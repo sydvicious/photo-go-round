@@ -2,8 +2,6 @@
 
 import PackageDescription
 
-// No dependencies, and there never will be any. See PLAN.md, "No third-party
-// dependencies, and what that means we write".
 let package = Package(
     name: "PhotoGoRound",
     platforms: [
