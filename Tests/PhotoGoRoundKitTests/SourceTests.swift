@@ -98,6 +98,26 @@ struct SourceTests {
         #expect(found.photos.first?.byteSize == 32)
     }
 
+    @Test("An unplugged drive is told apart from a deleted folder")
+    func unmountedVolumeIsDistinguishedFromDeletion() {
+        let mounts = ["/", "/Volumes/Backup", "/System/Volumes/Data"]
+
+        // The volume a path lives on is the *deepest* mount point containing
+        // it. Getting this wrong makes every missing path look like a deletion,
+        // because "/" prefixes everything — and the difference is what tells
+        // the user to plug the drive back in rather than that their photos are
+        // gone.
+        #expect(FileClassifier.volumeIsMounted(path: "/Volumes/Backup/photos", mountPoints: mounts))
+        #expect(!FileClassifier.volumeIsMounted(path: "/Volumes/Ejected/photos", mountPoints: mounts))
+
+        // A missing path on the boot volume really is a missing path.
+        #expect(FileClassifier.volumeIsMounted(path: "/Users/syd/Pictures", mountPoints: mounts))
+
+        // Prefix matching is on path components, not characters: a volume named
+        // "Backup2" must not satisfy a lookup for "Backup".
+        #expect(!FileClassifier.volumeIsMounted(path: "/Volumes/Backup2/x", mountPoints: ["/", "/Volumes/Backup"]))
+    }
+
     // MARK: - Single files
 
     @Test("A pinned file is one photo, named by its filename")

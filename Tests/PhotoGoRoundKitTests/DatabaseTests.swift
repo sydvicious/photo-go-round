@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 
 @testable import PhotoGoRoundKit
@@ -272,8 +273,59 @@ struct DatabaseTests {
         #expect(try reader.scalarInt("SELECT COUNT(*) FROM t;") == 2)
     }
 
-    @Test("A busy transaction is retried rather than surfaced")
+    @Test("A busy transaction replays its body rather than surfacing the error")
     func busyTransactionIsRetried() throws {
+        let database = try Database.inMemory()
+        try database.execute("CREATE TABLE t (i INTEGER);")
+
+        // Deterministic rather than timed. The previous version of this test
+        // raced a real lock against the backoff budget, which made it depend on
+        // how loaded the machine was — and it duly started failing once there
+        // were enough suites to run in parallel. A synthetic busy error
+        // exercises the same loop with no clock involved.
+        var attempts = 0
+        try database.transaction {
+            attempts += 1
+            if attempts < 4 {
+                throw SQLiteError(
+                    code: SQLITE_BUSY,
+                    // SQLITE_BUSY_SNAPSHOT is a macro and does not import. It is
+                    // the interesting one here: a busy *snapshot* cannot be
+                    // waited out by busy_timeout and has to be replayed.
+                    extendedCode: SQLITE_BUSY | (2 << 8),
+                    message: "database is locked",
+                    context: "test"
+                )
+            }
+            try database.run("INSERT INTO t (i) VALUES (:i);", ["i": 1])
+        }
+
+        #expect(attempts == 4)
+        // Every replay rolled back first, so exactly one row survives — which is
+        // the property that makes replaying the body safe at all.
+        #expect(try database.scalarInt("SELECT COUNT(*) FROM t;") == 1)
+    }
+
+    @Test("Retries are finite; a lock that never clears eventually surfaces")
+    func retriesGiveUpEventually() throws {
+        let database = try Database.inMemory()
+        var attempts = 0
+        #expect(throws: SQLiteError.self) {
+            try database.transaction(retries: 3) {
+                attempts += 1
+                throw SQLiteError(
+                    code: SQLITE_BUSY, extendedCode: SQLITE_BUSY,
+                    message: "database is locked", context: "test"
+                )
+            }
+        }
+        // The first attempt plus three retries. A wedged writer must not spin
+        // for ever.
+        #expect(attempts == 4)
+    }
+
+    @Test("A second writer waits for the first rather than failing")
+    func contendedWriterWaits() throws {
         let directory = URL.temporaryDirectory.appending(path: "pgr-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -285,22 +337,18 @@ struct DatabaseTests {
         // deliberately to keep the test to a single process.
         nonisolated(unsafe) let holder = try Database(path: path)
         try holder.execute("CREATE TABLE t (i INTEGER);")
-
-        // Hold the write lock, then release it from another thread shortly
-        // after. Touching one connection from two threads is exactly what the
-        // rest of the kit avoids; it is safe here only because the connection
-        // is opened FULLMUTEX, and it is done deliberately to keep the test to
-        // one process.
         try holder.execute("BEGIN IMMEDIATE;")
-        let released = DispatchSemaphore(value: 0)
-        let contender = try Database(path: path, busyTimeout: .milliseconds(10))
 
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) {
+        // A generous busy_timeout means SQLite itself absorbs the wait, so this
+        // asserts that contention resolves without depending on the backoff
+        // schedule outlasting the hold.
+        let contender = try Database(path: path, busyTimeout: .seconds(10))
+        let released = DispatchSemaphore(value: 0)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
             try? holder.execute("COMMIT;")
             released.signal()
         }
 
-        // Backoff should carry this past the lock rather than throwing.
         try contender.transaction {
             try contender.run("INSERT INTO t (i) VALUES (:i);", ["i": 1])
         }

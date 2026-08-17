@@ -2,7 +2,7 @@ import Foundation
 
 /// A scratch directory that cleans itself up, with helpers for putting
 /// plausible files in it.
-struct TemporaryFolder: ~Copyable {
+final class TemporaryFolder {
     let url: URL
 
     init(name: String = "pgr-sources") {

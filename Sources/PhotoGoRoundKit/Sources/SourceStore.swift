@@ -40,6 +40,10 @@ public struct ScanResult: Sendable, Equatable {
 /// assumes there is one of them.
 public struct SourceStore {
     public let database: Database
+    /// The seam every file read goes through. Exposed so that anything else
+    /// needing a URL for a photo — the cache, a display layer — resolves it the
+    /// same way rather than reaching for a path.
+    public let fileAccess: any FileAccess
     private let providers: [SourceKind: any SourceProvider]
 
     /// Rows per write transaction during a scan. Large enough that a
@@ -47,8 +51,13 @@ public struct SourceStore {
     /// enough that it never holds the single writer lock for a minute.
     static let batchSize = 500
 
-    public init(database: Database, providers: [any SourceProvider]) {
+    public init(
+        database: Database,
+        fileAccess: any FileAccess = UnsandboxedFileAccess(),
+        providers: [any SourceProvider]
+    ) {
         self.database = database
+        self.fileAccess = fileAccess
         self.providers = Dictionary(uniqueKeysWithValues: providers.map { ($0.kind, $0) })
     }
 
@@ -56,6 +65,7 @@ public struct SourceStore {
     public init(database: Database, fileAccess: any FileAccess = UnsandboxedFileAccess()) {
         self.init(
             database: database,
+            fileAccess: fileAccess,
             providers: [
                 FolderSourceProvider(fileAccess: fileAccess),
                 FileSourceProvider(fileAccess: fileAccess),

@@ -50,6 +50,20 @@ do {
             deal: options.deal,
             repeatWindowFraction: options.repeatWindowFraction
         ).run()
+
+    case .run:
+        Log.sources.notice("PhotoGoRoundServer starting")
+        try await RunCommand(
+            environment: MacHostEnvironment(
+                containerOverride: options.containerOverride,
+                databaseOverride: options.databaseOverride,
+                cacheOverride: options.cacheOverride
+            ),
+            foldersToAdd: options.foldersToAdd,
+            recursive: options.recursive,
+            tick: options.interval,
+            once: options.once
+        ).run()
     }
 } catch {
     Console.failure(String(describing: error))

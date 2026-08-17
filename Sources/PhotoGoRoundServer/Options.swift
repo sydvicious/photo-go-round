@@ -5,6 +5,7 @@ import Foundation
 struct Options {
     enum Command {
         case watch(folder: URL)
+        case run
         case help
     }
 
@@ -13,7 +14,12 @@ struct Options {
     var interval: Duration = .seconds(2)
     var recursive = false
     var deal = false
+    var once = false
     var repeatWindowFraction = DeckSettingsDefaults.repeatWindowFraction
+    var containerOverride: URL?
+    var databaseOverride: URL?
+    var cacheOverride: URL?
+    var foldersToAdd: [URL] = []
 
     /// Where the library lives when nothing says otherwise.
     ///
@@ -57,11 +63,22 @@ struct Options {
             switch argument {
             case "watch":
                 options.command = .watch(folder: URL(filePath: try next("watch")))
+            case "run":
+                options.command = .run
+            case "--add-folder":
+                options.foldersToAdd.append(URL(filePath: try next(argument)))
+            case "--once":
+                options.once = true
+            case "--cache":
+                options.cacheOverride = URL(filePath: try next(argument))
             case "--database", "-d":
-                options.databasePath = try next(argument)
+                let path = try next(argument)
+                options.databasePath = path
+                options.databaseOverride = URL(filePath: path)
                 explicitDatabase = true
             case "--container":
                 container = URL(filePath: try next(argument))
+                options.containerOverride = container
             case "--interval", "-i":
                 let raw = try next(argument)
                 guard let seconds = Double(raw), seconds > 0, seconds.isFinite else {
@@ -99,12 +116,21 @@ struct Options {
 
         USAGE
           PhotoGoRoundServer watch <folder> [options]
+          PhotoGoRoundServer run [options]
 
-        Watches a real folder and narrates what the deck does about it: photos
-        appearing, photos vanishing, photos coming back with their history. It
-        copies no bytes anywhere — the only thing it writes is the database.
+        watch   Narrates what the deck does about one folder: photos appearing,
+                vanishing, coming back with their history. Copies no bytes
+                anywhere — the only thing it writes is the database.
+
+        run     The agent proper. Scans every source, fills and evicts the cache,
+                and reclaims abandoned hands, on the intervals in preferences.
+                Photos on the boot volume are still referenced in place and never
+                copied; only removable, network, and iCloud files are cached.
 
         OPTIONS
+              --add-folder <path> Register a folder source if it is not already there (run)
+              --cache <dir>       Cache root. Default: <container>/cache
+              --once              Do one pass and exit, rather than looping (run)
           -d, --database <path>   Database file. Default: <container>/library.sqlite
               --container <dir>   Storage root. Default: ~/Library/Application Support/Photo-Go-Round
           -i, --interval <secs>   How often to rescan. Default: 2
@@ -119,6 +145,8 @@ struct Options {
         EXAMPLES
           PhotoGoRoundServer watch ~/Pictures/Wallpaper --database /tmp/pgr.sqlite
           PhotoGoRoundServer watch ~/Pictures/Wallpaper -r --deal -i 5
+          PhotoGoRoundServer run --container /tmp/pgr --add-folder ~/Pictures/Wallpaper -r
+          PhotoGoRoundServer run --container /tmp/pgr --once
         """
 }
 

@@ -91,9 +91,7 @@ struct FileClassifier {
         return "no longer at this path"
     }
 
-    private static func volumeIsMounted(for url: URL) -> Bool {
-        // Walking up from the path finds the deepest existing ancestor; if that
-        // is not on a currently mounted volume, the whole mount point is gone.
+    static func volumeIsMounted(for url: URL) -> Bool {
         guard
             let mounted = FileManager.default.mountedVolumeURLs(
                 includingResourceValuesForKeys: nil, options: []
@@ -101,11 +99,25 @@ struct FileClassifier {
         else { return true }
 
         let path = url.standardizedFileURL.path(percentEncoded: false)
-        return mounted.contains { volume in
-            let volumePath = volume.standardizedFileURL.path(percentEncoded: false)
-            // "/" matches everything, which is correct — the boot volume is
-            // always mounted, so a missing path there is a missing path.
-            return volumePath == "/" ? true : path.hasPrefix(volumePath)
+        return volumeIsMounted(
+            path: path,
+            mountPoints: mounted.map { $0.standardizedFileURL.path(percentEncoded: false) }
+        )
+    }
+
+    /// Split out so the awkward part is testable without mounting anything.
+    ///
+    /// The subtlety is that `/` prefixes every path, so a naive "does any mount
+    /// point contain this" is always true and the answer is always "the file was
+    /// deleted". The volume a path lives on is the *deepest* mount point
+    /// containing it — and a path under `/Volumes` whose deepest match is the
+    /// root volume is a path on a volume that is not there.
+    static func volumeIsMounted(path: String, mountPoints: [String]) -> Bool {
+        let containing = mountPoints.filter { mount in
+            path == mount || path.hasPrefix(mount.hasSuffix("/") ? mount : mount + "/")
         }
+        guard let deepest = containing.max(by: { $0.count < $1.count }) else { return false }
+        if deepest == "/", path.hasPrefix("/Volumes/") { return false }
+        return true
     }
 }
