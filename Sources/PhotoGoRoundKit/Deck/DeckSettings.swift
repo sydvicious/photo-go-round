@@ -80,3 +80,14 @@ public enum DeckRelaxation: Sendable, Equatable {
         }
     }
 }
+
+extension DeckRelaxation: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .reservedCardsReused:
+            "the deck had nothing free, so cards reserved by another consumer were reused"
+        case .handWasShort(let asked, let got):
+            "asked for \(asked) cards, got \(got)"
+        }
+    }
+}

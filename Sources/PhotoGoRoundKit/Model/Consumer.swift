@@ -89,7 +89,7 @@ extension Consumer {
         covering coverage: Duration = Consumer.handCoverage
     ) -> Int {
         guard interval > .zero else { return maximumHandSize }
-        let cards = (coverage.seconds / interval.seconds).rounded(.up)
+        let cards = (coverage.totalSeconds / interval.totalSeconds).rounded(.up)
         guard cards.isFinite else { return maximumHandSize }
         return min(max(Int(cards), minimumHandSize), maximumHandSize)
     }
@@ -98,7 +98,10 @@ extension Consumer {
 extension Duration {
     /// Fractional seconds. Convenient for arithmetic; not for anything that
     /// needs to be exact.
-    var seconds: Double {
+    ///
+    /// Named `totalSeconds` rather than `seconds` so it cannot be confused with
+    /// — or shadowed by — the `Duration.seconds(_:)` factory.
+    public var totalSeconds: Double {
         let (whole, attoseconds) = components
         return Double(whole) + Double(attoseconds) / 1e18
     }

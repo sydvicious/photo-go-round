@@ -399,7 +399,7 @@ extension Deck {
     @discardableResult
     public func reapAbandonedHands(idleFor: Duration, now: Date = Date()) throws -> ReapResult {
         try database.transaction(.immediate) {
-            let cutoff = now.addingTimeInterval(-idleFor.seconds)
+            let cutoff = now.addingTimeInterval(-idleFor.totalSeconds)
             let abandoned = try database.all(
                 """
                 SELECT DISTINCT c.id FROM consumer c
