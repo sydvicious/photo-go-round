@@ -172,14 +172,22 @@ enum SchemaV1 {
 
         -- ---------------------------------------------------------------
         -- deck_state: the single monotonic deal ordinal, advanced by every card
-        -- played anywhere in the system.
+        -- played anywhere in the system, plus the ordinal the current pass
+        -- began at.
+        --
+        -- A photo is unused in the current pass when its last_dealt_seq is at
+        -- or below pass_start_seq. When nothing is left unused the deck
+        -- reshuffles: pass_start_seq moves up to the current ordinal and every
+        -- photo becomes eligible again. One integer is the entire pass
+        -- mechanism — there is no per-photo epoch column.
         -- ---------------------------------------------------------------
         CREATE TABLE deck_state (
-          id       INTEGER PRIMARY KEY CHECK (id = 1),
-          deal_seq INTEGER NOT NULL DEFAULT 0
+          id             INTEGER PRIMARY KEY CHECK (id = 1),
+          deal_seq       INTEGER NOT NULL DEFAULT 0,
+          pass_start_seq INTEGER NOT NULL DEFAULT 0
         );
 
-        INSERT INTO deck_state (id, deal_seq) VALUES (1, 0);
+        INSERT INTO deck_state (id, deal_seq, pass_start_seq) VALUES (1, 0, 0);
 
         -- ---------------------------------------------------------------
         -- deck_event: relaxations and short hands, surfaced rather than

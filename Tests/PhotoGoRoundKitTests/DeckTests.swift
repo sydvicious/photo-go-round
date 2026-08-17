@@ -8,21 +8,27 @@ struct DeckTests {
 
     // MARK: - The window arithmetic
 
-    @Test("Fraction 1.0 gives a window of pool - 1, which is the classic shuffle")
-    func fractionOneClampsToPoolMinusOne() {
+    @Test("Fraction 1.0 gives a window of the whole pool, so the pass is the only rule")
+    func fractionOneWindowIsTheWholePool() {
         let settings = DeckSettings(repeatWindowFraction: 1.0)
-        #expect(settings.repeatWindow(poolSize: 100) == 99)
-        #expect(settings.repeatWindow(poolSize: 2) == 1)
-        // A window of `pool` would leave a deal at which nothing is eligible,
-        // firing the relaxation ladder at every pass boundary. The clamp is
-        // what makes 1.0 exactly the classic shuffle instead.
+        #expect(settings.repeatWindow(poolSize: 100) == 100)
+        #expect(settings.repeatWindow(poolSize: 2) == 2)
+        // The window is meant to be unsatisfiable at 1.0: it is the pass
+        // boundary that releases a photo, not the window.
     }
 
-    @Test("Small pools have no window at all")
-    func degeneratePoolsHaveNoWindow() {
-        let settings = DeckSettings(repeatWindowFraction: 1.0)
-        #expect(settings.repeatWindow(poolSize: 0) == 0)
-        #expect(settings.repeatWindow(poolSize: 1) == 0)
+    @Test("An empty pool has no window")
+    func emptyPoolHasNoWindow() {
+        #expect(DeckSettings(repeatWindowFraction: 1.0).repeatWindow(poolSize: 0) == 0)
+    }
+
+    @Test("Eligibility collapses the pass and the window into one comparison")
+    func thresholdIsTheLooserOfTheTwoRules() {
+        // Mid-pass at fraction 1.0, the window term is always the smaller of the
+        // two and drops out on its own — no branch, no special case.
+        #expect(Deck.threshold(seq: 150, passStartSeq: 100, window: 100) == 100)
+        // Below 1.0 the window is what bites, once the pass has run long enough.
+        #expect(Deck.threshold(seq: 150, passStartSeq: 100, window: 20) == 129)
     }
 
     @Test("The default fraction is half the pool")
@@ -40,14 +46,6 @@ struct DeckTests {
         #expect(DeckSettings(repeatWindowFraction: 42).repeatWindowFraction == 1)
         #expect(DeckSettings(repeatWindowFraction: .nan).repeatWindowFraction == 0.5)
         #expect(DeckSettings(repeatWindowFraction: .infinity).repeatWindowFraction == 0.5)
-    }
-
-    @Test("The relaxation ladder halves down to zero")
-    func relaxationLadderHalves() {
-        #expect(Deck.relaxationLadder(from: 8) == [8, 4, 2, 1, 0])
-        #expect(Deck.relaxationLadder(from: 1) == [1, 0])
-        #expect(Deck.relaxationLadder(from: 0) == [0])
-        #expect(Deck.relaxationLadder(from: 99) == [99, 49, 24, 12, 6, 3, 1, 0])
     }
 
     // MARK: - Dealing at all
@@ -202,48 +200,55 @@ struct DeckTests {
         #expect(events.contains { $0.kind == "reserved_reused" })
     }
 
-    @Test("A window the library cannot support is narrowed, and says so")
-    func windowNarrowsUnderScarcity() throws {
-        // The window is clamped to pool - 1, so a library dealing only to
-        // itself can never starve it — the oldest card is always exactly at the
-        // threshold. Outstanding hands are what make it reachable: a
-        // screensaver holding most of a small library leaves the rest too
-        // recently dealt to qualify.
-        let (library, ids) = try TestLibrary.withPhotos(10)
-        let screensaver = try library.addConsumer(kind: "screensaver")
-        for (offset, id) in ids[4...].enumerated() {
-            try library.reserve(id, consumerID: screensaver, position: offset)
-            try library.setLastDealt(id, seq: Int64(91 + offset))
-        }
-        for (offset, id) in ids[0..<4].enumerated() {
-            try library.setLastDealt(id, seq: Int64(97 + offset))
-        }
-        try library.setDealSeq(100)
+    @Test("Running out mid-pass is a reshuffle, not a degradation")
+    func exhaustingAPassReshuffles() throws {
+        let (library, ids) = try TestLibrary.withPhotos(6)
+        let settings = DeckSettings(repeatWindowFraction: 1.0)
 
-        // Pool 10 at fraction 0.5 wants a window of 5; at seq 101 the threshold
-        // is 95, and the four free cards were all dealt after that.
-        let deal = try #require(try library.deck.deal(settings: DeckSettings(repeatWindowFraction: 0.5)))
-        let narrowings = deal.relaxations.compactMap { relaxation -> (Int, Int)? in
-            if case .repeatWindowNarrowed(let from, let to) = relaxation { return (from, to) }
-            return nil
+        // The first pass deals each photo once and never reshuffles: every card
+        // is still unused, so nothing runs out.
+        var startedPasses = 0
+        for _ in 0..<6 {
+            let deal = try #require(try library.deck.deal(settings: settings))
+            #expect(deal.relaxations.isEmpty)
+            if deal.startedNewPass { startedPasses += 1 }
         }
-        #expect(narrowings.count == 1)
-        #expect(narrowings.first?.0 == 5)
-        #expect(narrowings.first?.1 == 2)
-        // Narrowed to 2, the threshold is 98, so the two oldest free cards
-        // qualify — and nothing reserved was touched.
-        #expect(ids[0..<2].contains(deal.card.id))
-        #expect(!deal.relaxations.contains(.reservedCardsReused))
+        #expect(startedPasses == 0)
+        #expect(try library.deck.unusedInCurrentPass() == 0)
+
+        // The seventh card has nothing unused left, so the deck reshuffles —
+        // reported as a new pass rather than as a concession.
+        let seventh = try #require(try library.deck.deal(settings: settings))
+        #expect(seventh.startedNewPass)
+        #expect(seventh.relaxations.isEmpty)
+        #expect(ids.contains(seventh.card.id))
+        #expect(try library.deck.state().passStartSeq == 6)
+        #expect(try library.deck.unusedInCurrentPass() == 5)
 
         let events = try library.deck.recentEvents()
-        #expect(events.contains { $0.kind == "window_relaxed" })
+        #expect(events.contains { $0.kind == "pass" })
     }
 
-    @Test("Relaxation events are kept to a bounded tail")
+    @Test("Below fraction 1.0 the window binds and the pass never has to reshuffle")
+    func lowerFractionsNeverReachThePassBoundary() throws {
+        let (library, _) = try TestLibrary.withPhotos(50)
+        var reshuffles = 0
+        for _ in 0..<600 {
+            let deal = try #require(try library.deck.deal(settings: .default))
+            if deal.startedNewPass { reshuffles += 1 }
+        }
+        // With half the pool eligible at any moment the window always has an
+        // answer, so `pass_start_seq` never moves and the pass rule contributes
+        // nothing. That is what keeps the minimum-gap guarantee intact below 1.0.
+        #expect(reshuffles == 0)
+        #expect(try library.deck.state().passStartSeq == 0)
+    }
+
+    @Test("Deck events are kept to a bounded tail")
     func eventsAreTrimmed() throws {
         let library = try TestLibrary()
         for index in 0..<(Deck.eventsKept + 25) {
-            try library.deck.record(.repeatWindowNarrowed(from: index, to: 0))
+            try library.deck.recordEvent(kind: "pass", detail: "reshuffled at ordinal \(index)")
         }
         let count = try library.database.scalarInt("SELECT COUNT(*) FROM deck_event;")
         #expect(count == Deck.eventsKept)
@@ -252,8 +257,8 @@ struct DeckTests {
     // MARK: - The statistical assertions
 
     /// The plan's own test: at fraction 1.0, a thousand deals across a hundred
-    /// photos produce exactly ten showings each with no repeat inside any
-    /// hundred-deal stretch.
+    /// photos produce exactly ten showings each — and every hundred-deal pass
+    /// contains every photo exactly once.
     @Test("Fraction 1.0 is exactly fair: zero variance across a thousand deals")
     func fractionOneIsExactlyFair() throws {
         let (library, ids) = try TestLibrary.withPhotos(100)
@@ -267,30 +272,51 @@ struct DeckTests {
         #expect(Set(counts.keys) == Set(ids))
         #expect(Set(counts.values) == [10], "expected exactly ten showings each, got \(Set(counts.values).sorted())")
 
-        // No repeat inside any hundred-deal stretch, which is the same claim
-        // stated as a window rather than as a count.
-        let gaps = gapsBetweenRepeats(in: sequence)
-        #expect(gaps.min() == 100)
+        // Exactly once per pass, which is the same claim stated per block
+        // rather than per total.
+        for pass in stride(from: 0, to: 1000, by: 100) {
+            let block = Array(sequence[pass..<(pass + 100)])
+            #expect(Set(block).count == 100, "pass starting at \(pass) repeated a photo")
+        }
 
-        // And nothing had to be given up to achieve it.
-        #expect(try library.deck.recentEvents().isEmpty)
+        // Nothing was given up to achieve it — the reshuffles are passes, not
+        // relaxations.
+        let events = try library.deck.recentEvents(limit: 200)
+        #expect(events.allSatisfy { $0.kind == "pass" })
     }
 
-    /// Documents a real property of the sliding window at its extreme, so that
-    /// it is recorded in code rather than discovered later: at fraction 1.0
-    /// exactly one photo is eligible at each deal after the first pass, so the
-    /// shuffle key never gets a say and every subsequent pass replays the first
-    /// pass's order. Exact fairness is bought with a fixed rotation.
-    @Test("Fraction 1.0 repeats the first pass's order forever")
-    func fractionOneDegeneratesToAFixedRotation() throws {
+    /// The reshuffle. Every pass is an independent random permutation, so the
+    /// order differs each time through — which is the whole reason the deck
+    /// keeps a pass boundary rather than a hard sliding window at 1.0.
+    @Test("Every pass is a fresh random order")
+    func everyPassIsShuffledAnew() throws {
         let (library, _) = try TestLibrary.withPhotos(20)
         let settings = DeckSettings(repeatWindowFraction: 1.0)
-        let sequence = try library.deck.dealSequence(count: 60, settings: settings)
-        let passOne = Array(sequence[0..<20])
-        let passTwo = Array(sequence[20..<40])
-        let passThree = Array(sequence[40..<60])
-        #expect(passTwo == passOne)
-        #expect(passThree == passOne)
+        let sequence = try library.deck.dealSequence(count: 20 * 40, settings: settings)
+
+        let passes = stride(from: 0, to: sequence.count, by: 20).map { Array(sequence[$0..<($0 + 20)]) }
+        // Each is a permutation of the library...
+        #expect(passes.allSatisfy { Set($0).count == 20 })
+        // ...and they are not the same permutation. Forty passes of twenty
+        // photos colliding by chance is 40 draws from 20! possibilities.
+        #expect(Set(passes.map { $0.map(String.init).joined(separator: ",") }).count == passes.count)
+    }
+
+    @Test("A photo may repeat across a pass boundary, and that is accepted")
+    func passBoundariesAllowAdjacentRepeats() throws {
+        // With a two-photo library every pass is two cards, so the boundary is
+        // hit constantly and a back-to-back repeat is a coin flip each time.
+        // The deck does not add machinery to prevent it.
+        let (library, _) = try TestLibrary.withPhotos(2)
+        let sequence = try library.deck.dealSequence(
+            count: 200, settings: DeckSettings(repeatWindowFraction: 1.0)
+        )
+        let adjacentRepeats = zip(sequence, sequence.dropFirst()).count { $0 == $1 }
+        #expect(adjacentRepeats > 0, "expected the boundary to produce some adjacent repeats")
+        // But fairness is still exact.
+        var counts: [Int64: Int] = [:]
+        for id in sequence { counts[id, default: 0] += 1 }
+        #expect(Set(counts.values) == [100])
     }
 
     @Test("A lower fraction respects its window and buys variance with it")
@@ -315,7 +341,7 @@ struct DeckTests {
         #expect(counts.values.min()! >= 5)
         #expect(counts.values.max()! <= 40)
 
-        // And no relaxation was needed to get there.
+        // And nothing was given up, nor reshuffled, to get there.
         #expect(try library.deck.recentEvents().isEmpty)
     }
 
@@ -396,6 +422,9 @@ struct DeckTests {
         #expect(stats.timesShownMin == 0)
         #expect(stats.timesShownMax == 1)
         #expect(stats.residentPhotos == 13)
+        // Still in the first pass, with six of the ten dealable cards to go.
+        #expect(stats.passStartSeq == 0)
+        #expect(stats.unusedInCurrentPass == 6)
     }
 
     // MARK: - Two processes, one deck

@@ -2,25 +2,35 @@ import Foundation
 
 /// The shared deck: one sequence, dealt from by every surface.
 ///
-/// A photo is eligible when it has not been dealt within the last `w` deals.
-/// Among the eligible, one is chosen uniformly at random. There are no epochs,
-/// no passes, and no boundary — and therefore no boundary artifact to patch.
+/// The deck runs in **passes**. A pass is a random permutation of the pool: a
+/// photo is unused in the current pass while its deal ordinal is at or below
+/// `pass_start_seq`, and when nothing unused is left the deck reshuffles —
+/// `pass_start_seq` moves up to the current ordinal and every photo becomes
+/// eligible again. At repeat-window fraction 1.0 that is the whole algorithm,
+/// and it gives exact fairness with a different order every time through.
 ///
-/// **On the selection step, which differs from PLAN.md.** The plan specifies
-/// `ORDER BY shuffle_key LIMIT 1` over the eligible set, with the key re-rolled
-/// on each deal. That starves. `LIMIT 1` on an ordering takes the *minimum*, and
-/// only the winner's key is re-rolled — so a photo whose key lands high loses,
-/// keeps its high key because it never won, and loses again, permanently. In
-/// simulation at fraction 0.5 over twenty thousand deals of a hundred photos,
-/// showings ranged from 3 to 391 and a photo with an initial key of 0.999 was
-/// never shown at all.
+/// The **repeat window** lets photos come back before the pass ends. At
+/// fraction *f* a photo is also eligible once `round(f × pool)` deals have gone
+/// by, whatever the pass is doing. The two rules are a single comparison —
+/// eligible when `last_dealt_seq <= max(pass_start_seq, seq - w - 1)` — so
+/// there is no branch and no special case. At fraction 1.0 the window term is
+/// always the smaller of the two and drops out on its own.
 ///
-/// The repair is one line of SQL: keep the indexed `shuffle_key` ordering, and
-/// take a random offset into the eligible set rather than its first row. The
-/// same simulation then gives showings between 186 and 217. `shuffle_key` keeps
-/// both of its jobs — it supplies the index that makes selection cheap, and its
-/// re-roll on deal keeps a hand's contiguous block from being the same
-/// neighbourhood twice running.
+/// Two consequences worth knowing. A photo dealt at the end of one pass can be
+/// dealt again at the start of the next, so the minimum gap is not the window;
+/// this is a deliberate acceptance rather than an oversight. And running out of
+/// cards mid-pass is not a failure to be degraded around — it is the end of the
+/// pass, which is ordinary business.
+///
+/// **Selection takes a uniformly random offset into the eligible set, never its
+/// first row.** `ORDER BY shuffle_key LIMIT 1` takes the *minimum*, and only the
+/// winner's key is re-rolled — so below fraction 1.0, where a pass does not
+/// guarantee everyone a turn, a photo whose key lands high loses, keeps its high
+/// key because it never won, and loses again, permanently. Fraction 1.0 hides
+/// this, which is why it is worth stating rather than assuming.
+/// `shuffle_key` keeps both of its jobs: it supplies the index that makes
+/// selection cheap, and its re-roll on deal keeps a hand's contiguous block from
+/// being the same neighbourhood twice running.
 ///
 /// The deck contains no timers and no opinion about when it is called. The Mac
 /// agent drives it from a continuous loop; an iOS widget will drive it from a
@@ -54,8 +64,8 @@ public struct Deck {
 
     // MARK: - State
 
-    /// Photos the deck could deal, ignoring the repeat window: enabled source,
-    /// available, and a still image.
+    /// Photos the deck could deal, ignoring the pass and the window: enabled
+    /// source, available, and a still image.
     ///
     /// Cache residency is deliberately *not* part of this. Cards are reserved
     /// ahead of being needed and the prefetcher materialises what has been
@@ -66,9 +76,15 @@ public struct Deck {
     }
 
     /// The single monotonic ordinal, advanced by every card played anywhere in
-    /// the system.
+    /// the system, and the ordinal at which the current pass began.
+    public func state() throws -> (dealSeq: Int64, passStartSeq: Int64) {
+        try database.first("SELECT deal_seq, pass_start_seq FROM deck_state WHERE id = 1;") {
+            (try $0.int64("deal_seq"), try $0.int64("pass_start_seq"))
+        } ?? (0, 0)
+    }
+
     public func currentDealSeq() throws -> Int64 {
-        Int64(try database.scalarInt("SELECT deal_seq FROM deck_state WHERE id = 1;") ?? 0)
+        try state().dealSeq
     }
 
     /// The repeat window in cards, given the current pool.
@@ -76,12 +92,25 @@ public struct Deck {
         settings.repeatWindow(poolSize: try poolSize())
     }
 
-    /// How many photos satisfy the window right now.
-    func countEligible(seq: Int64, window: Int, ignoringOutstandingHands: Bool) throws -> Int {
+    /// The single comparison both rules collapse into: a photo is eligible when
+    /// it has never been dealt, or was last dealt at or below this ordinal.
+    static func threshold(seq: Int64, passStartSeq: Int64, window: Int) -> Int64 {
+        max(passStartSeq, seq - Int64(window) - 1)
+    }
+
+    /// How many photos are eligible at the given threshold.
+    func countEligible(threshold: Int64, ignoringOutstandingHands: Bool) throws -> Int {
         try database.scalarInt(
             ignoringOutstandingHands ? Self.countIgnoringHandsSQL : Self.countSQL,
-            ["threshold": .int(seq - Int64(window) - 1)]
+            ["threshold": .int(threshold)]
         ) ?? 0
+    }
+
+    /// Photos not yet dealt in the current pass. Counts down to zero, at which
+    /// point the deck reshuffles.
+    public func unusedInCurrentPass() throws -> Int {
+        let state = try state()
+        return try countEligible(threshold: state.passStartSeq, ignoringOutstandingHands: true)
     }
 
     // MARK: - Dealing
@@ -91,6 +120,8 @@ public struct Deck {
     public struct Deal: Sendable, Equatable {
         public let card: DeckCard
         public let relaxations: [DeckRelaxation]
+        /// True when this card was the first of a fresh pass.
+        public let startedNewPass: Bool
     }
 
     /// Deals one card and advances the deal ordinal.
@@ -101,68 +132,74 @@ public struct Deck {
     /// the loser gets the *next* card rather than the same one.
     ///
     /// Returns nil only when there is genuinely nothing to deal — an empty
-    /// library. Every other scarcity is a relaxation rather than a failure.
+    /// library.
     public func deal(settings: DeckSettings = .default, now: Date = Date()) throws -> Deal? {
         try database.transaction(.immediate) {
             let pool = try poolSize()
             guard pool > 0 else { return nil }
 
-            let seq = try currentDealSeq() + 1
+            let state = try state()
+            let seq = state.dealSeq + 1
             let window = settings.repeatWindow(poolSize: pool)
+
+            var threshold = Self.threshold(seq: seq, passStartSeq: state.passStartSeq, window: window)
+            var passStart = state.passStartSeq
+            var startedNewPass = false
             var relaxations: [DeckRelaxation] = []
 
-            for candidateWindow in Self.relaxationLadder(from: window) {
-                let eligible = try countEligible(
-                    seq: seq, window: candidateWindow, ignoringOutstandingHands: false
+            var eligible = try countEligible(threshold: threshold, ignoringOutstandingHands: false)
+
+            if eligible == 0 {
+                // The pass is spent. Reshuffle: everything dealt so far becomes
+                // unused again, which is strictly more permissive than any
+                // window could be, so there is nothing further to degrade.
+                passStart = seq - 1
+                threshold = passStart
+                startedNewPass = passStart != state.passStartSeq
+                eligible = try countEligible(threshold: threshold, ignoringOutstandingHands: false)
+            }
+
+            if eligible > 0,
+                let card = try dealOne(
+                    sql: Self.dealSQL, seq: seq, threshold: threshold,
+                    offset: randomOffset(eligible), now: now
                 )
-                guard eligible > 0 else { continue }
-                if candidateWindow != window {
-                    relaxations.append(.repeatWindowNarrowed(from: window, to: candidateWindow))
-                }
-                if let card = try dealOne(
-                    sql: Self.dealSQL,
-                    seq: seq,
-                    window: candidateWindow,
-                    offset: randomOffset(eligible),
-                    now: now
-                ) {
-                    try commitDeal(seq: seq, relaxations: relaxations)
-                    return Deal(card: card, relaxations: relaxations)
-                }
+            {
+                try commit(seq: seq, passStart: passStart, startedNewPass: startedNewPass,
+                           relaxations: relaxations, now: now)
+                return Deal(card: card, relaxations: relaxations, startedNewPass: startedNewPass)
             }
 
             // Every free card is spoken for by somebody's outstanding hand.
             // Overlap rather than starve: three displays and one photo means
             // all three show that photo.
-            let anyCard = try countEligible(seq: seq, window: 0, ignoringOutstandingHands: true)
+            let anyCard = try countEligible(threshold: threshold, ignoringOutstandingHands: true)
             if anyCard > 0 {
                 relaxations.append(.reservedCardsReused)
                 if let card = try dealOne(
-                    sql: Self.dealIgnoringHandsSQL,
-                    seq: seq,
-                    window: 0,
-                    offset: randomOffset(anyCard),
-                    now: now
+                    sql: Self.dealIgnoringHandsSQL, seq: seq, threshold: threshold,
+                    offset: randomOffset(anyCard), now: now
                 ) {
-                    try commitDeal(seq: seq, relaxations: relaxations)
-                    return Deal(card: card, relaxations: relaxations)
+                    try commit(seq: seq, passStart: passStart, startedNewPass: startedNewPass,
+                               relaxations: relaxations, now: now)
+                    return Deal(card: card, relaxations: relaxations, startedNewPass: startedNewPass)
                 }
             }
 
-            // pool > 0 and a window of zero with hands ignored matches every
-            // dealable photo, so reaching here means the pool count and the
-            // deal predicate have drifted apart.
+            // A fresh pass with hands ignored matches every dealable photo, so
+            // reaching here means the pool count and the deal predicate have
+            // drifted apart.
             Log.deck.fault("pool reported \(pool, privacy: .public) photos but nothing was dealable")
             return nil
         }
     }
 
-    private func dealOne(sql: String, seq: Int64, window: Int, offset: Int, now: Date) throws -> DeckCard? {
+    private func dealOne(sql: String, seq: Int64, threshold: Int64, offset: Int, now: Date) throws -> DeckCard? {
         try database.first(
             sql,
             [
                 "seq": .int(seq),
-                "threshold": .int(seq - Int64(window) - 1),
+                "threshold": .int(threshold),
                 "offset": .int(Int64(offset)),
                 "key": .double(randomKey()),
                 "now": SQLValue(now),
@@ -170,27 +207,24 @@ public struct Deck {
         ) { try DeckCard(row: $0, dealSeq: seq) }
     }
 
-    private func commitDeal(seq: Int64, relaxations: [DeckRelaxation]) throws {
-        try database.run("UPDATE deck_state SET deal_seq = :seq WHERE id = 1;", ["seq": .int(seq)])
+    private func commit(
+        seq: Int64,
+        passStart: Int64,
+        startedNewPass: Bool,
+        relaxations: [DeckRelaxation],
+        now: Date
+    ) throws {
+        try database.run(
+            "UPDATE deck_state SET deal_seq = :seq, pass_start_seq = :pass WHERE id = 1;",
+            ["seq": .int(seq), "pass": .int(passStart)]
+        )
+        if startedNewPass {
+            Log.deck.notice("deck reshuffled; new pass begins at ordinal \(seq, privacy: .public)")
+            try recordEvent(kind: "pass", detail: "reshuffled at ordinal \(seq)", at: now)
+        }
         for relaxation in relaxations {
-            try record(relaxation)
+            try record(relaxation, at: now)
         }
-    }
-
-    /// `w`, then `w/2`, then `w/4` … down to 0, with duplicates removed.
-    ///
-    /// The window is halved rather than abandoned so a library that is merely
-    /// *tight* keeps most of its spacing, and only a library that is genuinely
-    /// too small for the setting ends up at zero.
-    static func relaxationLadder(from window: Int) -> [Int] {
-        var ladder: [Int] = []
-        var current = window
-        while current > 0 {
-            ladder.append(current)
-            current /= 2
-        }
-        ladder.append(0)
-        return ladder
     }
 
     // MARK: - Selecting without dealing
@@ -206,32 +240,29 @@ public struct Deck {
     /// cut. Every eligible card has the same chance of being in the block.
     func selectCandidates(
         limit: Int,
-        seq: Int64,
-        window: Int,
+        threshold: Int64,
         ignoringOutstandingHands: Bool,
         offset: Int? = nil
     ) throws -> [DeckCard] {
         guard limit > 0 else { return [] }
         let eligible = try countEligible(
-            seq: seq, window: window, ignoringOutstandingHands: ignoringOutstandingHands
+            threshold: threshold, ignoringOutstandingHands: ignoringOutstandingHands
         )
         guard eligible > 0 else { return [] }
 
         let sql = ignoringOutstandingHands ? Self.candidatesIgnoringHandsSQL : Self.candidatesSQL
         let start = offset ?? randomOffset(eligible)
-        let bindings: (Int, Int) -> SQLBindings = { limit, offset in
-            [
-                "threshold": .int(seq - Int64(window) - 1),
-                "limit": .int(Int64(limit)),
-                "offset": .int(Int64(offset)),
-            ]
+        func bindings(limit: Int, offset: Int) -> SQLBindings {
+            ["threshold": .int(threshold), "limit": .int(Int64(limit)), "offset": .int(Int64(offset))]
         }
 
-        var cards = try database.all(sql, bindings(limit, start)) { try DeckCard(row: $0, dealSeq: nil) }
+        var cards = try database.all(sql, bindings(limit: limit, offset: start)) {
+            try DeckCard(row: $0, dealSeq: nil)
+        }
         // Wrap, so a starting point near the end of the order does not produce
         // an artificially short hand.
         if cards.count < limit, start > 0 {
-            cards += try database.all(sql, bindings(limit - cards.count, 0)) {
+            cards += try database.all(sql, bindings(limit: limit - cards.count, offset: 0)) {
                 try DeckCard(row: $0, dealSeq: nil)
             }
         }
@@ -247,10 +278,14 @@ public struct Deck {
     public func peek(count: Int, settings: DeckSettings = .default) throws -> [DeckCard] {
         let pool = try poolSize()
         guard pool > 0 else { return [] }
+        let state = try state()
         return try selectCandidates(
             limit: count,
-            seq: try currentDealSeq(),
-            window: settings.repeatWindow(poolSize: pool),
+            threshold: Self.threshold(
+                seq: state.dealSeq,
+                passStartSeq: state.passStartSeq,
+                window: settings.repeatWindow(poolSize: pool)
+            ),
             ignoringOutstandingHands: false,
             offset: 0
         )
@@ -259,15 +294,19 @@ public struct Deck {
     // MARK: - Events
 
     /// Relaxations are recorded rather than swallowed, so `pgr deck stats` and
-    /// eventually the settings UI can say that the repeat window is larger than
-    /// the library can support.
+    /// eventually the settings UI can say that the library cannot support what
+    /// was asked of it.
     func record(_ relaxation: DeckRelaxation, at now: Date = Date()) throws {
         Log.deck.notice(
             "deck relaxed: \(relaxation.eventKind, privacy: .public) — \(relaxation.eventDetail, privacy: .public)"
         )
+        try recordEvent(kind: relaxation.eventKind, detail: relaxation.eventDetail, at: now)
+    }
+
+    func recordEvent(kind: String, detail: String?, at now: Date = Date()) throws {
         try database.run(
             "INSERT INTO deck_event (at, kind, detail) VALUES (:at, :kind, :detail);",
-            ["at": SQLValue(now), "kind": .text(relaxation.eventKind), "detail": .text(relaxation.eventDetail)]
+            ["at": SQLValue(now), "kind": .text(kind), "detail": SQLValue(detail)]
         )
         // Bounded tail; nothing depends on old rows.
         try database.run(
@@ -298,6 +337,7 @@ public struct Deck {
 
     public func stats(settings: DeckSettings = .default) throws -> DeckStats {
         let pool = try poolSize()
+        let state = try state()
         let counts = try database.first(
             """
             SELECT COUNT(*)                                                  AS total,
@@ -324,7 +364,9 @@ public struct Deck {
             dealablePhotos: pool,
             neverDealt: counts?.neverDealt ?? 0,
             residentPhotos: counts?.resident ?? 0,
-            currentDealSeq: try currentDealSeq(),
+            currentDealSeq: state.dealSeq,
+            passStartSeq: state.passStartSeq,
+            unusedInCurrentPass: try unusedInCurrentPass(),
             repeatWindow: settings.repeatWindow(poolSize: pool),
             timesShownMin: counts?.min ?? 0,
             timesShownMax: counts?.max ?? 0,
@@ -342,12 +384,15 @@ public struct DeckEvent: Sendable, Equatable {
 
 public struct DeckStats: Sendable, Equatable {
     public let totalPhotos: Int
-    /// Photos the deck could deal right now, ignoring the repeat window.
+    /// Photos the deck could deal right now, ignoring the pass and the window.
     public let dealablePhotos: Int
     public let neverDealt: Int
     /// Photos whose bytes are resident — referenced in place or materialised.
     public let residentPhotos: Int
     public let currentDealSeq: Int64
+    public let passStartSeq: Int64
+    /// Cards left before the deck reshuffles.
+    public let unusedInCurrentPass: Int
     public let repeatWindow: Int
     public let timesShownMin: Int
     public let timesShownMax: Int
@@ -362,6 +407,11 @@ extension Deck {
     /// v1 selects still images only. The exclusion is a named predicate rather
     /// than an absence of video code, which is the difference between 2.0 being
     /// a feature and being an excavation.
+    ///
+    /// `:threshold` carries both the pass and the window, since eligibility is
+    /// `last_dealt_seq <= max(pass_start_seq, seq - w - 1)`. A photo never dealt
+    /// is eligible by definition, which is what lets a newly added photo join
+    /// the pass already in progress rather than waiting for the next one.
     fileprivate static let eligibilityPredicate = """
         p.source_enabled = 1
           AND p.available = 1

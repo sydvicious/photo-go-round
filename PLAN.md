@@ -41,8 +41,10 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **The only things outside our own code are Apple's OS frameworks and the photo libraries themselves.** No packages, no SDKs, no vendored source. Since PhotoKit is Apple's, the sole genuine external dependency in the entire project is the Google Photos web API — one optional provider, at the very end.
 - **Raw SQLite and hand-written SQL. No ORM, no wrapper.** `libsqlite3` ships in the OS on every Apple platform, so there is nothing to bundle and nothing to vet. It is safe for multi-process access in WAL mode, which Core Data's SQLite store explicitly is not, and the deck is set-based SQL that an ORM would only obscure.
 - **Rows are cheap and complete; bytes are expensive and windowed.** The database holds an identifier row for *every* photo in every source, however many that is. The cache holds a bounded window of actual image files. Conflating the two would cap the shuffle at the cache size.
-- **The deck is a sliding repeat window over a re-rolled random key.** A photo is eligible once it has not been dealt within the last *w* deals; among the eligible, order by a random key re-rolled on each deal. No epochs, no passes, no boundary — and therefore no boundary artifact to patch.
-- **The window is a configurable fraction of the pool, default 0.5.** At 1.0 it is the classic every-photo-once-before-any-repeat shuffle; lower values let photos recur sooner, which matters on a fifty-thousand-photo library where strict fairness means never seeing a favourite again. Exposed as a user default from day one, and worth a slider later.
+- **The deck is a circular queue of eligible cards, with a pass reshuffle as the floor beneath it.** A photo is eligible once *w* deals have gone by since it was dealt, which leaves `N − w` candidates available at every deal and never runs dry; the pass rule catches only the two cases where the window has no answer — fraction 1.0, and a library too small for `N − w` to reach 1. Both rules are one comparison against `max(pass_start_seq, deal_seq - w)`, and the pass is one integer in a one-row table.
+- **A photo may repeat across a pass boundary, and we accept it.** This is a photo shuffle, not a casino. Preventing it costs a guard band and a relaxation path, to spare someone who happens to be watching when two passes meet — every few weeks — from seeing a picture twice.
+- **Selection takes a uniformly random offset into the eligible set, never its first row.** Ordering by a re-rolled random key and taking the minimum starves photos permanently: a high key loses, is never re-rolled *because* it lost, and loses forever. Measured at fraction 0.5, that gives showings from 3 to 391 where a random offset gives 186 to 217.
+- **The window is a configurable fraction of the pool, default 0.5.** At 1.0 the window is unsatisfiable and the pass alone governs: the classic every-photo-once-before-any-repeat shuffle, reshuffled each time through. Lower values let photos recur sooner, which matters on a fifty-thousand-photo library where strict fairness means never seeing a favourite again. Exposed as a user default from day one, and worth a slider later.
 - **No deduplication in v1.** A photo reachable from two sources is two rows and gets dealt twice. Content-level identity is genuinely hard — perceptual hashing, edited versions, format conversions — and it is additive to bolt on later.
 
 *Consumers*
@@ -50,7 +52,7 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **One deck, shared by every surface.** Wallpaper, screensaver, and widgets all deal from the same sequence, so no photo repeats anywhere until every photo has been shown. Dealing is therefore a cross-process atomic operation, and the cache must stay ahead of the *fastest* consumer, not the average one.
 - **The Watch app is a companion and requires the paired iPhone.** Not an independent watchOS app, even though the platform permits one. With no Photos framework and no sources of its own, an unpaired watch has nothing to show — so the dependency is declared up front rather than degraded into at runtime.
 - **Every display is a separate virtual consumer, and consumers deal in hands.** A consumer reserves a contiguous block of *n* cards from the shared deck in one atomic operation and plays through it locally — display one takes 1…n, display two takes n+1…2n. A surface hits the database once per hand rather than once per photo.
-- **Scarcity degrades, it never starves.** Hands are disjoint when the pool can support it; when it cannot — a one-photo library and three displays — every consumer gets the same photo rather than two of them getting nothing. The same principle governs the repeat window, which relaxes rather than starving.
+- **Scarcity degrades, it never starves.** Hands are disjoint when the pool can support it; when it cannot — a one-photo library and three displays — every consumer gets the same photo rather than two of them getting nothing. The same principle governs the deck itself: running out of eligible cards reshuffles into a new pass, and only when a reshuffle *still* finds everything spoken for do consumers overlap.
 
 *Sources*
 
@@ -59,6 +61,7 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **Photos inside a folder source are stored folder-relative.** Only the source's own path is absolute, so moving or renaming a folder is one row to repair rather than fifty thousand — and we only ever write metadata to items the user explicitly handed us, never to the photos inside them.
 - **We survive folder renames and moves; anything else the user does inside a folder is theirs.** A photo reorganized within or between folders is treated as a departure and an arrival, losing its shuffle history. Recognizing it would require stamping every file, which is the cost the narrow scope exists to avoid.
 - **Still images only. Videos are out of scope until 2.0.** Scanners filter them out deliberately rather than by omission, and the schema carries a `media_type` column from the first migration — so adding video later is a change to a predicate and a set of display capabilities, not a rescan of every source.
+- **Animated GIF and animated HEIC display as their first frame, and always will.** Unlike video, this is a settled non-goal rather than a deferral. It also happens to be free: the subsampled decode already asks for frame 0.
 - **Apple Photos is entirely optional; the system is complete without it.** A user who never wants the Photos library involved gets a fully working product from folders and individually selected files alone — and is never shown a Photos permission prompt, because we only ask when a Photos source is actually added.
 - **Only the System Photo Library is reachable.** PhotoKit talks to whichever library Photos designates as the system one; there is no public way to open another. If the user switches system libraries, our stored asset identifiers stop resolving *en masse*, which is treated as the source becoming unavailable rather than as the photos being deleted.
 - **File-backed sources come first, Apple Photos after the Mac app, Google Photos last.** Prove the deck, cache, and display pipeline against plain files where there is no permission flow and no network to fail before adding the provider that has both.
@@ -190,7 +193,9 @@ Videos are out of scope. The important thing is that they are excluded *delibera
 
 **Live Photos are photos, and are included.** A Live Photo is `mediaType == .image` with `.photoLive` in its subtypes — a still with a movie attached. It passes the filter, which is right; it should display as its still. The one thing to get right is materialization: `PHAssetResource` for a Live Photo yields both a photo resource and a `.pairedVideo`, and we take only `.photo` or `.fullSizePhoto`. Taking the wrong one means a video file in a cache that has no idea how to display it.
 
-**Animated stills are the fuzzy edge.** Animated GIFs and animated HEIC conform to `.image`, so they pass the filter and land in the library. Treating them as ordinary stills — first frame, no animation — is the v1 answer, and it is worth deciding rather than discovering when one shows up mid-pan.
+**Animated stills are first frames, permanently.** Animated GIFs and animated HEIC conform to `.image`, so they pass the filter and land in the library. They display as their first frame and never animate — not as a v1 simplification to be revisited, but as a settled non-goal, unlike video. Nobody adds an animated GIF to a photo library so that a wallpaper can loop it.
+
+Pleasingly, this costs nothing to implement and something to *un*-implement. `CGImageSourceCreateThumbnailAtIndex(source, 0, …)` — the subsampled decode this plan already relies on — takes the frame at index 0, so the first frame is what falls out of writing no special code at all. The decision's real value is that a later phase never reaches for `CGAnimateImageAtURLWithBlock` trying to be helpful, which would put a frame animation and the screensaver's pan on the same layer, fighting over it.
 
 **What the `media_type` column buys.** Storing the type on every row from the first migration means the exclusion lives in a query predicate, not in the scanner. Turning videos on in 2.0 becomes a change to what the deck selects rather than a re-enumeration of every source the user has ever added.
 
@@ -289,7 +294,11 @@ Keeping these separate is what makes the shuffle honest. If the database only he
 
 The naive shuffle — one random column, re-rolled when consumed — repeats photos almost immediately, because a fresh random value can land right back at the front. The fix is to make recency a filter rather than trusting the ordering alone.
 
-**A photo is eligible when it has not been dealt within the last *w* deals.** Among the eligible, order by a random key that is re-rolled on every deal. That is the whole algorithm.
+**In normal operation the deck is a circular queue that never runs dry.** A photo is eligible once *w* deals have gone by since it was last dealt, so at any moment exactly `N − w` of the library's `N` photos are available to choose from — a rotating window of candidates that refills itself as fast as it is consumed. Nothing ever ends; there is no boundary and no reshuffle.
+
+That holds for every fraction below 1.0 on a library of any real size. The **pass** is the floor underneath it, for the two cases where the window has no answer: at fraction 1.0, where `w` is the whole pool by construction, and on a library small enough that `N − w` rounds to nothing. Then, and only then, the deck reshuffles and a new pass begins.
+
+**So: a photo is eligible when *w* deals have gone by since it was dealt, or when it has not been dealt in the current pass.** That is the whole algorithm, and the second clause is the one that almost never fires.
 
 ```sql
 CREATE TABLE photo (
@@ -305,16 +314,38 @@ CREATE TABLE photo (
   last_shown_at  INTEGER,
   ...
 );
-CREATE INDEX photo_deck ON photo(available, last_dealt_seq, shuffle_key);
+
+CREATE TABLE deck_state (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  deal_seq       INTEGER NOT NULL DEFAULT 0,   -- advances on every card played
+  pass_start_seq INTEGER NOT NULL DEFAULT 0    -- the ordinal the current pass began at
+);
+
+-- Selection orders by shuffle_key and takes a LIMIT, so the index leads with
+-- the equality columns and *ends* at shuffle_key. Putting last_dealt_seq before
+-- it would force a temp b-tree sort of half the library on every deal.
+CREATE INDEX photo_deck ON photo(source_enabled, available, media_type, shuffle_key);
 ```
 
-A single monotonic counter — the deal ordinal — advances on every card dealt anywhere in the system. A photo is eligible when `last_dealt_seq IS NULL OR last_dealt_seq <= current_seq - w`. Photos never dealt are eligible by definition, so newly added photos compete immediately without needing to be placed anywhere special.
+A single monotonic counter — the deal ordinal — advances on every card dealt anywhere in the system. The pass is one more integer beside it: a photo is unused in the current pass while `last_dealt_seq <= pass_start_seq`, and reshuffling means moving `pass_start_seq` up to the current ordinal, which makes every photo unused again. There is no per-photo epoch column and no pass-position column.
+
+The two rules collapse into a single comparison, which is why there is no branch anywhere in the deal:
+
+```
+eligible  ⟺  last_dealt_seq IS NULL OR last_dealt_seq <= max(pass_start_seq, deal_seq - w)
+```
+
+Photos never dealt are eligible by definition, so a newly added photo joins the pass already in progress rather than waiting for the next one — no placement, no special case.
 
 ### The repeat window
 
-*w* is derived from a configurable fraction of the eligible pool: `w = round(fraction × pool_size)`, with **0.5 as the starting default** — a photo can come back once about half the library has gone by.
+*w* is derived from a configurable fraction of the eligible pool: `w = round(fraction × pool_size)`, with **0.5 as the starting default** — a photo can come back once about half the library has gone by, without waiting for the pass to finish.
 
-This generalizes the stricter rule it replaces. At **fraction 1.0** a photo cannot return until every other photo has been dealt: exactly one showing per pass, in random order within the pass, which is the classic shuffle. At **0.5** or **0.33** photos can recur sooner, which matters most on large libraries — with fifty thousand photos, fraction 1.0 means a picture you loved is effectively never coming back, and that is a strange thing for a system whose purpose is showing you your photos.
+At **fraction 1.0** the window is the whole pool and is therefore never satisfiable on its own, so the pass is the only rule: exactly one showing per pass, in a fresh random order every time through, which is the classic shuffle. At **0.5** or **0.33** photos recur sooner, which matters most on large libraries — with fifty thousand photos, fraction 1.0 means a picture you loved is effectively never coming back, and that is a strange thing for a system whose purpose is showing you your photos.
+
+The two rules hand off cleanly rather than fighting, and the handoff is lopsided. The eligible set has exactly `N − w` members, so below 1.0 the window always has an answer on any library where `(1 − fraction) × N ≥ 1`: the deck never runs down to nothing, `pass_start_seq` never moves, and the minimum-gap guarantee is exactly *w*. At 1.0 the window contributes nothing and the pass does all the work. Nothing in between needs describing, because the `max()` picks whichever is looser at each deal.
+
+The practical shape of that: at the default 0.5 with four thousand photos, two thousand cards are eligible at every single deal and the pass machinery is dead code that never executes. It earns its place only at the extremes — the slider pushed fully right, or a library of a handful of photos where `w` swallows the pool. Both are real, so the floor stays; neither is the common case, so the circular queue is what the code should read as.
 
 The trade is fairness against liveliness, and it should be stated plainly. Fraction 1.0 gives exact fairness: every photo shown the same number of times, zero variance. Lower fractions equalize only in expectation — over any finite stretch some photos appear three times while others appear once. That variance *is* the feature being bought, and it is why the number is exposed rather than chosen for the user.
 
@@ -322,13 +353,25 @@ It lives in `UserDefaults` as `repeatWindowFraction`, settable by `pgr set` from
 
 ### Why this removes machinery rather than adding it
 
-An earlier version of this plan used an epoch counter — order by `(epoch, shuffle_key)`, bump the epoch on deal — and needed a separate time-based cooldown to patch a hole at the epoch boundary. A photo dealt as the last card of one pass could be re-rolled to the front and dealt again as the first card of the next: two showings back to back despite being a full pass apart by the deck's own accounting.
+An earlier version of this plan used an epoch counter — order by `(epoch, shuffle_key)`, bump the epoch on deal — with a per-photo epoch column, a pass-position column, a key-biasing scheme, and a separate time-based cooldown to patch the boundary. All of that is deleted. What survives is one integer, `pass_start_seq`, in a table that has one row.
 
-The sliding window has no boundary, so there is no seam to patch. A photo dealt at ordinal *n* is ineligible until *n + w*, unconditionally and continuously, whatever the rest of the deck is doing. The cooldown, the pass-position column, and the key-biasing scheme that went with them are all deleted.
+**The boundary is accepted rather than patched, and that is the deliberate change.** A photo dealt as the last card of one pass can be dealt again as the first card of the next. The cooldown existed to prevent exactly that, and it is not worth its weight: this is a photo shuffle, not a casino, and someone who happens to be watching at the moment two passes meet — every few weeks, on a real library — sees a picture twice. The alternative costs a guard band, a relaxation path, and a paragraph of explanation, to buy nothing anybody asked for.
 
-What remains from that design is the degradation rule, which is unchanged and still essential: **the deal must never fail.** If no photo satisfies the window — a library of thirty photos and a screensaver at one every ten seconds will exhaust it in minutes — the window is progressively halved until something is eligible, and the relaxation is surfaced as an observable event rather than swallowed, so the settings UI can eventually say that the repeat window is larger than the library can support.
+A pure sliding window with no pass would have no boundary at all, which is why an earlier draft of this section preferred one. It does not survive contact with fraction 1.0. A window of `pool` cards leaves exactly one photo eligible at every deal after the first pass, so the shuffle key never gets a say and every pass replays the first pass's order forever — exact fairness bought with a fixed rotation. Reshuffling at a pass boundary is what makes 1.0 an actual shuffle, and the boundary is the price.
+
+**The degradation rule is unchanged and still essential: the deal must never fail.** But running out of eligible cards is no longer a failure to degrade around — it is the end of a pass, which is ordinary business, and the reshuffle is strictly more permissive than any window could be. So the progressive halving is gone with the rest of the epoch machinery. What is left needing degradation is scarcity that a reshuffle cannot fix: when every free card is already spoken for by an outstanding hand, consumers overlap rather than starve, and *that* is surfaced as an observable event.
 
 `times_shown` survives purely as a statistic, for the deck inspector and for `pgr deck stats`. Nothing orders by it.
+
+### Selecting at a random offset, not at the minimum
+
+**Among the eligible, take a card at a uniformly random offset** in `shuffle_key` order. Not the first one.
+
+This is worth stating explicitly because the obvious formulation — `ORDER BY shuffle_key LIMIT 1`, with the key re-rolled on deal — starves photos permanently, and does so silently. `LIMIT 1` on an ordering takes the *minimum*, and only the winner's key is re-rolled. A photo whose key lands high loses, keeps its high key precisely *because* it never won, and loses again. In simulation at fraction 0.5 over twenty thousand deals of a hundred photos, showings ranged from 3 to 391 and a photo with an initial key of 0.999 was never shown at all. Taking a random offset instead gives 186 to 217.
+
+Fraction 1.0 hides the flaw, because a pass guarantees every photo a turn whatever its key — which is exactly why it is worth a paragraph rather than a footnote. The bug lives only in the range the deck actually ships in.
+
+`shuffle_key` keeps both of its jobs. It supplies the index that makes selection cheap, and its re-roll on deal churns the order so a hand's contiguous block is not the same neighbourhood twice running.
 
 ### Dealing atomically
 
@@ -336,22 +379,33 @@ Every surface deals from this one sequence, and the processes are separate, so a
 
 ```sql
 BEGIN IMMEDIATE;
+-- :threshold is max(pass_start_seq, :seq - :window), computed by the caller,
+-- and :offset is a uniform draw over the count of eligible cards.
 UPDATE photo
    SET times_shown    = times_shown + 1,
        last_dealt_seq = :seq,
        shuffle_key    = <new random>,
        last_shown_at  = :now
  WHERE id = (SELECT id FROM photo
-              WHERE available = 1
+              WHERE source_enabled = 1
+                AND available = 1
                 AND media_type = 'image'
-                AND (last_dealt_seq IS NULL OR last_dealt_seq <= :seq - :window)
+                AND (last_dealt_seq IS NULL OR last_dealt_seq <= :threshold)
+                AND NOT EXISTS (SELECT 1 FROM hand
+                                 WHERE hand.photo_id = photo.id
+                                   AND hand.played_at IS NULL)
               ORDER BY shuffle_key
-              LIMIT 1)
+              LIMIT 1 OFFSET :offset)
 RETURNING id, external_id, cache_path;
+UPDATE deck_state SET deal_seq = :seq, pass_start_seq = :pass WHERE id = 1;
 COMMIT;
 ```
 
 `BEGIN IMMEDIATE` takes the write lock up front rather than discovering the conflict at COMMIT, and `RETURNING` makes the deal and the read one round trip. Two processes racing get serialized by SQLite, and the loser gets the next card rather than the same one. Callers still need `SQLITE_BUSY` retry with backoff, since WAL permits one writer at a time.
+
+Counting the eligible cards to draw the offset is a second statement inside the same transaction, and it is the one real cost of selecting properly. Against fifty thousand photos it is an index scan rather than a table scan; measured on this machine, a hundred-card hand reservation at a random offset costs about 21 ms, and hands mean that runs a handful of times an hour rather than once a photo.
+
+**`source_enabled` is denormalized onto `photo`.** The deck is the union of every *enabled* source, and joining `source` on every deal would cost the index that makes the ordering free. It is maintained in the same transaction that enables or disables a source — one write against that source's rows, on an operation nobody performs in a loop.
 
 One refinement worth considering later: whether a photo appearing in two selected sources should be dealt twice or deduplicated. Deferred — deduplication is out of scope for v1.
 
@@ -604,7 +658,7 @@ pgr source list | remove <id> | enable <id> | disable <id>
 pgr scan [--source <id>]
 pgr deck peek [--count n]          # next n cards, with deal ordinal and shuffle key
 pgr deck deal --consumer <name> [--count n]
-pgr deck stats                     # showing counts, gap distribution, window relaxations
+pgr deck stats                     # showing counts, gap distribution, passes, overlaps
 pgr cache status | fill | evict
 pgr shuffle-test --deals N         # the statistical assertions
 pgr notify <topic>                 # post a Darwin notification by hand
