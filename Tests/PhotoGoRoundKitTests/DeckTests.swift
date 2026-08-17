@@ -436,7 +436,7 @@ struct DeckTests {
 
         let library = try TestLibrary.onDisk(at: directory)
         let source = try library.addSource()
-        let ids = try library.addPhotos(400, to: source)
+        _ = try library.addPhotos(400, to: source)
         let path = TestLibrary.path(in: directory)
 
         let dealsPerWorker = 50

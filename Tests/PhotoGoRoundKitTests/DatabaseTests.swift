@@ -279,7 +279,11 @@ struct DatabaseTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appending(path: "library.sqlite").path(percentEncoded: false)
 
-        let holder = try Database(path: path)
+        // Touching one connection from two threads is exactly what the rest of
+        // the kit avoids, and the compiler is right to say so. It is safe here
+        // only because the connection is opened FULLMUTEX, and it is done
+        // deliberately to keep the test to a single process.
+        nonisolated(unsafe) let holder = try Database(path: path)
         try holder.execute("CREATE TABLE t (i INTEGER);")
 
         // Hold the write lock, then release it from another thread shortly

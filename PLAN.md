@@ -93,7 +93,7 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **A LaunchAgent, not a LaunchDaemon.** Photos access is per-user TCC and requires a user session; a system daemon cannot reach the library at all.
 - **Installs are fully independent — no cross-device sync at all, with one forced exception.** iCloud Photos already puts the same photos on every device, so each install shuffles the same pool on its own; this buys out of `PHCloudIdentifier` mapping, a CloudKit layer, and deal-time conflict resolution entirely. The Apple Watch is the exception, because watchOS has no Photos framework and no sources of its own — the paired iPhone feeds it, one-directionally.
 - **Between our own components: the database is the transport, a Darwin notification is the doorbell.** No HTTP server, no sockets, no XPC. Darwin notifications carry no payload, which is exactly right — they signal "go look" and SQLite holds what there is to look at. Only the screensaver, trapped in someone else's sandbox, may need something else.
-- **Minimum deployment target 27.0 on every platform.** No back-deployment guards, no availability checks, no legacy code paths; the whole modern API surface is simply available.
+- **Minimum deployment target 27.0 on every platform, temporarily held at 26.0 until 27 ships.** The target is 27: no back-deployment guards, no availability checks, no legacy code paths. The hold exists only because this machine is on a 27 seed while the second Mac — the one that has to keep the agent running during a vacation — is on the current public release. 27 will have shipped by the time the server is done, so the hold lifts on its own. Nothing may be designed around it.
 
 *Engineering*
 
@@ -106,7 +106,7 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 
 # Background
 
-The repository is empty apart from a BSD 3-Clause license and an Xcode `.gitignore`. Toolchain on this machine is macOS 27.0, Xcode 27.0, Swift 6.4. Minimum deployment target is 27.0 across macOS, iOS, iPadOS, tvOS, and visionOS. No prior implementation exists, so nothing here is constrained by an existing codebase — only by platform rules.
+The repository is empty apart from a BSD 3-Clause license and an Xcode `.gitignore`. Toolchain on this machine is macOS 27.0, Xcode 27.0, Swift 6.4. This machine runs a 27 seed; 27 has not shipped publicly yet. Minimum deployment target is 27.0 across macOS, iOS, iPadOS, tvOS, and visionOS, held at 26.0 until it does, so the server can run in the meantime on a second Mac on the current public release. No prior implementation exists, so nothing here is constrained by an existing codebase — only by platform rules.
 
 This problem has been pursued for a very long time: a friend's "Desktop Picture" extension on classic Mac OS in 1992, then Mac OS X's built-in wallpaper and screensaver from 2001, from inside Apple. Across three decades and many releases the quality has moved up and down without the core failure ever being fixed — nothing has been able to take a large, unstructured collection of photos and simply do the right thing with it. Every design decision below should be read against that: the thing being built is the part that has been missing the whole time.
 
@@ -118,11 +118,19 @@ Syd built a screensaver from Xcode's built-in template about two years ago. That
 
 # Detailed discussions
 
-## The 27.0 baseline
+## The 27.0 baseline, and the temporary 26.0 hold
 
 Targeting 27.0 everywhere removes a whole category of work. `SMAppService`, Swift 6 strict concurrency, `ScreenCaptureKit`-era display APIs, and the modern WidgetKit and SwiftUI surfaces are all simply present; there are no `@available` ladders and no fallback implementations to write or test. Since this is software for you rather than for a market, there is no user base stranded on an older OS to weigh against that.
 
-One honest caveat: my knowledge runs to roughly mid-2026, and 27.0 shipped after that. Where this plan asserts platform behavior — most importantly the `legacyScreenSaver` hosting model and its sandbox, but also WidgetKit refresh budgets and tvOS storage limits — those assertions describe the 26-and-earlier world. Any of them could have changed. That is why each phase carries its own spike, and I will verify against the installed SDK and current documentation rather than against memory before any of the later surfaces are designed in detail.
+**The target is held at 26.0 until 27 ships, and the hold expires by itself.** This machine is on a 27 seed; the second Mac — the one that has to keep the agent running while nobody is at a desk — is on the current public release, because that is the only release there is. Building against a seed would mean the server could only run on the machine it was written on, which is precisely the wrong property for a background service. 27 will have shipped well before the server is finished, at which point the target goes to 27 and stays there.
+
+Because the hold is temporary and self-expiring, the important thing is that **nothing may be designed around it.** No availability check, no fallback path, no "the 26 way of doing this" — if a 27-only API is ever the right answer, lift the hold early rather than write a guard that then has to be hunted down and deleted. Lifting it is a one-line change to `Package.swift` precisely because there is nothing to unwind.
+
+So far the hold costs nothing at all: the kit builds and its whole test suite passes against 26 without a single availability check, because everything this project actually uses is far older than either release — `libsqlite3`, `OSLog` and `OSSignposter`, `Duration`, `SMAppService` (13), `NSWorkspace.setDesktopImageURL`, `PHAssetResourceManager`, WidgetKit. The phases where a 27-only API might first be tempting are the Photos provider in Phase 3 and the saver in Phase 6, and the hold will almost certainly have lifted by then.
+
+There is a second reason the hold is comfortable rather than merely tolerable. Phases 1 and 2 are a library and a command-line tool: no windows, no sandboxes, no OS integration points beyond SQLite and the filesystem. That is the part of the project least likely to want anything new from the OS, which is a good match for the only period during which the constraint applies.
+
+One honest caveat: my knowledge runs to roughly mid-2026, and 27.0 shipped after that. Where this plan asserts platform behavior, those assertions describe the 26-and-earlier world. Any of them could have changed. That is why each phase carries its own spike, and I will verify against the installed SDK and current documentation rather than against memory before any of the later surfaces are designed in detail.
 
 ## Why SQLite rather than Core Data
 
@@ -920,7 +928,7 @@ This is exactly the sort of thing worth ten minutes of proving before designing 
 
 **Everything else is smaller versions of known problems.** What the watch stores is tiny — watch-screen-sized, well under the widget memory ceiling — and it is the only copy there, not a derivative of a local original. Complication timeline reloads are budgeted more strictly than on iOS, so the watch advances its own display on the phone's schedule rather than trying to run a clock of its own. And storage on the watch is small enough that the rolling set is measured in single-digit megabytes.
 
-*Caveat, as elsewhere in this plan: the rendering-mode behavior described here is what held through the watchOS versions I know. Verify against the 27.0 SDK before designing Phase 9 in detail.*
+*Caveat, as elsewhere in this plan: the rendering-mode behavior described here is what held through the watchOS versions I know. Verify against the installed SDK before designing Phase 9 in detail.*
 
 ## tvOS storage
 
