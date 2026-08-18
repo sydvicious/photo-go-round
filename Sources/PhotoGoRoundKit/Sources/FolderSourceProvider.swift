@@ -96,6 +96,41 @@ public struct FolderSourceProvider: SourceProvider {
         }
     }
 
+    public func existence(of externalID: String, in source: Source) async -> PhotoExistence {
+        Self.fileExistence(of: externalID, in: source, using: fileAccess)
+    }
+
+    /// A `stat`, and — when it comes back negative — a second `stat` on the
+    /// source itself.
+    ///
+    /// That second check is the entire difference between "you deleted this
+    /// photo" and "your drive is not plugged in". Without it the two are
+    /// indistinguishable, and treating them alike destroys a library on the
+    /// first undock.
+    static func fileExistence(
+        of externalID: String,
+        in source: Source,
+        using fileAccess: any FileAccess
+    ) -> PhotoExistence {
+        do {
+            let photoIsThere = try fileAccess.withPhotoURL(in: source, externalID: externalID) {
+                FileManager.default.fileExists(atPath: $0.path(percentEncoded: false))
+            }
+            if photoIsThere { return .present }
+
+            let sourceIsThere = try fileAccess.withSourceURL(source) {
+                FileManager.default.fileExists(atPath: $0.path(percentEncoded: false))
+            }
+            guard sourceIsThere else {
+                return .unknown(reason: FileClassifier.unavailableReason(for: URL(filePath: source.locator)))
+            }
+            // The source is right there and the photo is not. It is gone.
+            return .absent
+        } catch {
+            return .unknown(reason: String(describing: error))
+        }
+    }
+
     /// The path relative to the source's own folder, which is what goes in
     /// `external_id`.
     static func relativePath(of fileURL: URL, under rootPath: String) -> String? {
@@ -113,7 +148,7 @@ public struct FolderSourceProvider: SourceProvider {
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         // Replacing rather than failing: a half-written cache entry from a
-        // previous run should not wedge the prefetcher for ever.
+        // previous run should not wedge this photo for ever.
         if FileManager.default.fileExists(atPath: destination.path(percentEncoded: false)) {
             try FileManager.default.removeItem(at: destination)
         }
@@ -176,5 +211,12 @@ public struct FileSourceProvider: SourceProvider {
         try fileAccess.withPhotoURL(in: source, externalID: externalID) { fileURL in
             try FolderSourceProvider.copy(fileURL, to: destination, externalID: externalID)
         }
+    }
+
+    public func existence(of externalID: String, in source: Source) async -> PhotoExistence {
+        // A file source's locator *is* the photo, so "is the source there" and
+        // "is the photo there" are the same question — and a negative answer
+        // cannot be attributed without knowing whether the volume is mounted.
+        FolderSourceProvider.fileExistence(of: externalID, in: source, using: fileAccess)
     }
 }

@@ -3,7 +3,7 @@ import Foundation
 /// User-settable configuration.
 ///
 /// **The database holds state; `UserDefaults` holds preferences.** Sources, the
-/// deck, hands, and the cache are state — what the system knows. Fits, timings,
+/// pool, the queue, and the cache are state — what the system knows. Fits, timings,
 /// caps, and the repeat window are preferences — what you told it.
 ///
 /// Two rules follow from `defaults write` being a first-class interface:
@@ -54,13 +54,15 @@ public struct Preferences: @unchecked Sendable {
         public static let repeatWindowFraction = Key("repeatWindowFraction")
         public static let cachePhotoCap = Key("cachePhotoCap")
         public static let cacheByteCeiling = Key("cacheByteCeiling")
-        public static let cacheChunkSize = Key("cacheChunkSize")
-        public static let cacheBurstSize = Key("cacheBurstSize")
         public static let cacheMinimumFreeBytes = Key("cacheMinimumFreeBytes")
         public static let cacheCriticalFreeBytes = Key("cacheCriticalFreeBytes")
         public static let scanIntervalSeconds = Key("scanIntervalSeconds")
         public static let maintenanceIntervalSeconds = Key("maintenanceIntervalSeconds")
-        public static let abandonedHandTimeoutSeconds = Key("abandonedHandTimeoutSeconds")
+        public static let downloadConcurrency = Key("downloadConcurrency")
+        public static let queueSize = Key("queueSize")
+        public static let queueRefreshIntervalSeconds = Key("queueRefreshIntervalSeconds")
+        public static let consumerIdleTimeoutSeconds = Key("consumerIdleTimeoutSeconds")
+        public static let sources = Key("sources")
     }
 
     // MARK: - Reading, with a default and a clamp
@@ -125,8 +127,7 @@ public struct Preferences: @unchecked Sendable {
     }
 
     /// A lowered cap is applied by running an eviction pass; a raised one is
-    /// applied by letting the next prefetch fill to it. Chunk size takes effect
-    /// at the next chunk boundary, which is one of the reasons chunks exist.
+    /// applied by letting the queue fill toward it.
     public var cacheSettings: CacheSettings {
         let defaultSettings = CacheSettings.default
         return CacheSettings(
@@ -134,8 +135,6 @@ public struct Preferences: @unchecked Sendable {
             byteCeiling: bytes(
                 .cacheByteCeiling, default: defaultSettings.byteCeiling, in: 0...Int64.max
             ),
-            chunkSize: integer(.cacheChunkSize, default: defaultSettings.chunkSize, in: 1...1000),
-            burstSize: integer(.cacheBurstSize, default: defaultSettings.burstSize, in: 1...1000),
             minimumFreeBytes: bytes(
                 .cacheMinimumFreeBytes, default: defaultSettings.minimumFreeBytes, in: 0...Int64.max
             ),
@@ -145,22 +144,107 @@ public struct Preferences: @unchecked Sendable {
         )
     }
 
-    /// How often the agent rescans sources as a backstop. FSEvents makes the
-    /// common case near-immediate; this catches what happened while the agent
-    /// was not running.
+    /// How often the agent rescans sources.
+    ///
+    /// This is the only change-detection mechanism today. Watching becomes a 1.0
+    /// requirement for surfaces that render ahead of time, but nothing depends
+    /// on it yet.
     public var scanInterval: Duration {
         .seconds(number(.scanIntervalSeconds, default: 300, in: 1...86_400))
     }
 
-    /// How often the agent prefetches, evicts, and reaps.
+    /// How often the agent verifies residency, sweeps orphans, and evicts.
     public var maintenanceInterval: Duration {
         .seconds(number(.maintenanceIntervalSeconds, default: 30, in: 1...3600))
     }
 
-    /// How long a consumer may go without checking in before its unplayed cards
-    /// are returned to the deck.
-    public var abandonedHandTimeout: Duration {
-        .seconds(number(.abandonedHandTimeoutSeconds, default: 1800, in: 60...86_400))
+    /// How long a consumer may go without asking before it is reported as
+    /// having gone quiet. Nothing is reclaimed — there is nothing to reclaim —
+    /// but a display that stopped asking is worth being able to see.
+    public var consumerIdleTimeout: Duration {
+        .seconds(number(.consumerIdleTimeoutSeconds, default: 900, in: 60...86_400))
+    }
+
+    /// How many pictures each source fetches at once.
+    ///
+    /// Fetching is nearly all latency, so one at a time leaves a provider idle
+    /// for the duration of its own I/O. Per source rather than global, so a slow
+    /// provider saturates its own connection without crowding out a fast one.
+    public var downloadConcurrency: Int {
+        integer(.downloadConcurrency, default: SourceWorker.defaultConcurrency, in: 1...32)
+    }
+
+    /// How many ready pictures to keep queued. A target, not a ceiling.
+    ///
+    /// Read afresh every time the queue is topped up, so changing it takes
+    /// effect at the next refresh rather than at the next launch. Raising it
+    /// lets the queue grow on its own; lowering it simply stops producers being
+    /// asked until serving brings the queue back under the new number, since
+    /// nothing is ever evicted from the queue to make it shorter.
+    public var queueSize: Int {
+        integer(.queueSize, default: 1000, in: 1...100_000)
+    }
+
+    /// How often the queue is topped up.
+    ///
+    /// Separate from the maintenance interval, because they answer to different
+    /// pressures: topping up should be frequent enough that a queue drained by a
+    /// fast consumer refills promptly, while sweeping and evicting can be lazy.
+    public var queueRefreshInterval: Duration {
+        .seconds(number(.queueRefreshIntervalSeconds, default: 5, in: 1...3600))
+    }
+
+    // MARK: - Sources
+
+    /// The source list, which is the one piece of library state that is not
+    /// derivable and therefore the one that lives here.
+    ///
+    /// Entries that cannot be parsed are dropped rather than failing the read —
+    /// a hand-edited plist should cost you the bad entry, not the library.
+    public var sources: [SourceSpec] {
+        let stored = defaults.array(forKey: Key.sources.rawValue) ?? []
+        return stored.compactMap { entry in
+            guard let spec = SourceSpec(propertyList: entry) else {
+                Log.prefs.error("ignoring an unreadable entry in the source list")
+                return nil
+            }
+            return spec
+        }
+    }
+
+    public func setSources(_ specs: [SourceSpec]) {
+        defaults.set(specs.map(\.propertyList), forKey: Key.sources.rawValue)
+        DarwinNotification.post(.sourcesChanged)
+    }
+
+    /// Adds a source if its locator is not already listed. Returns false when it
+    /// was already there, which makes re-asserting the same list at every launch
+    /// a no-op rather than a duplicate.
+    @discardableResult
+    public func addSource(_ spec: SourceSpec) -> Bool {
+        var current = sources
+        guard !current.contains(where: { $0.locator == spec.locator }) else { return false }
+        current.append(spec)
+        setSources(current)
+        return true
+    }
+
+    @discardableResult
+    public func removeSource(locator: String) -> Bool {
+        let current = sources
+        let remaining = current.filter { $0.locator != locator }
+        guard remaining.count != current.count else { return false }
+        setSources(remaining)
+        return true
+    }
+
+    @discardableResult
+    public func setSourceEnabled(_ enabled: Bool, locator: String) -> Bool {
+        var current = sources
+        guard let index = current.firstIndex(where: { $0.locator == locator }) else { return false }
+        current[index].enabled = enabled
+        setSources(current)
+        return true
     }
 
     // MARK: - Writing
@@ -206,8 +290,9 @@ public struct Preferences: @unchecked Sendable {
     }
 
     public static let allKeys: [Key] = [
-        .repeatWindowFraction, .cachePhotoCap, .cacheByteCeiling, .cacheChunkSize,
-        .cacheBurstSize, .cacheMinimumFreeBytes, .cacheCriticalFreeBytes,
-        .scanIntervalSeconds, .maintenanceIntervalSeconds, .abandonedHandTimeoutSeconds,
+        .repeatWindowFraction, .cachePhotoCap, .cacheByteCeiling,
+        .cacheMinimumFreeBytes, .cacheCriticalFreeBytes,
+        .scanIntervalSeconds, .maintenanceIntervalSeconds, .downloadConcurrency, .queueSize,
+        .queueRefreshIntervalSeconds, .consumerIdleTimeoutSeconds,
     ]
 }

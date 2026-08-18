@@ -50,8 +50,8 @@ public struct DeckCard: Sendable, Equatable, Identifiable {
     /// Absolute for referenced photos; relative to the cache root for
     /// materialized ones. Nil when the bytes are not resident.
     public let cachePath: String?
-    /// The deal ordinal assigned when this card was played. Nil for a card that
-    /// has been reserved into a hand but not yet played.
+    /// The ordinal assigned when this picture was shown. Nil for one that is
+    /// queued or merely selected, and so has not been shown yet.
     public let dealSeq: Int64?
 
     public init(

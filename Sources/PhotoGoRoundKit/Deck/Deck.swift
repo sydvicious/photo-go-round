@@ -29,8 +29,8 @@ import Foundation
 /// key because it never won, and loses again, permanently. Fraction 1.0 hides
 /// this, which is why it is worth stating rather than assuming.
 /// `shuffle_key` keeps both of its jobs: it supplies the index that makes
-/// selection cheap, and its re-roll on deal keeps a hand's contiguous block from
-/// being the same neighbourhood twice running.
+/// selection cheap, and its re-roll on showing churns the order so consecutive
+/// requests to one source do not walk the same neighbourhood.
 ///
 /// The deck contains no timers and no opinion about when it is called. The Mac
 /// agent drives it from a continuous loop; an iOS widget will drive it from a
@@ -64,13 +64,12 @@ public struct Deck {
 
     // MARK: - State
 
-    /// Photos the deck could deal, ignoring the pass and the window: enabled
-    /// source, available, and a still image.
+    /// Photos the deck could offer, ignoring the pass and the window: enabled
+    /// source, still image.
     ///
-    /// Cache residency is deliberately *not* part of this. Cards are reserved
-    /// ahead of being needed and the prefetcher materialises what has been
-    /// reserved, so requiring resident bytes here would mean the cache could
-    /// never lead the deck.
+    /// Cache residency is deliberately *not* part of this. A picture is selected
+    /// before its bytes are fetched, so requiring resident bytes here would mean
+    /// nothing could ever be selected in the first place.
     public func poolSize() throws -> Int {
         try database.scalarInt(Self.poolSizeSQL) ?? 0
     }
@@ -98,237 +97,20 @@ public struct Deck {
         max(passStartSeq, seq - Int64(window) - 1)
     }
 
-    /// Which already-spoken-for cards a selection has to step around.
-    enum Exclusion: Sendable, Equatable {
-        /// The normal rule: a card reserved into *anybody's* outstanding hand is
-        /// spoken for. This is what keeps hands disjoint.
-        case anyOutstandingHand
-        /// The scarcity rule: overlap with other consumers is permitted, but a
-        /// consumer still must not be handed the same photo twice in one hand.
-        case ownOutstandingHand(consumerID: Int64)
-        /// No exclusion at all.
-        case none
-
-        var bindings: SQLBindings {
-            if case .ownOutstandingHand(let id) = self { return ["consumer": .int(id)] }
-            return [:]
-        }
-    }
-
-    /// How many photos are eligible at the given threshold.
-    func countEligible(threshold: Int64, excluding exclusion: Exclusion) throws -> Int {
-        try database.scalarInt(
-            Self.countSQL(exclusion),
-            exclusion.bindings.merging(["threshold": .int(threshold)]) { current, _ in current }
-        ) ?? 0
-    }
-
-    /// Photos not yet dealt in the current pass. Counts down to zero, at which
+    /// Pictures not yet used in the current pass. Counts down to zero, at which
     /// point the deck reshuffles.
     public func unusedInCurrentPass() throws -> Int {
         let state = try state()
-        return try countEligible(threshold: state.passStartSeq, excluding: .none)
-    }
-
-    // MARK: - Dealing
-
-    /// The result of a deal: a card, plus whatever the deck had to give up to
-    /// produce it.
-    public struct Deal: Sendable, Equatable {
-        public let card: DeckCard
-        public let relaxations: [DeckRelaxation]
-        /// True when this card was the first of a fresh pass.
-        public let startedNewPass: Bool
-    }
-
-    /// Deals one card and advances the deal ordinal.
-    ///
-    /// `BEGIN IMMEDIATE` takes the write lock up front rather than discovering
-    /// the conflict at COMMIT, and `UPDATE … RETURNING` makes the deal and the
-    /// read one round trip. Two processes racing are serialised by SQLite, and
-    /// the loser gets the *next* card rather than the same one.
-    ///
-    /// Returns nil only when there is genuinely nothing to deal — an empty
-    /// library.
-    public func deal(settings: DeckSettings = .default, now: Date = Date()) throws -> Deal? {
-        try database.transaction(.immediate) {
-            let pool = try poolSize()
-            guard pool > 0 else { return nil }
-
-            let state = try state()
-            let seq = state.dealSeq + 1
-            let window = settings.repeatWindow(poolSize: pool)
-
-            var threshold = Self.threshold(seq: seq, passStartSeq: state.passStartSeq, window: window)
-            var passStart = state.passStartSeq
-            var startedNewPass = false
-            var relaxations: [DeckRelaxation] = []
-
-            var eligible = try countEligible(threshold: threshold, excluding: .anyOutstandingHand)
-
-            if eligible == 0 {
-                // The pass is spent. Reshuffle: everything dealt so far becomes
-                // unused again, which is strictly more permissive than any
-                // window could be, so there is nothing further to degrade.
-                passStart = seq - 1
-                threshold = passStart
-                startedNewPass = passStart != state.passStartSeq
-                eligible = try countEligible(threshold: threshold, excluding: .anyOutstandingHand)
-            }
-
-            if eligible > 0,
-                let card = try dealOne(
-                    sql: Self.dealSQL(.anyOutstandingHand), seq: seq, threshold: threshold,
-                    offset: randomOffset(eligible), now: now
-                )
-            {
-                try commit(seq: seq, passStart: passStart, startedNewPass: startedNewPass,
-                           relaxations: relaxations, now: now)
-                return Deal(card: card, relaxations: relaxations, startedNewPass: startedNewPass)
-            }
-
-            // Every free card is spoken for by somebody's outstanding hand.
-            // Overlap rather than starve: three displays and one photo means
-            // all three show that photo.
-            let anyCard = try countEligible(threshold: threshold, excluding: .none)
-            if anyCard > 0 {
-                relaxations.append(.reservedCardsReused)
-                if let card = try dealOne(
-                    sql: Self.dealSQL(.none), seq: seq, threshold: threshold,
-                    offset: randomOffset(anyCard), now: now
-                ) {
-                    try commit(seq: seq, passStart: passStart, startedNewPass: startedNewPass,
-                               relaxations: relaxations, now: now)
-                    return Deal(card: card, relaxations: relaxations, startedNewPass: startedNewPass)
-                }
-            }
-
-            // A fresh pass with hands ignored matches every dealable photo, so
-            // reaching here means the pool count and the deal predicate have
-            // drifted apart.
-            Log.deck.fault("pool reported \(pool, privacy: .public) photos but nothing was dealable")
-            return nil
-        }
-    }
-
-    private func dealOne(sql: String, seq: Int64, threshold: Int64, offset: Int, now: Date) throws -> DeckCard? {
-        try database.first(
-            sql,
-            [
-                "seq": .int(seq),
-                "threshold": .int(threshold),
-                "offset": .int(Int64(offset)),
-                "key": .double(randomKey()),
-                "now": SQLValue(now),
-            ]
-        ) { try DeckCard(row: $0, dealSeq: seq) }
-    }
-
-    private func commit(
-        seq: Int64,
-        passStart: Int64,
-        startedNewPass: Bool,
-        relaxations: [DeckRelaxation],
-        now: Date
-    ) throws {
-        try database.run(
-            "UPDATE deck_state SET deal_seq = :seq, pass_start_seq = :pass WHERE id = 1;",
-            ["seq": .int(seq), "pass": .int(passStart)]
-        )
-        if startedNewPass {
-            Log.deck.notice("deck reshuffled; new pass begins at ordinal \(seq, privacy: .public)")
-            try recordEvent(kind: "pass", detail: "reshuffled at ordinal \(seq)", at: now)
-        }
-        for relaxation in relaxations {
-            try record(relaxation, at: now)
-        }
-    }
-
-    // MARK: - Selecting without dealing
-
-    /// The eligibility query on its own, without advancing anything.
-    ///
-    /// This is what hand reservation is built from: reservation marks cards as
-    /// spoken for, and only *playing* a card assigns it a deal ordinal and
-    /// starts its window clock.
-    ///
-    /// The block is contiguous in shuffle order from a random starting point,
-    /// wrapping if it runs off the end — cutting the deck and dealing from the
-    /// cut. Every eligible card has the same chance of being in the block.
-    func selectCandidates(
-        limit: Int,
-        threshold: Int64,
-        excluding exclusion: Exclusion,
-        offset: Int? = nil
-    ) throws -> [DeckCard] {
-        guard limit > 0 else { return [] }
-        let eligible = try countEligible(threshold: threshold, excluding: exclusion)
-        guard eligible > 0 else { return [] }
-
-        let sql = Self.candidatesSQL(exclusion)
-        // Asking for more than exists would make the wrap below re-read rows the
-        // first pass already returned, and a hand must never contain the same
-        // photo twice.
-        let wanted = min(limit, eligible)
-        let start = offset.map { min($0, max(eligible - 1, 0)) } ?? randomOffset(eligible)
-
-        func bindings(limit: Int, offset: Int) -> SQLBindings {
-            exclusion.bindings.merging([
-                "threshold": .int(threshold),
-                "limit": .int(Int64(limit)),
-                "offset": .int(Int64(offset)),
-            ]) { current, _ in current }
-        }
-
-        var cards = try database.all(sql, bindings(limit: wanted, offset: start)) {
-            try DeckCard(row: $0, dealSeq: nil)
-        }
-        // Wrap, so a starting point near the end of the order does not produce
-        // an artificially short hand. Capped at `start`, which is exactly the
-        // number of rows sitting before the cut.
-        let shortfall = min(wanted - cards.count, start)
-        if shortfall > 0 {
-            cards += try database.all(sql, bindings(limit: shortfall, offset: 0)) {
-                try DeckCard(row: $0, dealSeq: nil)
-            }
-        }
-        return cards
-    }
-
-    /// The head of the eligible set in shuffle order — what `pgr deck peek`
-    /// shows.
-    ///
-    /// Deliberately *not* a prediction of what will be dealt next: selection
-    /// takes a random offset into this set, so there is no "next card" until a
-    /// deal picks one. This is the set it will pick from.
-    public func peek(count: Int, settings: DeckSettings = .default) throws -> [DeckCard] {
-        let pool = try poolSize()
-        guard pool > 0 else { return [] }
-        let state = try state()
-        return try selectCandidates(
-            limit: count,
-            threshold: Self.threshold(
-                seq: state.dealSeq,
-                passStartSeq: state.passStartSeq,
-                window: settings.repeatWindow(poolSize: pool)
-            ),
-            excluding: .anyOutstandingHand,
-            offset: 0
-        )
+        return try database.scalarInt(
+            Self.unusedCountSQL, ["threshold": .int(state.passStartSeq)]
+        ) ?? 0
     }
 
     // MARK: - Events
 
-    /// Relaxations are recorded rather than swallowed, so `pgr deck stats` and
-    /// eventually the settings UI can say that the library cannot support what
-    /// was asked of it.
-    func record(_ relaxation: DeckRelaxation, at now: Date = Date()) throws {
-        Log.deck.notice(
-            "deck relaxed: \(relaxation.eventKind, privacy: .public) — \(relaxation.eventDetail, privacy: .public)"
-        )
-        try recordEvent(kind: relaxation.eventKind, detail: relaxation.eventDetail, at: now)
-    }
-
+    /// Notable moments, recorded rather than swallowed, so `pgr deck stats` and
+    /// eventually the settings UI can say what the deck has been doing. A pass
+    /// boundary is the only one so far.
     func recordEvent(kind: String, detail: String?, at now: Date = Date()) throws {
         try database.run(
             "INSERT INTO deck_event (at, kind, detail) VALUES (:at, :kind, :detail);",
@@ -433,104 +215,14 @@ extension Deck {
     /// v1 selects still images only. The exclusion is a named predicate rather
     /// than an absence of video code, which is the difference between 2.0 being
     /// a feature and being an excavation.
-    ///
-    /// `:threshold` carries both the pass and the window, since eligibility is
-    /// `last_dealt_seq <= max(pass_start_seq, seq - w - 1)`. A photo never dealt
-    /// is eligible by definition, which is what lets a newly added photo join
-    /// the pass already in progress rather than waiting for the next one.
-    fileprivate static let eligibilityPredicate = """
-        p.source_enabled = 1
-          AND p.available = 1
-          AND p.media_type = 'image'
-          AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold)
-        """
-
-    /// The clause that steps around cards already spoken for.
-    fileprivate static func exclusionClause(_ exclusion: Exclusion) -> String {
-        switch exclusion {
-        case .anyOutstandingHand:
-            """
-            AND NOT EXISTS (
-                  SELECT 1 FROM hand h
-                   WHERE h.photo_id = p.id AND h.played_at IS NULL)
-            """
-        case .ownOutstandingHand:
-            """
-            AND NOT EXISTS (
-                  SELECT 1 FROM hand h
-                   WHERE h.photo_id = p.id AND h.played_at IS NULL
-                     AND h.consumer_id = :consumer)
-            """
-        case .none:
-            ""
-        }
-    }
-
     static let poolSizeSQL = """
         SELECT COUNT(*) FROM photo p
-         WHERE p.source_enabled = 1 AND p.available = 1 AND p.media_type = 'image';
+         WHERE p.source_enabled = 1 AND p.media_type = 'image';
         """
 
-    // Built once each rather than per call, since these are the hot statements
-    // and `Database` caches by SQL text.
-    private static let counts = statements(countStatement)
-    private static let deals = statements(dealStatement)
-    private static let candidates = statements(candidatesStatement)
-
-    static func countSQL(_ exclusion: Exclusion) -> String { counts[key(exclusion)]! }
-    static func dealSQL(_ exclusion: Exclusion) -> String { deals[key(exclusion)]! }
-    static func candidatesSQL(_ exclusion: Exclusion) -> String { candidates[key(exclusion)]! }
-
-    /// `Exclusion` carries a consumer id, which is a binding rather than part of
-    /// the SQL, so statements are keyed by mode alone.
-    private static func key(_ exclusion: Exclusion) -> Int {
-        switch exclusion {
-        case .anyOutstandingHand: 0
-        case .ownOutstandingHand: 1
-        case .none: 2
-        }
-    }
-
-    private static func statements(_ build: (Exclusion) -> String) -> [Int: String] {
-        [
-            0: build(.anyOutstandingHand),
-            1: build(.ownOutstandingHand(consumerID: 0)),
-            2: build(.none),
-        ]
-    }
-
-    private static func countStatement(_ exclusion: Exclusion) -> String {
-        """
+    static let unusedCountSQL = """
         SELECT COUNT(*) FROM photo p
-         WHERE \(eligibilityPredicate)
-           \(exclusionClause(exclusion));
+         WHERE p.source_enabled = 1 AND p.media_type = 'image'
+           AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold);
         """
-    }
-
-    private static func dealStatement(_ exclusion: Exclusion) -> String {
-        """
-        UPDATE photo
-           SET times_shown    = times_shown + 1,
-               last_dealt_seq = :seq,
-               shuffle_key    = :key,
-               last_shown_at  = :now
-         WHERE id = (SELECT p.id FROM photo p
-                      WHERE \(eligibilityPredicate)
-                        \(exclusionClause(exclusion))
-                      ORDER BY p.shuffle_key
-                      LIMIT 1 OFFSET :offset)
-        RETURNING id, source_id, external_id, storage, cache_path;
-        """
-    }
-
-    private static func candidatesStatement(_ exclusion: Exclusion) -> String {
-        """
-        SELECT p.id, p.source_id, p.external_id, p.storage, p.cache_path
-          FROM photo p
-         WHERE \(eligibilityPredicate)
-           \(exclusionClause(exclusion))
-         ORDER BY p.shuffle_key
-         LIMIT :limit OFFSET :offset;
-        """
-    }
 }

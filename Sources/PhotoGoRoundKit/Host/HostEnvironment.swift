@@ -24,19 +24,37 @@ public protocol HostEnvironment: Sendable {
     func announce(_ topic: DarwinNotification.Topic)
 }
 
+/// Which library a run is talking to.
+///
+/// **Development is the default, and that is deliberate.** Running the binary
+/// with no arguments cannot touch a real library: it writes into `.build`, which
+/// is gitignored and is already the directory you delete for a clean slate.
+/// Reaching the real one takes `--prod`, typed on purpose.
+///
+/// The inverse default would make every casual `swift run` one typo away from a
+/// library that took hours to fetch, and every test of a delete path a live-fire
+/// exercise.
+public enum Deployment: String, Sendable {
+    case development
+    case production
+
+    /// The bundle identifier, which is also the preference domain and the last
+    /// path component of both production directories.
+    static let identifier = "com.sydpolk.photogoround"
+}
+
 /// Where the storage root came from, so that it is never a mystery.
 public enum ContainerOrigin: String, Sendable {
     /// A `--container` or `--database` flag.
     case explicitOverride = "explicit override"
     /// `PGR_CONTAINER` or `PGR_DATABASE`, which is how a launchd plist pins the
-    /// production roots.
+    /// roots without touching the command line.
     case environment
-    /// The App Group container, which resolves for sandboxed and unsandboxed
-    /// processes alike and is the shipping answer on both platforms.
-    case appGroup = "app group container"
-    /// `~/Library/Application Support/Photo-Go-Round`, for development builds
-    /// with no App Group entitlement.
-    case applicationSupport = "application support"
+    /// `--prod`: `~/Library/Containers`, alongside `~/Library/Caches` and the
+    /// real preference domain.
+    case production
+    /// The default: two directories under the repository's `.build`.
+    case development = "development (.build)"
 }
 
 /// The Mac agent's environment.
@@ -58,17 +76,23 @@ public struct MacHostEnvironment: HostEnvironment {
     /// User-facing name, hyphenated. The hyphens never appear in an identifier.
     public static let directoryName = "Photo-Go-Round"
 
+    /// Which library this run is talking to.
+    public let deployment: Deployment
+
     public init(
+        deployment: Deployment = .development,
         containerOverride: URL? = nil,
         databaseOverride: URL? = nil,
         cacheOverride: URL? = nil,
-        appGroupIdentifier: String? = MacHostEnvironment.appGroupIdentifier,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executableURL: URL? = nil
     ) {
+        self.deployment = deployment
         let resolved = Self.resolveContainer(
+            deployment: deployment,
             override: containerOverride,
-            appGroupIdentifier: appGroupIdentifier,
-            environment: environment
+            environment: environment,
+            executableURL: executableURL
         )
         origin = resolved.origin
 
@@ -80,9 +104,19 @@ public struct MacHostEnvironment: HostEnvironment {
         cacheRoot =
             cacheOverride
             ?? environment["PGR_CACHE"].flatMap { $0.isEmpty ? nil : URL(filePath: $0) }
-            ?? resolved.container.appending(path: "cache")
+            ?? Self.defaultCacheRoot(
+                deployment: deployment, container: resolved.container, origin: resolved.origin)
 
-        preferences = Preferences(suiteName: appGroupIdentifier)
+        // Preferences move with the deployment, and this is the part that is
+        // not deducible: relocating the storage root does *not* relocate them,
+        // so a run that pointed only the container at scratch space would still
+        // read and write the real source list. Two of the three are obviously
+        // per-deployment and the third silently is not, which is exactly why one
+        // flag moves all three.
+        preferences = Preferences(
+            suiteName: environment["PGR_PREFS_SUITE"].flatMap { $0.isEmpty ? nil : $0 }
+                ?? Self.preferenceDomain(for: deployment)
+        )
     }
 
     /// Flags beat environment beats App Group beats Application Support.
@@ -93,9 +127,10 @@ public struct MacHostEnvironment: HostEnvironment {
     /// point: a background service should never be tied to one path on one
     /// machine.
     static func resolveContainer(
+        deployment: Deployment,
         override: URL?,
-        appGroupIdentifier: String?,
-        environment: [String: String]
+        environment: [String: String],
+        executableURL: URL? = nil
     ) -> (container: URL, origin: ContainerOrigin) {
         if let override {
             return (override, .explicitOverride)
@@ -103,17 +138,81 @@ public struct MacHostEnvironment: HostEnvironment {
         if let fromEnvironment = environment["PGR_CONTAINER"], !fromEnvironment.isEmpty {
             return (URL(filePath: fromEnvironment), .environment)
         }
-        if let appGroupIdentifier,
-            let container = FileManager.default.containerURL(
-                forSecurityApplicationGroupIdentifier: appGroupIdentifier
+        switch deployment {
+        case .production:
+            return (
+                URL.homeDirectory.appending(path: "Library/Containers/\(Deployment.identifier)"),
+                .production
             )
-        {
-            return (container, .appGroup)
+        case .development:
+            return (buildDirectory(executableURL: executableURL).appending(path: "pgr-container"),
+                .development)
         }
-        return (
-            URL.applicationSupportDirectory.appending(path: Self.directoryName),
-            .applicationSupport
-        )
+    }
+
+    static func defaultCacheRoot(
+        deployment: Deployment, container: URL, origin: ContainerOrigin
+    ) -> URL {
+        // An explicit container takes the cache with it, because somebody who
+        // named one directory means both. Otherwise the deployment decides, and
+        // the two land in genuinely different places.
+        guard origin == .production || origin == .development else {
+            return container.appending(path: "cache")
+        }
+        return switch deployment {
+        case .production:
+            URL.homeDirectory.appending(path: "Library/Caches/\(Deployment.identifier)")
+        case .development:
+            buildDirectory(executableURL: nil).appending(path: "pgr-cache")
+        }
+    }
+
+    static func preferenceDomain(for deployment: Deployment) -> String {
+        switch deployment {
+        case .production: Deployment.identifier
+        case .development: "\(Deployment.identifier).dev"
+        }
+    }
+
+    /// Where this file was compiled from, which is the one thing a development
+    /// build always knows about its own checkout. Evaluated here rather than as
+    /// a defaulted argument so it names *this* file no matter who calls.
+    private static let sourceFilePath = #filePath
+
+    /// The repository's `.build`, found by walking up from the executable.
+    ///
+    /// A SwiftPM binary lives at `<repo>/.build/<triple>/<config>/photogoroundd`,
+    /// so the directory is right there in its own path — which means a
+    /// development run finds it whether it was started by `swift run`, by the
+    /// wrapper script, or by hand.
+    ///
+    /// **Xcode is the case that path cannot cover.** It builds into DerivedData,
+    /// which is nowhere near the checkout, so the walk finds nothing and the old
+    /// fallback — the working directory — resolved to `/.build` and failed on a
+    /// read-only volume. Debugging the agent in Xcode has to work without a
+    /// scheme argument, so the second rung is the source tree this binary was
+    /// compiled from: `#filePath` is a compile-time constant pointing into the
+    /// checkout, which is exactly the right answer for a development default and
+    /// is never consulted for `--prod`.
+    static func buildDirectory(executableURL: URL?) -> URL {
+        var url = executableURL ?? URL(filePath: CommandLine.arguments.first ?? "").standardizedFileURL
+        while url.pathComponents.count > 1 {
+            if url.lastPathComponent == ".build" { return url }
+            url = url.deletingLastPathComponent()
+        }
+
+        var source = URL(filePath: sourceFilePath).deletingLastPathComponent()
+        while source.pathComponents.count > 1 {
+            let manifest = source.appending(path: "Package.swift")
+            if FileManager.default.fileExists(atPath: manifest.path(percentEncoded: false)) {
+                return source.appending(path: ".build")
+            }
+            source = source.deletingLastPathComponent()
+        }
+
+        // A binary copied away from both, with the checkout gone. "Wherever you
+        // are standing" is the only honest answer left.
+        return URL(filePath: FileManager.default.currentDirectoryPath).appending(path: ".build")
     }
 
     public func announce(_ topic: DarwinNotification.Topic) {

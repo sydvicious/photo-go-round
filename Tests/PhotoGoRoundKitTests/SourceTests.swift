@@ -167,10 +167,10 @@ struct SourceTests {
         let library = try TestLibrary()
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
-        let result = try await store.scan(source)
+        let result = await store.refresh(source)
 
         #expect(result.added == 3)
-        #expect(result.vanished == 0)
+        #expect(result.removed == 0)
         #expect(!result.sourceUnavailable)
         #expect(try library.deck.poolSize() == 3)
         // Null deal ordinal means eligible by definition.
@@ -188,61 +188,129 @@ struct SourceTests {
         let library = try TestLibrary()
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
+        await store.refresh(source)
 
         folder.write("c.png")
         folder.remove("a.png")
 
         var changes: [ScanChange] = []
-        let result = try await store.scan(try store.source(id: source.id)!) { changes.append($0) }
+        let result = await store.refresh(try store.source(id: source.id)!) { changes.append($0) }
 
         #expect(result.added == 1)
-        #expect(result.vanished == 1)
+        #expect(result.removed == 1)
         #expect(result.unchanged == 1)
         #expect(changes.contains(.added(externalID: "c.png")))
-        #expect(changes.contains(.vanished(externalID: "a.png")))
+        #expect(changes.contains(.removed(externalID: "a.png")))
     }
 
-    @Test("A photo that goes away keeps its row and its history")
-    func vanishedPhotosAreSoftDeleted() async throws {
+    @Test("A photo that goes away leaves the pool, and comes back as a new entry")
+    func vanishedPhotosLeaveThePool() async throws {
         let folder = TemporaryFolder()
         for name in ["a.png", "b.png"] { folder.write(name) }
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
+        await store.refresh(source)
 
-        // Show them both a few times so there is history worth keeping.
-        _ = try library.deck.dealSequence(count: 6, settings: .default)
-        let shownBefore = try library.database.scalarInt(
-            "SELECT times_shown FROM photo WHERE external_id = 'a.png';")
+        _ = try library.drawSequence(count: 6, settings: .default)
 
+        // Removed means removed. The row goes, and its queue entries cascade
+        // with it — these are transient images, and the per-photo history is
+        // not worth a flag column and a second lifecycle to preserve.
         folder.remove("a.png")
-        try await store.scan(try store.source(id: source.id)!)
+        await store.refresh(try store.source(id: source.id)!)
 
         #expect(try library.deck.poolSize() == 1)
-        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 2)
-        #expect(
-            try library.database.scalarInt("SELECT times_shown FROM photo WHERE external_id = 'a.png';")
-                == shownBefore
-        )
+        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 1)
 
-        // And putting it back restores it, history intact, rather than adding a
-        // second row.
+        // Putting it back makes it a genuinely new entry: new row, null deal
+        // ordinal, no history. It competes immediately rather than resuming a
+        // place in a rotation it was absent from.
         folder.write("a.png")
-        let back = try await store.scan(try store.source(id: source.id)!)
-        #expect(back.returned == 1)
-        #expect(back.added == 0)
-        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 2)
+        let back = await store.refresh(try store.source(id: source.id)!)
+        #expect(back.added == 1)
+        #expect(back.removed == 0)
         #expect(try library.deck.poolSize() == 2)
-        #expect(
-            try library.database.scalarInt("SELECT times_shown FROM photo WHERE external_id = 'a.png';")
-                == shownBefore
-        )
+
+        // Identity is asserted by the absence of history rather than by the row
+        // id: SQLite hands back the same rowid when the deleted row held the
+        // maximum, so a new entry can legitimately land on an old number. That
+        // is harmless here only because removal cascades — no consumer can be
+        // holding a card for the id that got reused.
+        let revived = try library.database.first(
+            "SELECT times_shown, last_dealt_seq FROM photo WHERE external_id = 'a.png';"
+        ) {
+            (shown: try $0.int("times_shown"), seq: try $0.optionalInt64("last_dealt_seq"))
+        }
+        let entry = try #require(revived)
+        #expect(entry.shown == 0)
+        #expect(entry.seq == nil)
     }
 
-    @Test("A vanished photo's reserved card is returned rather than shown")
+    @Test("Removing from the pool takes its queue entries with it")
+    func poolRemovalCascadesToTheQueue() async throws {
+        let folder = TemporaryFolder()
+        for name in ["a.png", "b.png", "c.png"] { folder.write(name) }
+
+        let library = try TestLibrary()
+        let store = Self.store(library.database)
+        let source = try store.add(kind: .folder, locator: folder.path)
+        await store.refresh(source)
+
+        // Queue everything, so removal has something to cascade through.
+        for id in try library.database.all("SELECT id FROM photo;", [:], { try $0.int64("id") }) {
+            try library.enqueue(id, sourceID: source.id)
+        }
+        #expect(try PhotoQueue(database: library.database).size() == 3)
+
+        let doomed = try #require(
+            try library.database.first("SELECT id FROM photo WHERE external_id = 'b.png';") {
+                try $0.int64("id")
+            }
+        )
+        try store.pool.remove(doomed)
+
+        // No separate step, and no window in which the queue holds a picture
+        // the pool no longer has.
+        let queue = PhotoQueue(database: library.database)
+        #expect(try queue.size() == 2)
+        #expect(!(try queue.peek(10).map(\.id).contains(doomed)))
+    }
+
+    @Test("A source that lost everything keeps its rotation, unlike one lost file")
+    func bulkReturnKeepsItsPlaceInTheRotation() async throws {
+        // The distinction that protects an unplugged drive: ten thousand photos
+        // coming back at once must not all become immediately eligible, or
+        // reconnecting a drive would flood the shuffle. One returning photo has
+        // nothing to flood, so it rejoins as new; a whole source never had its
+        // photos marked in the first place.
+        let folder = TemporaryFolder()
+        for name in ["a.png", "b.png", "c.png"] { folder.write(name) }
+
+        let library = try TestLibrary()
+        let store = Self.store(library.database)
+        let source = try store.add(kind: .folder, locator: folder.path)
+        await store.refresh(source)
+        _ = try library.drawSequence(count: 3, settings: .default)
+
+        let ordinalsBefore = try library.database.all(
+            "SELECT external_id, last_dealt_seq FROM photo ORDER BY external_id;"
+        ) { (try $0.string("external_id"), try $0.optionalInt64("last_dealt_seq")) }
+        #expect(ordinalsBefore.allSatisfy { $0.1 != nil })
+
+        for name in ["a.png", "b.png", "c.png"] { folder.remove(name) }
+        await store.refresh(try store.source(id: source.id)!)
+        for name in ["a.png", "b.png", "c.png"] { folder.write(name) }
+        await store.refresh(try store.source(id: source.id)!)
+
+        let ordinalsAfter = try library.database.all(
+            "SELECT external_id, last_dealt_seq FROM photo ORDER BY external_id;"
+        ) { (try $0.string("external_id"), try $0.optionalInt64("last_dealt_seq")) }
+        #expect(ordinalsAfter.map(\.1) == ordinalsBefore.map(\.1))
+    }
+
+    @Test("A vanished photo leaves the queue rather than being shown")
     func vanishingReleasesOutstandingCards() async throws {
         let folder = TemporaryFolder()
         for name in ["a.png", "b.png", "c.png"] { folder.write(name) }
@@ -250,18 +318,22 @@ struct SourceTests {
         let library = try TestLibrary()
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
+        await store.refresh(source)
 
-        let consumer = try library.deck.register(kind: .screensaver, handSize: 3)
-        try library.deck.reserveHand(for: consumer.id)
-        #expect(try library.deck.outstandingHand(for: consumer.id).count == 3)
+        // Queue everything, so removal has something to cascade through.
+        for id in try library.database.all("SELECT id FROM photo;", [:], { try $0.int64("id") }) {
+            try library.enqueue(id, sourceID: source.id)
+        }
+        #expect(try PhotoQueue(database: library.database).size() == 3)
 
         folder.remove("b.png")
-        try await store.scan(try store.source(id: source.id)!)
+        await store.refresh(try store.source(id: source.id)!)
 
-        let hand = try library.deck.outstandingHand(for: consumer.id)
-        #expect(hand.count == 2)
-        #expect(!hand.contains { $0.card.externalID == "b.png" })
+        // A refresh that removes an entry takes its queue place with it, so no
+        // consumer can be handed a picture the pool no longer has.
+        let queue = PhotoQueue(database: library.database)
+        #expect(try queue.size() == 2)
+        #expect(!(try queue.peek(10).map(\.externalID).contains("b.png")))
     }
 
     // MARK: - Losing everything at once
@@ -274,18 +346,18 @@ struct SourceTests {
         let library = try TestLibrary()
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
-        _ = try library.deck.dealSequence(count: 3, settings: .default)
+        await store.refresh(source)
+        _ = try library.drawSequence(count: 3, settings: .default)
 
         // The folder is still there and readable — it just has nothing in it.
         // That is the same shape as an unmounted drive or a switched Photos
         // library, and it gets the same treatment.
         for name in ["a.png", "b.png", "c.png"] { folder.remove(name) }
-        let result = try await store.scan(try store.source(id: source.id)!)
+        let result = await store.refresh(try store.source(id: source.id)!)
 
         #expect(result.sourceUnavailable)
-        #expect(result.vanished == 0)
-        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo WHERE available = 1;") == 3)
+        #expect(result.removed == 0)
+        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 3)
 
         let after = try #require(try store.source(id: source.id))
         #expect(!after.available)
@@ -294,7 +366,7 @@ struct SourceTests {
 
         // Putting them back makes the source available again.
         for name in ["a.png", "b.png", "c.png"] { folder.write(name) }
-        let recovered = try await store.scan(try store.source(id: source.id)!)
+        let recovered = await store.refresh(try store.source(id: source.id)!)
         #expect(!recovered.sourceUnavailable)
         #expect(try store.source(id: source.id)?.available == true)
         #expect(try store.source(id: source.id)?.unavailableReason == nil)
@@ -307,7 +379,7 @@ struct SourceTests {
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
 
-        let result = try await store.scan(source)
+        let result = await store.refresh(source)
         #expect(!result.sourceUnavailable)
         #expect(result.added == 0)
         #expect(try store.source(id: source.id)?.available == true)
@@ -321,17 +393,17 @@ struct SourceTests {
         let library = try TestLibrary()
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
+        await store.refresh(source)
 
         // Simulate the drive going away by pointing the source somewhere gone.
         try library.database.run(
             "UPDATE source SET locator = :locator WHERE id = :id;",
             ["locator": "/nowhere/at/all", "id": .int(source.id)]
         )
-        let result = try await store.scan(try store.source(id: source.id)!)
+        let result = await store.refresh(try store.source(id: source.id)!)
 
         #expect(result.sourceUnavailable)
-        #expect(result.vanished == 0)
+        #expect(result.removed == 0)
         #expect(try library.deck.poolSize() == 2)
     }
 
@@ -345,14 +417,11 @@ struct SourceTests {
         let library = try TestLibrary()
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
+        await store.refresh(source)
 
-        let consumer = try library.deck.register(kind: .screensaver, handSize: 3)
-        try library.deck.reserveHand(for: consumer.id)
-
+        
         try store.setEnabled(false, for: source.id)
         #expect(try library.deck.poolSize() == 0)
-        #expect(try library.deck.outstandingHand(for: consumer.id).isEmpty)
         #expect(try store.source(id: source.id)?.enabled == false)
 
         // Re-enabling brings them back with their history rather than
@@ -361,7 +430,7 @@ struct SourceTests {
         #expect(try library.deck.poolSize() == 3)
     }
 
-    @Test("Removing a source removes its photos and their hands")
+    @Test("Removing a source removes its photos and their queue entries")
     func removingCascades() async throws {
         let folder = TemporaryFolder()
         for name in ["a.png", "b.png"] { folder.write(name) }
@@ -369,13 +438,11 @@ struct SourceTests {
         let library = try TestLibrary()
         let store = Self.store(library.database)
         let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
-        let consumer = try library.deck.register(kind: .screensaver, handSize: 2)
-        try library.deck.reserveHand(for: consumer.id)
-
+        await store.refresh(source)
+        
         try store.remove(id: source.id)
         #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 0)
-        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM hand;") == 0)
+        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM queue;") == 0)
         #expect(try store.all().isEmpty)
     }
 
@@ -391,7 +458,7 @@ struct SourceTests {
         try store.add(kind: .folder, locator: folder.path)
         try store.add(kind: .file, locator: pinned.path(percentEncoded: false))
 
-        let results = try await store.scanAll()
+        let results = await store.refreshAll()
         #expect(results.count == 2)
         #expect(results.map(\.added).reduce(0, +) == 3)
         // The deck is the union, and nothing anywhere branched on which kind.

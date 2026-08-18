@@ -65,10 +65,11 @@ enum SchemaV1 {
           -- index without a join. Maintained in the same transaction that
           -- enables or disables a source.
           source_enabled  INTEGER NOT NULL DEFAULT 1,
-          -- Soft delete. The row survives so an unmounted volume is not ten
-          -- thousand deletions, so rename tracking has something to match
-          -- against, and so times_shown stays honest across an absence.
-          available       INTEGER NOT NULL DEFAULT 1,
+          -- There is deliberately no `available` flag. A photo gone from a
+          -- reachable source is deleted outright; a source that lost everything
+          -- at once is marked unavailable and its rows are left alone. Those two
+          -- rules cover every case a soft delete used to, without a second
+          -- lifecycle for a row to be in.
           -- Whether the bytes can go away, which is a property of where the
           -- file lives rather than of which provider found it. Internal boot
           -- volume: referenced in place, no copy, no cache budget. Anything
@@ -102,13 +103,13 @@ enum SchemaV1 {
         -- walk in shuffle order and apply the repeat window as a residual,
         -- stopping as soon as it has enough — O(cards wanted) rather than a
         -- sort of half the library on every deal.
-        CREATE INDEX photo_deck ON photo(source_enabled, available, media_type, shuffle_key);
+        CREATE INDEX photo_deck ON photo(source_enabled, media_type, shuffle_key);
 
         -- The complement, for the case the first index is bad at: at repeat
         -- window fraction 1.0 near the end of a pass, almost nothing is
         -- eligible and walking shuffle order would traverse the whole library.
         -- Both are cheap to maintain at these rates; the planner picks.
-        CREATE INDEX photo_window ON photo(source_enabled, available, media_type, last_dealt_seq);
+        CREATE INDEX photo_window ON photo(source_enabled, media_type, last_dealt_seq);
 
         CREATE INDEX photo_source ON photo(source_id);
 
@@ -118,10 +119,35 @@ enum SchemaV1 {
           WHERE materialized_at IS NOT NULL;
 
         -- ---------------------------------------------------------------
-        -- consumer: every display is a separate virtual consumer.
+        -- queue: pictures that are ready to be served, in order.
+        --
+        -- Filled by providers answering requests, drained by clients asking for
+        -- a picture. Its size is nominal rather than a ceiling: providers answer
+        -- independently, so it overshoots by up to one per provider and that is
+        -- fine. Nothing is evicted when an entry is added; the only thing that
+        -- shortens the queue is serving from it.
+        --
+        -- An entry exists only once its bytes do, so anything in here is ready
+        -- to show, subject to one last existence check against its source.
+        -- ---------------------------------------------------------------
+        CREATE TABLE queue (
+          position  INTEGER PRIMARY KEY AUTOINCREMENT,
+          photo_id  INTEGER NOT NULL REFERENCES photo(id) ON DELETE CASCADE,
+          source_id INTEGER NOT NULL REFERENCES source(id) ON DELETE CASCADE,
+          queued_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX queue_photo ON queue(photo_id);
+
+        -- ---------------------------------------------------------------
+        -- consumer: the surfaces that ask for pictures.
+        --
+        -- A registry and a heartbeat, nothing more. Every surface serves from
+        -- the same queue, and two displays get different pictures because
+        -- serving removes the entry.
         --
         -- `kind` carries no CHECK for the same reason source.kind does not — a
-        -- new surface is a new consumer row, not a new code path in the deck.
+        -- new surface is a new consumer row, not a new code path anywhere.
         -- ---------------------------------------------------------------
         CREATE TABLE consumer (
           id         INTEGER PRIMARY KEY,
@@ -133,42 +159,13 @@ enum SchemaV1 {
           -- several simultaneous instances discriminates them in `kind`
           -- ('widget.small' and 'widget.large' are two consumers, not one).
           display_id TEXT,
-          -- Per consumer, derived from its known interval: enough cards to
-          -- cover roughly twenty minutes of playback. A wallpaper at one photo
-          -- per half hour wants a small hand; a screensaver wants a large one.
-          hand_size  INTEGER NOT NULL,
-          -- Heartbeat. The reaper keys abandoned hands off this.
+          -- Heartbeat, so a surface that has stopped asking can be told apart
+          -- from one that is simply between pictures.
           seen_at    INTEGER NOT NULL,
           created_at INTEGER NOT NULL
         );
 
         CREATE UNIQUE INDEX consumer_identity ON consumer(kind, IFNULL(display_id, ''));
-
-        -- ---------------------------------------------------------------
-        -- hand: a contiguous block of cards reserved from the shared deck.
-        --
-        -- A card is dealt — ordinal assigned, window clock started — when it is
-        -- PLAYED, not when it is reserved. Reservation only marks it spoken
-        -- for, which is what lets an abandoned hand's unplayed cards return to
-        -- the deck instead of silently thinning the library over weeks.
-        -- ---------------------------------------------------------------
-        CREATE TABLE hand (
-          consumer_id INTEGER NOT NULL REFERENCES consumer(id) ON DELETE CASCADE,
-          photo_id    INTEGER NOT NULL REFERENCES photo(id) ON DELETE CASCADE,
-          position    INTEGER NOT NULL,
-          reserved_at INTEGER NOT NULL,
-          played_at   INTEGER,
-          PRIMARY KEY (consumer_id, position)
-        );
-
-        -- Serves both the "is this card already spoken for" check in the
-        -- reservation query and the "never evict a card in an outstanding
-        -- hand" guard in the evictor.
-        CREATE INDEX hand_photo ON hand(photo_id) WHERE played_at IS NULL;
-
-        -- The prefetcher's work list: unplayed cards across all outstanding
-        -- hands, in position order.
-        CREATE INDEX hand_unplayed ON hand(consumer_id, position) WHERE played_at IS NULL;
 
         -- ---------------------------------------------------------------
         -- deck_state: the single monotonic deal ordinal, advanced by every card
@@ -190,9 +187,9 @@ enum SchemaV1 {
         INSERT INTO deck_state (id, deal_seq, pass_start_seq) VALUES (1, 0, 0);
 
         -- ---------------------------------------------------------------
-        -- deck_event: relaxations and short hands, surfaced rather than
-        -- swallowed, so `pgr deck stats` and eventually the settings UI can say
-        -- that the repeat window is larger than the library can support.
+        -- deck_event: notable moments, recorded rather than swallowed, so
+        -- `pgr deck stats` and eventually the settings UI can say what the deck
+        -- has been doing. A pass boundary is the only one so far.
         -- Trimmed to a bounded tail; nothing depends on old rows.
         -- ---------------------------------------------------------------
         CREATE TABLE deck_event (

@@ -102,7 +102,12 @@ struct MigratorTests {
         let database = try Self.fullyMigratedDatabase()
         let snapshot = try SchemaSnapshot(of: database)
         let names = Set(snapshot.tables.map(\.name))
-        #expect(names == ["source", "photo", "consumer", "hand", "deck_state", "deck_event"])
+        #expect(names == ["source", "photo", "queue", "consumer", "deck_state", "deck_event"])
+
+        // No `available` flag on photo: a picture gone from a reachable source is
+        // deleted, and a source that lost everything keeps its rows untouched.
+        let photo = try #require(snapshot.tables.first { $0.name == "photo" })
+        #expect(!photo.columns.contains { $0.name == "available" })
     }
 
     @Test("The deal ordinal starts at zero and there can only ever be one of it")
@@ -151,7 +156,7 @@ struct MigratorTests {
         }
     }
 
-    @Test("Deleting a source takes its photos and their hands with it")
+    @Test("Deleting a source takes its photos and their queue entries with it")
     func deletingASourceCascades() throws {
         let database = try Self.fullyMigratedDatabase()
         let source = try Self.insertSource(named: "/a", into: database)
@@ -160,22 +165,19 @@ struct MigratorTests {
 
         try database.run(
             """
-            INSERT INTO consumer (kind, display_id, hand_size, seen_at, created_at)
-            VALUES ('screensaver', NULL, 100, 0, 0);
+            INSERT INTO consumer (kind, display_id, seen_at, created_at)
+            VALUES ('screensaver', NULL, 0, 0);
             """
         )
         let consumerID = database.lastInsertRowID
         try database.run(
-            """
-            INSERT INTO hand (consumer_id, photo_id, position, reserved_at)
-            VALUES (:c, :p, 0, 0);
-            """,
-            ["c": .int(consumerID), "p": .int(photoID)]
+            "INSERT INTO queue (photo_id, source_id, queued_at) VALUES (:p, :s, 0);",
+            ["p": .int(photoID), "s": .int(source)]
         )
 
         try database.run("DELETE FROM source WHERE id = :id;", ["id": .int(source)])
         #expect(try database.scalarInt("SELECT COUNT(*) FROM photo;") == 0)
-        #expect(try database.scalarInt("SELECT COUNT(*) FROM hand;") == 0)
+        #expect(try database.scalarInt("SELECT COUNT(*) FROM queue;") == 0)
         // The consumer survives — a display does not stop existing because a
         // folder was removed.
         #expect(try database.scalarInt("SELECT COUNT(*) FROM consumer;") == 1)
@@ -185,17 +187,17 @@ struct MigratorTests {
     func consumerIdentityIsUnique() throws {
         let database = try Self.fullyMigratedDatabase()
         try database.run(
-            "INSERT INTO consumer (kind, display_id, hand_size, seen_at, created_at) VALUES ('wallpaper', :d, 4, 0, 0);",
+            "INSERT INTO consumer (kind, display_id, seen_at, created_at) VALUES ('wallpaper', :d, 0, 0);",
             ["d": "DISPLAY-A"]
         )
         // A different display is a different consumer.
         try database.run(
-            "INSERT INTO consumer (kind, display_id, hand_size, seen_at, created_at) VALUES ('wallpaper', :d, 4, 0, 0);",
+            "INSERT INTO consumer (kind, display_id, seen_at, created_at) VALUES ('wallpaper', :d, 0, 0);",
             ["d": "DISPLAY-B"]
         )
         #expect(throws: SQLiteError.self) {
             try database.run(
-                "INSERT INTO consumer (kind, display_id, hand_size, seen_at, created_at) VALUES ('wallpaper', :d, 4, 0, 0);",
+                "INSERT INTO consumer (kind, display_id, seen_at, created_at) VALUES ('wallpaper', :d, 0, 0);",
                 ["d": "DISPLAY-A"]
             )
         }
@@ -203,11 +205,11 @@ struct MigratorTests {
         // And two NULLs collide, which is why a surface with several instances
         // discriminates them in `kind`.
         try database.run(
-            "INSERT INTO consumer (kind, display_id, hand_size, seen_at, created_at) VALUES ('widget', NULL, 8, 0, 0);"
+            "INSERT INTO consumer (kind, display_id, seen_at, created_at) VALUES ('widget', NULL, 0, 0);"
         )
         #expect(throws: SQLiteError.self) {
             try database.run(
-                "INSERT INTO consumer (kind, display_id, hand_size, seen_at, created_at) VALUES ('widget', NULL, 8, 0, 0);"
+                "INSERT INTO consumer (kind, display_id, seen_at, created_at) VALUES ('widget', NULL, 0, 0);"
             )
         }
     }
@@ -219,7 +221,7 @@ struct MigratorTests {
             """
             EXPLAIN QUERY PLAN
             SELECT id FROM photo
-             WHERE source_enabled = 1 AND available = 1 AND media_type = 'image'
+             WHERE source_enabled = 1 AND media_type = 'image'
                AND (last_dealt_seq IS NULL OR last_dealt_seq <= 100)
              ORDER BY shuffle_key
              LIMIT 1;

@@ -58,7 +58,6 @@ struct TestLibrary {
         _ count: Int,
         to sourceID: Int64,
         mediaType: MediaType = .image,
-        available: Bool = true,
         sourceEnabled: Bool = true,
         namePrefix: String = "photo"
     ) throws -> [Int64] {
@@ -67,9 +66,9 @@ struct TestLibrary {
             for index in 0..<count {
                 try database.run(
                     """
-                    INSERT INTO photo (source_id, external_id, media_type, source_enabled, available,
+                    INSERT INTO photo (source_id, external_id, media_type, source_enabled,
                                        storage, cache_path, shuffle_key, added_at)
-                    VALUES (:source, :external, :media, :enabled, :available,
+                    VALUES (:source, :external, :media, :enabled,
                             'materialized', :path, :key, 0);
                     """,
                     [
@@ -77,7 +76,6 @@ struct TestLibrary {
                         "external": .text("\(namePrefix)-\(index).heic"),
                         "media": .text(mediaType.rawValue),
                         "enabled": SQLValue(sourceEnabled),
-                        "available": SQLValue(available),
                         "path": .text("\(sourceID)/\(namePrefix)-\(index).heic"),
                         "key": .double(Double.random(in: 0..<1)),
                     ]
@@ -108,13 +106,6 @@ struct TestLibrary {
         try database.run("UPDATE deck_state SET deal_seq = :seq WHERE id = 1;", ["seq": .int(seq)])
     }
 
-    func setAvailable(_ photoID: Int64, _ available: Bool) throws {
-        try database.run(
-            "UPDATE photo SET available = :a WHERE id = :id;",
-            ["a": SQLValue(available), "id": .int(photoID)]
-        )
-    }
-
     func setSourceEnabled(_ sourceID: Int64, _ enabled: Bool) throws {
         try database.transaction {
             try database.run(
@@ -128,39 +119,59 @@ struct TestLibrary {
         }
     }
 
-    /// Reserves a card into an outstanding hand, without going through the
-    /// hand API — which is the next slice.
-    func reserve(_ photoID: Int64, consumerID: Int64, position: Int) throws {
+    /// Puts a photo in the queue directly, without going through a provider.
+    func enqueue(_ photoID: Int64, sourceID: Int64) throws {
         try database.run(
-            "INSERT INTO hand (consumer_id, photo_id, position, reserved_at) VALUES (:c, :p, :n, 0);",
-            ["c": .int(consumerID), "p": .int(photoID), "n": .int(Int64(position))]
+            "INSERT INTO queue (photo_id, source_id, queued_at) VALUES (:p, :s, 0);",
+            ["p": .int(photoID), "s": .int(sourceID)]
         )
     }
 
     @discardableResult
-    func addConsumer(kind: String, displayID: String? = nil, handSize: Int = 10) throws -> Int64 {
+    func addConsumer(kind: String, displayID: String? = nil) throws -> Int64 {
         try database.run(
             """
-            INSERT INTO consumer (kind, display_id, hand_size, seen_at, created_at)
-            VALUES (:kind, :display, :size, 0, 0);
+            INSERT INTO consumer (kind, display_id, seen_at, created_at)
+            VALUES (:kind, :display, 0, 0);
             """,
-            ["kind": .text(kind), "display": SQLValue(displayID), "size": .int(Int64(handSize))]
+            ["kind": .text(kind), "display": SQLValue(displayID)]
         )
         return database.lastInsertRowID
     }
 }
 
-/// Deals `count` cards and records what came out, for the statistical
-/// assertions. Returns the photo id of each deal, in order.
-extension Deck {
-    func dealSequence(count: Int, settings: DeckSettings) throws -> [Int64] {
-        var dealt: [Int64] = []
-        dealt.reserveCapacity(count)
-        for _ in 0..<count {
-            guard let deal = try deal(settings: settings) else { break }
-            dealt.append(deal.card.id)
+/// Draws `count` pictures and records what came out, exercising the deck the way
+/// the queue does — pick a candidate, mark it shown — without the cache or any
+/// file I/O in the way.
+///
+/// Sources are visited in turn, so a single-source library (which is what the
+/// statistical tests use) sees exactly the pass-and-window behaviour the deck
+/// promises.
+extension TestLibrary {
+    func drawSequence(count: Int, settings: DeckSettings) throws -> [Int64] {
+        let sourceIDs = try database.all("SELECT id FROM source WHERE enabled = 1 ORDER BY id;") {
+            try $0.int64("id")
         }
-        return dealt
+        guard !sourceIDs.isEmpty else { return [] }
+
+        var drawn: [Int64] = []
+        drawn.reserveCapacity(count)
+        var next = 0
+        while drawn.count < count {
+            var madeProgress = false
+            for _ in sourceIDs.indices {
+                let sourceID = sourceIDs[next % sourceIDs.count]
+                next += 1
+                if let card = try deck.nextCandidate(forSource: sourceID, settings: settings) {
+                    _ = try deck.markShown(photoID: card.id)
+                    drawn.append(card.id)
+                    madeProgress = true
+                    break
+                }
+            }
+            if !madeProgress { break }
+        }
+        return drawn
     }
 }
 
@@ -175,4 +186,19 @@ func gapsBetweenRepeats(in sequence: [Int64]) -> [Int] {
         lastIndex[id] = index
     }
     return gaps
+}
+
+/// A minimal lock, for collecting results from several threads. The kit takes no
+/// dependencies and neither do its tests.
+final class Mutex<Value>: @unchecked Sendable {
+    private var value: Value
+    private let lock = NSLock()
+
+    init(_ value: Value) { self.value = value }
+
+    func withLock<T>(_ body: (inout Value) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&value)
+    }
 }

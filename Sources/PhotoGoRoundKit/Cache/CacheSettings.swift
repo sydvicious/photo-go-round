@@ -26,18 +26,6 @@ public struct CacheSettings: Sendable, Equatable {
     /// evicts early, never late.
     public var byteCeiling: Int64
 
-    /// Photos per chunk.
-    ///
-    /// Chunking bounds peak memory to this many in-flight images, gives natural
-    /// checkpoints to re-read configuration and notice that a source was
-    /// disabled, lets an iOS `BGProcessingTask` stop cleanly when its time
-    /// expires, and avoids issuing fifty thousand concurrent PhotoKit requests.
-    public var chunkSize: Int
-
-    /// The cold-start burst: enough photos to make the system usable within
-    /// seconds of adding a source, fetched before dropping to background pace.
-    public var burstSize: Int
-
     /// Below this much free space, stop materializing and say why. Running out
     /// of disk should degrade into "the deck stops growing" rather than into a
     /// full volume, which on macOS is a genuinely bad day for everything else
@@ -52,8 +40,6 @@ public struct CacheSettings: Sendable, Equatable {
     public init(
         photoCap: Int = 1000,
         byteCeiling: Int64 = 50 * CacheSettings.gigabyte,
-        chunkSize: Int = 10,
-        burstSize: Int = 10,
         minimumFreeBytes: Int64 = 5 * CacheSettings.gigabyte,
         criticalFreeBytes: Int64 = 2 * CacheSettings.gigabyte
     ) {
@@ -61,8 +47,6 @@ public struct CacheSettings: Sendable, Equatable {
         // anything, so each is a parse with a default and a clamp.
         self.photoCap = max(0, photoCap)
         self.byteCeiling = max(0, byteCeiling)
-        self.chunkSize = min(max(chunkSize, 1), 1000)
-        self.burstSize = min(max(burstSize, 1), 1000)
         self.minimumFreeBytes = max(0, minimumFreeBytes)
         self.criticalFreeBytes = max(0, min(criticalFreeBytes, minimumFreeBytes))
     }

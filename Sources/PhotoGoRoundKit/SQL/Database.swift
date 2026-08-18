@@ -17,8 +17,8 @@ public final class Database {
         /// a conflict at COMMIT. Fine for pure reads.
         case deferred = "DEFERRED"
         /// Takes the write lock up front. Everything that writes uses this —
-        /// notably the deal and the hand reservation, which are exactly the
-        /// statements two processes race on.
+        /// notably serving a picture, which is the statement two processes race
+        /// on.
         case immediate = "IMMEDIATE"
     }
 
@@ -101,8 +101,8 @@ public final class Database {
     /// Prepares a statement, reusing the cached one when there is a cached one
     /// to reuse.
     ///
-    /// The deal and the hand reservation run constantly, so re-preparing them
-    /// every time would be waste. A statement that is currently being iterated
+    /// Serving and selecting run constantly, so re-preparing them every time
+    /// would be waste. A statement that is currently being iterated
     /// is not handed out again — re-entrant use gets its own.
     public func prepare(_ sql: String) throws -> Statement {
         if let cached = cachedStatements[sql], !cached.isActive {
@@ -191,8 +191,8 @@ public final class Database {
     ///
     /// WAL permits exactly one writer, so `SQLITE_BUSY` is an ordinary outcome
     /// rather than a failure. `sqlite3_busy_timeout` absorbs most of it; the
-    /// paths two processes genuinely race on — the deal, the hand reservation —
-    /// want this retry as well, because a busy *snapshot* at COMMIT cannot be
+    /// paths two processes genuinely race on — serving a picture — want this
+    /// retry as well, because a busy *snapshot* at COMMIT cannot be
     /// waited out and has to be replayed.
     ///
     /// `body` is therefore called more than once in the contended case, so it

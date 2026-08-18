@@ -6,12 +6,10 @@ import Testing
 @Suite("Cache")
 struct CacheTests {
 
-    /// A library whose photos live on a *removable* volume as far as the
-    /// database is concerned, so they are materialized rather than referenced.
-    ///
-    /// Everything in a temporary directory is really on the boot volume, so the
-    /// storage column is set directly — the classification itself is covered in
-    /// the source tests.
+    /// A library whose photos are treated as materialized, so the cache cap
+    /// governs them. Everything in a temporary directory is really on the boot
+    /// volume, so the storage column is set directly — classification itself is
+    /// covered in the source tests.
     private struct Fixture {
         let folder: TemporaryFolder
         let cacheRoot: TemporaryFolder
@@ -20,7 +18,12 @@ struct CacheTests {
         let cache: PhotoCache
         let source: Source
 
-        init(photos: [String], settings: CacheSettings = .default) async throws {
+        init(
+            photos: [String],
+            settings: CacheSettings = .default,
+            queueSize: Int = 1000,
+            materialized: Bool = true
+        ) async throws {
             folder = TemporaryFolder(name: "pgr-cache-src")
             cacheRoot = TemporaryFolder(name: "pgr-cache-dst")
             for name in photos { folder.write(name, bytes: 100) }
@@ -31,17 +34,30 @@ struct CacheTests {
                 database: library.database,
                 root: cacheRoot.url.appending(path: "cache"),
                 settings: settings,
-                sources: store
+                sources: store,
+                queueSize: queueSize
             )
             try cache.prepare()
 
             source = try store.add(kind: .folder, locator: folder.path, recursive: true)
-            try await store.scan(source)
-            // Force the materialized path, which is what the cap governs.
-            try library.database.run("UPDATE photo SET storage = 'materialized';")
+            await store.refresh(source)
+            if materialized {
+                try library.database.run("UPDATE photo SET storage = 'materialized';")
+            }
         }
 
         var deck: Deck { library.deck }
+
+        /// Asks the source for pictures until it stops offering them.
+        @discardableResult
+        func produceAll(limit: Int = 200) async throws -> Int {
+            var made = 0
+            for _ in 0..<limit {
+                guard try await cache.produce(forSource: source.id) else { break }
+                made += 1
+            }
+            return made
+        }
     }
 
     // MARK: - Layout
@@ -50,7 +66,6 @@ struct CacheTests {
     func cacheLayoutIsSourceThenPhoto() {
         let path = PhotoCache.relativePath(sourceID: 3, photoID: 124, externalID: "holiday/beach.HEIC")
         #expect(path == "3/000000124.heic")
-        // No extension is not an error; nobody reads the cache by name.
         #expect(PhotoCache.relativePath(sourceID: 7, photoID: 1, externalID: "noext") == "7/000000001")
     }
 
@@ -64,121 +79,147 @@ struct CacheTests {
             sources: SourceStore(database: library.database)
         )
         try cache.prepare()
-
         let values = try cache.root.resourceValues(forKeys: [.isExcludedFromBackupKey])
         #expect(values.isExcludedFromBackup == true)
     }
 
-    // MARK: - Filling
+    // MARK: - Producing
 
-    @Test("A chunk materializes bytes and records where they went")
-    func fillingCopiesBytes() async throws {
+    @Test("Producing fetches the bytes and queues the picture, in one step")
+    func producingFetchesAndQueues() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
-        let outcome = try await fixture.cache.fillNextChunk()
+        #expect(try await fixture.cache.produce(forSource: fixture.source.id))
 
-        #expect(outcome == .materialized(count: 3, bytes: 300))
-        let status = try fixture.cache.status()
-        #expect(status.residentCount == 3)
-        #expect(status.pendingCount == 0)
-        #expect(status.bytesOnDisk == 300)
-
-        // And the bytes are really there, under the layout.
-        let paths = try fixture.library.database.all(
-            "SELECT cache_path FROM photo ORDER BY id;") { try $0.string("cache_path") }
-        for path in paths {
-            let url = fixture.cache.root.appending(path: path)
-            #expect(FileManager.default.fileExists(atPath: url.path(percentEncoded: false)))
-        }
+        // A picture is never queued unless it is ready to show: producing it and
+        // fetching its bytes are the same operation.
+        #expect(try fixture.cache.queue.size() == 1)
+        let queued = try #require(try fixture.cache.queue.peek().first)
+        #expect(try fixture.cache.residentURL(forPhoto: queued.id) != nil)
+        #expect(try fixture.cache.status().residentCount == 1)
     }
 
-    @Test("Filling stops at the cap")
-    func fillingRespectsTheCap() async throws {
-        let fixture = try await Fixture(
-            photos: (0..<20).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 6, chunkSize: 4, burstSize: 4)
-        )
-        _ = try await fixture.cache.fill()
+    @Test("Each request yields a different picture")
+    func producingDoesNotRepeat() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
+        #expect(try await fixture.produceAll() == 3)
+        #expect(try fixture.cache.queue.size() == 3)
+        #expect(Set(try fixture.cache.queue.peek(10).map(\.id)).count == 3)
 
-        let status = try fixture.cache.status()
-        #expect(status.residentCount == 6)
-        #expect(status.pendingCount == 14)
-        #expect(try await fixture.cache.fillNextChunk() == .capReached)
+        // Nothing left to offer is an ordinary answer.
+        #expect(!(try await fixture.cache.produce(forSource: fixture.source.id)))
     }
 
-    @Test("The first chunk is the burst, the rest are chunk-sized")
-    func burstComesFirst() async throws {
-        let fixture = try await Fixture(
-            photos: (0..<20).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 100, chunkSize: 3, burstSize: 8)
-        )
-        // Ten photos would be usable within seconds of adding a source; the
-        // rest fill in behind them.
-        let first = try await fixture.cache.fillNextChunk(size: fixture.cache.settings.burstSize)
-        #expect(first == .materialized(count: 8, bytes: 800))
-        let second = try await fixture.cache.fillNextChunk()
-        #expect(second == .materialized(count: 3, bytes: 300))
-    }
-
-    @Test("Nothing left to do is a normal outcome")
-    func fillingAnEmptyQueueIsFine() async throws {
-        let fixture = try await Fixture(photos: ["a.png"])
-        _ = try await fixture.cache.fill()
-        #expect(try await fixture.cache.fillNextChunk() == .nothingToDo)
-    }
-
-    @Test("Cards in outstanding hands are materialized first")
-    func outstandingHandsLeadTheQueue() async throws {
-        let fixture = try await Fixture(
-            photos: (0..<30).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 100, chunkSize: 5, burstSize: 5)
-        )
-        let consumer = try fixture.deck.register(kind: .screensaver, handSize: 5)
-        let hand = try fixture.deck.reserveHand(for: consumer.id).cards.map(\.card.id)
-
-        // The prefetcher does not have to guess what is needed soon — reserved
-        // hands are the answer, explicitly.
-        let queue = try fixture.cache.materializationQueue(limit: 5)
-        #expect(queue.map(\.photoID) == hand)
-
-        _ = try await fixture.cache.fillNextChunk()
-        for card in hand {
-            #expect(try fixture.cache.residentURL(forPhoto: card) != nil)
-        }
-    }
-
-    @Test("Photos from an unavailable source are never re-fetched")
-    func orphansAreSkipped() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        try fixture.store.markUnavailable(sourceID: fixture.source.id, reason: "drive unplugged")
-
-        #expect(try fixture.cache.materializationQueue(limit: 10).isEmpty)
-        #expect(try await fixture.cache.fillNextChunk() == .nothingToDo)
-    }
-
-    @Test("A photo that has gone missing is marked, not retried for ever")
-    func missingFilesAreMarkedUnavailable() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        fixture.folder.remove("a.png")
-
-        let outcome = try await fixture.cache.fillNextChunk()
-        #expect(outcome == .materialized(count: 1, bytes: 100))
-        #expect(try fixture.deck.poolSize() == 1)
-        #expect(try fixture.cache.materializationQueue(limit: 10).isEmpty)
-    }
-
-    @Test("Filling pauses rather than filling the volume")
-    func lowDiskPausesMaterialization() async throws {
-        // A floor larger than any real volume, so the guard always trips.
+    @Test("Producing stops rather than filling the volume")
+    func lowDiskStopsProduction() async throws {
         let fixture = try await Fixture(
             photos: ["a.png", "b.png"],
             settings: CacheSettings(minimumFreeBytes: .max, criticalFreeBytes: .max)
         )
-        let outcome = try await fixture.cache.fillNextChunk()
-        guard case .pausedForDiskSpace = outcome else {
-            Issue.record("expected a disk-space pause, got \(outcome)")
-            return
+        #expect(!(try await fixture.cache.produce(forSource: fixture.source.id)))
+        #expect(try fixture.cache.queue.size() == 0)
+    }
+
+    @Test("A source that is unavailable is not asked to produce")
+    func unavailableSourcesProduceNothing() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        try fixture.store.setEnabled(false, for: fixture.source.id)
+        #expect(!(try await fixture.cache.produce(forSource: fixture.source.id)))
+    }
+
+    @Test("A file that vanished before its download leaves the pool")
+    func failedDownloadFromAnOnlineSourceRemovesTheEntry() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        fixture.folder.remove("a.png")
+
+        // Two attempts: one hits the missing file and removes it, the other
+        // succeeds. The source is right there, so a missing file is a file that
+        // no longer exists.
+        _ = try await fixture.cache.produce(forSource: fixture.source.id)
+        _ = try await fixture.cache.produce(forSource: fixture.source.id)
+
+        #expect(try fixture.deck.poolSize() == 1)
+        #expect(try fixture.cache.queue.size() == 1)
+    }
+
+    // MARK: - Serving
+
+    @Test("An empty queue serves nothing, which is how a fresh install starts")
+    func servingAnEmptyQueue() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        #expect(try await fixture.cache.serve() == nil)
+    }
+
+    @Test("Serving returns a picture and advances the deck")
+    func servingAdvancesTheDeck() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        try await fixture.produceAll()
+
+        let served = try #require(try await fixture.cache.serve())
+        #expect(served.card.dealSeq == 1)
+        #expect(FileManager.default.fileExists(atPath: served.url.path(percentEncoded: false)))
+        #expect(try fixture.deck.currentDealSeq() == 1)
+        // Serving is what shortens the queue.
+        #expect(try fixture.cache.queue.size() == 1)
+        #expect(
+            try fixture.library.database.scalarInt(
+                "SELECT times_shown FROM photo WHERE id = :id;", ["id": .int(served.card.id)]) == 1
+        )
+    }
+
+    /// The requirement the whole serving path exists for.
+    @Test("A photo deleted from the source is never served, even though we hold a copy")
+    func deletedPhotosAreNeverServed() async throws {
+        let fixture = try await Fixture(photos: ["keep.png", "delete-me.png"])
+        try await fixture.produceAll()
+        #expect(try fixture.cache.queue.size() == 2)
+
+        // We hold our own copy, so deleting the original does not touch our
+        // bytes — exactly the case a residency check would sail past.
+        fixture.folder.remove("delete-me.png")
+
+        var served: [String] = []
+        while let next = try await fixture.cache.serve() {
+            served.append(next.card.externalID)
         }
-        #expect(try fixture.cache.status().residentCount == 0)
+        #expect(served == ["keep.png"])
+        #expect(try fixture.deck.poolSize() == 1)
+        #expect(try fixture.cache.sweepOrphans().files == 0)
+    }
+
+    @Test("Existence is three-valued, and offline is not deletion")
+    func existenceDistinguishesDeletedFromUnreachable() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        let source = try #require(try fixture.store.source(id: fixture.source.id))
+        let provider = FolderSourceProvider()
+
+        #expect(await provider.existence(of: "a.png", in: source) == .present)
+        #expect(await provider.existence(of: "ghost.png", in: source) == .absent)
+
+        let unreachable = try fixture.store.add(kind: .folder, locator: "/Volumes/NotMounted/photos")
+        let verdict = await provider.existence(of: "a.png", in: unreachable)
+        #expect(verdict != .absent)
+        if case .unknown = verdict {} else {
+            Issue.record("expected .unknown for an unreachable source, got \(verdict)")
+        }
+    }
+
+    @Test("Offline keeps its cached bytes, and keeps serving them")
+    func offlineSourcesKeepServingFromCache() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
+        try await fixture.produceAll()
+
+        // The drive is unplugged. Note what this is *not*: deleting the files
+        // while leaving the folder is the deletion case.
+        try fixture.library.database.run(
+            "UPDATE source SET locator = :locator WHERE id = :id;",
+            ["locator": "/Volumes/NotMounted/photos", "id": .int(fixture.source.id)]
+        )
+        try fixture.store.markUnavailable(sourceID: fixture.source.id, reason: "volume not mounted")
+
+        // The cached copies are the most valuable thing we have now.
+        #expect(try await fixture.cache.serve() != nil)
+        #expect(try fixture.deck.poolSize() == 3)
+        #expect(try fixture.cache.status().residentCount == 3)
     }
 
     // MARK: - Eviction
@@ -187,11 +228,10 @@ struct CacheTests {
     func evictionIsFIFO() async throws {
         let fixture = try await Fixture(
             photos: (0..<10).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 10, chunkSize: 10, burstSize: 10)
+            settings: CacheSettings(photoCap: 10)
         )
-        _ = try await fixture.cache.fill()
+        try await fixture.produceAll()
 
-        // Stamp distinct materialization times so "oldest" is unambiguous.
         let ids = try fixture.library.database.all("SELECT id FROM photo ORDER BY id;") {
             try $0.int64("id")
         }
@@ -201,249 +241,159 @@ struct CacheTests {
                 ["at": .int(Int64(1000 + index)), "id": .int(id)]
             )
         }
+        // Nothing queued, so nothing is protected.
+        try fixture.library.database.run("DELETE FROM queue;")
 
         let tighter = PhotoCache(
-            database: fixture.library.database,
-            root: fixture.cache.root,
-            settings: CacheSettings(photoCap: 4),
-            sources: fixture.store
+            database: fixture.library.database, root: fixture.cache.root,
+            settings: CacheSettings(photoCap: 4), sources: fixture.store
         )
         let result = try tighter.evictIfNeeded()
         #expect(result.evicted == 6)
-        #expect(result.bytesFreed == 600)
-
-        // The six oldest went; the four newest stayed.
         let remaining = try fixture.library.database.all(
             "SELECT id FROM photo WHERE cache_path IS NOT NULL ORDER BY id;") { try $0.int64("id") }
         #expect(remaining == Array(ids.suffix(4)))
     }
 
-    @Test("A card in an outstanding hand is never evicted, however old")
-    func outstandingCardsAreProtected() async throws {
+    @Test("A queued picture is never evicted, however old")
+    func queuedPicturesAreProtected() async throws {
         let fixture = try await Fixture(
             photos: (0..<10).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 10, chunkSize: 10, burstSize: 10)
+            settings: CacheSettings(photoCap: 10)
         )
-        _ = try await fixture.cache.fill()
+        try await fixture.produceAll()
 
         let ids = try fixture.library.database.all("SELECT id FROM photo ORDER BY id;") {
             try $0.int64("id")
         }
-        // Make the very oldest entries the ones somebody is about to show.
         for (index, id) in ids.enumerated() {
             try fixture.library.database.run(
                 "UPDATE photo SET materialized_at = :at WHERE id = :id;",
                 ["at": .int(Int64(1000 + index)), "id": .int(id)]
             )
         }
-        let consumer = try fixture.deck.register(kind: .screensaver, handSize: 2)
-        try fixture.library.database.run(
-            """
-            INSERT INTO hand (consumer_id, photo_id, position, reserved_at)
-            VALUES (:c, :a, 0, 0), (:c, :b, 1, 0);
-            """,
-            ["c": .int(consumer.id), "a": .int(ids[0]), "b": .int(ids[1])]
-        )
 
+        // Everything is queued, so nothing may be evicted — these are about to
+        // be shown.
         let tighter = PhotoCache(
-            database: fixture.library.database,
-            root: fixture.cache.root,
-            settings: CacheSettings(photoCap: 3),
-            sources: fixture.store
+            database: fixture.library.database, root: fixture.cache.root,
+            settings: CacheSettings(photoCap: 3), sources: fixture.store
         )
         let result = try tighter.evictIfNeeded()
-        #expect(result.protectedFromEviction == 2)
-
-        // Without this guard a fast consumer could evict a photo moments before
-        // requesting it.
-        #expect(try fixture.cache.residentURL(forPhoto: ids[0]) != nil)
-        #expect(try fixture.cache.residentURL(forPhoto: ids[1]) != nil)
+        #expect(result.evicted == 0)
+        #expect(result.protectedFromEviction > 0)
     }
 
     @Test("The byte ceiling evicts early even when the count is fine")
     func byteCeilingIsASafetyValve() async throws {
         let fixture = try await Fixture(
             photos: (0..<10).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 100, chunkSize: 10, burstSize: 10)
+            settings: CacheSettings(photoCap: 100)
         )
-        _ = try await fixture.cache.fill()
+        try await fixture.produceAll()
+        try fixture.library.database.run("DELETE FROM queue;")
         #expect(try fixture.cache.status().bytesOnDisk == 1000)
 
-        // Count is nowhere near the cap; bytes are over the ceiling.
         let capped = PhotoCache(
-            database: fixture.library.database,
-            root: fixture.cache.root,
-            settings: CacheSettings(photoCap: 100, byteCeiling: 450),
-            sources: fixture.store
+            database: fixture.library.database, root: fixture.cache.root,
+            settings: CacheSettings(photoCap: 100, byteCeiling: 450), sources: fixture.store
         )
-        let result = try capped.evictIfNeeded()
-        #expect(result.evicted > 0)
+        #expect(try capped.evictIfNeeded().evicted > 0)
         #expect(try capped.status().bytesOnDisk <= 450)
     }
 
-    @Test("Under the cap, eviction does nothing")
-    func evictionIsQuietWhenUnderCap() async throws {
-        let fixture = try await Fixture(
-            photos: ["a.png", "b.png"],
-            settings: CacheSettings(photoCap: 100)
-        )
-        _ = try await fixture.cache.fill()
-        #expect(try fixture.cache.evictIfNeeded() == PhotoCache.EvictionResult(
-            evicted: 0, bytesFreed: 0, protectedFromEviction: 0))
-    }
+    // MARK: - Orphaned bytes
 
-    // MARK: - Clearing
-
-    @Test("Clearing states its price before charging it")
-    func clearingReportsItsCost() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
-        _ = try await fixture.cache.fill()
-
-        let cost = try fixture.cache.costOfClearing(.everything)
-        #expect(cost.needingRefetch == 3)
-        #expect(cost.bytesFreed == 300)
-        #expect(!cost.costsNothingToRefetch)
-
-        // Clearing only what is gone frees space at zero future cost, which is
-        // the variant to reach for first.
-        #expect(try fixture.cache.costOfClearing(.unavailableSources).costsNothingToRefetch)
-    }
-
-    @Test("Clearing discards bytes and keeps shuffle history")
-    func clearingKeepsDeckHistory() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
-        _ = try await fixture.cache.fill()
-        _ = try fixture.deck.dealSequence(count: 5, settings: .default)
-
-        let seqBefore = try fixture.deck.currentDealSeq()
-        let shownBefore = try fixture.library.database.scalarInt("SELECT SUM(times_shown) FROM photo;")
-
-        let result = try fixture.cache.clear(.everything)
-        #expect(result.cleared == 3)
-        #expect(result.bytesFreed == 300)
-        #expect(try fixture.cache.status().residentCount == 0)
-
-        // Epochs, shuffle keys, and last-shown times are untouched, so a
-        // cleared cache refills into the same rotation.
-        #expect(try fixture.deck.currentDealSeq() == seqBefore)
-        #expect(try fixture.library.database.scalarInt("SELECT SUM(times_shown) FROM photo;") == shownBefore)
-        #expect(try fixture.deck.poolSize() == 3)
-    }
-
-    @Test("Clearing everything returns outstanding hands")
-    func clearingReturnsHands() async throws {
-        let fixture = try await Fixture(photos: (0..<6).map { "photo-\($0).png" })
-        _ = try await fixture.cache.fill()
-        let consumer = try fixture.deck.register(kind: .screensaver, handSize: 4)
-        try fixture.deck.reserveHand(for: consumer.id)
-
-        let result = try fixture.cache.clear(.everything)
-        #expect(result.handsReturned == 4)
-        #expect(try fixture.deck.outstandingHand(for: consumer.id).isEmpty)
-    }
-
-    @Test("Clearing one source leaves the others alone")
-    func clearingOneSource() async throws {
+    @Test("Gone from an online source takes the cache entry with it")
+    func onlineRemovalDiscardsTheCachedBytes() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        let other = TemporaryFolder(name: "pgr-cache-other")
-        other.write("x.png", bytes: 50)
-        let second = try fixture.store.add(kind: .folder, locator: other.path)
-        try await fixture.store.scan(second)
-        try fixture.library.database.run("UPDATE photo SET storage = 'materialized';")
-        _ = try await fixture.cache.fill()
-        #expect(try fixture.cache.status().residentCount == 3)
+        try await fixture.produceAll()
 
-        let result = try fixture.cache.clear(.source(fixture.source.id))
-        #expect(result.cleared == 2)
-        #expect(try fixture.cache.status().residentCount == 1)
-        // One directory removal, not a thousand unlinks.
+        let doomed = try #require(
+            try fixture.library.database.first(
+                "SELECT id FROM photo WHERE external_id = 'a.png';") { try $0.int64("id") }
+        )
+        let path = try #require(
+            try fixture.library.database.first(
+                "SELECT cache_path FROM photo WHERE id = :id;", ["id": .int(doomed)]
+            ) { try $0.string("cache_path") }
+        )
+
+        #expect(try fixture.cache.remove(doomed).count == 1)
         #expect(
             !FileManager.default.fileExists(
-                atPath: fixture.cache.root.appending(path: "\(fixture.source.id)")
-                    .path(percentEncoded: false))
+                atPath: fixture.cache.root.appending(path: path).path(percentEncoded: false))
         )
+        // And it left the queue by cascade.
+        #expect(try fixture.cache.queue.size() == 1)
+        #expect(try fixture.cache.sweepOrphans().files == 0)
     }
 
-    @Test("Clearing unavailable sources frees exactly the orphans")
-    func clearingUnavailableSources() async throws {
+    @Test("Bytes left behind by a crash are swept up")
+    func orphanedBytesAreSwept() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        let other = TemporaryFolder(name: "pgr-cache-live")
-        other.write("x.png", bytes: 50)
-        let live = try fixture.store.add(kind: .folder, locator: other.path)
-        try await fixture.store.scan(live)
-        try fixture.library.database.run("UPDATE photo SET storage = 'materialized';")
-        _ = try await fixture.cache.fill()
+        try await fixture.produceAll()
 
-        try fixture.store.markUnavailable(sourceID: fixture.source.id, reason: "drive unplugged")
-        let result = try fixture.cache.clear(.unavailableSources)
-        #expect(result.cleared == 2)
+        // A file the database does not claim: what a crash between the copy and
+        // the row update leaves behind.
+        let stray = fixture.cache.root.appending(path: "\(fixture.source.id)/999999999.png")
+        try Data(count: 250).write(to: stray)
+
+        let swept = try fixture.cache.sweepOrphans()
+        #expect(swept.files == 1)
+        #expect(swept.bytes == 250)
+        #expect(try fixture.cache.status().residentCount == 2)
+    }
+
+    @Test("A cache entry that lost its bytes is queued for re-fetch")
+    func residencyIsVerified() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        try await fixture.produceAll()
+
+        let path = try #require(
+            try fixture.library.database.first("SELECT cache_path FROM photo ORDER BY id LIMIT 1;") {
+                try $0.string("cache_path")
+            }
+        )
+        try FileManager.default.removeItem(at: fixture.cache.root.appending(path: path))
+
+        #expect(try fixture.cache.verifyResidency() == 1)
         #expect(try fixture.cache.status().residentCount == 1)
+        // It left the queue too, so nothing serves a picture with no bytes.
+        #expect(try fixture.cache.queue.size() == 1)
     }
 
     // MARK: - Referenced photos
 
-    @Test("Referenced photos cost no cache budget and need no materialization")
+    @Test("Referenced photos cost no cache budget and need no download")
     func referencedPhotosAreFree() async throws {
-        let folder = TemporaryFolder(name: "pgr-ref-src")
-        for name in ["a.png", "b.png"] { folder.write(name, bytes: 100) }
-        let cacheRoot = TemporaryFolder(name: "pgr-ref-dst")
+        let fixture = try await Fixture(photos: ["a.png", "b.png"], materialized: false)
+        try await fixture.produceAll()
 
-        let library = try TestLibrary()
-        let store = SourceStore(database: library.database)
-        let cache = PhotoCache(
-            database: library.database,
-            root: cacheRoot.url.appending(path: "cache"),
-            sources: store
-        )
-        try cache.prepare()
-        let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
-
-        // A temporary directory is on the boot volume, so these classify as
-        // referenced without any help.
-        let status = try cache.status()
+        let status = try fixture.cache.status()
         #expect(status.referencedCount == 2)
         #expect(status.residentCount == 0)
-        #expect(status.pendingCount == 0)
-        #expect(try cache.materializationQueue(limit: 10).isEmpty)
-        #expect(try await cache.fillNextChunk() == .nothingToDo)
-
-        // But their bytes are readable, resolved through the access seam.
-        let ids = try library.database.all("SELECT id FROM photo;") { try $0.int64("id") }
-        for id in ids {
-            #expect(try cache.residentURL(forPhoto: id) != nil)
-        }
-
-        // And eviction is a no-op for them.
-        #expect(try cache.evictIfNeeded().evicted == 0)
+        #expect(status.bytesOnDisk == 0)
+        // Queued and servable without a byte being copied: for a file we know
+        // the path to, the cache entry is the pointer.
+        #expect(try fixture.cache.queue.size() == 2)
+        #expect(try await fixture.cache.serve() != nil)
+        #expect(try fixture.cache.evictIfNeeded().evicted == 0)
     }
 
-    @Test("A referenced photo the user deletes stops being readable at once")
-    func deletedReferencedPhotoIsGone() async throws {
-        let folder = TemporaryFolder(name: "pgr-ref-del")
-        folder.write("a.png", bytes: 100)
-        folder.write("b.png", bytes: 100)
-        let cacheRoot = TemporaryFolder(name: "pgr-ref-del-dst")
+    // MARK: - Clearing
 
-        let library = try TestLibrary()
-        let store = SourceStore(database: library.database)
-        let cache = PhotoCache(
-            database: library.database,
-            root: cacheRoot.url.appending(path: "cache"),
-            sources: store
-        )
-        let source = try store.add(kind: .folder, locator: folder.path)
-        try await store.scan(source)
+    @Test("Clearing discards bytes and keeps shuffle history")
+    func clearingKeepsDeckHistory() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
+        try await fixture.produceAll()
+        _ = try await fixture.cache.serve()
 
-        let target = try #require(
-            try library.database.first(
-                "SELECT id FROM photo WHERE external_id = 'a.png';") { try $0.int64("id") }
-        )
-        #expect(try cache.residentURL(forPhoto: target) != nil)
-
-        // Referenced photos *are* their bytes: deleting one removes it, rather
-        // than starting a countdown.
-        folder.remove("a.png")
-        #expect(try cache.residentURL(forPhoto: target) == nil)
+        let seqBefore = try fixture.deck.currentDealSeq()
+        let result = try fixture.cache.clear(.everything)
+        #expect(result.cleared == 3)
+        #expect(try fixture.cache.status().residentCount == 0)
+        #expect(try fixture.deck.currentDealSeq() == seqBefore)
+        #expect(try fixture.deck.poolSize() == 3)
     }
 }

@@ -18,6 +18,9 @@ public struct PhotoCache {
     public let root: URL
     public let settings: CacheSettings
 
+    /// Pictures that are ready to show. The cache fills it and serves from it.
+    public let queue: PhotoQueue
+
     private let sources: SourceStore
     private let deck: Deck
 
@@ -26,13 +29,15 @@ public struct PhotoCache {
         root: URL,
         settings: CacheSettings = .default,
         sources: SourceStore,
-        deck: Deck? = nil
+        deck: Deck? = nil,
+        queueSize: Int = 1000
     ) {
         self.database = database
         self.root = root
         self.settings = settings
         self.sources = sources
         self.deck = deck ?? Deck(database: database)
+        self.queue = PhotoQueue(database: database, nominalSize: queueSize)
     }
 
     /// Creates the cache directory and keeps it out of Time Machine.
@@ -71,7 +76,7 @@ public struct PhotoCache {
     public func residentURL(forPhoto photoID: Int64) throws -> URL? {
         let row = try database.first(
             """
-            SELECT p.storage, p.cache_path, p.external_id, p.available, p.source_id
+            SELECT p.storage, p.cache_path, p.external_id, p.source_id
               FROM photo p WHERE p.id = :id;
             """,
             ["id": .int(photoID)]
@@ -80,11 +85,10 @@ public struct PhotoCache {
                 storage: PhotoStorage(rawValue: try row.string("storage")) ?? .materialized,
                 cachePath: try row.optionalString("cache_path"),
                 externalID: try row.string("external_id"),
-                available: try row.bool("available"),
                 sourceID: try row.int64("source_id")
             )
         }
-        guard let row, row.available else { return nil }
+        guard let row else { return nil }
 
         switch row.storage {
         case .materialized:
@@ -113,9 +117,8 @@ public struct PhotoCache {
         public let bytesOnDisk: Int64
         public let cap: Int
         public let freeBytesOnVolume: Int64
-        /// Cards in outstanding hands that have no bytes yet — the work the
-        /// prefetcher owes the consumers right now.
-        public let outstandingWithoutBytes: Int
+        /// Pictures waiting in the queue, ready to show.
+        public let queued: Int
     }
 
     public func status() throws -> Status {
@@ -123,9 +126,8 @@ public struct PhotoCache {
             """
             SELECT
               SUM(CASE WHEN storage = 'materialized' AND cache_path IS NOT NULL THEN 1 ELSE 0 END) AS resident,
-              SUM(CASE WHEN storage = 'referenced' AND available = 1 THEN 1 ELSE 0 END)            AS referenced,
-              SUM(CASE WHEN storage = 'materialized' AND cache_path IS NULL
-                        AND available = 1 THEN 1 ELSE 0 END)                                      AS pending,
+              SUM(CASE WHEN storage = 'referenced' THEN 1 ELSE 0 END)                              AS referenced,
+              SUM(CASE WHEN storage = 'materialized' AND cache_path IS NULL THEN 1 ELSE 0 END)    AS pending,
               IFNULL(SUM(CASE WHEN cache_path IS NOT NULL THEN byte_size ELSE 0 END), 0)          AS bytes
               FROM photo;
             """
@@ -138,13 +140,7 @@ public struct PhotoCache {
             )
         }
 
-        let outstanding =
-            try database.scalarInt(
-                """
-                SELECT COUNT(*) FROM hand h JOIN photo p ON p.id = h.photo_id
-                 WHERE h.played_at IS NULL AND p.storage = 'materialized' AND p.cache_path IS NULL;
-                """
-            ) ?? 0
+        let queued = try queue.size()
 
         return Status(
             residentCount: counts?.resident ?? 0,
@@ -153,7 +149,7 @@ public struct PhotoCache {
             bytesOnDisk: counts?.bytes ?? 0,
             cap: settings.photoCap,
             freeBytesOnVolume: freeBytesOnVolume(),
-            outstandingWithoutBytes: outstanding
+            queued: queued
         )
     }
 
@@ -162,164 +158,254 @@ public struct PhotoCache {
         return values?.volumeAvailableCapacityForImportantUsage ?? .max
     }
 
-    // MARK: - Filling
+    // MARK: - Producing one picture
 
-    public enum ChunkOutcome: Sendable, Equatable {
-        case materialized(count: Int, bytes: Int64)
-        /// Nothing wanted bytes. The steady state.
-        case nothingToDo
-        /// The cap is full and everything resident is either newer or pinned.
-        case capReached
-        /// Free space fell below the floor. The deck stops growing rather than
-        /// the volume filling.
-        case pausedForDiskSpace(freeBytes: Int64)
-    }
-
-    /// Materializes one chunk, in the order the photos are actually needed.
+    /// Asks this source for one picture, makes sure its bytes are there, and
+    /// appends it to the queue.
     ///
-    /// The queue is not a guess. Reserved hands *are* the answer to "what is
-    /// needed soon", explicitly — so unplayed cards come first, in position
-    /// order, and everything after that follows deck order. Because
-    /// materialization follows deck order, oldest-materialized is also
-    /// longest-since-dealt, which is what makes plain FIFO eviction correct.
+    /// This is what a provider *answering a request* amounts to, and it is where
+    /// downloading happens. There is no separate fetch stage walking a work
+    /// list: producing a picture and fetching its bytes are the same operation,
+    /// so a picture is never queued unless it is ready to show.
+    ///
+    /// Returns false when this source had nothing to offer, which is an ordinary
+    /// answer — an empty source, everything already queued, or a download that
+    /// failed.
     @discardableResult
-    public func fillNextChunk(size: Int? = nil, now: Date = Date()) async throws -> ChunkOutcome {
-        // Checked before every chunk, which is one of the reasons chunks exist.
+    public func produce(
+        forSource sourceID: Int64,
+        settings: DeckSettings = .default,
+        now: Date = Date()
+    ) async throws -> Bool {
+        // Free space is checked before fetching, so running out of disk degrades
+        // into "the queue stops growing" rather than a full volume.
         let free = freeBytesOnVolume()
-        guard free >= settings.minimumFreeBytes else {
+        guard free >= self.settings.minimumFreeBytes else {
             Log.cache.notice(
-                "pausing materialization: \(free, privacy: .public) bytes free, floor is \(settings.minimumFreeBytes, privacy: .public)"
+                "not producing: \(free, privacy: .public) bytes free, floor is \(self.settings.minimumFreeBytes, privacy: .public)"
             )
-            return .pausedForDiskSpace(freeBytes: free)
+            return false
         }
 
-        let resident = try database.scalarInt(
-            "SELECT COUNT(*) FROM photo WHERE storage = 'materialized' AND cache_path IS NOT NULL;"
-        ) ?? 0
-        guard resident < settings.photoCap else { return .capReached }
+        guard let source = try sources.source(id: sourceID),
+            source.enabled,
+            let provider = sources.provider(for: source.kind),
+            let candidate = try deck.nextCandidate(forSource: sourceID, settings: settings, now: now)
+        else { return false }
 
-        let wanted = min(size ?? settings.chunkSize, settings.photoCap - resident)
-        let queue = try materializationQueue(limit: wanted)
-        guard !queue.isEmpty else { return .nothingToDo }
-
-        let interval = Log.signposter.beginInterval("materialize")
-        defer { Log.signposter.endInterval("materialize", interval) }
-
-        var materialized = 0
-        var bytes: Int64 = 0
-        for item in queue {
+        if candidate.storage == .materialized, candidate.cachePath == nil {
+            let relative = Self.relativePath(
+                sourceID: sourceID, photoID: candidate.id, externalID: candidate.externalID
+            )
             do {
-                let file = try await materialize(item, now: now)
-                materialized += 1
-                bytes += file.byteSize
-            } catch let error as SourceProviderError {
-                // The file is gone. Mark it on the spot rather than retrying it
-                // on every chunk for ever.
-                Log.cache.notice(
-                    "photo \(item.photoID, privacy: .public) could not be materialized: \(String(describing: error), privacy: .public)"
+                let file = try await provider.materialize(
+                    externalID: candidate.externalID,
+                    from: source,
+                    to: root.appending(path: relative)
                 )
-                try deck.markUnavailable(photoID: item.photoID, reason: "missing at materialization")
+                try database.run(
+                    """
+                    UPDATE photo
+                       SET cache_path = :path, byte_size = :size, materialized_at = :now
+                     WHERE id = :id;
+                    """,
+                    [
+                        "path": .text(relative), "size": .int(file.byteSize),
+                        "now": SQLValue(now), "id": .int(candidate.id),
+                    ]
+                )
+            } catch {
+                try handleFailedDownload(candidate, source: source, error: error)
+                return false
             }
         }
 
-        if materialized > 0 {
+        return try queue.append(photoID: candidate.id, sourceID: sourceID, at: now)
+    }
+
+    /// A download that failed means two completely different things depending on
+    /// whether the source is there.
+    ///
+    /// **Source online:** the file is genuinely gone, so the entry leaves the
+    /// pool and our copy goes with it. **Source offline:** the failure says
+    /// nothing about the file, so the entry stays and only its queue place is
+    /// cleared. This is the whole answer to the offline volume problem, and the
+    /// check happens here rather than at refresh time because a drive can go
+    /// away in between.
+    private func handleFailedDownload(_ card: DeckCard, source: Source, error: any Error) throws {
+        if sources.isOnline(source) {
+            Log.cache.notice(
+                "photo \(card.id, privacy: .public) could not be downloaded from an online source; removing it from the pool"
+            )
+            try self.remove(card.id)
+        } else {
             Log.cache.info(
-                "materialized \(materialized, privacy: .public) photos, \(bytes, privacy: .public) bytes"
+                "photo \(card.id, privacy: .public) is on an offline source; leaving it in the pool"
             )
+            try queue.remove(photoID: card.id)
         }
-        return .materialized(count: materialized, bytes: bytes)
     }
 
-    /// Fills the opening burst, then keeps going in chunks until the cap, the
-    /// disk floor, or nothing left to do stops it.
+    // MARK: - Serving one picture
+
+    /// Takes the head of the queue and gives it to a consumer.
     ///
-    /// The host decides the priority this runs at; the kit has no opinion about
-    /// when it is called.
-    @discardableResult
-    public func fill(maximumChunks: Int = .max, now: Date = Date()) async throws -> ChunkOutcome {
-        var totalCount = 0
-        var totalBytes: Int64 = 0
-        var chunks = 0
-        while chunks < maximumChunks, !Task.isCancelled {
-            let size = chunks == 0 ? settings.burstSize : settings.chunkSize
-            let outcome = try await fillNextChunk(size: size, now: now)
-            chunks += 1
-            switch outcome {
-            case .materialized(let count, let bytes):
-                totalCount += count
-                totalBytes += bytes
-                if count == 0 { return .nothingToDo }
-            case .nothingToDo, .capReached, .pausedForDiskSpace:
-                return totalCount > 0 ? .materialized(count: totalCount, bytes: totalBytes) : outcome
+    /// **Every picture is checked against its source in the moment before it is
+    /// returned**, including one we hold our own copy of. That is the guarantee:
+    /// a photo the user deleted is never shown again, not even in the minutes
+    /// before a refresh would have noticed.
+    ///
+    /// Returns nil when there is nothing to show, which is an ordinary answer.
+    /// A fresh install has an empty queue and an empty cache, so the first
+    /// requests are answered this way and pictures begin arriving as providers
+    /// deliver.
+    public func serve(
+        to consumerID: Int64? = nil,
+        now: Date = Date()
+    ) async throws -> (card: DeckCard, url: URL)? {
+        while let card = try queue.serve(at: now) {
+            guard let source = try sources.source(id: card.sourceID),
+                let provider = sources.provider(for: source.kind)
+            else { continue }
+
+            switch await provider.existence(of: card.externalID, in: source) {
+            case .absent:
+                Log.cache.notice(
+                    "photo \(card.id, privacy: .public) is gone from a reachable source; removing it rather than showing it"
+                )
+                try self.remove(card.id)
+
+            case .unknown, .present:
+                guard let url = try residentURL(forPhoto: card.id) else { continue }
+                let seq = try deck.markShown(photoID: card.id, now: now)
+                if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
+                // The deck moved, so anything mirroring its position — a
+                // diagnostic panel, another surface's idea of what is next —
+                // should go and look.
+                DarwinNotification.post(.deckAdvanced)
+                return (
+                    DeckCard(
+                        id: card.id, sourceID: card.sourceID, externalID: card.externalID,
+                        storage: card.storage, cachePath: card.cachePath, dealSeq: seq
+                    ),
+                    url
+                )
             }
         }
-        return .materialized(count: totalCount, bytes: totalBytes)
+        return nil
     }
 
-    struct QueueItem: Sendable {
-        let photoID: Int64
-        let sourceID: Int64
-        let externalID: String
-    }
+    // MARK: - Keeping the bytes honest
 
-    /// Unplayed cards first, in the order they will be shown; then deck order.
+    /// Removes entries from the pool *and* their cached bytes, together.
     ///
-    /// Photos whose *source* is unavailable are skipped entirely, so an orphan
-    /// is never re-materialized and never produces a storm of failures.
-    func materializationQueue(limit: Int) throws -> [QueueItem] {
-        guard limit > 0 else { return [] }
-        var items = try database.all(Self.outstandingQueueSQL, ["limit": .int(Int64(limit))]) {
-            QueueItem(
-                photoID: try $0.int64("id"),
-                sourceID: try $0.int64("source_id"),
-                externalID: try $0.string("external_id")
-            )
+    /// This is what "the file is gone" means: the entry goes, its queue place
+    /// goes with it by cascade, and the copy we were holding is deleted rather
+    /// than left for the next sweep. A photo missing from a source that is
+    /// *there* no longer exists, so there is nothing left worth keeping.
+    ///
+    /// Contrast a source that is merely offline, where the cached bytes are the
+    /// most valuable thing we have and keep being served.
+    @discardableResult
+    public func remove(_ photoIDs: [Int64]) throws -> PhotoPool.Removal {
+        let removal = try sources.pool.remove(photoIDs)
+        for path in removal.orphanedCachePaths {
+            try? FileManager.default.removeItem(at: root.appending(path: path))
         }
-        guard items.count < limit else { return items }
-
-        let seen = Set(items.map(\.photoID))
-        let rest = try database.all(
-            Self.deckOrderQueueSQL, ["limit": .int(Int64(limit - items.count))]
-        ) {
-            QueueItem(
-                photoID: try $0.int64("id"),
-                sourceID: try $0.int64("source_id"),
-                externalID: try $0.string("external_id")
-            )
-        }
-        items.append(contentsOf: rest.filter { !seen.contains($0.photoID) })
-        return items
+        return removal
     }
 
-    private func materialize(_ item: QueueItem, now: Date) async throws -> MaterializedFile {
-        guard let source = try sources.source(id: item.sourceID),
-            let provider = sources.provider(for: source.kind)
-        else {
-            throw SourceProviderError.notMaterializable(externalID: item.externalID)
+    @discardableResult
+    public func remove(_ photoID: Int64) throws -> PhotoPool.Removal {
+        try remove([photoID])
+    }
+
+    /// Confirms every materialized entry's bytes are still on disk, and clears
+    /// the ones that are not.
+    ///
+    /// The database's claim can go stale without anybody lying: a purge, a
+    /// half-written entry from a run killed mid-copy, someone tidying a
+    /// directory. Clearing `cache_path` puts the photo back in contention rather
+    /// than leaving a queue entry that resolves to nothing.
+    @discardableResult
+    public func verifyResidency() throws -> Int {
+        let claimed = try database.all(Self.residentSQL) {
+            (id: try $0.int64("id"), path: try $0.string("cache_path"))
+        }
+        var cleared = 0
+        for entry in claimed {
+            let url = root.appending(path: entry.path)
+            guard !FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else {
+                continue
+            }
+            try database.run(
+                "UPDATE photo SET cache_path = NULL, materialized_at = NULL WHERE id = :id;",
+                ["id": .int(entry.id)]
+            )
+            try queue.remove(photoID: entry.id)
+            cleared += 1
+        }
+        if cleared > 0 {
+            Log.cache.notice(
+                "\(cleared, privacy: .public) cache entries had lost their bytes"
+            )
+        }
+        return cleared
+    }
+
+    /// Deletes cached bytes that no pool entry claims.
+    ///
+    /// Removing an entry deletes its row, which cascades to the queue but says
+    /// nothing about the file on disk — and once the row is gone the evictor
+    /// cannot see those bytes either, because it walks rows rather than the
+    /// filesystem. Without this they would sit there for ever. It also cleans up
+    /// after a crash between the copy and the row update.
+    @discardableResult
+    public func sweepOrphans() throws -> (files: Int, bytes: Int64) {
+        var claimed = Set<String>()
+        try database.query("SELECT cache_path FROM photo WHERE cache_path IS NOT NULL;") { row in
+            claimed.insert(try row.string("cache_path"))
         }
 
-        let relative = Self.relativePath(
-            sourceID: item.sourceID, photoID: item.photoID, externalID: item.externalID
-        )
-        let destination = root.appending(path: relative)
-        let file = try await provider.materialize(
-            externalID: item.externalID, from: source, to: destination
-        )
+        guard
+            let directories = try? FileManager.default.contentsOfDirectory(
+                at: root, includingPropertiesForKeys: nil
+            )
+        else { return (0, 0) }
 
-        try database.run(
-            """
-            UPDATE photo
-               SET cache_path = :path, byte_size = :size, materialized_at = :now
-             WHERE id = :id;
-            """,
-            [
-                "path": .text(relative),
-                "size": .int(file.byteSize),
-                "now": SQLValue(now),
-                "id": .int(item.photoID),
-            ]
-        )
-        return file
+        var files = 0
+        var bytes: Int64 = 0
+        for directory in directories {
+            let sourceComponent = directory.lastPathComponent
+            guard Int64(sourceComponent) != nil else { continue }
+            let contents =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: directory, includingPropertiesForKeys: [.fileSizeKey]
+                )) ?? []
+
+            for file in contents {
+                let relative = "\(sourceComponent)/\(file.lastPathComponent)"
+                guard !claimed.contains(relative) else { continue }
+                let size =
+                    (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+                try? FileManager.default.removeItem(at: file)
+                files += 1
+                bytes += size
+            }
+
+            if (try? FileManager.default.contentsOfDirectory(atPath: directory.path(percentEncoded: false)))?
+                .isEmpty == true
+            {
+                try? FileManager.default.removeItem(at: directory)
+            }
+        }
+
+        if files > 0 {
+            Log.cache.notice(
+                "swept \(files, privacy: .public) orphaned cache files, freeing \(bytes, privacy: .public) bytes"
+            )
+        }
+        return (files, bytes)
     }
 
     // MARK: - Eviction
@@ -327,8 +413,8 @@ public struct PhotoCache {
     public struct EvictionResult: Sendable, Equatable {
         public let evicted: Int
         public let bytesFreed: Int64
-        /// Cards that were over the cap but held in an outstanding hand, and so
-        /// left alone.
+        /// Pictures that were over the cap but sitting in the queue, and so left
+        /// alone.
         public let protectedFromEviction: Int
     }
 
@@ -341,7 +427,7 @@ public struct PhotoCache {
     /// expiring off the front, filling at the back.
     @discardableResult
     public func evictIfNeeded() throws -> EvictionResult {
-        let protectedIDs = try deck.outstandingPhotoIDs()
+        let protectedIDs = try queuedPhotoIDs()
         var evicted = 0
         var freed: Int64 = 0
         var skipped = 0
@@ -373,15 +459,15 @@ public struct PhotoCache {
             let overBytes = bytes > settings.byteCeiling
             guard overCount || overBytes else { break }
 
-            // Never evict a card in an outstanding hand, whatever its age.
-            // Without this a fast consumer could evict a photo moments before
-            // requesting it.
+            // Never evict a picture that is in the queue, whatever its age — it
+            // is about to be shown. Without this a fast consumer could evict a
+            // photo moments before asking for it.
             guard !protectedIDs.contains(entry.id) else {
                 skipped += 1
                 continue
             }
 
-            try remove(photoID: entry.id, relativePath: entry.path)
+            try evictEntry(photoID: entry.id, relativePath: entry.path)
             evicted += 1
             freed += entry.bytes
             count -= 1
@@ -396,7 +482,13 @@ public struct PhotoCache {
         return EvictionResult(evicted: evicted, bytesFreed: freed, protectedFromEviction: skipped)
     }
 
-    private func remove(photoID: Int64, relativePath: String) throws {
+    /// Pictures waiting in the queue, which the evictor must not touch whatever
+    /// their age — they are about to be shown.
+    func queuedPhotoIDs() throws -> Set<Int64> {
+        Set(try database.all("SELECT photo_id FROM queue;") { try $0.int64("photo_id") })
+    }
+
+    private func evictEntry(photoID: Int64, relativePath: String) throws {
         try? FileManager.default.removeItem(at: root.appending(path: relativePath))
         try database.run(
             "UPDATE photo SET cache_path = NULL, materialized_at = NULL WHERE id = :id;",
@@ -465,7 +557,8 @@ public struct PhotoCache {
     public struct ClearResult: Sendable, Equatable {
         public let cleared: Int
         public let bytesFreed: Int64
-        public let handsReturned: Int
+        /// Queue entries dropped because their bytes no longer exist.
+        public let queueCleared: Int
     }
 
     /// Discards bytes. Never shuffle state.
@@ -507,14 +600,14 @@ public struct PhotoCache {
             }
         }
 
-        // Outstanding hands hold cards whose bytes no longer exist, so they go
-        // back to the deck. Recovery is then the cold-start path, which already
-        // exists.
-        var handsReturned = 0
+        // Queued pictures point at bytes that no longer exist, so the queue is
+        // emptied too. Refilling is then the cold-start path, which already
+        // exists: providers are asked, and pictures arrive as they answer.
+        var queueCleared = 0
         if scope == .everything {
             try database.transaction(.immediate) {
-                try database.run("DELETE FROM hand WHERE played_at IS NULL;")
-                handsReturned = database.changes
+                try database.run("DELETE FROM queue;")
+                queueCleared = database.changes
             }
         }
 
@@ -522,7 +615,7 @@ public struct PhotoCache {
             "cleared \(paths.count, privacy: .public) cached photos, freeing \(cost.bytesFreed, privacy: .public) bytes"
         )
         return ClearResult(
-            cleared: paths.count, bytesFreed: cost.bytesFreed, handsReturned: handsReturned
+            cleared: paths.count, bytesFreed: cost.bytesFreed, queueCleared: queueCleared
         )
     }
 
@@ -538,38 +631,6 @@ public struct PhotoCache {
     }
 
     // MARK: - SQL
-
-    /// Cards somebody is about to show. Skips sources that are gone, so an
-    /// orphan is never re-fetched.
-    private static let outstandingQueueSQL = """
-        SELECT p.id, p.source_id, p.external_id
-          FROM hand h
-          JOIN photo p ON p.id = h.photo_id
-          JOIN source s ON s.id = p.source_id
-         WHERE h.played_at IS NULL
-           AND p.storage = 'materialized'
-           AND p.cache_path IS NULL
-           AND p.available = 1
-           AND s.available = 1
-         ORDER BY h.consumer_id, h.position
-         LIMIT :limit;
-        """
-
-    /// Everything else, in deck order — which is what makes FIFO eviction the
-    /// right policy downstream.
-    private static let deckOrderQueueSQL = """
-        SELECT p.id, p.source_id, p.external_id
-          FROM photo p
-          JOIN source s ON s.id = p.source_id
-         WHERE p.source_enabled = 1
-           AND p.available = 1
-           AND p.media_type = 'image'
-           AND p.storage = 'materialized'
-           AND p.cache_path IS NULL
-           AND s.available = 1
-         ORDER BY p.shuffle_key
-         LIMIT :limit;
-        """
 
     private static let residentSQL = """
         SELECT id, cache_path, byte_size

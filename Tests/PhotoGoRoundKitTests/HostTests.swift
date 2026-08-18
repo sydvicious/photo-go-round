@@ -12,76 +12,154 @@ struct HostTests {
         let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
         var defaults: UserDefaults { UserDefaults(suiteName: name)! }
         var preferences: Preferences { Preferences(defaults: defaults) }
-        deinit { UserDefaults().removePersistentDomain(forName: name) }
+
+        /// Tearing a defaults suite down takes all three steps, and skipping any
+        /// of them leaves a plist in `~/Library/Preferences` for ever. This ran
+        /// with only the first for a while and had left five hundred behind.
+        ///
+        /// `removePersistentDomain` empties the domain, `removeSuite` detaches
+        /// it, and the file removal deals with `cfprefsd` having already flushed
+        /// — or flushing afterwards, which is why the file is checked rather
+        /// than assumed gone.
+        /// `cfprefsd` owns these files, writes them on its own schedule, and
+        /// will flush one back out *after* the test process has exited — so a
+        /// few survive `deinit` and an `atexit` handler cannot catch them
+        /// either. Nothing inside this process can win that race.
+        ///
+        /// So the sweep runs at the start instead, clearing what the previous
+        /// run left. Both hooks together bound the leak at one run's worth
+        /// rather than letting it accumulate; unswept, it had reached five
+        /// hundred files.
+        ///
+        /// Only files older than this process are removed, so two test runs at
+        /// once cannot delete each other's live suites.
+        private static let sweep: Void = {
+            let directory = URL.homeDirectory.appending(path: "Library/Preferences")
+            let started = Date()
+            let files =
+                (try? FileManager.default.contentsOfDirectory(
+                    at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            for file in files
+            where file.lastPathComponent.hasPrefix("com.sydpolk.photogoround.tests.") {
+                let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate
+                if let modified, modified >= started { continue }
+                try? FileManager.default.removeItem(at: file)
+            }
+        }()
+
+        init() { _ = Self.sweep }
+
+        deinit {
+            let defaults = UserDefaults(suiteName: name)
+            defaults?.removePersistentDomain(forName: name)
+            defaults?.synchronize()
+            UserDefaults.standard.removeSuite(named: name)
+
+            let plist = URL.homeDirectory
+                .appending(path: "Library/Preferences")
+                .appending(path: "\(name).plist")
+            try? FileManager.default.removeItem(at: plist)
+        }
     }
 
     // MARK: - Storage roots
 
-    @Test("Roots resolve flags first, then environment, then the container")
-    func rootResolutionPrecedence() {
-        // A launchd plist sets environment variables far more naturally than it
-        // sets argv, so both have to work — and a development flag has to be
-        // able to beat the production environment.
+    private static let build = URL(filePath: "/repo/.build/arm64-apple-macosx/debug/photogoroundd")
+
+    @Test("Development is the default, and it cannot reach the real library")
+    func developmentIsTheDefault() {
+        // The safety has to live in the program rather than in a wrapper script,
+        // or it evaporates the moment somebody runs the binary directly.
+        let resolved = MacHostEnvironment.resolveContainer(
+            deployment: .development, override: nil, environment: [:], executableURL: Self.build
+        )
+        #expect(resolved.origin == .development)
+        #expect(resolved.container.path(percentEncoded: false) == "/repo/.build/pgr-container")
+    }
+
+    @Test("`--prod` moves the storage root, the cache, and the preferences together")
+    func productionMovesAllThree() {
+        // Two of the three are obviously per-deployment and the third silently
+        // is not: relocating the container alone would leave the source list
+        // pointing at the real one, so a run that believed it was isolated could
+        // remove somebody's sources for good.
+        let container = MacHostEnvironment.resolveContainer(
+            deployment: .production, override: nil, environment: [:]
+        )
+        #expect(container.origin == .production)
+        #expect(container.container.path(percentEncoded: false).hasSuffix(
+            "/Library/Containers/com.sydpolk.photogoround"))
+
+        let cache = MacHostEnvironment.defaultCacheRoot(
+            deployment: .production, container: container.container, origin: .production)
+        #expect(cache.path(percentEncoded: false).hasSuffix(
+            "/Library/Caches/com.sydpolk.photogoround"))
+
+        #expect(MacHostEnvironment.preferenceDomain(for: .production) == "com.sydpolk.photogoround")
+        #expect(MacHostEnvironment.preferenceDomain(for: .development) != "com.sydpolk.photogoround")
+    }
+
+    @Test("The cache is not nested inside the container")
+    func cacheIsItsOwnDirectory() {
+        // ~/Library/Caches is purgeable, which is right for bytes we can fetch
+        // again and wrong for the database. Nesting would forfeit that.
+        let production = MacHostEnvironment.resolveContainer(
+            deployment: .production, override: nil, environment: [:])
+        let cache = MacHostEnvironment.defaultCacheRoot(
+            deployment: .production, container: production.container, origin: .production)
+        #expect(!cache.path(percentEncoded: false).hasPrefix(
+            production.container.path(percentEncoded: false)))
+    }
+
+    @Test("Naming a container takes the cache with it")
+    func explicitContainerCarriesTheCache() {
+        // Somebody who named one directory meant both.
+        let cache = MacHostEnvironment.defaultCacheRoot(
+            deployment: .development,
+            container: URL(filePath: "/tmp/mine"),
+            origin: .explicitOverride
+        )
+        #expect(cache.path(percentEncoded: false) == "/tmp/mine/cache")
+    }
+
+    @Test("Flags beat environment beats the deployment default")
+    func resolutionPrecedence() {
         let fromFlag = MacHostEnvironment.resolveContainer(
+            deployment: .production,
             override: URL(filePath: "/tmp/flag"),
-            appGroupIdentifier: nil,
             environment: ["PGR_CONTAINER": "/tmp/env"]
         )
         #expect(fromFlag.origin == .explicitOverride)
-        #expect(fromFlag.container.path(percentEncoded: false) == "/tmp/flag")
 
+        // A launchd plist sets environment variables far more naturally than it
+        // sets argv, so both have to work.
         let fromEnvironment = MacHostEnvironment.resolveContainer(
-            override: nil,
-            appGroupIdentifier: nil,
-            environment: ["PGR_CONTAINER": "/tmp/env"]
+            deployment: .production, override: nil, environment: ["PGR_CONTAINER": "/tmp/env"]
         )
         #expect(fromEnvironment.origin == .environment)
         #expect(fromEnvironment.container.path(percentEncoded: false) == "/tmp/env")
 
-        // With no App Group entitlement — every unsigned development build —
-        // this must still land somewhere usable rather than returning nil.
-        let fallback = MacHostEnvironment.resolveContainer(
-            override: nil, appGroupIdentifier: nil, environment: [:]
+        // An empty variable is not a value.
+        #expect(
+            MacHostEnvironment.resolveContainer(
+                deployment: .development, override: nil, environment: ["PGR_CONTAINER": ""],
+                executableURL: Self.build
+            ).origin == .development
         )
-        #expect(fallback.origin == .applicationSupport)
-        #expect(fallback.container.lastPathComponent == "Photo-Go-Round")
     }
 
-    @Test("An empty environment variable is not a value")
-    func emptyEnvironmentIsIgnored() {
-        let resolved = MacHostEnvironment.resolveContainer(
-            override: nil, appGroupIdentifier: nil, environment: ["PGR_CONTAINER": ""]
-        )
-        #expect(resolved.origin == .applicationSupport)
-    }
-
-    @Test("Database and cache follow the container unless named separately")
-    func databaseAndCacheFollowTheContainer() {
-        let environment = MacHostEnvironment(
-            containerOverride: URL(filePath: "/tmp/pgr-root"),
-            appGroupIdentifier: nil,
-            environment: [:]
-        )
-        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/pgr-root/library.sqlite")
-        #expect(environment.cacheRoot.path(percentEncoded: false) == "/tmp/pgr-root/cache")
-
+    @Test("Database and cache can each be moved on their own")
+    func databaseAndCacheAreSeparable() {
         let split = MacHostEnvironment(
+            deployment: .development,
             containerOverride: URL(filePath: "/tmp/pgr-root"),
             databaseOverride: URL(filePath: "/tmp/elsewhere/db.sqlite"),
             cacheOverride: URL(filePath: "/tmp/scratch/cache"),
-            appGroupIdentifier: nil,
             environment: [:]
         )
         #expect(split.databaseURL.path(percentEncoded: false) == "/tmp/elsewhere/db.sqlite")
         #expect(split.cacheRoot.path(percentEncoded: false) == "/tmp/scratch/cache")
-    }
-
-    @Test("The macOS app group is team-ID prefixed, not group-prefixed")
-    func appGroupIsTeamPrefixed() {
-        // `group.` is the iOS convention. On macOS it produces a nil container
-        // URL rather than an error, which is a classic afternoon lost.
-        #expect(!MacHostEnvironment.appGroupIdentifier.hasPrefix("group."))
-        #expect(MacHostEnvironment.appGroupIdentifier.hasSuffix(".com.sydpolk.photogoround"))
     }
 
     // MARK: - Preferences
@@ -119,8 +197,11 @@ struct HostTests {
         suite.defaults.set(-500, forKey: Preferences.Key.cachePhotoCap.rawValue)
         #expect(suite.preferences.cacheSettings.photoCap == 0)
 
-        suite.defaults.set(0, forKey: Preferences.Key.cacheChunkSize.rawValue)
-        #expect(suite.preferences.cacheSettings.chunkSize == 1)
+        suite.defaults.set(0, forKey: Preferences.Key.queueSize.rawValue)
+        #expect(suite.preferences.queueSize == 1)
+
+        suite.defaults.set(99, forKey: Preferences.Key.downloadConcurrency.rawValue)
+        #expect(suite.preferences.downloadConcurrency == 32)
 
         suite.defaults.set("nonsense", forKey: Preferences.Key.scanIntervalSeconds.rawValue)
         #expect(suite.preferences.scanInterval == .seconds(1))

@@ -1,0 +1,38 @@
+#!/bin/bash
+#
+# Builds the agent if needed and runs it, passing everything through.
+#
+# This is how the server gets staged: a long-scrollback screen session, this
+# script, and then leaving it alone for a day.
+#
+#     screen -h 10000
+#     cd photo-go-round
+#     ./Scripts/photogoroundd
+#
+# It exists so that staging is one command rather than a remembered incantation
+# about bin paths, and so the build never silently runs a stale binary.
+
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIGURATION="${PGR_CONFIGURATION:-debug}"
+
+if [[ "${1:-}" == "--release" ]]; then
+    CONFIGURATION="release"
+    shift
+fi
+
+# Build to stderr so stdout stays clean for the agent's own output — which
+# matters when this is piped to a file or read back through a screen scrollback.
+swift build --configuration "$CONFIGURATION" --package-path "$REPO" >&2
+
+BIN="$(swift build --configuration "$CONFIGURATION" --package-path "$REPO" --show-bin-path)/photogoroundd"
+
+# Nothing is exported here on purpose. The binary already defaults to two
+# directories under .build, and reaching the real library takes --prod. Setting
+# it from the wrapper would mean the safety lived in the script rather than in
+# the program, and would evaporate the moment somebody ran the binary directly.
+
+# exec, so signals reach the agent rather than this script: ^C in screen should
+# stop the server, not orphan it.
+exec "$BIN" "$@"

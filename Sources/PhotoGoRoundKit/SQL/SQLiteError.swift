@@ -29,8 +29,8 @@ public struct SQLiteError: Error, CustomStringConvertible, Sendable {
     }
 
     /// `SQLITE_BUSY` and `SQLITE_LOCKED` are normal outcomes under WAL
-    /// contention rather than errors, so callers on the deal and reservation
-    /// paths retry them.
+    /// contention rather than errors, so callers on the hot write paths retry
+    /// them.
     public var isBusy: Bool {
         code == SQLITE_BUSY || code == SQLITE_LOCKED
     }

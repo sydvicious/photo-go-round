@@ -50,10 +50,10 @@ struct DeckTests {
 
     // MARK: - Dealing at all
 
-    @Test("An empty library deals nothing rather than failing")
-    func emptyLibraryDealsNil() throws {
+    @Test("An empty library offers nothing rather than failing")
+    func emptyLibraryOffersNothing() throws {
         let library = try TestLibrary()
-        #expect(try library.deck.deal() == nil)
+        #expect(try library.drawSequence(count: 3, settings: .default).isEmpty)
         #expect(try library.deck.currentDealSeq() == 0)
     }
 
@@ -64,9 +64,8 @@ struct DeckTests {
             "SELECT shuffle_key FROM photo WHERE id = :id;", ["id": .int(ids[0])]
         ) { try $0.double("shuffle_key") }
 
-        let deal = try #require(try library.deck.deal())
-        #expect(deal.card.id == ids[0])
-        #expect(deal.card.dealSeq == 1)
+        let drawn = try library.drawSequence(count: 1, settings: .default)
+        #expect(drawn == [ids[0]])
         #expect(try library.deck.currentDealSeq() == 1)
 
         let after = try library.database.first(
@@ -90,7 +89,7 @@ struct DeckTests {
     @Test("A one-photo library keeps dealing that photo")
     func onePhotoLibraryNeverStarves() throws {
         let (library, ids) = try TestLibrary.withPhotos(1)
-        let dealt = try library.deck.dealSequence(count: 5, settings: .default)
+        let dealt = try library.drawSequence(count: 5, settings: .default)
         #expect(dealt == Array(repeating: ids[0], count: 5))
     }
 
@@ -98,16 +97,15 @@ struct DeckTests {
     func newPhotosCompeteImmediately() throws {
         let (library, _) = try TestLibrary.withPhotos(4)
         let settings = DeckSettings(repeatWindowFraction: 1.0)
-        _ = try library.deck.dealSequence(count: 4, settings: settings)
+        _ = try library.drawSequence(count: 4, settings: settings)
 
         // A photo inserted mid-run has a null deal ordinal, so it is eligible
         // by definition and needs no special placement.
         let source = try library.database.scalarInt("SELECT id FROM source LIMIT 1;")
         let newcomers = try library.addPhotos(1, to: Int64(source!), namePrefix: "newcomer")
-        // At fraction 1.0 nothing already dealt has served out its window yet,
-        // so the newcomer is the only eligible card.
-        let next = try #require(try library.deck.deal(settings: settings))
-        #expect(next.card.id == newcomers[0])
+        // At fraction 1.0 nothing already shown has served out its window yet,
+        // so the newcomer is the only eligible picture.
+        #expect(try library.drawSequence(count: 1, settings: settings) == [newcomers[0]])
     }
 
     // MARK: - What is excluded from the deck
@@ -120,11 +118,11 @@ struct DeckTests {
         let kept = try library.addPhotos(3, to: keep, namePrefix: "keep")
         let dropped = try library.addPhotos(3, to: drop, namePrefix: "drop")
 
-        _ = try library.deck.dealSequence(count: 6, settings: DeckSettings(repeatWindowFraction: 1.0))
+        _ = try library.drawSequence(count: 6, settings: DeckSettings(repeatWindowFraction: 1.0))
         try library.setSourceEnabled(drop, false)
 
         #expect(try library.deck.poolSize() == 3)
-        let after = Set(try library.deck.dealSequence(count: 12, settings: .default))
+        let after = Set(try library.drawSequence(count: 12, settings: .default))
         #expect(after.isSubset(of: Set(kept)))
         #expect(after.isDisjoint(with: Set(dropped)))
 
@@ -135,15 +133,6 @@ struct DeckTests {
         #expect(shown == 3)
     }
 
-    @Test("An unavailable photo is unreachable the moment the flag flips")
-    func unavailablePhotosAreNotDealt() throws {
-        let (library, ids) = try TestLibrary.withPhotos(3)
-        try library.setAvailable(ids[0], false)
-        #expect(try library.deck.poolSize() == 2)
-        let dealt = Set(try library.deck.dealSequence(count: 20, settings: .default))
-        #expect(!dealt.contains(ids[0]))
-    }
-
     @Test("Videos are in the database and never in the deck")
     func videosAreNeverDealt() throws {
         let library = try TestLibrary()
@@ -152,7 +141,7 @@ struct DeckTests {
         let videos = try library.addPhotos(5, to: source, mediaType: .video, namePrefix: "clip")
 
         #expect(try library.deck.poolSize() == 2)
-        let dealt = Set(try library.deck.dealSequence(count: 20, settings: .default))
+        let dealt = Set(try library.drawSequence(count: 20, settings: .default))
         #expect(dealt == Set(images))
         #expect(dealt.isDisjoint(with: Set(videos)))
 
@@ -161,88 +150,30 @@ struct DeckTests {
         #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 7)
     }
 
-    @Test("A card in an outstanding hand is spoken for")
-    func reservedCardsAreNotDealt() throws {
+    @Test("A picture already in the queue is not offered again")
+    func queuedPicturesAreNotDealt() throws {
         let (library, ids) = try TestLibrary.withPhotos(3)
-        let consumer = try library.addConsumer(kind: "screensaver")
-        try library.reserve(ids[0], consumerID: consumer, position: 0)
+        let sourceID = try library.database.scalarInt("SELECT id FROM source LIMIT 1;")!
+        try library.enqueue(ids[0], sourceID: Int64(sourceID))
 
-        let dealt = Set(try library.deck.dealSequence(count: 10, settings: .default))
+        let dealt = Set(try library.drawSequence(count: 10, settings: .default))
         #expect(!dealt.contains(ids[0]))
     }
 
-    @Test("A played card is no longer spoken for")
-    func playedCardsReturnToTheDeck() throws {
+    @Test("Serving a picture puts it back in contention")
+    func servedPicturesReturnToTheDeck() throws {
         let (library, ids) = try TestLibrary.withPhotos(2)
-        let consumer = try library.addConsumer(kind: "screensaver")
-        try library.reserve(ids[0], consumerID: consumer, position: 0)
-        try library.database.run("UPDATE hand SET played_at = 1 WHERE photo_id = :p;", ["p": .int(ids[0])])
+        let sourceID = try library.database.scalarInt("SELECT id FROM source LIMIT 1;")!
+        try library.enqueue(ids[0], sourceID: Int64(sourceID))
 
-        let dealt = Set(try library.deck.dealSequence(count: 10, settings: .default))
+        // Serving removes the queue entry, which is the only thing that was
+        // holding the photo out of the deck.
+        _ = try PhotoQueue(database: library.database).serve()
+        let dealt = Set(try library.drawSequence(count: 10, settings: .default))
         #expect(dealt.contains(ids[0]))
     }
 
     // MARK: - Scarcity degrades, it never starves
-
-    @Test("When every card is reserved, consumers overlap rather than starve")
-    func overlapRatherThanStarve() throws {
-        // One photo and three displays: all three show that photo.
-        let (library, ids) = try TestLibrary.withPhotos(1)
-        let one = try library.addConsumer(kind: "wallpaper", displayID: "A")
-        try library.reserve(ids[0], consumerID: one, position: 0)
-
-        let deal = try #require(try library.deck.deal())
-        #expect(deal.card.id == ids[0])
-        #expect(deal.relaxations.contains(.reservedCardsReused))
-
-        // And the concession is on the record rather than swallowed.
-        let events = try library.deck.recentEvents()
-        #expect(events.contains { $0.kind == "reserved_reused" })
-    }
-
-    @Test("Running out mid-pass is a reshuffle, not a degradation")
-    func exhaustingAPassReshuffles() throws {
-        let (library, ids) = try TestLibrary.withPhotos(6)
-        let settings = DeckSettings(repeatWindowFraction: 1.0)
-
-        // The first pass deals each photo once and never reshuffles: every card
-        // is still unused, so nothing runs out.
-        var startedPasses = 0
-        for _ in 0..<6 {
-            let deal = try #require(try library.deck.deal(settings: settings))
-            #expect(deal.relaxations.isEmpty)
-            if deal.startedNewPass { startedPasses += 1 }
-        }
-        #expect(startedPasses == 0)
-        #expect(try library.deck.unusedInCurrentPass() == 0)
-
-        // The seventh card has nothing unused left, so the deck reshuffles —
-        // reported as a new pass rather than as a concession.
-        let seventh = try #require(try library.deck.deal(settings: settings))
-        #expect(seventh.startedNewPass)
-        #expect(seventh.relaxations.isEmpty)
-        #expect(ids.contains(seventh.card.id))
-        #expect(try library.deck.state().passStartSeq == 6)
-        #expect(try library.deck.unusedInCurrentPass() == 5)
-
-        let events = try library.deck.recentEvents()
-        #expect(events.contains { $0.kind == "pass" })
-    }
-
-    @Test("Below fraction 1.0 the window binds and the pass never has to reshuffle")
-    func lowerFractionsNeverReachThePassBoundary() throws {
-        let (library, _) = try TestLibrary.withPhotos(50)
-        var reshuffles = 0
-        for _ in 0..<600 {
-            let deal = try #require(try library.deck.deal(settings: .default))
-            if deal.startedNewPass { reshuffles += 1 }
-        }
-        // With half the pool eligible at any moment the window always has an
-        // answer, so `pass_start_seq` never moves and the pass rule contributes
-        // nothing. That is what keeps the minimum-gap guarantee intact below 1.0.
-        #expect(reshuffles == 0)
-        #expect(try library.deck.state().passStartSeq == 0)
-    }
 
     @Test("Deck events are kept to a bounded tail")
     func eventsAreTrimmed() throws {
@@ -263,7 +194,7 @@ struct DeckTests {
     func fractionOneIsExactlyFair() throws {
         let (library, ids) = try TestLibrary.withPhotos(100)
         let settings = DeckSettings(repeatWindowFraction: 1.0)
-        let sequence = try library.deck.dealSequence(count: 1000, settings: settings)
+        let sequence = try library.drawSequence(count: 1000, settings: settings)
 
         #expect(sequence.count == 1000)
 
@@ -292,7 +223,7 @@ struct DeckTests {
     func everyPassIsShuffledAnew() throws {
         let (library, _) = try TestLibrary.withPhotos(20)
         let settings = DeckSettings(repeatWindowFraction: 1.0)
-        let sequence = try library.deck.dealSequence(count: 20 * 40, settings: settings)
+        let sequence = try library.drawSequence(count: 20 * 40, settings: settings)
 
         let passes = stride(from: 0, to: sequence.count, by: 20).map { Array(sequence[$0..<($0 + 20)]) }
         // Each is a permutation of the library...
@@ -308,7 +239,7 @@ struct DeckTests {
         // hit constantly and a back-to-back repeat is a coin flip each time.
         // The deck does not add machinery to prevent it.
         let (library, _) = try TestLibrary.withPhotos(2)
-        let sequence = try library.deck.dealSequence(
+        let sequence = try library.drawSequence(
             count: 200, settings: DeckSettings(repeatWindowFraction: 1.0)
         )
         let adjacentRepeats = zip(sequence, sequence.dropFirst()).count { $0 == $1 }
@@ -323,7 +254,7 @@ struct DeckTests {
     func lowerFractionIsLivelyButBounded() throws {
         let (library, ids) = try TestLibrary.withPhotos(100)
         let settings = DeckSettings(repeatWindowFraction: 0.5)
-        let sequence = try library.deck.dealSequence(count: 2000, settings: settings)
+        let sequence = try library.drawSequence(count: 2000, settings: settings)
 
         // The hard guarantee: no repeat inside the window.
         let gaps = gapsBetweenRepeats(in: sequence)
@@ -361,7 +292,7 @@ struct DeckTests {
             ["unlucky": .int(unlucky)]
         )
 
-        let sequence = try library.deck.dealSequence(count: 1000, settings: .default)
+        let sequence = try library.drawSequence(count: 1000, settings: .default)
         var counts: [Int64: Int] = [:]
         for id in sequence { counts[id, default: 0] += 1 }
 
@@ -378,7 +309,7 @@ struct DeckTests {
         let (library, ids) = try TestLibrary.withPhotos(500)
         // At fraction 1.0 coverage is exact rather than probabilistic: a pass
         // is the library, so 500 deals is every photo once.
-        let sequence = try library.deck.dealSequence(
+        let sequence = try library.drawSequence(
             count: 500, settings: DeckSettings(repeatWindowFraction: 1.0)
         )
         #expect(Set(sequence) == Set(ids))
@@ -387,30 +318,13 @@ struct DeckTests {
 
     // MARK: - Peeking and stats
 
-    @Test("Peeking shows the eligible set without consuming any of it")
-    func peekDoesNotAdvance() throws {
-        let (library, ids) = try TestLibrary.withPhotos(10)
-        let peeked = try library.deck.peek(count: 3)
-        #expect(peeked.count == 3)
-        #expect(try library.deck.currentDealSeq() == 0)
-        #expect(try library.database.scalarInt("SELECT SUM(times_shown) FROM photo;") == 0)
-
-        // Peek is the set a deal will pick from, not a prediction of which one
-        // it will pick — selection takes a random offset into that set.
-        let everything = try library.deck.peek(count: 100)
-        #expect(Set(everything.map(\.id)) == Set(ids))
-
-        let dealt = try #require(try library.deck.deal())
-        #expect(ids.contains(dealt.card.id))
-    }
-
     @Test("Stats describe the library rather than guessing at it")
     func statsAreAccurate() throws {
         let library = try TestLibrary()
         let source = try library.addSource()
         _ = try library.addPhotos(10, to: source)
         _ = try library.addPhotos(3, to: source, mediaType: .video, namePrefix: "clip")
-        _ = try library.deck.dealSequence(count: 4, settings: .default)
+        _ = try library.drawSequence(count: 4, settings: .default)
 
         let stats = try library.deck.stats()
         #expect(stats.totalPhotos == 13)
@@ -429,58 +343,36 @@ struct DeckTests {
 
     // MARK: - Two processes, one deck
 
-    @Test("Concurrent deals from separate connections never hand out the same card")
-    func concurrentDealsAreSerialised() throws {
+    @Test("Concurrent serves from separate connections never hand out the same picture")
+    func concurrentServesAreSerialised() throws {
         let directory = URL.temporaryDirectory.appending(path: "pgr-deck-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let library = try TestLibrary.onDisk(at: directory)
         let source = try library.addSource()
-        _ = try library.addPhotos(400, to: source)
+        let ids = try library.addPhotos(400, to: source)
+        for id in ids { try library.enqueue(id, sourceID: source) }
         let path = TestLibrary.path(in: directory)
 
-        let dealsPerWorker = 50
-        let workers = 4
+        // The atomicity that used to live in the fused deal now lives in the
+        // queue pop: selection and marking-shown are separate steps, so two
+        // producers may briefly pick the same picture — but `append` dedupes,
+        // and only one server can ever remove a given entry.
         let collected = Mutex<[Int64]>([])
-
-        // Each worker opens its own connection, which is the arrangement the
-        // real system has: an agent, an app, and a saver in separate processes.
-        DispatchQueue.concurrentPerform(iterations: workers) { _ in
+        DispatchQueue.concurrentPerform(iterations: 4) { _ in
             guard let database = try? Database(path: path) else { return }
-            let deck = Deck(database: database)
+            let queue = PhotoQueue(database: database)
             var mine: [Int64] = []
-            for _ in 0..<dealsPerWorker {
-                if let deal = try? deck.deal(settings: DeckSettings(repeatWindowFraction: 1.0)) {
-                    mine.append(deal.card.id)
-                }
+            for _ in 0..<100 {
+                guard let card = (try? queue.serve()) ?? nil else { break }
+                mine.append(card.id)
             }
             collected.withLock { $0.append(contentsOf: mine) }
         }
 
-        let dealt = collected.withLock { $0 }
-        #expect(dealt.count == workers * dealsPerWorker)
-
-        // 200 deals against a 400-photo pool at fraction 1.0: no photo can
-        // legitimately come out twice, so any duplicate is a lost race.
-        #expect(Set(dealt).count == dealt.count, "a card was dealt twice")
-
-        // The ordinal counted every card exactly once, from whichever process
-        // dealt it.
-        #expect(try library.deck.currentDealSeq() == Int64(dealt.count))
-    }
-}
-
-/// A minimal lock, since the test needs to collect results from several
-/// threads and the kit takes no dependencies.
-final class Mutex<Value>: @unchecked Sendable {
-    private var value: Value
-    private let lock = NSLock()
-
-    init(_ value: Value) { self.value = value }
-
-    func withLock<T>(_ body: (inout Value) -> T) -> T {
-        lock.lock()
-        defer { lock.unlock() }
-        return body(&value)
+        let served = collected.withLock { $0 }
+        #expect(served.count == 400)
+        #expect(Set(served).count == served.count, "a picture was served twice")
+        #expect(try PhotoQueue(database: library.database).size() == 0)
     }
 }

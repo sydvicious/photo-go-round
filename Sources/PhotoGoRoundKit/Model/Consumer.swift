@@ -34,7 +34,11 @@ extension ConsumerKind: CustomStringConvertible {
     public var description: String { rawValue }
 }
 
-/// A registered surface that deals from the shared deck.
+/// A registered surface that asks for pictures.
+///
+/// A registry and a heartbeat, and deliberately nothing more. Every surface
+/// serves from the same queue; two displays get different pictures because
+/// serving removes the entry.
 public struct Consumer: Sendable, Equatable, Identifiable {
     public let id: Int64
     public let kind: ConsumerKind
@@ -43,10 +47,8 @@ public struct Consumer: Sendable, Equatable, Identifiable {
     /// cable swap. The transient `CGDirectDisplayID` is not a suitable key.
     /// Nil for consumers that are not tied to a display.
     public let displayID: String?
-    /// How many cards this consumer reserves at a time.
-    public let handSize: Int
-    /// Heartbeat. The reaper returns the unplayed cards of any consumer that
-    /// has stopped checking in.
+    /// Heartbeat, so a surface that has stopped asking can be told apart from
+    /// one that is simply between pictures.
     public let seenAt: Date
     public let createdAt: Date
 
@@ -54,44 +56,8 @@ public struct Consumer: Sendable, Equatable, Identifiable {
         id = try row.int64("id")
         kind = ConsumerKind(try row.string("kind"))
         displayID = try row.optionalString("display_id")
-        handSize = try row.int("hand_size")
         seenAt = try row.date("seen_at")
         createdAt = try row.date("created_at")
-    }
-}
-
-extension Consumer {
-    /// How much playback a hand should cover.
-    ///
-    /// The number that matters is not the hand size but the interval between
-    /// reservations: one write every twenty minutes is a dramatically easier
-    /// thing to arrange from inside a sandbox than one every ten seconds, and it
-    /// is what makes the screensaver's consumption-journal fallback comfortable
-    /// rather than marginal.
-    public static let handCoverage: Duration = .seconds(20 * 60)
-
-    /// A hand of fewer than this is not worth the round trip, and it gives a
-    /// slow consumer — a wallpaper at one photo per half hour — a couple of
-    /// hours of cover rather than a single card.
-    public static let minimumHandSize = 4
-
-    /// A large hand reserves cards it will not show for days, keeping them out
-    /// of every other consumer's reach and pinned in the cache. The cache cap
-    /// has a hard floor at the sum of all hand sizes, so this bounds that too.
-    public static let maximumHandSize = 200
-
-    /// The default hand size for a consumer that shows a photo every `interval`.
-    ///
-    /// A screensaver at one every ten seconds gets 120 cards; a wallpaper at one
-    /// every thirty minutes gets the floor of 4, which covers two hours.
-    public static func handSize(
-        forInterval interval: Duration,
-        covering coverage: Duration = Consumer.handCoverage
-    ) -> Int {
-        guard interval > .zero else { return maximumHandSize }
-        let cards = (coverage.totalSeconds / interval.totalSeconds).rounded(.up)
-        guard cards.isFinite else { return maximumHandSize }
-        return min(max(Int(cards), minimumHandSize), maximumHandSize)
     }
 }
 
