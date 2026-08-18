@@ -120,9 +120,19 @@ public struct PhotoPool {
                 for id in batch {
                     // Read the path before the row goes, or there is no way to
                     // find the bytes afterwards.
-                    if let path = try database.first(
-                        "SELECT cache_path FROM photo WHERE id = :id;", ["id": .int(id)]
-                    ) { try $0.optionalString("cache_path") } ?? nil {
+                    //
+                    // The closure is parenthesized rather than trailing: inside
+                    // an `if` condition a trailing closure reads as the body of
+                    // the statement, and the compiler says so.
+                    //
+                    // Doubly optional because the query may match no row and the
+                    // column itself is nullable — a referenced photo has no
+                    // cache path. Both mean "nothing to delete", so they flatten.
+                    let cached = try database.first(
+                        "SELECT cache_path FROM photo WHERE id = :id;", ["id": .int(id)],
+                        { try $0.optionalString("cache_path") }
+                    )
+                    if let path = cached ?? nil {
                         orphaned.append(path)
                     }
                     try database.run("DELETE FROM photo WHERE id = :id;", ["id": .int(id)])
