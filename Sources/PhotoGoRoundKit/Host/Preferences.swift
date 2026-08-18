@@ -20,11 +20,6 @@ import Foundation
 public struct Preferences: @unchecked Sendable {
     private let defaults: UserDefaults
 
-    /// Where a person would guess, and be wrong: shared settings live in the
-    /// App Group suite, not here. The server watches this domain anyway and
-    /// says so loudly when it finds anything, because the guess is reasonable.
-    public static let bundleDomain = "com.sydpolk.photogoround"
-
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
@@ -61,7 +56,6 @@ public struct Preferences: @unchecked Sendable {
         public static let downloadConcurrency = Key("downloadConcurrency")
         public static let queueSize = Key("queueSize")
         public static let queueRefreshIntervalSeconds = Key("queueRefreshIntervalSeconds")
-        public static let consumerIdleTimeoutSeconds = Key("consumerIdleTimeoutSeconds")
         public static let sources = Key("sources")
     }
 
@@ -158,13 +152,6 @@ public struct Preferences: @unchecked Sendable {
         .seconds(number(.maintenanceIntervalSeconds, default: 30, in: 1...3600))
     }
 
-    /// How long a consumer may go without asking before it is reported as
-    /// having gone quiet. Nothing is reclaimed — there is nothing to reclaim —
-    /// but a display that stopped asking is worth being able to see.
-    public var consumerIdleTimeout: Duration {
-        .seconds(number(.consumerIdleTimeoutSeconds, default: 900, in: 60...86_400))
-    }
-
     /// How many pictures each source fetches at once.
     ///
     /// Fetching is nearly all latency, so one at a time leaves a provider idle
@@ -230,15 +217,7 @@ public struct Preferences: @unchecked Sendable {
     }
 
     @discardableResult
-    public func removeSource(locator: String) -> Bool {
-        let current = sources
-        let remaining = current.filter { $0.locator != locator }
-        guard remaining.count != current.count else { return false }
-        setSources(remaining)
-        return true
-    }
 
-    @discardableResult
     public func setSourceEnabled(_ enabled: Bool, locator: String) -> Bool {
         var current = sources
         guard let index = current.firstIndex(where: { $0.locator == locator }) else { return false }
@@ -293,6 +272,6 @@ public struct Preferences: @unchecked Sendable {
         .repeatWindowFraction, .cachePhotoCap, .cacheByteCeiling,
         .cacheMinimumFreeBytes, .cacheCriticalFreeBytes,
         .scanIntervalSeconds, .maintenanceIntervalSeconds, .downloadConcurrency, .queueSize,
-        .queueRefreshIntervalSeconds, .consumerIdleTimeoutSeconds,
+        .queueRefreshIntervalSeconds,
     ]
 }

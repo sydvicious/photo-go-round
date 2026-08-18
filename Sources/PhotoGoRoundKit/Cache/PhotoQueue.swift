@@ -122,13 +122,4 @@ public struct PhotoQueue {
         return database.changes
     }
 
-    /// How many entries each source currently has waiting. Diagnostics, and the
-    /// answer to "is one provider crowding out the others".
-    public func depthBySource() throws -> [Int64: Int] {
-        var depths: [Int64: Int] = [:]
-        try database.query("SELECT source_id, COUNT(*) AS n FROM queue GROUP BY source_id;") { row in
-            depths[try row.int64("source_id")] = try row.int("n")
-        }
-        return depths
-    }
 }

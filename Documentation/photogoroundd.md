@@ -149,7 +149,6 @@ without restarting it and without any cooperation:
 | `cacheByteCeiling` | bytes to keep, as a safety valve | 50 GB |
 | `cacheMinimumFreeBytes` | stop fetching below this much free space | 5 GB |
 | `cacheCriticalFreeBytes` | evict ahead of the cap below this much | 2 GB |
-| `consumerIdleTimeoutSeconds` | when a surface counts as having gone quiet | 900 |
 
 Every read is a parse with a default and a clamp, because `defaults write` accepts
 anything. An out-of-range value is logged and clamped rather than honoured.

@@ -86,11 +86,6 @@ public struct Source: Sendable, Equatable, Identifiable {
         addedAt = try row.date("added_at")
         scannedAt = try row.optionalDate("scanned_at")
     }
-
-    /// A source contributes to the deck only when it is switched on. An
-    /// *unavailable* source still contributes whatever it has already cached —
-    /// a photo is dealable if its bytes are local, whatever its source's state.
-    public var contributesToDeck: Bool { enabled }
 }
 
 /// One photo as a provider found it. Identifiers and metadata only; no bytes.

@@ -10,7 +10,7 @@ This is a decades-old itch, chased through a friend's "Desktop Picture" extensio
 
 Each phase carries its own spike rather than front-loading them all, so the first running thing arrives as early as possible. Each new surface is also the first real test of assumptions made before it, so expect sandboxing and architecture decisions to move as the sequence proceeds — the design below is arranged to absorb that rather than to resist it.
 
-- **Phase 1** — **The Mac server for pictures.** `PhotoGoRoundKit` — SQLite schema and migrator, the pool, the deck, the queue, the source protocol and its file-backed providers, the cache — plus the headless macOS process that owns it, **run from the command line**. Folder and explicitly-selected-file sources. No UI at all, and no packaging: registering as a login item is a much later concern, and nothing in Phase 1 should depend on it.
+- **Phase 1 — complete.** Staged 2026-08-17 and left alone; the gate below is met. **The Mac server for pictures.** `PhotoGoRoundKit` — SQLite schema and migrator, the pool, the deck, the queue, the source protocol and its file-backed providers, the cache — plus the headless macOS process that owns it, **run from the command line**. Folder and explicitly-selected-file sources. No UI at all, and no packaging: registering as a login item is a much later concern, and nothing in Phase 1 should depend on it.
   - **Exit gate: the server is staged and running, and stays running.** Concretely:
 
     ```
@@ -30,6 +30,9 @@ Each phase carries its own spike rather than front-loading them all, so the firs
     This is not a stopgap for the missing CLI. Naming initial sources at launch is how a service ought to be configurable, and it would still be right with `pgr_ctl` present.
 
     Then a long scrollback in a detached `screen`, left alone for a day, and still serving pictures when you come back to it. **Deliberately not launchd** — a login item is packaging, it arrives much later, and making Phase 1 depend on it would mean debugging TCC and code signing before the library is known to work. What this gate tests is that the thing survives being *used*: that it does not leak, wedge, spin, or quietly stop; that its output is readable a thousand lines later; and that a second terminal can add a source and see the agent notice.
+  - **Result, 10h08m unattended.** Ten hours and eight minutes on a second machine, 7,955 photos from one recursive folder. The queue reached 1,001 six seconds after launch and still read 1,001 at the end — filled on the first pass and held, through roughly 121 scan cycles, with no console output in between. Resident size 92 MB at the final sample and 2.3% CPU.
+
+    Both of those numbers needed a baseline to mean anything, which is the part worth keeping. An idle agent sits at **36 MB** and a scan peaks it at **96 MB**, returning afterwards — so 92 MB at the ten-hour mark is a sample that landed during a scan, not ten hours of growth. And the CPU reading is the one that rules out the failure this gate exists to catch: a wedged agent prints nothing *and* burns nothing, so silence alone proves neither. It was working.
   - A library that only ever runs under `swift test` has not been shown to work, it has been shown not to crash. Everything this project has found that the test suite missed — stdout buffering that only bites when stdout is not a terminal, an unavailability reason that said the wrong thing, a schema column deleted along with its neighbour — was found by standing it up.
 - **Phase 2** — **`pgr_ctl`, an internal Swift command-line tool to exercise the server.** A **separate binary**, because the service has exactly one job and answering questions is not it. Add sources, refresh them, peek at the queue, serve pictures, inspect the cache, read and write preferences, run the shuffle-quality statistics. This is how the server is proven correct before any window exists, and it stays the rig for everything scriptable afterwards. Never shipped.
   - **Exit gate: `pgr_ctl` builds and drives a running server end to end.** Add a folder, watch the pool fill, watch the queue fill behind it, serve a hundred pictures, remove a photo and confirm it never appears again, unplug a drive and confirm the cached ones keep coming. Every one of those is a thing you do at a prompt against a live agent, and none of them is a unit test.
@@ -55,7 +58,7 @@ Distribution is a 1.0 concern, not an 0.1 one: 0.1 runs from Xcode and from a lo
 
 Everything above is 0.1, and it ships with one fit, one layout, and one transition. Display richness — alternate fits, tiling, transition styles, per-surface timing, more widget families — is deliberately held back and collected under "Beyond 0.1" below, where it is also argued that none of it is architecture.
 
-Phases 1 and 2 run on file-backed sources alone — folders and individually selected photos — so the deck, cache, and hands are proven where there is no permission flow and no network to fail. Apple Photos then arrives with the Mac app, which is the point at which there is somewhere to look at it.
+Phases 1 and 2 run on file-backed sources alone — folders and individually selected photos — so the deck, the queue, and the cache are proven where there is no permission flow and no network to fail. Apple Photos then arrives with the Mac app, which is the point at which there is somewhere to look at it.
 
 # Design Decisions
 
@@ -180,7 +183,7 @@ This is a constraint worth stating as a principle rather than rediscovering per-
 **The database layer.** We call `sqlite3_*` directly from Swift, importing the system `SQLite3` module — no `Package.swift` dependency, no vendored source. The plumbing this obliges us to write is well-understood and finite:
 
 - *A connection wrapper.* Open with `SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX`, set `PRAGMA journal_mode = WAL` once at creation, `PRAGMA foreign_keys = ON` and `PRAGMA busy_timeout` on every connection. Perhaps 150 lines.
-- *A statement wrapper.* Prepare, bind, step, finalize, with a small typed binding surface so call sites are not writing `sqlite3_bind_int64(stmt, 3, …)` by hand and miscounting indices. Cache prepared statements for the hot queries — the deal, the hand reservation — since those run constantly. Another 150 lines or so.
+- *A statement wrapper.* Prepare, bind, step, finalize, with a small typed binding surface so call sites are not writing `sqlite3_bind_int64(stmt, 3, …)` by hand and miscounting indices. Cache prepared statements for the hot queries — picking a candidate, serving from the queue — since those run constantly. Another 150 lines or so.
 - *A migrator.* A `user_version` pragma, an ordered array of migration closures, and a loop that applies the ones above the current version inside a transaction. About 40 lines, with tests from the first commit: apply from empty, apply from every intermediate version, and assert the resulting schema matches a freshly-created one.
 
   Worth knowing what this is *for*, though, given the database is disposable: it exists so that an update does not silently discard a library that took an hour to fetch, not because the data is precious. Before 1.0 the schema is edited in place and the answer to a mismatch is to delete the file. After 1.0 a migration is a courtesy that saves a re-download, and "delete and rescan" remains the fallback for anything a migration gets wrong.
@@ -200,14 +203,18 @@ A source is a row in a `source` table, never a setting. That distinction is the 
 
 ```sql
 CREATE TABLE source (
-  id          INTEGER PRIMARY KEY,
-  kind        TEXT NOT NULL,     -- 'folder' | 'file' | 'photos_collection' | 'photos_asset' | 'google_album'
-  locator     TEXT NOT NULL,     -- path, bookmark, PHAssetCollection id, PHAsset id, Google album id
-  stamp_uuid  TEXT,              -- file/folder sources only: matches the com.apple.metadata: xattr
-  enabled     INTEGER NOT NULL DEFAULT 1,
-  recursive   INTEGER,           -- folder only
-  added_at    INTEGER NOT NULL,
-  scanned_at  INTEGER
+  id                 INTEGER PRIMARY KEY,
+  kind               TEXT NOT NULL,  -- 'folder' | 'file' | 'photos_collection' | 'photos_asset' | 'google_album'
+  locator            TEXT NOT NULL,  -- path, PHAssetCollection id, PHAsset id, Google album id
+  bookmark           BLOB,           -- security-scoped, stored from the first commit even unsandboxed
+  stamp_uuid         TEXT,           -- file/folder sources only: matches the com.apple.metadata: xattr
+  enabled            INTEGER NOT NULL DEFAULT 1,
+  recursive          INTEGER,        -- folder only
+  available          INTEGER NOT NULL DEFAULT 1,  -- the source itself, not its photos
+  unavailable_reason TEXT,
+  unavailable_at     INTEGER,
+  added_at           INTEGER NOT NULL,
+  scanned_at         INTEGER
 );
 ```
 
@@ -224,7 +231,7 @@ Four consequences worth stating:
 
 Both interfaces mirror the column. `--add-folder` takes a folder as it finds it and `--add-folder-recursive` walks it; `PGR_FOLDERS` and `PGR_FOLDERS_RECURSIVE` are the environment forms, independent lists that may both be set. The older `-r` still applies to every plain `--add-folder`, because "all of them, recursively" stays the common case and nothing that worked should stop working.
 
-Scanning is incremental. Each source records `scanned_at`; a folder rescan diffs the directory against existing rows and inserts new photos with a null `last_dealt_seq`, which makes them immediately eligible without needing to be placed anywhere special.
+Scanning is incremental. Each source records `scanned_at`; a rescan streams the source past the pool and inserts what is not already there, with a null `last_dealt_seq` that makes a new photo immediately eligible without needing to be placed anywhere special. See *Scanning is constant-memory* for why it streams rather than compares.
 
 ## No videos until 2.0
 
@@ -242,7 +249,7 @@ Pleasingly, this costs nothing to implement and something to *un*-implement. `CG
 
 **Why 2.0 is genuinely harder, and why the column alone is not the whole answer.** Video is not a photo with extra bytes; it breaks assumptions the current design leans on:
 
-- **Duration versus dwell.** A ten-second screensaver dwell and a three-minute clip disagree. Either the video is truncated, or the dwell becomes per-photo, which changes how hands are sized and how the shared deck paces.
+- **Duration versus dwell.** A ten-second screensaver dwell and a three-minute clip disagree. Either the video is truncated, or the dwell becomes per-photo, which changes how the shared queue paces for every surface at once.
 - **Not every surface can show one.** The wallpaper API takes a still image URL. A widget cannot animate. So video is a per-surface capability, which means the `consumer` table gains a capability mask and the deal query starts filtering by what the asking consumer can actually display — the first thing in this design that would make consumers pull from genuinely different subsets of the shared deck.
 - **Audio needs a policy,** almost certainly "always muted," and a screensaver that unexpectedly makes noise is a bug people remember.
 - **The cache cap stops making sense as a count.** A thousand videos is not a number of gigabytes anyone can predict, which is the point at which the byte ceiling stops being a safety valve and becomes the primary control.
@@ -404,6 +411,42 @@ That separation is what makes the concurrency safe to have. A folder on a dead n
 
 **Concurrency is scheduling, so it belongs to the host.** The kit exposes "refresh this one source" and has no opinion about how many run at once; the Mac agent runs a task group with a cap, and an iOS host with a few hundred milliseconds of background time can run exactly one. That is the same seam that keeps timers out of the kit.
 
+### Scanning is constant-memory, and what it took
+
+**The only photos this system holds in memory are the ones in flight** — one streaming out of a provider, bytes being fetched, an image being handed to a client. Everything else is in the database, which is what the database is for. A scan of a million photos and a scan of eight thousand now cost the same.
+
+That took three fixes. Only the first was visible by reading the code; the other two were found by bisecting a standalone probe against directories of the real size, and neither was where anyone predicted.
+
+**The library was held in memory three times over.** The provider returned its whole enumeration as an array, the scanner loaded every existing row into a dictionary to diff against, and it built a `Set` of every external identifier to find what had departed. All three are gone. `enumerate` takes a sink and pushes one photo at a time; additions are `INSERT OR IGNORE` in batches of five hundred, so *is this already known* is a question for the database rather than for a dictionary. Removals page through the pool five hundred rows at a time and ask the provider about each photo — the same three-valued `existence` check that already guaranteed a deleted photo is never shown, which is why an unmounted volume answers `.unknown` and nothing is deleted. There is no diff at all any more.
+
+**`.isUbiquitousItemKey` cost about 9 KB per file.** It was prefetched so a photo in iCloud Drive could be classified as materialized. Every answer drags iCloud bookkeeping with it and not all of it comes back when the URL goes: 212 MB for a 20,000-photo walk against 28 MB without it, and 787 MB against 74 MB at 80,000. Asking lazily per file was no better. **iCloud Drive is a subtree**, so the question is now asked once of the source root — a folder inside it has every file ubiquitous, a folder outside it has none.
+
+**Building an absolute path per file cost 94 MB per 80,000, and the fix was to stop needing one.** The walk had no business handling paths at all: what it wants is each photo's identifier *relative to its source*, and it was recovering that by taking the child's absolute path and stripping the root off the front.
+
+That prefix arithmetic was never as simple as it sounds. Foundation resolves symlinks in the children an enumerator yields but not in the root it was handed, so a source under `/var/…` produces children under `/private/var/…` and no single prefix matches. `standardizedFileURL` per file papered over it at 53 MB per 80,000 files, and three candidate prefixes computed once per walk replaced that for free — but both were solving a problem that only existed because the relative path had been thrown away and was being reconstructed.
+
+**`.producesRelativePathURLs` is Foundation's own answer**, and it deletes the whole category. The enumerator reports what it descended through, `url.relativePath` is the identifier, and the `/var` case resolves on its own because Foundation is tracking the descent rather than being reverse-engineered from a string.
+
+It also retired an `autoreleasepool`. One was genuinely load-bearing while the loop built absolute paths — `path(percentEncoded:)` mints an Objective-C temporary and a tight Swift loop crosses no pool boundary to drain it, so 94 MB accumulated across 80,000 files against 12 MB with a pool. `relativePath` does not allocate one, so the pool now measures 12.5 MB against 12.4 MB without it and costs 0.3s per 80,000 files. **It is gone from the walk, and that is the better outcome: not draining an allocation, but not making it.** A pool remains around the existence check, which still asks for an absolute path and is called once per pool entry by a sweep.
+
+`URL` and `URLResourceValues` are Swift structs throughout and never needed a pool of their own — worth stating because a pool in a loop reads as a thing one always does, and here it was load-bearing in exactly one place for exactly one reason, until it was not needed at all.
+
+**Filenames were verified byte for byte before this changed**, because a mangled identifier is a photo that can never be opened again. `url.relativePath` returns the exact UTF-8 the filesystem reported — not merely a canonically equivalent string — across NFC and NFD spellings of the same name, emoji, CJK, Arabic, Hangul, stacked combining marks, embedded quotes, a filename containing a newline, and an NFD-named subdirectory. Every one reopens by root-plus-identifier. APFS refuses to create a filename that is not valid UTF-8, so the one case that could not be tested here is an exFAT or SMB volume that permits one.
+
+**What it measures now**, the same code against 8,287 real photos, an 80,000-file nested tree, and a synthetic tree of a million files:
+
+| | 8,287 photos | 80,000 files | 1,000,000 files |
+| --- | --- | --- | --- |
+| walk | 21.8 MB, 0.45s | — | 22.0 MB, 21s |
+| full ingest | 23.6 MB, 0.31s | 30.8 MB, 2.8s | 30.8 MB, 83s |
+| rescan, including the removal sweep | 23.8 MB, 0.59s | — | 32.5 MB, 136s |
+
+Underneath all of those is a floor of 6.4 MB of Swift runtime and Foundation, plus 1.4 MB to open and migrate the database. **A million files cost about 14 MB over an idle process, and going from eight thousand to a million moved the number by 0.2 MB.** The running agent sits flat at 28 MB through startup, queue fill, and rescans, with no scan spike left to see.
+
+**A hand-rolled `readdir` walker was measured and rejected**, and the numbers are worth keeping so nobody re-opens it on a hunch. With every decision the kit actually makes preserved — `UTType` conformance rather than an extension list, package directories not descended, storage classified per device — it ran 0.40s against 0.98s at 80,000 files and produced identical counts on the real library, 8,287 images and 3 videos. But its memory was a wash at 13.9 MB against 12.3 MB, because loading `UTType` dominates either way, and the 5.8 MB figure that first made it look dramatic came from a version cheating with a hardcoded extension list. Two and a half times the speed, none of the memory, in exchange for owning hidden-file handling, package detection, symlink loops, and filename encoding across every filesystem macOS mounts. **Foundation handles the myriad special cases; that is what it is for.**
+
+The durable lesson is about method rather than about memory. Five explanations were argued confidently before any was tested — the enumerator retaining URLs, autorelease pressure in general, SQLite's page cache, `UTType` conformance, and later that the pool was permanently necessary — and every one was wrong, including a pool that was added on a bad theory, removed on a null result from a probe that did not exercise the real culprit, added back when a better probe found it, and finally deleted when the allocation it drained stopped happening. What settled each round was a standalone program with one ingredient removed at a time, run against a directory of the size that matters. Rebuild that probe rather than reasoning around the next number that looks wrong.
+
 ### What a client asks for, and what it gets back
 
 Consumers do not block on any of this. The exchange is:
@@ -427,6 +470,22 @@ The single most important thing to keep straight in this design is that there ar
 
 Keeping these separate is what makes the shuffle honest. If the database only held the 1000 photos that happen to be cached, the shuffle would be a shuffle of 1000 photos, and the other 49,000 would surface only through whatever refill policy pulled them in. With complete rows, the deck shuffles the entire library and the cache is purely a performance layer — a prediction about which photos are needed soon, wrong at worst, never a constraint on what can appear.
 
+### Transient bytes: cache them, then let them go back to being transient
+
+**If a provider can take the bytes out from under an entry, cache them and treat the original as transient rather than authoritative.** That is the general rule, and `referenced` versus `materialized` is one instance of it rather than the whole idea.
+
+The failure it prevents is specific and nasty, because it does not look like an error. An evicted iCloud Drive file is a *dataless stub*: it is present, `stat` succeeds, and the existence check passes — and then reading it either blocks on a download or fails outright, on the display path, at the moment a surface wants to draw. Volume properties cannot see this coming, because the volume is the internal boot disk and answers "internal, local, not removable." It is the file that is remote, not the disk.
+
+Materializing moves that download into the producer, where slowness is free: fetching bytes already has a generous latency budget, and nothing is queued until it is ready.
+
+**Every provider that can do this gets the same treatment.** iCloud Drive today, Google Photos in Phase 11, a Photos library whose originals live in iCloud, a network share that goes away mid-session. The question is never "which kind of source is this" but "can the bytes disappear while the row stays valid" — and wherever the answer is yes, the bytes come into the cache and the original is treated as a hint about where they came from.
+
+Once cached, the entry is an ordinary materialized photo and the original is free to revert to whatever transient state its provider likes. FIFO eviction is the only thing that decides when we stop holding it, exactly as for every other materialized photo.
+
+**Today this is approximated per source, and that is a deliberate trade.** `sourceIsUbiquitous` asks whether the source root lives in iCloud, once per scan, and marks everything under it materialized. It answers *lives in iCloud* rather than *is currently evicted* — so a fully-downloaded iCloud folder is copied unnecessarily. The precise question is `.ubiquitousItemDownloadingStatusKey`, which is per file, and per-file iCloud properties are what cost 787 MB across an 80,000-photo walk. Coarse and constant beats precise and linear.
+
+**Doing this properly waits for the download half of `pgr_ctl`**, which is the first thing that will actually exercise a slow, failable, resumable fetch. Building the general mechanism before there is something to test it against would be designing against an imagined provider.
+
 ## The deck algorithm
 
 The naive shuffle — one random column, re-rolled when consumed — repeats photos almost immediately, because a fresh random value can land right back at the front. The fix is to make recency a filter rather than trusting the ordering alone.
@@ -439,17 +498,21 @@ That holds for every fraction below 1.0 on a library of any real size. The **pas
 
 ```sql
 CREATE TABLE photo (
-  id             INTEGER PRIMARY KEY,
-  source_id      INTEGER NOT NULL REFERENCES source(id),
-  external_id    TEXT NOT NULL,      -- PHAsset localIdentifier, Google media item id, or
+  id              INTEGER PRIMARY KEY,
+  source_id       INTEGER NOT NULL REFERENCES source(id) ON DELETE CASCADE,
+  external_id     TEXT NOT NULL,     -- PHAsset localIdentifier, Google media item id, or
                                      -- for folder sources: path RELATIVE to source.locator
-  media_type     TEXT NOT NULL,      -- 'image' in v1; 'video' exists but is never selected
-  available      INTEGER NOT NULL DEFAULT 1,
-  times_shown    INTEGER NOT NULL DEFAULT 0,
-  last_dealt_seq INTEGER,            -- global deal ordinal; NULL means never dealt
-  shuffle_key    REAL NOT NULL,      -- random, re-rolled on each deal
-  last_shown_at  INTEGER,
-  ...
+  media_type      TEXT NOT NULL DEFAULT 'image',  -- 'video' exists and is never selected
+  source_enabled  INTEGER NOT NULL DEFAULT 1,     -- denormalised, so the deal needs no join
+  storage         TEXT NOT NULL DEFAULT 'materialized',  -- 'referenced' | 'materialized'
+  cache_path      TEXT,              -- cache-relative; NULL until the bytes are fetched
+  byte_size       INTEGER,
+  materialized_at INTEGER,           -- FIFO eviction orders by this
+  times_shown     INTEGER NOT NULL DEFAULT 0,
+  last_dealt_seq  INTEGER,           -- global deal ordinal; NULL means never dealt
+  shuffle_key     REAL NOT NULL,     -- random, re-rolled on each deal
+  last_shown_at   INTEGER,
+  added_at        INTEGER NOT NULL
 );
 
 CREATE TABLE deck_state (
@@ -461,7 +524,10 @@ CREATE TABLE deck_state (
 -- Selection orders by shuffle_key and takes a LIMIT, so the index leads with
 -- the equality columns and *ends* at shuffle_key. Putting last_dealt_seq before
 -- it would force a temp b-tree sort of half the library on every deal.
-CREATE INDEX photo_deck ON photo(source_enabled, available, media_type, shuffle_key);
+CREATE INDEX photo_deck ON photo(source_enabled, media_type, shuffle_key);
+CREATE INDEX photo_window ON photo(source_enabled, media_type, last_dealt_seq);
+CREATE INDEX photo_source ON photo(source_id);
+CREATE INDEX photo_materialized ON photo(materialized_at) WHERE cache_path IS NOT NULL;
 ```
 
 A single monotonic counter — the deal ordinal — advances on every card dealt anywhere in the system. The pass is one more integer beside it: a photo is unused in the current pass while `last_dealt_seq <= pass_start_seq`, and reshuffling means moving `pass_start_seq` up to the current ordinal, which makes every photo unused again. There is no per-photo epoch column and no pass-position column.
@@ -521,7 +587,6 @@ SELECT id, source_id, external_id, storage, cache_path
   FROM photo p
  WHERE p.source_id = :source
    AND p.source_enabled = 1
-   AND p.available = 1
    AND p.media_type = 'image'
    AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold)
    AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.photo_id = p.id)
@@ -622,7 +687,7 @@ cache/
   7/000000502.heic
 ```
 
-Source id at the top, photo id below. `pgr cache clear --source 3` becomes one directory removal instead of a thousand unlinks, and per-source byte totals become a directory size instead of a query plus a stat loop. That is the whole justification; if those two operations did not exist, flat would be correct.
+Source id at the top, photo id below. `pgr_ctl cache clear --source 3` becomes one directory removal instead of a thousand unlinks, and per-source byte totals become a directory size instead of a query plus a stat loop. That is the whole justification; if those two operations did not exist, flat would be correct.
 
 The cache directory is marked `isExcludedFromBackup`. Letting Time Machine copy tens of gigabytes of photos that are already in the Photos library or already in iCloud wastes the user's backup volume on data we can reconstruct.
 
@@ -869,7 +934,7 @@ A rough shape of the subcommands:
 ```
 pgr_ctl source add --folder <path> | --file <path>
 pgr_ctl source list | remove <id> | enable <id> | disable <id>
-pgr_ctl refresh [--source <id>]        # diff sources against the pool
+pgr_ctl refresh [--source <id>]        # re-enumerate sources into the pool
 pgr_ctl pool stats                     # rows per source, available, media types
 pgr_ctl queue peek [--count n]         # what is ready to serve, in order
 pgr_ctl queue fill                     # ask every source once, synchronously
@@ -1243,40 +1308,48 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 **Wrong behaviour, worth fixing now**
 
 1. **Selection and claim are not atomic.** Picking a candidate and marking it shown are separate statements with a fetch in between, so two producers can pick the same picture. Today that cannot happen — one agent, and a source refuses concurrent work beyond its limit — so this is a property of the deployment rather than of the code. The moment a second process produces, it costs a duplicated download. Cheap to fix by claiming at selection time; wrong to forget.
-2. **A file edited in place is never noticed.** The refresh diff compares storage and byte size, so an edit that preserves the byte count — a crop re-encoded to the same length, a metadata rewrite — leaves the stale copy cached for ever. Wants a `modified_at` column compared on refresh, treated as re-fetch rather than as a new entry so it keeps its place in the rotation.
+2. **A file edited in place is never noticed.** A refresh compares storage and byte size, so an edit that preserves the byte count — a crop re-encoded to the same length, a metadata rewrite — leaves the stale copy cached for ever. Wants a `modified_at` column compared on refresh, treated as re-fetch rather than as a new entry so it keeps its place in the rotation.
 
 **Dead weight left by refactoring**
 
 3. **`ScanChange` and `ScanResult` are named for a method called `refresh`.** Small, but the vocabulary should be one word.
 4. **Seven inspect verbs still live in `photogoroundd`** — `serve`, `status`, `source`, `queue`, `get`/`set`, and the service ones. They are Phase 2's, and the plan already says the service does one thing. Until they move, that claim is true of the default behaviour and not of the binary.
 
+**Declared but not wired up**
+
+5. **`MacHostEnvironment.appGroupIdentifier` and `directoryName` have no callers**, and that is deliberate rather than an oversight — Phase 5's widget and Phase 8's Mac widget need an App Group container, and the team-ID-prefixed spelling is the kind of detail that costs an afternoon when it is rediscovered rather than recorded. Left in place knowingly.
+
 **Cosmetic**
 
-5. **The status line reports cached photos against a cap that some libraries can never approach.** A boot-volume library is referenced in place and never copied, so `0/1000 cached` is correct and reads like a stalled fetch. It should say what is true — that there is nothing to cache — rather than making the reader work it out.
-6. **A folder that never existed is reported as "no longer at this path."** The check cannot tell "moved" from "never there", and says the more alarming of the two.
+6. **The status line reports cached photos against a cap that some libraries can never approach.** A boot-volume library is referenced in place and never copied, so `0/1000 cached` is correct and reads like a stalled fetch. It should say what is true — that there is nothing to cache — rather than making the reader work it out.
+7. **A folder that never existed is reported as "no longer at this path."** The check cannot tell "moved" from "never there", and says the more alarming of the two.
 
 **Done since this list was written**
 
 - `.sourcesChanged` was announced and nobody listened, so a source added from a terminal sat idle until the next scheduled refresh. The agent now observes it and refreshes within a tick — verified against a live agent with the scan interval set to an hour.
 - `CacheSettings.chunkSize` and `burstSize` were vestigial after chunked ingestion went, along with their preferences. Removed.
-- `Consumer.seenAt` was written and never read; it now backs a `consumerIdleTimeout` so a surface that has stopped asking can be seen. `DarwinNotification.deckAdvanced` was a topic nobody rang; serving now posts it.
+- `DarwinNotification.deckAdvanced` was a topic nobody rang; serving now posts it.
+- `consumerIdleTimeoutSeconds` was parsed and clamped and never consulted — nothing asked which consumers had gone quiet. Removed; `consumer.seen_at` stays as the heartbeat, which `touch` does write, and the timeout can come back when something actually reports idleness.
+- Dead API removed after an audit: `PhotoQueue.depthBySource`, `Source.contributesToDeck` (a second name for `enabled`), `PhotoExistence.isAbsent`, `Statement.optionalDouble`, `Preferences.removeSource(locator:)`, and `Preferences.bundleDomain` (a second spelling of `Deployment.identifier`). All had zero call sites.
 - Sources can be named at launch with `PGR_FOLDERS`, so Phase 1 needs no CLI.
 - The queue filled at one round of requests per tick rather than re-asking on each answer — four pictures every five seconds against a folder that fills a thousand-entry queue in three. Fixed, and written up under *Filling*.
 - A pool smaller than the queue's target had no stopping condition, so a small library meant a producer spinning against a queue that already held everything. It is now paced by the maintenance tick.
 - The agent printed a count of sources and nothing about them. It now names each one at startup with its photo count and whether it is recursive, disabled, unavailable, or not yet scanned — the whole class of "it is running but showing nothing" is visible in the first second rather than after a session of reading the log.
 - The `run` verb is gone; a bare invocation runs the agent.
+- A refresh held the whole library in memory three times over — the provider's full enumeration, a dictionary of every existing row, and a `Set` of every external identifier. All three are gone, and with them the two per-file costs underneath. Written up under *Scanning is constant-memory, and what it took*.
+- The folder walk reconstructed each photo's relative identifier by stripping a prefix off its absolute path, which needed three candidate prefixes to cope with `/var` versus `/private/var`. `.producesRelativePathURLs` replaces all of it, and removed the walk's `autoreleasepool` as a side effect by not making the allocation it was draining.
 - An unavailable source printed its alert at every refresh and, worse, announced itself each time — and the agent observes its own announcements, so a missing folder drove a refresh loop. Both fixed; see *The doorbell rings back at you*.
 - Recursion applied to a whole run rather than to each folder, so a flat directory and a nested tree could not be added in one command. Each source now carries its own, defaulting off.
 - The tests leaked a preferences plist per run, five hundred of them. Bounded now, and the reason the obvious fix fails is written up under *Testing strategy*.
 - `sources changed; refreshing now` was narrating routine work on every doorbell. Removed; what a refresh *finds* is still printed.
+- The staging run had been minutes rather than a day. It has now run 10h08m unattended, which closes the Phase 1 gate; the numbers are under *Phase 1*. What it did **not** exercise is serving — nothing drew a picture for ten hours, so the deal path, eviction, and the repeat window went untouched. That is Phase 2's gate, not a gap in this one.
 
 **Known and deliberately deferred**
 
-7. **No Xcode project until Phase 3.** A shared scheme in `.swiftpm/xcode/xcshareddata/xcschemes/` gives the package a debugger today, which is enough for the agent. A real project arrives with the Mac app, where the App Group container has to be settled anyway — and doing both at once means the container question is answered by the thing that actually has the problem.
-8. **The agent bundle and `SMAppService` are built but out of scope, and ahead of schedule.** `Scripts/make-agent-bundle.sh` assembles an `LSUIElement` app, and the server has `register` / `unregister` / `service-status` verbs. None of it is needed until there is a surface that wakes up on its own and expects the library to be there — the screensaver, the wallpaper, the widgets, and probably the Mac app that registers it on their behalf. Recorded because it exists and because the finding is worth keeping: `SMAppService.agent(plistName:)` reports `.notFound` from that bundle, having ruled out a missing plist, five plist shapes, ad-hoc versus Developer ID signing, and `Bundle.main` resolution. What is left is that the process probably has to be launched by LaunchServices as an app, which is how it will actually be used.
-9. **Watching the filesystem is a 1.0 requirement, not built.** See *Watching, and why it comes back for 1.0*: the play-time existence check covers on-demand surfaces completely and pre-rendered ones not at all, so it is needed before the widget in Phase 5 and the Watch in Phase 9.
-10. **The migrator refuses a database from a newer build.** Given the database is disposable, deleting and rebuilding would be a friendlier answer than an error — at the cost of one rescan. Worth revisiting when there is a second build to be older than.
-11. **The staging run has been minutes, not a day.** A bare run, `source add/list`, `status`, `serve`, and the doorbell have all been driven against a live agent, and a photo deleted mid-run was never served across thirty-two draws. What has not been tested is duration: the gate asks for a detached `screen` left alone for a day, and nothing here has run longer than a few minutes.
+8. **No Xcode project until Phase 3.** A shared scheme in `.swiftpm/xcode/xcshareddata/xcschemes/` gives the package a debugger today, which is enough for the agent. A real project arrives with the Mac app, where the App Group container has to be settled anyway — and doing both at once means the container question is answered by the thing that actually has the problem.
+9. **The agent bundle and `SMAppService` are built but out of scope, and ahead of schedule.** `Scripts/make-agent-bundle.sh` assembles an `LSUIElement` app, and the server has `register` / `unregister` / `service-status` verbs. None of it is needed until there is a surface that wakes up on its own and expects the library to be there — the screensaver, the wallpaper, the widgets, and probably the Mac app that registers it on their behalf. Recorded because it exists and because the finding is worth keeping: `SMAppService.agent(plistName:)` reports `.notFound` from that bundle, having ruled out a missing plist, five plist shapes, ad-hoc versus Developer ID signing, and `Bundle.main` resolution. What is left is that the process probably has to be launched by LaunchServices as an app, which is how it will actually be used.
+10. **Watching the filesystem is a 1.0 requirement, not built.** See *Watching, and why it comes back for 1.0*: the play-time existence check covers on-demand surfaces completely and pre-rendered ones not at all, so it is needed before the widget in Phase 5 and the Watch in Phase 9.
+11. **The migrator refuses a database from a newer build.** Given the database is disposable, deleting and rebuilding would be a friendlier answer than an error — at the cost of one rescan. Worth revisiting when there is a second build to be older than.
 
 ## Expect the plan to change, and where it can absorb it
 
@@ -1285,7 +1358,7 @@ Every phase after the third adds a surface that lives under rules we do not cont
 **Seams built specifically to absorb it.** Each of these exists because something downstream is likely to change:
 
 - `FileAccess` — path today, security-scoped bookmark if we sandbox. Isolates the single most likely architectural reversal.
-- `HostEnvironment` — storage roots, App Group identifiers, cache caps, chunk sizes. Every platform difference and every container surprise lands here rather than in the kit.
+- `HostEnvironment` — storage roots, App Group identifiers, preference domains. Every platform difference and every container surprise lands here rather than in the kit.
 - The source-provider protocol — enumerate and materialize, nothing else. New source kinds are additive.
 - The pool API and the queue — a new surface is a new consumer row, and a new source kind is a new provider. Neither reaches into the other.
 - The migrator — schema change is a routine operation with a test, not an event to be feared. This is what makes "add a nullable column later" a real answer rather than a hopeful one.

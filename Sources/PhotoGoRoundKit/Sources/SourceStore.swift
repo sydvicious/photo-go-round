@@ -24,6 +24,24 @@ public struct ScanResult: Sendable, Equatable {
     /// was removed from the pool at all.
     public let sourceUnavailable: Bool
     public let reason: String?
+    /// Cache-relative paths whose photos are gone. The store has no idea where
+    /// the cache root is, so it reports them and whoever owns the root deletes
+    /// them. Bounded by how many photos actually disappeared, not by library
+    /// size — a scan that removes nothing carries nothing.
+    public let orphanedCachePaths: [String]
+
+    public init(
+        sourceID: Int64, added: Int, removed: Int, unchanged: Int,
+        sourceUnavailable: Bool, reason: String?, orphanedCachePaths: [String] = []
+    ) {
+        self.sourceID = sourceID
+        self.added = added
+        self.removed = removed
+        self.unchanged = unchanged
+        self.sourceUnavailable = sourceUnavailable
+        self.reason = reason
+        self.orphanedCachePaths = orphanedCachePaths
+    }
 
     public var isEmpty: Bool { added == 0 && removed == 0 }
 }
@@ -297,74 +315,120 @@ public struct SourceStore {
         let interval = Log.signposter.beginInterval("refresh")
         defer { Log.signposter.endInterval("refresh", interval) }
 
-        let enumeration = try await provider.enumerate(source)
+        // ── Additions: streamed, never collected ──
+        //
+        // A photo arrives, a row goes in, the value is dropped. Nothing about
+        // this step scales with the size of the library, which is the whole
+        // point: the only photos this system holds in memory are the ones in
+        // the queue.
+        var added = 0
+        var updated = 0
+        var seen = 0
+        var pending: [DiscoveredPhoto] = []
+        pending.reserveCapacity(PhotoPool.batchSize)
 
-        // A source that could not be reached keeps every entry it has. An
-        // external drive that is not plugged in makes ten thousand photos
-        // vanish at once, and emptying the pool over it would mean
-        // re-enumerating and re-downloading everything on every undock.
-        if let reason = enumeration.unavailableReason {
+        func flush() throws {
+            guard !pending.isEmpty else { return }
+            let counts = try pool.upsert(pending, to: source, at: now) { photo in
+                onChange?(.added(externalID: photo.externalID))
+            }
+            added += counts.added
+            updated += counts.updated
+            pending.removeAll(keepingCapacity: true)
+        }
+
+        let reachability = try await provider.enumerate(source) { photo in
+            seen += 1
+            pending.append(photo)
+            // Batched only to keep the write transaction count sane. The buffer
+            // is five hundred entries, not a library.
+            if pending.count >= PhotoPool.batchSize { try flush() }
+        }
+
+        if let reason = reachability.unavailableReason {
+            // A source that could not be reached keeps every entry it has. An
+            // external drive that is not plugged in makes ten thousand photos
+            // vanish at once, and emptying the pool over it would mean
+            // re-enumerating and re-downloading everything on every undock.
             try markUnavailable(sourceID: source.id, reason: reason, at: now)
             return ScanResult(
                 sourceID: source.id, added: 0, removed: 0, unchanged: 0,
                 sourceUnavailable: true, reason: reason
             )
         }
+        try flush()
 
-        let existing = try pool.contents(ofSource: source.id)
-
-        // The same rule, generalised: a source that loses *everything* at once
-        // has become unavailable; its contents were not deleted. This covers a
-        // Photos library switch and a share that silently disconnected.
-        if enumeration.photos.isEmpty, !existing.isEmpty {
-            let reason = "enumerated to nothing, but was not empty before"
-            Log.sources.notice(
-                "source \(source.id, privacy: .public) \(reason, privacy: .public); leaving \(existing.count, privacy: .public) entries in the pool"
-            )
-            try markUnavailable(sourceID: source.id, reason: reason, at: now)
-            return ScanResult(
-                sourceID: source.id, added: 0, removed: 0, unchanged: existing.count,
-                sourceUnavailable: true, reason: reason
-            )
-        }
-
-        var discovered = Set<String>()
-        discovered.reserveCapacity(enumeration.photos.count)
-        var additions: [DiscoveredPhoto] = []
-        var updates: [(id: Int64, photo: DiscoveredPhoto)] = []
-        var unchanged = 0
-
-        for photo in enumeration.photos {
-            discovered.insert(photo.externalID)
-            guard let entry = existing[photo.externalID] else {
-                additions.append(photo)
-                continue
-            }
-            if entry.storage != photo.storage || entry.byteSize != photo.byteSize {
-                updates.append((entry.id, photo))
-            } else {
-                unchanged += 1
+        // A source that loses *everything* at once has become unavailable; its
+        // contents were not deleted. This covers a Photos library switch and a
+        // share that silently disconnected, and it survives the move away from
+        // diffing because both halves of it are counters — how many the walk
+        // produced, and how many rows exist — rather than the contents of either.
+        if seen == 0 {
+            let held = try pool.size(forSource: source.id)
+            if held > 0 {
+                let reason = "enumerated to nothing, but was not empty before"
+                Log.sources.notice(
+                    "source \(source.id, privacy: .public) \(reason, privacy: .public); leaving \(held, privacy: .public) entries in the pool"
+                )
+                try markUnavailable(sourceID: source.id, reason: reason, at: now)
+                return ScanResult(
+                    sourceID: source.id, added: 0, removed: 0, unchanged: held,
+                    sourceUnavailable: true, reason: reason
+                )
             }
         }
 
-        let departed = existing.filter { !discovered.contains($0.key) }
+        // ── Removals: asked one photo at a time ──
+        //
+        // There is no diff and no set of what was seen. The pool is walked a
+        // page at a time and each entry's provider is asked whether that photo
+        // is still there, which is the same three-valued check that guarantees a
+        // deleted photo is never shown.
+        //
+        // Using it here retires a heuristic as well. There used to be a rule
+        // that a source enumerating to nothing when it was not empty before had
+        // "become unavailable" — an approximation of exactly what `.unknown`
+        // states outright. An unmounted volume answers `.unknown` for every
+        // photo, so nothing is deleted, and the guess is no longer needed.
+        var removed = 0
+        // Photos the walk found still in place. The walk runs after the inserts,
+        // so it sees this pass's additions too — they are discounted at the end
+        // rather than tracked here, which would mean knowing which rows were new.
+        var survived = 0
+        var cursor: Int64 = 0
+        var orphanedCachePaths: [String] = []
 
-        try pool.add(additions, to: source, at: now)
-        for (id, photo) in updates {
-            try pool.refresh(id, storage: photo.storage, byteSize: photo.byteSize)
+        while true {
+            let batch = try pool.page(ofSource: source.id, after: cursor)
+            guard let last = batch.last else { break }
+            cursor = last.id
+
+            var departed: [Int64] = []
+            for entry in batch {
+                switch await provider.existence(of: entry.externalID, in: source) {
+                case .absent:
+                    departed.append(entry.id)
+                    onChange?(.removed(externalID: entry.externalID))
+                case .present, .unknown:
+                    // `.unknown` is not `.absent`. The photo keeps its row and
+                    // its history, and the question gets asked again next pass.
+                    survived += 1
+                }
+            }
+
+            if !departed.isEmpty {
+                let removal = try pool.remove(departed)
+                removed += removal.count
+                orphanedCachePaths += removal.orphanedCachePaths
+            }
         }
-        try pool.remove(departed.values.map(\.id))
 
         try markAvailable(sourceID: source.id, scannedAt: now)
 
-        if let onChange {
-            for photo in additions { onChange(.added(externalID: photo.externalID)) }
-            for externalID in departed.keys { onChange(.removed(externalID: externalID)) }
-        }
-
         let result = ScanResult(
-            sourceID: source.id, added: additions.count, removed: departed.count,
-            unchanged: unchanged + updates.count, sourceUnavailable: false, reason: nil
+            sourceID: source.id, added: added, removed: removed,
+            unchanged: max(0, survived - added), sourceUnavailable: false, reason: nil,
+            orphanedCachePaths: orphanedCachePaths
         )
         if !result.isEmpty {
             Log.sources.notice(

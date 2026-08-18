@@ -9,6 +9,13 @@ import UniformTypeIdentifiers
 struct FileClassifier {
     /// Keys worth prefetching on the enumerator, so each file is one stat
     /// rather than several.
+    ///
+    /// `.isUbiquitousItemKey` is deliberately absent. Prefetching it cost about
+    /// 9 KB of resident memory **per file** — 787 MB across an 80,000-photo
+    /// walk against 74 MB without it — because each answer drags iCloud
+    /// bookkeeping along and not all of it is released when the URL goes.
+    /// Asking lazily per file was no better. iCloud Drive is a subtree, so the
+    /// question is asked once of the source root instead.
     static let resourceKeys: [URLResourceKey] = [
         .isRegularFileKey,
         .isDirectoryKey,
@@ -17,8 +24,20 @@ struct FileClassifier {
         .fileSizeKey,
         .isPackageKey,
         .volumeURLKey,
-        .isUbiquitousItemKey,
     ]
+
+    /// Whether this classifier's source lives in iCloud, settled once at
+    /// construction — see `resourceKeys`.
+    let sourceIsUbiquitous: Bool
+
+    init(sourceIsUbiquitous: Bool = false) {
+        self.sourceIsUbiquitous = sourceIsUbiquitous
+    }
+
+    /// One question per scan, not one per file.
+    static func isUbiquitous(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
+    }
 
     private var storageByVolume: [URL: PhotoStorage] = [:]
 
@@ -48,7 +67,7 @@ struct FileClassifier {
     /// file we did not need to copy wastes disk, whereas referencing one that
     /// vanishes blanks a screen.
     mutating func storage(of url: URL, values: URLResourceValues?) -> PhotoStorage {
-        if values?.isUbiquitousItem == true { return .materialized }
+        if sourceIsUbiquitous { return .materialized }
 
         guard let volume = values?.volume ?? (try? url.resourceValues(forKeys: [.volumeURLKey]).volume)
         else { return .materialized }
@@ -66,7 +85,7 @@ struct FileClassifier {
             volumeIsRemovable: volumeValues?.volumeIsRemovable,
             volumeIsEjectable: volumeValues?.volumeIsEjectable,
             volumeIsLocal: volumeValues?.volumeIsLocal,
-            isUbiquitous: values?.isUbiquitousItem
+            isUbiquitous: sourceIsUbiquitous
         )
         storageByVolume[volume] = storage
         return storage

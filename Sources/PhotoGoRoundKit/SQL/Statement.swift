@@ -281,11 +281,6 @@ public struct Row {
         try optionalInt64(column).map(Int.init)
     }
 
-    public func optionalDouble(_ column: String) throws -> Double? {
-        let index = try statement.columnIndex(column)
-        return statement.isNull(at: index) ? nil : statement.double(at: index)
-    }
-
     public func optionalString(_ column: String) throws -> String? {
         statement.text(at: try statement.columnIndex(column))
     }

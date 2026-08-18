@@ -14,8 +14,6 @@ public enum PhotoExistence: Sendable, Equatable {
     /// Cannot be determined right now — the volume is not mounted, the share is
     /// down, the network is unreachable. Says nothing about the photo.
     case unknown(reason: String)
-
-    public var isAbsent: Bool { self == .absent }
 }
 
 /// Everything a source kind has to be able to do.
@@ -32,13 +30,25 @@ public enum PhotoExistence: Sendable, Equatable {
 public protocol SourceProvider: Sendable {
     var kind: SourceKind { get }
 
-    /// What is in this source right now.
+    /// What is in this source right now, handed over one photo at a time.
     ///
-    /// Must distinguish "I looked and there is nothing" from "I could not look",
-    /// because the scanner treats those completely differently: the first is a
-    /// mass disappearance, the second is an unavailable source whose photos keep
-    /// their deal history.
-    func enumerate(_ source: Source) async throws -> SourceEnumeration
+    /// **A provider must never build a collection of its whole source.** A
+    /// hundred-thousand-photo library costs about 7 KB per photo to hold as
+    /// values, and the only photos this system keeps in memory are the ones in
+    /// the queue. Everything else lives in the database — which is what the
+    /// database is for. So enumeration pushes into `sink` as it walks and keeps
+    /// nothing.
+    ///
+    /// The return value must distinguish "I looked and there is nothing" from
+    /// "I could not look", because the scanner treats those completely
+    /// differently: the first is a mass disappearance, the second is an
+    /// unavailable source whose photos keep their deal history. Reaching that
+    /// conclusion before streaming anything is normal — an unmounted volume is
+    /// known to be unreachable before a single entry is produced.
+    func enumerate(
+        _ source: Source,
+        into sink: (DiscoveredPhoto) throws -> Void
+    ) async throws -> SourceReachability
 
     /// Is this one photo still in this source?
     ///
@@ -71,6 +81,35 @@ public protocol SourceProvider: Sendable {
         from source: Source,
         to destination: URL
     ) async throws -> MaterializedFile
+}
+
+/// Whether a source could be looked at, which is a different question from
+/// whether it had anything in it.
+public enum SourceReachability: Sendable, Equatable {
+    case reachable
+    /// The source itself is gone — volume unmounted, folder deleted, Photos
+    /// library changed, permission revoked. Its photos keep their history.
+    case unavailable(reason: String)
+
+    public var unavailableReason: String? {
+        switch self {
+        case .reachable: nil
+        case .unavailable(let reason): reason
+        }
+    }
+}
+
+extension SourceProvider {
+    /// The whole source as one array.
+    ///
+    /// A convenience for tests and for callers that already know the source is
+    /// small. **Not for the scanner** — materialising the library is the thing
+    /// the streaming form exists to avoid.
+    public func enumerate(_ source: Source) async throws -> SourceEnumeration {
+        var photos: [DiscoveredPhoto] = []
+        let reachability = try await enumerate(source) { photos.append($0) }
+        return SourceEnumeration(photos: photos, unavailableReason: reachability.unavailableReason)
+    }
 }
 
 /// What materialization produced.

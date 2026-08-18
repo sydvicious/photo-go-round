@@ -19,29 +19,45 @@ public struct PhotoPool {
         self.database = database
     }
 
-    /// What the pool already holds for a source, keyed by external identifier.
-    /// The input to every diff.
-    public func contents(ofSource sourceID: Int64) throws -> [String: Entry] {
-        var entries: [String: Entry] = [:]
-        try database.query(
+    /// One page of a source's entries, ordered by row id, starting after `after`.
+    ///
+    /// Paged rather than whole because the pool is the one thing in this system
+    /// that is as large as the user's library, and **nothing outside the queue is
+    /// ever held in memory**. Loading a source's contents into a dictionary — as
+    /// the diff-based refresh used to — cost about 7 KB per photo and would have
+    /// been most of a gigabyte on a hundred-thousand-photo library.
+    ///
+    /// Ordering by `id` and resuming after the last one seen means a page is a
+    /// cursor rather than an offset, so rows deleted mid-walk cannot make the
+    /// walk skip anything.
+    public func page(
+        ofSource sourceID: Int64,
+        after: Int64 = 0,
+        limit: Int = PhotoPool.batchSize
+    ) throws -> [Entry] {
+        try database.all(
             """
             SELECT id, external_id, storage, byte_size, cache_path
-              FROM photo WHERE source_id = :id;
+              FROM photo
+             WHERE source_id = :id AND id > :after
+             ORDER BY id
+             LIMIT :limit;
             """,
-            ["id": .int(sourceID)]
+            ["id": .int(sourceID), "after": .int(after), "limit": .int(Int64(limit))]
         ) { row in
-            entries[try row.string("external_id")] = Entry(
+            Entry(
                 id: try row.int64("id"),
+                externalID: try row.string("external_id"),
                 storage: PhotoStorage(rawValue: try row.string("storage")) ?? .materialized,
                 byteSize: try row.optionalInt64("byte_size"),
                 isCached: try row.optionalString("cache_path") != nil
             )
         }
-        return entries
     }
 
     public struct Entry: Sendable, Equatable {
         public let id: Int64
+        public let externalID: String
         public let storage: PhotoStorage
         public let byteSize: Int64?
         /// For a materialized photo, whether its bytes have been fetched. For a
@@ -55,16 +71,24 @@ public struct PhotoPool {
     /// holds the single writer lock long enough for a consumer to notice.
     public static let batchSize = 500
 
-    /// Adds entries. New entries have a null deal ordinal and a fresh shuffle
-    /// key, which makes them eligible immediately without being placed anywhere
-    /// special.
+    /// Inserts what is new and updates what changed, one batch at a time.
+    ///
+    /// Two statements rather than an upsert, because the caller needs to know
+    /// which photos were *new* — that is what gets reported as a change — and
+    /// `changes()` cannot tell an insert from a conflict-update. The second
+    /// statement only runs when the first found the row already there.
+    ///
+    /// `onAdded` fires per new photo so the caller can report it without
+    /// collecting a list. Nothing here retains a photo past its batch.
     @discardableResult
-    public func add(
+    public func upsert(
         _ photos: [DiscoveredPhoto],
         to source: Source,
-        at now: Date = Date()
-    ) throws -> Int {
+        at now: Date = Date(),
+        onAdded: ((DiscoveredPhoto) -> Void)? = nil
+    ) throws -> (added: Int, updated: Int) {
         var added = 0
+        var updated = 0
         for batch in photos.chunked(into: Self.batchSize) {
             try database.transaction(.immediate) {
                 for photo in batch {
@@ -86,11 +110,35 @@ public struct PhotoPool {
                             "now": SQLValue(now),
                         ]
                     )
-                    added += database.changes
+                    if database.changes == 1 {
+                        added += 1
+                        onAdded?(photo)
+                        continue
+                    }
+
+                    // Already known. Update only if something we track moved,
+                    // so an unchanged library does not dirty a page per photo
+                    // per scan. `IS NOT` rather than `<>` because byte_size is
+                    // nullable and `NULL <> NULL` is null, not true.
+                    try database.run(
+                        """
+                        UPDATE photo
+                           SET storage = :storage, byte_size = :size
+                         WHERE source_id = :source AND external_id = :external
+                           AND (storage <> :storage OR byte_size IS NOT :size);
+                        """,
+                        [
+                            "source": .int(source.id),
+                            "external": .text(photo.externalID),
+                            "storage": .text(photo.storage.rawValue),
+                            "size": SQLValue(photo.byteSize),
+                        ]
+                    )
+                    updated += database.changes
                 }
             }
         }
-        return added
+        return (added, updated)
     }
 
     /// What a removal left behind for someone else to clean up.
