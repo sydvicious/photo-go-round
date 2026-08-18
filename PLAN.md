@@ -41,6 +41,7 @@ Each phase carries its own spike rather than front-loading them all, so the firs
   - Full screen makes it the screensaver's rehearsal space. The fit, the pan, the transitions, and the empty state all get tuned here, in a window with a debugger attached, long before Phase 6 has to make them work inside someone else's sandbox.
   - **The Apple Photos provider lands here too** — albums, smart albums, Favorites, and individually pinned assets, at full resolution — so the window is showing a real library rather than a test folder. Spike first: confirm `PHAssetResourceManager` returns true originals for iCloud-optimized assets, and measure throughput.
   - **Settle the App Group container before anything else in this phase.** An Xcode-launched sandboxed app does not use `~/Library/Containers`; CoreDevice redirects it. See *Where an Xcode-launched app puts its container*.
+  - **Watching, and revoking a photo already on screen, land here.** This is the first surface that *holds* a picture up rather than printing a path and exiting, which is what makes it the first one that can show somebody a photo they have deleted. See *Revoking a photo that is already on screen*.
   - Diagnostic panels accrete later, as the phases that need them arrive — not in Phase 3.
 - **Phase 4** — iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
 - **Phase 5** — iOS widget: WidgetKit extension sharing an App Group container, serving from the queue in the timeline provider.
@@ -297,13 +298,26 @@ Detection is by rescan for 0.1, and rescanning is genuinely cheap — measured a
 
 That second number is structural rather than lucky. Almost all of the 2.4 seconds is filesystem enumeration with no database lock held at all; writes are batched at about five hundred rows per transaction, each lasting microseconds; and WAL means a reader never blocks on a writer. The queue and the cache genuinely do run independently of refresh.
 
-**`FSEventStream` on folder sources is nonetheless a 1.0 requirement**, and the reason is the deletion rule above rather than latency.
+**`FSEventStream` on folder sources is nonetheless a requirement**, and the reason is the deletion rule above rather than latency.
 
-The play-time check fully covers every surface that renders *on demand* — the wallpaper, the screensaver, the Mac app. Each asks for a photo at the moment it needs one, so there is a moment at which to check.
+### Revoking a photo that is already on screen
 
-It covers nothing that renders *ahead of time and cannot be retracted*. A WidgetKit timeline provider generates entries in advance; the Watch receives derivatives that then sit on the device. There is no play moment there to intercept, so a deletion cannot be caught on the way out — it has to arrive. That means watching: `FSEventStream` for folder sources, `PHPhotoLibraryChangeObserver` for Photos.
+This section previously argued that the play-time check fully covered every surface rendering *on demand* — the wallpaper, the screensaver, the Mac app — and that only pre-rendered surfaces like a widget or a Watch complication needed watching. **That was wrong, and the error is worth keeping because it is easy to make again: it conflates being checked at hand-off with being checked at display.**
 
-So the sequencing is: polling alone through 0.1, and watching before the widget in Phase 5 and the Watch in Phase 9 ship. Which is a good illustration of why this document expects to be rewritten — the argument that deleted watching was sound on its own terms, and a requirement arriving from a completely different direction reinstated it.
+Every surface holds its photo up for a while. A screensaver dwells ten seconds, the Mac app until you look away, the wallpaper for hours. The serve-time check guarantees we never *hand out* a deleted photo. It says nothing whatever about one already on the screen. Delete a file over `ssh` while the screensaver is running and it stays up there; delete one that is currently your desktop picture and it can sit there until something happens to rotate it. That is the rule in *Never showing a photo the user deleted* being broken by the surface with the longest dwell of all.
+
+So there are two halves, and only the first is what "FSEvents" usually means:
+
+- **Notice the deletion promptly.** `FSEventStream` for folder sources, `PHPhotoLibraryChangeObserver` for Photos. Polling bounds this at a scan interval, which is far too long for a photo somebody deleted deliberately.
+- **Tell the surfaces that are displaying it.** This does not exist in any form today. The mechanism is the one used everywhere else between our components: the agent removes the row and rings a payload-free topic — call it `.photoRevoked` — and every consumer checks whether the card it is currently showing still exists, which is one indexed lookup by photo id, and asks for a replacement if it does not. No payload to marshal, no per-client bookkeeping, and a consumer that missed the notification catches up on its next ordinary request.
+
+For the widget and the Watch, that same topic is what drives `WidgetCenter.reloadTimelines`, which is the only lever that retracts an entry already rendered.
+
+**Both halves land in Phase 3**, with the Mac app. Not because the app is special, but because it is the first thing that holds a picture in front of a person: `pgr_ctl` prints a path and exits, so there is nothing on screen to retract and no way to observe the bug. Phases 6 and 7 then inherit a solved problem rather than discovering it in a screensaver sandbox.
+
+**Does a shorter scan interval substitute?** Partly, and less than it looks. Scanning is now constant-memory and fast — 0.45s for 8,287 photos — so a thirty-second interval is a one-and-a-half percent duty cycle and would narrow the window considerably. But a scan of a million-photo source takes about two minutes, so the interval cannot be shortened where it matters most, and this project exists for libraries that large. Polling narrows the window; it cannot close it.
+
+This is also a good illustration of why this document expects to be rewritten. The argument that deleted watching was sound on its own terms; a requirement arriving from a completely different direction reinstated it; and then the reinstated argument turned out to be scoped too narrowly as well.
 
 ### Tracking selected photos and folders through renames and moves — later
 
@@ -1348,7 +1362,7 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 
 8. **No Xcode project until Phase 3.** A shared scheme in `.swiftpm/xcode/xcshareddata/xcschemes/` gives the package a debugger today, which is enough for the agent. A real project arrives with the Mac app, where the App Group container has to be settled anyway — and doing both at once means the container question is answered by the thing that actually has the problem.
 9. **The agent bundle and `SMAppService` are built but out of scope, and ahead of schedule.** `Scripts/make-agent-bundle.sh` assembles an `LSUIElement` app, and the server has `register` / `unregister` / `service-status` verbs. None of it is needed until there is a surface that wakes up on its own and expects the library to be there — the screensaver, the wallpaper, the widgets, and probably the Mac app that registers it on their behalf. Recorded because it exists and because the finding is worth keeping: `SMAppService.agent(plistName:)` reports `.notFound` from that bundle, having ruled out a missing plist, five plist shapes, ad-hoc versus Developer ID signing, and `Bundle.main` resolution. What is left is that the process probably has to be launched by LaunchServices as an app, which is how it will actually be used.
-10. **Watching the filesystem is a 1.0 requirement, not built.** See *Watching, and why it comes back for 1.0*: the play-time existence check covers on-demand surfaces completely and pre-rendered ones not at all, so it is needed before the widget in Phase 5 and the Watch in Phase 9.
+10. **Watching the filesystem, and revoking a photo already on screen, are Phase 3 work and not built.** See *Revoking a photo that is already on screen*. The serve-time check covers hand-off and nothing else, so every surface that displays a photo for longer than an instant can show one that has since been deleted — the wallpaper worst of all. Two pieces are missing: a watcher (`FSEventStream`, `PHPhotoLibraryChangeObserver`) and a `.photoRevoked` topic for consumers to drop what they are holding.
 11. **The migrator refuses a database from a newer build.** Given the database is disposable, deleting and rebuilding would be a friendlier answer than an error — at the cost of one rescan. Worth revisiting when there is a second build to be older than.
 
 ## Expect the plan to change, and where it can absorb it

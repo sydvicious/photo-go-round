@@ -37,5 +37,10 @@ let package = Package(
             dependencies: ["PhotoGoRoundKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        .testTarget(
+            name: "photogorounddTests",
+            dependencies: ["photogoroundd"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
     ]
 )

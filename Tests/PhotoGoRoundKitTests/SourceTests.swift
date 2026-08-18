@@ -49,6 +49,114 @@ struct SourceTests {
         #expect(found.photos.map(\.externalID) == ["still.png"])
     }
 
+    /// Names chosen so each one breaks a different assumption.
+    ///
+    /// **macOS normalises filenames on write**, which is the thing to know
+    /// before reading these assertions. Handing the filesystem a precomposed
+    /// `é` and reading the directory back gives you a decomposed one, and
+    /// several combining marks on one base come back in canonical order rather
+    /// than the order they went in. So "the identifier equals the name I asked
+    /// for" is *not* a property this system has, or can have.
+    ///
+    /// What it must have is that the identifier matches what the filesystem
+    /// actually holds, stably, and reopens the file. Those are the two things
+    /// that make a photo findable again.
+    static let awkwardNames = [
+        "caf\u{00E9}-precomposed.png",           // NFC: é as one scalar
+        "cafe\u{0301}-decomposed.png",           // NFD: e + combining acute
+        "photo-\u{1F334}\u{1F3D6}.png",          // outside the BMP
+        "\u{5199}\u{771F}-\u{65E5}\u{672C}\u{8A9E}.png",  // CJK
+        "\u{0635}\u{0648}\u{0631}\u{0629}.png",            // right-to-left
+        "a\u{0301}\u{0328}\u{0331}-stacked.png",            // several combining marks on one base
+        "it's a \"photo\".png",                  // quotes
+        "line\nbreak.png",                       // a newline, which is legal
+        "two  spaces.png",
+    ]
+
+    @Test("Every identifier the walk produces reopens the file it names")
+    func unicodeFilenamesResolveBackToFiles() async throws {
+        let folder = TemporaryFolder()
+        for name in Self.awkwardNames { folder.write(name) }
+        // An NFD-named subdirectory, so a whole path component is decomposed
+        // rather than only the leaf.
+        folder.write("\u{0065}\u{0301}t\u{0065}\u{0301}/nested.png")
+
+        let library = try TestLibrary()
+        let store = Self.store(library.database)
+        let source = try store.add(kind: .folder, locator: folder.path, recursive: true)
+        let found = try await FolderSourceProvider().enumerate(source)
+
+        // Nothing collapsed and nothing was invented.
+        #expect(found.photos.count == Self.awkwardNames.count + 1)
+        #expect(Set(found.photos.map { Array($0.externalID.utf8) }).count == found.photos.count)
+
+        // The property that matters: an identifier that cannot reopen its file
+        // is a photo gone for good.
+        for photo in found.photos {
+            let url = folder.url.appending(path: photo.externalID)
+            #expect(
+                FileManager.default.fileExists(atPath: url.path(percentEncoded: false)),
+                "\(Array(photo.externalID.utf8)) did not resolve back to a file"
+            )
+        }
+    }
+
+    @Test("Walking twice produces the same identifier bytes, not merely equal strings")
+    func unicodeIdentifiersAreStableAcrossWalks() async throws {
+        let folder = TemporaryFolder()
+        for name in Self.awkwardNames { folder.write(name) }
+
+        let library = try TestLibrary()
+        let store = Self.store(library.database)
+        let source = try store.add(kind: .folder, locator: folder.path, recursive: true)
+
+        let first = try await FolderSourceProvider().enumerate(source)
+        let second = try await FolderSourceProvider().enumerate(source)
+
+        // Byte equality, not string equality. `==` on String is canonical
+        // equivalence, so it would call an NFC and an NFD spelling the same and
+        // hide exactly the drift this asserts against.
+        #expect(
+            Set(first.photos.map { Array($0.externalID.utf8) })
+                == Set(second.photos.map { Array($0.externalID.utf8) })
+        )
+    }
+
+    @Test("An awkwardly named photo is found, stored, and noticed when it goes")
+    func unicodeFilenamesSurviveTheWholeRound() async throws {
+        let folder = TemporaryFolder()
+        let name = "cafe\u{0301}-decomposed.png"   // NFD, which is how macOS stores it anyway
+        folder.write(name)
+        folder.write("\u{0635}\u{0648}\u{0631}\u{0629}/nested-\u{1F334}.png")
+
+        let library = try TestLibrary()
+        let store = Self.store(library.database)
+        let source = try store.add(kind: .folder, locator: folder.path, recursive: true)
+
+        let first = await store.refresh(source)
+        #expect(first.added == 2)
+
+        // Round-tripped through SQLite as well as through the walk.
+        let stored = try library.database.all(
+            "SELECT external_id FROM photo ORDER BY external_id;", [:]
+        ) { try $0.string("external_id") }
+        #expect(Set(stored.map { Array($0.utf8) }).contains(Array(name.utf8)))
+
+        // A second pass must not re-add them — which it would if the identifier
+        // that went into the database differed by one byte from the one coming
+        // back out of the walk. This is the assertion that would have caught a
+        // normalising walk.
+        let second = await store.refresh(try store.source(id: source.id)!)
+        #expect(second.added == 0)
+        #expect(second.removed == 0)
+
+        // And the removal sweep has to recognise the same name on the way out.
+        folder.remove(name)
+        let third = await store.refresh(try store.source(id: source.id)!)
+        #expect(third.removed == 1)
+        #expect(try library.deck.poolSize() == 1)
+    }
+
     @Test("Subfolders are walked only when asked, and paths are folder-relative")
     func recursionIsOptionalAndPathsAreRelative() async throws {
         let folder = TemporaryFolder()
