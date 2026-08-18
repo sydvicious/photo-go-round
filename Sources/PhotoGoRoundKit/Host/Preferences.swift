@@ -158,7 +158,7 @@ public struct Preferences: @unchecked Sendable {
     /// for the duration of its own I/O. Per source rather than global, so a slow
     /// provider saturates its own connection without crowding out a fast one.
     public var downloadConcurrency: Int {
-        integer(.downloadConcurrency, default: SourceWorker.defaultConcurrency, in: 1...32)
+        integer(.downloadConcurrency, default: QueueFiller.defaultConcurrency, in: 1...32)
     }
 
     /// How many ready pictures to keep queued. A target, not a ceiling.
@@ -216,8 +216,22 @@ public struct Preferences: @unchecked Sendable {
         return true
     }
 
+    /// Removes a source by locator. Returns false when it was not listed,
+    /// which makes removing something twice a no-op rather than an error.
+    ///
+    /// Removing it *here* is what removes it: the source table is a projection
+    /// of this list, so a row deleted straight from the database comes back at
+    /// the agent's next reconcile.
     @discardableResult
+    public func removeSource(locator: String) -> Bool {
+        let current = sources
+        let remaining = current.filter { $0.locator != locator }
+        guard remaining.count != current.count else { return false }
+        setSources(remaining)
+        return true
+    }
 
+    @discardableResult
     public func setSourceEnabled(_ enabled: Bool, locator: String) -> Bool {
         var current = sources
         guard let index = current.firstIndex(where: { $0.locator == locator }) else { return false }

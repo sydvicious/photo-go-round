@@ -1,3 +1,4 @@
+import Console
 import Foundation
 import PhotoGoRoundKit
 
@@ -19,9 +20,12 @@ struct RunCommand {
     /// Development convenience. Production takes this from preferences, where
     /// it can be changed without restarting the agent.
     var scanIntervalOverride: Duration?
+    var servicePort: UInt16
 
-    /// One per source, each ignoring requests while it is still producing.
-    private let workers = SourceWorkers(concurrency: SourceWorker.defaultConcurrency)
+    /// Filling is policy and lives in the kit; what stays here is the two facts
+    /// it needs — is the queue short, and produce one picture — each of which
+    /// wants its own database connection.
+    private let filler = FillerBox()
 
     func run() async throws {
         try environment.prepare()
@@ -42,6 +46,33 @@ struct RunCommand {
             queueSize: preferences.queueSize
         )
         try cache.prepare()
+
+        // The service is the interface: clients ask for a picture and are handed
+        // the bytes, and never open the database or the cache themselves.
+        //
+        // **Serving is what notices the queue has run short**, and therefore what
+        // asks for more. Without this the queue only ever refilled on the
+        // maintenance tick, so a consumer drawing faster than that tick drained it
+        // and got *no photos available* while the library sat there full.
+        // A source already at its concurrency limit drops the request on the
+        // floor, so calling this on every served picture cannot outrun what the
+        // providers are willing to do.
+        let databasePath = environment.databaseURL.path(percentEncoded: false)
+        filler.configure(databasePath: databasePath, cacheRoot: environment.cacheRoot)
+        let filler = self.filler
+        let topUp: @Sendable () -> Void = {
+            Task { await filler.fill(preferences: environment.preferences) }
+        }
+
+        let endpoint = PictureEndpoint(
+            databasePath: databasePath,
+            cacheRoot: environment.cacheRoot,
+            preferences: preferences,
+            queueRanShort: topUp
+        )
+        let listener = HTTPListener(port: servicePort) { await endpoint.route($0) }
+        try listener.start()
+        defer { listener.stop() }
 
         Console.banner(
             """
@@ -179,7 +210,22 @@ struct RunCommand {
                 lastMaintenance = now
             }
 
-            let status = try describe(cache: cache, deck: deck, preferences: preferences)
+            // Built from the preferences in force rather than reused from
+            // launch. The one at line 37 exists to create the directory, and it
+            // froze the cap it was born with — so raising `cachePhotoCap` from
+            // a terminal left the status line reporting the old number
+            // indefinitely, which is the one place a person goes to check that
+            // the change took.
+            let status = try describe(
+                cache: PhotoCache(
+                    database: database,
+                    root: environment.cacheRoot,
+                    settings: preferences.cacheSettings,
+                    sources: sources,
+                    deck: deck,
+                    queueSize: preferences.queueSize
+                ),
+                deck: deck, preferences: preferences)
             if status != lastStatus {
                 Console.summary(status)
                 lastStatus = status
@@ -235,6 +281,7 @@ struct RunCommand {
 
     static let maximumConcurrentRefreshes = 4
 
+
     /// The queue maintainer, which always runs.
     ///
     /// Its whole job is: if the queue is below nominal, ask every source for a
@@ -262,31 +309,16 @@ struct RunCommand {
         preferences: Preferences,
         environment: MacHostEnvironment
     ) async throws {
-        let enabled = try sources.enabled()
-        workers.retain(enabled.map(\.id))
-        workers.setConcurrency(preferences.downloadConcurrency)
 
-        let queue = PhotoQueue(database: sources.database, nominalSize: preferences.queueSize)
-        guard try queue.needsTopUp() else { return }
 
-        // A library smaller than the queue's target can never fill it, and the
-        // pump's "ask again as each answer lands" is exactly wrong there: it
-        // would run flat out forever against a queue that is already holding
-        // everything there is. So when the pool is the smaller of the two, the
-        // clock takes over — one round of asks per tick, and the pump does not
-        // chase its own answers.
-        let pool = try sources.pool.dealableSize()
-        let paced = pool < preferences.queueSize
-
-        QueuePump(
-            workers: workers,
-            databasePath: environment.databaseURL.path(percentEncoded: false),
-            cacheRoot: environment.cacheRoot,
-            cacheSettings: preferences.cacheSettings,
-            deckSettings: preferences.deckSettings,
-            queueSize: preferences.queueSize,
-            paced: paced
-        ).start(sources: enabled.map(\.id))
+        // The pump keeps asking as each answer lands. What stops it is a source
+        // that has nothing left to offer, which is answered once and remembered
+        // for the round — so a library smaller than the queue's target does not
+        // spin, it simply stops early. An earlier version paced this on the
+        // maintenance tick instead, which starved a small library the moment
+        // anything drew from it: fifty photos against a thousand-entry queue
+        // meant one picture every five seconds however fast the queue drained.
+        await filler.fill(preferences: preferences)
     }
 
     private func runMaintenance(
@@ -382,76 +414,117 @@ private func describeSources(_ sources: [Source], pool: PhotoPool) {
     print()
 }
 
-final class QueuePump: @unchecked Sendable {
-    private let workers: SourceWorkers
-    private let databasePath: String
-    private let cacheRoot: URL
-    private let cacheSettings: CacheSettings
-    private let deckSettings: DeckSettings
-    private let queueSize: Int
-    /// One round of asks per tick, rather than asking again on every answer.
-    /// Set when the pool is smaller than the queue wants — see `maintainQueue`.
-    private let paced: Bool
-
+/// Owns the filler and the connections its two closures need.
+///
+/// A box rather than a bare `QueueFiller` because the paths are not known until
+/// `run()` has resolved them, and because the *same* filler has to survive every
+/// call — the guard that drops overlapping rounds is on the instance, and a fast
+/// consumer starts rounds faster than they finish.
+final class FillerBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var exhausted: Set<Int64> = []
+    private var databasePath = ""
+    private var cacheRoot = URL(filePath: "/")
+    private var filler: QueueFiller?
 
-    init(
-        workers: SourceWorkers, databasePath: String, cacheRoot: URL,
-        cacheSettings: CacheSettings, deckSettings: DeckSettings, queueSize: Int,
-        paced: Bool = false
-    ) {
-        self.workers = workers
-        self.databasePath = databasePath
-        self.cacheRoot = cacheRoot
-        self.cacheSettings = cacheSettings
-        self.deckSettings = deckSettings
-        self.queueSize = queueSize
-        self.paced = paced
-    }
-
-    func start(sources: [Int64]) {
-        for sourceID in sources {
-            let asks = paced ? 1 : workers.worker(for: sourceID).concurrency
-            for _ in 0..<asks { ask(sourceID) }
-        }
-    }
-
-    /// Locking is split into non-async helpers because `NSLock` is unavailable
-    /// from an async context — holding one across a suspension is exactly the
-    /// bug that restriction exists to prevent.
-    private func markExhausted(_ sourceID: Int64) {
-        lock.lock()
-        exhausted.insert(sourceID)
-        lock.unlock()
-    }
-
-    private func isExhausted(_ sourceID: Int64) -> Bool {
+    func configure(databasePath: String, cacheRoot: URL) {
         lock.lock()
         defer { lock.unlock() }
-        return exhausted.contains(sourceID)
+        self.databasePath = databasePath
+        self.cacheRoot = cacheRoot
     }
 
-    private func ask(_ sourceID: Int64) {
-        guard !isExhausted(sourceID) else { return }
+    private func paths() -> (database: String, cache: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (databasePath, cacheRoot)
+    }
 
-        workers.worker(for: sourceID).request { [self] in
-            // Its own connection: a Database belongs to one isolation domain,
-            // and WAL is what makes several of them safe.
-            guard let database = try? Database(path: databasePath) else { return }
-            let store = SourceStore(database: database)
-            let producer = PhotoCache(
-                database: database, root: cacheRoot, settings: cacheSettings,
-                sources: store, queueSize: queueSize)
-
-            let produced =
-                (try? await producer.produce(forSource: sourceID, settings: deckSettings)) ?? false
-            guard produced else {
-                markExhausted(sourceID)
-                return
-            }
-            if !paced, (try? producer.queue.needsTopUp()) == true { ask(sourceID) }
+    /// One connection for the gauge, serialised, because `needsTopUp` is a COUNT
+    /// asked once per lane per iteration and opening a connection each time would
+    /// cost more than the answer. Producing gets its own connection per ask, since
+    /// it is doing real I/O anyway and a `Database` belongs to one isolation domain.
+    private func makeFiller(nominalSize: Int) -> QueueFiller {
+        lock.lock()
+        if let filler {
+            lock.unlock()
+            return filler
         }
+        let path = databasePath
+        let root = cacheRoot
+        lock.unlock()
+
+        let gauge = Gauge(databasePath: path)
+        let sizes = Sizes()
+        let built = QueueFiller(
+            isShort: { gauge.isShort(nominalSize: sizes.queueSize) },
+            produce: { sourceID in
+                guard let database = try? Database(path: path) else { return false }
+                let store = SourceStore(database: database)
+                let producer = PhotoCache(
+                    database: database, root: root, settings: sizes.cacheSettings,
+                    sources: store, queueSize: sizes.queueSize)
+                return (try? await producer.produce(
+                    forSource: sourceID, settings: sizes.deckSettings)) ?? false
+            })
+        lock.lock()
+        filler = built
+        self.sizes = sizes
+        lock.unlock()
+        return built
+    }
+
+    private var sizes: Sizes?
+
+    /// The current preference values, re-read per round so a change takes effect
+    /// at the next fill rather than at the next launch.
+    final class Sizes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _queueSize = 1000
+        private var _cacheSettings = CacheSettings.default
+        private var _deckSettings = DeckSettings.default
+
+        var queueSize: Int { lock.lock(); defer { lock.unlock() }; return _queueSize }
+        var cacheSettings: CacheSettings { lock.lock(); defer { lock.unlock() }; return _cacheSettings }
+        var deckSettings: DeckSettings { lock.lock(); defer { lock.unlock() }; return _deckSettings }
+
+        func update(_ preferences: Preferences) {
+            lock.lock()
+            _queueSize = preferences.queueSize
+            _cacheSettings = preferences.cacheSettings
+            _deckSettings = preferences.deckSettings
+            lock.unlock()
+        }
+    }
+
+    final class Gauge: @unchecked Sendable {
+        private let lock = NSLock()
+        private let database: Database?
+
+        init(databasePath: String) {
+            database = try? Database(path: databasePath)
+        }
+
+        func isShort(nominalSize: Int) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let database else { return false }
+            return (try? PhotoQueue(database: database, nominalSize: nominalSize).needsTopUp())
+                == true
+        }
+    }
+
+    @discardableResult
+    func fill(preferences: Preferences) async -> QueueFiller.Round {
+        let filler = makeFiller(nominalSize: preferences.queueSize)
+        sizes?.update(preferences)
+
+        let (path, _) = paths()
+        guard let database = try? Database(path: path),
+            let enabled = try? SourceStore(database: database).enabled()
+        else { return .alreadyRunning }
+
+        return await filler.fill(
+            sources: enabled.map(\.id), concurrency: preferences.downloadConcurrency)
     }
 }
 

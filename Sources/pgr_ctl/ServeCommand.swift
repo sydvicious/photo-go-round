@@ -1,12 +1,15 @@
+import Console
 import Foundation
 import PhotoGoRoundKit
 
 /// Serves pictures as a named consumer, and reports how long each one took.
 ///
-/// This is what a display does, reduced to a terminal. A precursor to `pgr
-/// serve`, and the thing that answers questions no test can: does the queue stay
-/// responsive while a refresh runs in another process, does a deleted photo
-/// really never appear, does an unplugged drive really keep serving.
+/// This is what a display does, reduced to a terminal, and it is the thing that
+/// answers questions no unit test can: does the queue stay responsive while a
+/// refresh runs in another process, does a deleted photo really never appear,
+/// does an unplugged drive really keep serving from cache. Several of these run
+/// at once is also how the queue pop is shown to serialise — run four and assert
+/// the union of what they got has no duplicates.
 struct ServeCommand {
     var environment: MacHostEnvironment
     var consumerName: String
@@ -15,15 +18,17 @@ struct ServeCommand {
     var quiet: Bool
 
     func run() async throws {
-        let database = try Database(path: environment.databaseURL.path(percentEncoded: false))
-        try Migrator.migrate(database)
-        let deck = Deck(database: database)
-        let sources = SourceStore(database: database)
+        let context = try Library.context(environment)
         let settings = DeckSettings(repeatWindowFraction: repeatWindowFraction)
         let cache = PhotoCache(
-            database: database, root: environment.cacheRoot, sources: sources, deck: deck,
-            queueSize: environment.preferences.queueSize)
-        let consumer = try deck.register(kind: .commandLine, displayID: consumerName)
+            database: context.database,
+            root: environment.cacheRoot,
+            settings: context.preferences.cacheSettings,
+            sources: context.sources,
+            deck: context.deck,
+            queueSize: context.preferences.queueSize
+        )
+        let consumer = try context.deck.register(kind: .commandLine, displayID: consumerName)
 
         var latencies: [Double] = []
         latencies.reserveCapacity(count)
@@ -32,10 +37,11 @@ struct ServeCommand {
         for _ in 0..<count {
             let start = ContinuousClock.now
 
-            // Serving is what notices the queue is short, so top up first —
-            // the same shape the agent's loop uses.
+            // Serving is what notices the queue is short, so top up first — the
+            // same shape the agent's loop uses. With no agent running this is
+            // the only thing filling the queue at all.
             if try cache.queue.needsTopUp() {
-                for source in try sources.enabled() {
+                for source in try context.sources.enabled() {
                     _ = try? await cache.produce(forSource: source.id, settings: settings)
                 }
             }
@@ -49,7 +55,7 @@ struct ServeCommand {
             if !quiet {
                 Console.change(
                     "▸", card.externalID, .yellow,
-                    suffix: "deal #\(card.dealSeq ?? 0) · \(elapsed.formatted(.number.precision(.fractionLength(1))))ms"
+                    suffix: "deal #\(card.dealSeq ?? 0) · \(Library.number(elapsed))ms"
                 )
             }
         }
@@ -63,9 +69,7 @@ struct ServeCommand {
         func percentile(_ p: Double) -> Double {
             sorted[min(sorted.count - 1, Int(Double(sorted.count) * p))]
         }
-        func format(_ value: Double) -> String {
-            value.formatted(.number.precision(.fractionLength(1))) + "ms"
-        }
+        func format(_ value: Double) -> String { Library.number(value) + "ms" }
 
         Console.note(
             """
@@ -74,12 +78,8 @@ struct ServeCommand {
             max \(format(sorted.last!))
             """
         )
-    }
-}
-
-extension Duration {
-    var totalSeconds: Double {
-        let (whole, attoseconds) = components
-        return Double(whole) + Double(attoseconds) / 1e18
+        if dealt < count {
+            Console.alert("asked for \(count) and the queue ran dry after \(dealt)")
+        }
     }
 }

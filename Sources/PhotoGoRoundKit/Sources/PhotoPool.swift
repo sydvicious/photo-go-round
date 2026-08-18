@@ -226,6 +226,52 @@ public struct PhotoPool {
         ) ?? 0
     }
 
+    /// What one source contributes, broken down the way the questions are
+    /// actually asked: how much of it is dealable, how much of it has bytes, and
+    /// how much of it somebody is fetching right now.
+    ///
+    /// Exposed rather than left to a caller's own SQL, because a harness that
+    /// reaches past the interface tests nothing — and because Phase 3's deck
+    /// inspector wants exactly this.
+    public struct SourceStats: Sendable, Equatable {
+        public let total: Int
+        public let images: Int
+        public let videos: Int
+        /// Referenced in place: no copy, no cache budget.
+        public let referenced: Int
+        /// Bytes are present, whether referenced or materialized.
+        public let resident: Int
+        /// Claimed by a producer that is fetching them. A handful is normal; a
+        /// lot means producers are dying mid-fetch, and the claims will expire
+        /// on their own either way.
+        public let claimed: Int
+    }
+
+    public func stats(forSource sourceID: Int64) throws -> SourceStats {
+        try database.first(
+            """
+            SELECT COUNT(*)                                                AS total,
+                   SUM(CASE WHEN media_type = 'image' THEN 1 ELSE 0 END)   AS images,
+                   SUM(CASE WHEN storage = 'referenced' THEN 1 ELSE 0 END) AS referenced,
+                   SUM(CASE WHEN cache_path IS NOT NULL THEN 1 ELSE 0 END) AS resident,
+                   SUM(CASE WHEN claimed_at IS NOT NULL THEN 1 ELSE 0 END) AS claimed
+              FROM photo WHERE source_id = :id;
+            """,
+            ["id": .int(sourceID)]
+        ) { row in
+            let total = try row.int("total")
+            let images = try row.optionalInt("images") ?? 0
+            return SourceStats(
+                total: total,
+                images: images,
+                videos: total - images,
+                referenced: try row.optionalInt("referenced") ?? 0,
+                resident: try row.optionalInt("resident") ?? 0,
+                claimed: try row.optionalInt("claimed") ?? 0
+            )
+        } ?? SourceStats(total: 0, images: 0, videos: 0, referenced: 0, resident: 0, claimed: 0)
+    }
+
     /// How many photos the deck can actually draw on — enabled sources only.
     ///
     /// This is the number the queue has to compare itself against. A pool

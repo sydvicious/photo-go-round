@@ -66,13 +66,6 @@ public struct MacHostEnvironment: HostEnvironment {
     /// startup, because "why is it writing there" should never need a debugger.
     public let origin: ContainerOrigin
 
-    /// The App Group must be team-ID prefixed on macOS — `<TeamID>.com.sydpolk.photogoround`,
-    /// not `group.com.sydpolk.photogoround`. Getting it wrong produces a nil
-    /// container URL rather than an error, which is a classic afternoon lost.
-    /// It is therefore not portable between the Mac and iOS builds, which is
-    /// why it lives here rather than in a shared constant.
-    public static let appGroupIdentifier = "R5PQPZARC5.com.sydpolk.photogoround"
-
     /// User-facing name, hyphenated. The hyphens never appear in an identifier.
     public static let directoryName = "Photo-Go-Round"
 

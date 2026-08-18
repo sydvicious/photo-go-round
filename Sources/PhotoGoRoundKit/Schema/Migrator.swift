@@ -10,7 +10,8 @@ public enum Migrator {
 
     /// Append-only. A migration that has run anywhere is never edited.
     static let migrations: [Migration] = [
-        Migration(version: 1, name: "initial schema", sql: SchemaV1.sql)
+        Migration(version: 1, name: "initial schema", sql: SchemaV1.sql),
+        Migration(version: 2, name: "claim at selection", sql: SchemaV2.sql),
     ]
 
     /// The version a fully migrated database reports.

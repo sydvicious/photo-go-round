@@ -341,6 +341,99 @@ struct DeckTests {
         #expect(stats.unusedInCurrentPass == 6)
     }
 
+    // MARK: - Claiming at selection
+
+    @Test("Selecting claims the photo, so the next selection cannot pick it again")
+    func selectionClaimsItsCandidate() throws {
+        let (library, ids) = try TestLibrary.withPhotos(2)
+        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let deck = library.deck
+
+        let first = try #require(try deck.nextCandidate(forSource: source))
+        let second = try #require(try deck.nextCandidate(forSource: source))
+        #expect(first.id != second.id)
+        #expect(Set([first.id, second.id]) == Set(ids))
+
+        // Both are claimed and neither is queued or shown, so there is nothing
+        // left to offer. Without the claim this would hand out a third card
+        // that another producer was already downloading.
+        #expect(try deck.nextCandidate(forSource: source) == nil)
+    }
+
+    @Test("Releasing a claim puts the photo straight back in contention")
+    func releasingAClaimRestoresThePhoto() throws {
+        let (library, _) = try TestLibrary.withPhotos(1)
+        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let deck = library.deck
+
+        let card = try #require(try deck.nextCandidate(forSource: source))
+        #expect(try deck.nextCandidate(forSource: source) == nil)
+
+        try deck.releaseClaim(photoID: card.id)
+        #expect(try deck.nextCandidate(forSource: source)?.id == card.id)
+    }
+
+    @Test("A claim expires, so a producer that died mid-fetch sidelines nothing")
+    func claimsExpire() throws {
+        let (library, _) = try TestLibrary.withPhotos(1)
+        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let deck = library.deck
+
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let card = try #require(try deck.nextCandidate(forSource: source, now: start))
+        // Still inside the window: the claim holds.
+        #expect(try deck.nextCandidate(forSource: source, now: start.addingTimeInterval(Deck.claimTimeout - 1)) == nil)
+        // Past it: nobody is coming back for this one, so it competes again.
+        let again = try deck.nextCandidate(
+            forSource: source, now: start.addingTimeInterval(Deck.claimTimeout + 1))
+        #expect(again?.id == card.id)
+    }
+
+    @Test("Showing a photo ends any claim on it")
+    func markingShownClearsTheClaim() throws {
+        let (library, _) = try TestLibrary.withPhotos(1)
+        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let deck = library.deck
+
+        let card = try #require(try deck.nextCandidate(forSource: source))
+        _ = try deck.markShown(photoID: card.id)
+        let claimed = try library.database.first(
+            "SELECT claimed_at FROM photo WHERE id = :id;", ["id": .int(card.id)]
+        ) { try $0.optionalInt64("claimed_at") }
+        #expect(claimed == .some(nil))
+    }
+
+    @Test("Concurrent producers against one source never pick the same picture")
+    func concurrentSelectionsNeverCollide() throws {
+        let directory = URL.temporaryDirectory.appending(path: "pgr-claim-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let library = try TestLibrary.onDisk(at: directory)
+        let source = try library.addSource()
+        try library.addPhotos(400, to: source)
+        let path = TestLibrary.path(in: directory)
+
+        // This is ledger item 1. Selection and the fetch that follows it are
+        // separated in time, so the claim is what stops two producers spending
+        // two downloads on one picture. Nothing is released here, which is the
+        // point: 400 selections against 400 photos must be 400 distinct photos.
+        let collected = Mutex<[Int64]>([])
+        DispatchQueue.concurrentPerform(iterations: 4) { _ in
+            guard let database = try? Database(path: path) else { return }
+            let deck = Deck(database: database)
+            var mine: [Int64] = []
+            for _ in 0..<100 {
+                guard let card = (try? deck.nextCandidate(forSource: source)) ?? nil else { break }
+                mine.append(card.id)
+            }
+            collected.withLock { $0.append(contentsOf: mine) }
+        }
+
+        let picked = collected.withLock { $0 }
+        #expect(picked.count == 400)
+        #expect(Set(picked).count == picked.count, "two producers picked the same picture")
+    }
+
     // MARK: - Two processes, one deck
 
     @Test("Concurrent serves from separate connections never hand out the same picture")
@@ -354,10 +447,10 @@ struct DeckTests {
         for id in ids { try library.enqueue(id, sourceID: source) }
         let path = TestLibrary.path(in: directory)
 
-        // The atomicity that used to live in the fused deal now lives in the
-        // queue pop: selection and marking-shown are separate steps, so two
-        // producers may briefly pick the same picture — but `append` dedupes,
-        // and only one server can ever remove a given entry.
+        // The atomicity that used to live in the fused deal now lives in two
+        // places: the claim taken at selection, which keeps two producers off
+        // one picture, and this — the queue pop, where removing the entry under
+        // BEGIN IMMEDIATE means exactly one consumer can ever win it.
         let collected = Mutex<[Int64]>([])
         DispatchQueue.concurrentPerform(iterations: 4) { _ in
             guard let database = try? Database(path: path) else { return }

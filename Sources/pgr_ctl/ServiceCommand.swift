@@ -1,3 +1,4 @@
+import Console
 import Foundation
 import PhotoGoRoundKit
 import ServiceManagement
@@ -19,9 +20,7 @@ import ServiceManagement
 /// app — Phase 3 — the bundle registers itself, which works because
 /// `agent(plistName:)` resolves against the calling bundle either way.
 struct ServiceCommand {
-    enum Action { case register, unregister, status }
-
-    var action: Action
+    var action: Options.ServiceAction
 
     /// Must match the plist filename in `Contents/Library/LaunchAgents/`.
     static let plistName = "com.sydpolk.photogoround.server.plist"
@@ -36,7 +35,7 @@ struct ServiceCommand {
                 only works from the built bundle rather than from `swift run`:
 
                     ./Scripts/make-agent-bundle.sh
-                    "./build/Photo-Go-Round Server.app/Contents/MacOS/photogoroundd" \(label)
+                    pgr_ctl \(label)
                 """
             )
             throw ExitCode(1)
@@ -96,10 +95,4 @@ struct ServiceCommand {
         }
         Console.note("status: \(description)")
     }
-}
-
-/// Lets a command exit non-zero without the error text being printed twice.
-struct ExitCode: Error {
-    let code: Int32
-    init(_ code: Int32) { self.code = code }
 }

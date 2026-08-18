@@ -90,7 +90,8 @@ extension Deck {
 
 extension Deck {
 
-    /// One photo from this source that is worth adding to the queue.
+    /// One photo from this source that is worth adding to the queue, **claimed
+    /// so that nobody else picks it while its bytes are being fetched**.
     ///
     /// This is what a provider answers with when the queue asks it for a
     /// picture. The shuffle rules still apply — the pass, the repeat window, the
@@ -99,6 +100,18 @@ extension Deck {
     ///
     /// Photos already queued are excluded, so asking twice in a row does not
     /// offer the same picture twice.
+    ///
+    /// **Selecting and claiming are one transaction, and that is the point.**
+    /// A fetch happens between selection and queuing, so without the claim two
+    /// producers asking the same source could pick the same picture and both
+    /// download it — reachable rather than theoretical, since a source runs
+    /// several fetches at once. Under `BEGIN IMMEDIATE` the loser sees the
+    /// winner's claim and picks something else.
+    ///
+    /// The caller must release the claim when it is done with the picture,
+    /// whatever the outcome; `PhotoCache.produce` does it in a `defer`. A caller
+    /// that dies first releases nothing, which is why the claim expires — see
+    /// `claimTimeout`.
     public func nextCandidate(
         forSource sourceID: Int64,
         settings: DeckSettings = .default,
@@ -107,44 +120,83 @@ extension Deck {
         let pool = try poolSize()
         guard pool > 0 else { return nil }
 
-        let state = try state()
         let window = settings.repeatWindow(poolSize: pool)
-        var threshold = Self.threshold(
-            seq: state.dealSeq, passStartSeq: state.passStartSeq, window: window
-        )
+        let claimedBefore = now.addingTimeInterval(-Self.claimTimeout)
 
-        var eligible = try countCandidates(sourceID: sourceID, threshold: threshold)
-        if eligible == 0 {
-            // This source has nothing left unused in the current pass. Starting
-            // a new pass is ordinary business, not a concession.
-            threshold = state.dealSeq
-            if threshold != state.passStartSeq {
-                try database.run(
-                    "UPDATE deck_state SET pass_start_seq = :pass WHERE id = 1;",
-                    ["pass": .int(threshold)]
-                )
-                Log.deck.notice(
-                    "deck reshuffled; new pass begins at ordinal \(threshold, privacy: .public)"
-                )
-                try recordEvent(kind: "pass", detail: "reshuffled at ordinal \(threshold)", at: now)
+        return try database.transaction(.immediate) {
+            let state = try state()
+            var threshold = Self.threshold(
+                seq: state.dealSeq, passStartSeq: state.passStartSeq, window: window
+            )
+
+            var eligible = try countCandidates(
+                sourceID: sourceID, threshold: threshold, claimedBefore: claimedBefore)
+            if eligible == 0 {
+                // This source has nothing left unused in the current pass. Starting
+                // a new pass is ordinary business, not a concession.
+                threshold = state.dealSeq
+                if threshold != state.passStartSeq {
+                    try database.run(
+                        "UPDATE deck_state SET pass_start_seq = :pass WHERE id = 1;",
+                        ["pass": .int(threshold)]
+                    )
+                    Log.deck.notice(
+                        "deck reshuffled; new pass begins at ordinal \(threshold, privacy: .public)"
+                    )
+                    try recordEvent(kind: "pass", detail: "reshuffled at ordinal \(threshold)", at: now)
+                }
+                eligible = try countCandidates(
+                    sourceID: sourceID, threshold: threshold, claimedBefore: claimedBefore)
             }
-            eligible = try countCandidates(sourceID: sourceID, threshold: threshold)
-        }
-        guard eligible > 0 else { return nil }
+            guard eligible > 0 else { return nil }
 
-        return try database.first(
-            Self.candidateSQL,
-            [
-                "source": .int(sourceID),
-                "threshold": .int(threshold),
-                "offset": .int(Int64(randomOffset(eligible))),
-            ]
-        ) { try DeckCard(row: $0, dealSeq: nil) }
+            let card = try database.first(
+                Self.candidateSQL,
+                [
+                    "source": .int(sourceID),
+                    "threshold": .int(threshold),
+                    "claimExpiry": SQLValue(claimedBefore),
+                    "offset": .int(Int64(randomOffset(eligible))),
+                ]
+            ) { try DeckCard(row: $0, dealSeq: nil) }
+            guard let card else { return nil }
+
+            try database.run(
+                "UPDATE photo SET claimed_at = :now WHERE id = :id;",
+                ["now": SQLValue(now), "id": .int(card.id)]
+            )
+            return card
+        }
     }
 
-    func countCandidates(sourceID: Int64, threshold: Int64) throws -> Int {
+    /// How long a claim counts for.
+    ///
+    /// Long enough that no honest fetch expires under it — an iCloud original
+    /// over a slow connection is minutes rather than seconds — and short enough
+    /// that a producer killed mid-fetch does not sideline a photo for a session.
+    /// Nothing depends on the exact number: expiring early costs one duplicated
+    /// download, which is the very thing the claim exists to avoid, and expiring
+    /// late costs one photo its turn. Both are cheaper than a reaper.
+    public static let claimTimeout: TimeInterval = 300
+
+    /// Gives a claimed photo back, whether or not it made it to the queue.
+    ///
+    /// Queued is its own exclusion, so releasing on success is not a hole; the
+    /// release that matters is the failing one, where the photo would otherwise
+    /// wait out the timeout before anyone offered it again.
+    public func releaseClaim(photoID: Int64) throws {
+        try database.run(
+            "UPDATE photo SET claimed_at = NULL WHERE id = :id;", ["id": .int(photoID)]
+        )
+    }
+
+    func countCandidates(sourceID: Int64, threshold: Int64, claimedBefore: Date) throws -> Int {
         try database.scalarInt(
-            Self.candidateCountSQL, ["source": .int(sourceID), "threshold": .int(threshold)]
+            Self.candidateCountSQL,
+            [
+                "source": .int(sourceID), "threshold": .int(threshold),
+                "claimExpiry": SQLValue(claimedBefore),
+            ]
         ) ?? 0
     }
 
@@ -164,7 +216,8 @@ extension Deck {
                    SET times_shown    = times_shown + 1,
                        last_dealt_seq = :seq,
                        shuffle_key    = :key,
-                       last_shown_at  = :now
+                       last_shown_at  = :now,
+                       claimed_at     = NULL
                  WHERE id = :id;
                 """,
                 [
@@ -184,6 +237,7 @@ extension Deck {
           AND p.source_enabled = 1
           AND p.media_type = 'image'
           AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold)
+          AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry)
           AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.photo_id = p.id)
         """
 

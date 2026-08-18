@@ -167,7 +167,7 @@ struct OptionsTests {
     static let frozenFlags = [
         "--add-folder", "--add-folder-recursive", "-r", "--recursive",
         "--prod", "--container", "--cache", "--database", "-d",
-        "--once", "-i", "--interval", "--scan-interval", "-h", "--help",
+        "--once", "-i", "--interval", "--scan-interval", "--port", "-h", "--help",
     ]
 
     static let frozenEnvironment = [
@@ -180,7 +180,7 @@ struct OptionsTests {
         // Flags taking a value get a plausible one; the rest stand alone.
         let needsValue = [
             "--add-folder", "--add-folder-recursive", "--container", "--cache",
-            "--database", "-d", "-i", "--interval", "--scan-interval",
+            "--database", "-d", "-i", "--interval", "--scan-interval", "--port",
         ]
         let arguments = needsValue.contains(flag) ? [flag, valueFor(flag)] : [flag]
         _ = try parse(arguments)
@@ -189,6 +189,7 @@ struct OptionsTests {
     private func valueFor(_ flag: String) -> String {
         switch flag {
         case "-i", "--interval", "--scan-interval": "10"
+        case "--port": "9101"
         default: "/tmp/frozen"
         }
     }
@@ -235,6 +236,24 @@ struct OptionsTests {
         )
         #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/flag/library.sqlite")
         #expect(environment.origin == .explicitOverride)
+    }
+
+    // MARK: - The service port
+
+    @Test("`--port` overrides the port the pictures are served on")
+    func portOverride() throws {
+        #expect(try parse([]).servicePort == 9000)
+        #expect(try parse(["--port", "9101"]).servicePort == 9101)
+    }
+
+    @Test("`--port` refuses what is not a port")
+    func portRejectsNonsense() {
+        for value in ["0", "-1", "70000", "nine", ""] {
+            #expect(throws: (any Error).self, "--port \(value)") {
+                try parse(["--port", value])
+            }
+        }
+        #expect(throws: (any Error).self, "--port with no value") { try parse(["--port"]) }
     }
 
     @Test("Intervals parse, and `--once` means one pass")

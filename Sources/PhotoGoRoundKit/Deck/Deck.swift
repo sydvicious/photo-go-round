@@ -143,6 +143,24 @@ public struct Deck {
 
     // MARK: - Statistics
 
+    /// How many photos have been shown *n* times, for each *n*.
+    ///
+    /// `times_shown` is a statistic and nothing orders by it, which is precisely
+    /// what makes it the honest measure of whether the deck is behaving. A
+    /// spread of one to three across a library is a healthy fraction below 1.0;
+    /// a spread of three to four hundred is the starvation this deck was
+    /// rewritten to remove, and it is invisible in every other number.
+    public func showingHistogram(limit: Int = 20) throws -> [(shown: Int, photos: Int)] {
+        try database.all(
+            """
+            SELECT times_shown AS shown, COUNT(*) AS photos
+              FROM photo WHERE source_enabled = 1 AND media_type = 'image'
+             GROUP BY times_shown ORDER BY times_shown LIMIT :limit;
+            """,
+            ["limit": .int(Int64(limit))]
+        ) { (shown: try $0.int("shown"), photos: try $0.int("photos")) }
+    }
+
     public func stats(settings: DeckSettings = .default) throws -> DeckStats {
         let pool = try poolSize()
         let state = try state()

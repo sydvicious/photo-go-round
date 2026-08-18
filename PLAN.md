@@ -34,7 +34,19 @@ Each phase carries its own spike rather than front-loading them all, so the firs
 
     Both of those numbers needed a baseline to mean anything, which is the part worth keeping. An idle agent sits at **36 MB** and a scan peaks it at **96 MB**, returning afterwards — so 92 MB at the ten-hour mark is a sample that landed during a scan, not ten hours of growth. And the CPU reading is the one that rules out the failure this gate exists to catch: a wedged agent prints nothing *and* burns nothing, so silence alone proves neither. It was working.
   - A library that only ever runs under `swift test` has not been shown to work, it has been shown not to crash. Everything this project has found that the test suite missed — stdout buffering that only bites when stdout is not a terminal, an unavailability reason that said the wrong thing, a schema column deleted along with its neighbour — was found by standing it up.
-- **Phase 2** — **`pgr_ctl`, an internal Swift command-line tool to exercise the server.** A **separate binary**, because the service has exactly one job and answering questions is not it. Add sources, refresh them, peek at the queue, serve pictures, inspect the cache, read and write preferences, run the shuffle-quality statistics. This is how the server is proven correct before any window exists, and it stays the rig for everything scriptable afterwards. Never shipped.
+- **Phase 1.5** — **The service is the interface.** An HTTP endpoint on the Mac that hands a client a picture rendered to the resolution it asked for. Clients stop opening the database and the cache; the service becomes the only thing that touches either.
+  - `GET /v1/next` carrying a resolution — `200` and the bytes, or `204` when there is nothing queued.
+  - The endpoint pops the queue entry whether or not the download succeeds; there is no reservation and nothing to reclaim.
+  - A photo that will not render is skipped to the next queue entry, and blacklisted after three attempts.
+  - `GET /v1/revocations?since=` plus a Darwin notification, for local surfaces holding a picture that has since been deleted.
+  - Bonjour `_photogoround._tcp` for discovery, a bearer token for authorization.
+  - The port defaults to one the kernel assigns and is published to preferences for local clients; `--port` pins it, permanently, so a development agent can run beside a shipped one.
+  - The cache becomes `(photo, resolution)`, bounded by bytes alone; `cachePhotoCap` goes.
+  - Cache metadata lives in RAM, rebuilt at startup from UUID-keyed filenames; migration 3 is a deletion.
+  - Phase 2's `pgr_ctl` becomes the first client, which is how the protocol gets designed before any window exists.
+  - **Exit gate: two clients draw from one deck over the wire, and neither can read the container.** Revoke `pgr_ctl`'s file access to the storage root and confirm it still serves; run it against the service from a second machine on the same Wi-Fi.
+
+- **Phase 2** — **`pgr_ctl`, an internal Swift command-line tool to exercise the server.** A **separate binary**, because the service has exactly one job and answering questions is not it. Add sources, refresh them, peek at the queue, inspect the cache, read and write preferences, run the shuffle-quality statistics. Serving pictures is `curl` against Phase 1.5's endpoint, so the rig covers what is *not* a service operation. This is how the server is proven correct before any window exists, and it stays the rig for everything scriptable afterwards. Never shipped.
   - **Exit gate: `pgr_ctl` builds and drives a running server end to end.** Add a folder, watch the pool fill, watch the queue fill behind it, serve a hundred pictures, remove a photo and confirm it never appears again, unplug a drive and confirm the cached ones keep coming. Every one of those is a thing you do at a prompt against a live agent, and none of them is a unit test.
   - The two gates are the same principle applied twice, and it is worth naming: **a phase ends when you have used it, not when it compiles.** Everything found in this project so far that a test suite missed — stdout buffering under launchd, an unavailability reason that said the wrong thing, a schema column deleted along with its neighbour — was found by running the thing.
 - **Phase 3** — **The Mac app that calls it.** Just a window showing the shuffle — sized to fit, with the pan — that can be taken full screen. No source management, no settings: `pgr_ctl` already does that. This is the milestone that proves the whole idea, and it is small.
@@ -46,10 +58,10 @@ Each phase carries its own spike rather than front-loading them all, so the firs
 - **Phase 4** — iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
 - **Phase 5** — iOS widget: WidgetKit extension sharing an App Group container, serving from the queue in the timeline provider.
 - **Phase 6** — Mac screensaver: a `.saver` bundle, one photo at a time, sized to fit, panning slowly along whichever axis would otherwise be black.
-  - Spike first: can a saver inside `legacyScreenSaver` read the cache and write the deck? Direct container access, then localhost HTTP, then XPC, with a consumption journal as fallback.
+  - Spike first: can a saver inside `legacyScreenSaver` make an HTTP request? That is the whole question now — it needs no file access to the container and no write access to the deck.
 - **Phase 7** — Mac wallpaper: per-screen `NSWorkspace.setDesktopImageURL`, scheduled by the server.
 - **Phase 8** — Mac widget: WidgetKit extension for Notification Center and the desktop.
-  - Spike first: confirm an unsandboxed Developer ID server and its sandboxed widget extension can share an App Group container.
+  - No App Group spike: the extension asks the service for an image at its family size, inside its timeline budget, and never opens the container.
 - **Phase 9** — Apple Watch: a watchOS app plus its WidgetKit widget, fed photos by the paired iPhone.
   - Spike first: confirm a photo survives the watch's widget rendering modes legibly, and measure what `WCSession.transferFile` costs for a rolling set of small derivatives.
 - **Phase 10** — Other platforms: tvOS top shelf, visionOS wall-mounted frame.
@@ -99,12 +111,12 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 
 *Cache*
 
-- **Reference in place on the internal volume; materialize from anywhere that can disappear.** A file on the boot volume is always there, so copying it is pure waste. A file on an external, removable, network, or iCloud Drive volume can vanish without notice, so it is copied into the cache. Whether a photo is referenced or materialized is a property of *where it lives*, not of which kind of source found it.
-- **The queue asks each source for one picture at a time, until it is full.** One request yields one picture, bytes and all — there is no batch size and no separate prefetcher. A source runs a few of those at once (four by default, because fetching is nearly all latency) and ignores anything beyond its limit, which is the entire flow control. Serving is what notices the queue has run short and starts the asking again.
+- **Reference in place on the internal volume; materialize from anywhere that can disappear.** A file on the boot volume is always there, so copying it is pure waste. A file on an external, removable, network, or iCloud Drive volume can vanish without notice, so it is copied into the cache. Whether a photo is referenced or materialized is a property of *where it lives*, not of which kind of source found it — and it describes the photo's original entry in the cache, since every rendering is a real file with nothing to point at.
+- **The queue asks each source for one picture at a time, until it is full.** One request yields one picture, bytes and all — there is no batch size and no separate prefetcher. A source runs a few of those at once (four by default, because fetching is nearly all latency), each lane asking again as soon as its answer lands. **Serving is what notices the queue has run short**, and therefore what starts a round; a round already in progress absorbs the next request rather than stacking with it, and that is the entire flow control. No clock is involved in any of it.
 - **A photo is dealable if its bytes are local, whatever its source's state.** An unmounted drive removes referenced photos immediately; a vanished Photos library does not, since those were materialized into our cache. Orphans then shuffle out gradually as FIFO evicts them — the cache's ordinary behavior is the garbage collector.
 - **The cache is clearable on demand, and guarded against a full disk.** `pgr_ctl cache clear`, optionally per source or restricted to unavailable ones, never touching deck history. Separately, free space is checked before every chunk, because a photo count cannot bound bytes.
 - **Unavailable sources are shown as unavailable, in red, with the reason.** A source that has silently stopped contributing to the shuffle is indistinguishable from a bug.
-- **The cache is capped by photo count, FIFO, default 1000.** Materialization follows deck order, so oldest-added is also longest-since-dealt — the cache is a sliding window over the deck, expiring off the front and filling at the back. Configurable; the shipping default gets set by measurement, not by guess.
+- **The cache is bounded by bytes, FIFO, and holds renderings alongside originals.** Materialization follows deck order, so oldest-added is also longest-since-dealt — the cache is a sliding window over the deck, expiring off the front and filling at the back. A photo count stopped meaning anything once one photo is an original plus several renderings, and it was always a poor proxy for the disk it exists to protect. Configurable; the shipping default gets set by measurement, not by guess.
 
 *Display*
 
@@ -116,14 +128,14 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **Server, then a CLI to exercise it, then the Mac app that calls it, then iOS.** The headless library process is the foundation every surface sits on; the command line proves it correct before any UI exists, and a window showing the shuffle is the shortest proof the idea works. The kit's API is still shaped by iOS's constraints even though iOS arrives third, since retrofitting those is the expensive mistake.
 - **`pgr_ctl` and the Mac app are permanent test harnesses, not scaffolding.** The command line covers anything scriptable, statistical, or concurrent; the app covers anything visual or timing-dependent. Every later surface is exercised through one of them before it gets its own home.
 - **The Mac app is just a window that can go full screen.** No source management, no settings — `pgr_ctl` owns those. A full-screen window is visually what the screensaver will be, so the display behavior gets designed there and Phase 6 is left with only the sandbox to solve.
-- **"Calls it" means the database and a Darwin notification, not a socket.** The server and the app share the SQLite store; the notification says "go look." This follows your own ranking of the options, and it means neither process has to be running for the other to work.
+- **"Calls it" means an HTTP request.** The app is a client like every other surface and gets a picture rendered to the size of its window, which buys it out of the App Group container question entirely. The cost is that the service has to be running, which a login item and launchd activation cover.
 
 *Platform and distribution*
 
 - **Mac ships Developer ID direct, the iOS family ships App Store.** Your call, and it is the right one — a sandboxed app cannot install a `.saver` bundle, so App Store distribution and a screensaver are mutually exclusive.
 - **A LaunchAgent, not a LaunchDaemon.** Photos access is per-user TCC and requires a user session; a system daemon cannot reach the library at all.
 - **Installs are fully independent — no cross-device sync at all, with one forced exception.** iCloud Photos already puts the same photos on every device, so each install shuffles the same pool on its own; this buys out of `PHCloudIdentifier` mapping, a CloudKit layer, and deal-time conflict resolution entirely. The Apple Watch is the exception, because watchOS has no Photos framework and no sources of its own — the paired iPhone feeds it, one-directionally.
-- **Between our own components: the database is the transport, a Darwin notification is the doorbell.** No HTTP server, no sockets, no XPC. Darwin notifications carry no payload, which is exactly right — they signal "go look" and SQLite holds what there is to look at. Only the screensaver, trapped in someone else's sandbox, may need something else.
+- **Clients ask the service over HTTP and get bytes; the database is the control channel, never the picture path.** A surface requests a picture at the resolution it is about to draw at and is handed the pixels — it opens neither the database nor the cache. Multiple simultaneous clients, several of them on other devices, are what force it, since XPC cannot leave the machine. Darwin notifications keep exactly one job and one direction: locally, from the outside world to the service, where `defaults write` reconfigures a running agent and both ends share the preferences domain, so "go look" is still sufficient. See *The service is the interface*.
 - **Minimum deployment target 27.0 on every platform, temporarily held at 26.0 until 27 ships.** The target is 27: no back-deployment guards, no availability checks, no legacy code paths. The hold exists only because this machine is on a 27 seed while the second Mac — the one that has to keep the agent running during a vacation — is on the current public release. 27 will have shipped by the time the server is done, so the hold lifts on its own. Nothing may be designed around it.
 
 *Engineering*
@@ -465,12 +477,12 @@ The durable lesson is about method rather than about memory. Five explanations w
 
 Consumers do not block on any of this. The exchange is:
 
-1. The client posts *it is time for a picture*, and forgets about it.
-2. The service takes however long it needs — selecting, fetching bytes, and checking the picture is still in its source.
-3. The service posts either *a picture is ready* or *there are no photos available*.
-4. On the first, the client reads the card and loads the image. On the second, it shows its empty state.
+1. The client asks for a picture, at the resolution it is about to draw at.
+2. The service takes the head of the queue, confirms the picture is still in its source, and renders it to that size.
+3. It answers with the bytes, or with *there are no photos available*.
+4. On the first the client displays what it was handed. On the second it shows its empty state.
 
-The database is the transport and the notification is the doorbell, exactly as everywhere else between our own components; this adds topics, not mechanism. What makes fire-and-forget the right shape rather than a compromise is the latency budget: nobody perceives variation in how long a picture takes to change, so the service is free to do a network round trip before answering, and the client never has to model "still working" as a state.
+**The client never touches the database or the cache**, which is what lets a screensaver inside someone else's sandbox and an Apple TV on the far side of the Wi-Fi be the same kind of thing. The exchange needs no callback, because the queue has already done the waiting: producing a picture and fetching its bytes are the same operation, so nothing is queued until it is ready to show. What remains at request time is a subsampled decode, which is tens of milliseconds. See *The service is the interface*.
 
 It also means **"no photos" is an ordinary reply rather than an error**. A fresh install has an empty queue and an empty cache, so the first few requests answer *nothing available* and photos begin arriving as downloads succeed. Every surface has a defined empty state already; this just gives it something to be triggered by.
 
@@ -518,10 +530,13 @@ CREATE TABLE photo (
                                      -- for folder sources: path RELATIVE to source.locator
   media_type      TEXT NOT NULL DEFAULT 'image',  -- 'video' exists and is never selected
   source_enabled  INTEGER NOT NULL DEFAULT 1,     -- denormalised, so the deal needs no join
+  uuid            TEXT NOT NULL UNIQUE,  -- durable identity, and the only one that ever
+                                     -- leaves the database: cache filenames carry it, and
+                                     -- a filename whose uuid is unknown is deleted at startup
   storage         TEXT NOT NULL DEFAULT 'materialized',  -- 'referenced' | 'materialized'
-  cache_path      TEXT,              -- cache-relative; NULL until the bytes are fetched
   byte_size       INTEGER,
-  materialized_at INTEGER,           -- FIFO eviction orders by this
+  claimed_at      INTEGER,           -- a producer is fetching this one; expires, never reaped
+  render_failures INTEGER NOT NULL DEFAULT 0,  -- blacklisted at 3; the file is bad, not gone
   times_shown     INTEGER NOT NULL DEFAULT 0,
   last_dealt_seq  INTEGER,           -- global deal ordinal; NULL means never dealt
   shuffle_key     REAL NOT NULL,     -- random, re-rolled on each deal
@@ -541,7 +556,9 @@ CREATE TABLE deck_state (
 CREATE INDEX photo_deck ON photo(source_enabled, media_type, shuffle_key);
 CREATE INDEX photo_window ON photo(source_enabled, media_type, last_dealt_seq);
 CREATE INDEX photo_source ON photo(source_id);
-CREATE INDEX photo_materialized ON photo(materialized_at) WHERE cache_path IS NOT NULL;
+-- No index for cache residency. Since Phase 1.5 the cache's index lives in the
+-- service's memory, rebuilt from the filesystem at launch; the database records
+-- nothing about which bytes are present.
 ```
 
 A single monotonic counter — the deal ordinal — advances on every card dealt anywhere in the system. The pass is one more integer beside it: a photo is unused in the current pass while `last_dealt_seq <= pass_start_seq`, and reshuffling means moving `pass_start_seq` up to the current ordinal, which makes every photo unused again. There is no per-photo epoch column and no pass-position column.
@@ -597,7 +614,7 @@ Selection and showing are two statements rather than one, and the atomic guarant
 ```sql
 -- Pick a candidate from one source. :threshold is max(pass_start_seq, deal_seq - w),
 -- and :offset is a uniform draw over the count of eligible pictures.
-SELECT id, source_id, external_id, storage, cache_path
+SELECT id, uuid, source_id, external_id, storage
   FROM photo p
  WHERE p.source_id = :source
    AND p.source_enabled = 1
@@ -607,7 +624,8 @@ SELECT id, source_id, external_id, storage, cache_path
  ORDER BY p.shuffle_key
  LIMIT 1 OFFSET :offset;
 
--- …fetch its bytes, append it to the queue, and much later, when it is served:
+-- …claim it in the same transaction, fetch its bytes, append it to the queue,
+-- and much later, when it is served:
 BEGIN IMMEDIATE;
 UPDATE photo
    SET times_shown = times_shown + 1, last_dealt_seq = :seq,
@@ -690,43 +708,34 @@ Two consequences worth stating. First, external-volume photos now consume cache 
 
 ### Cache layout
 
-Nobody looks at the cache, so it is not designed to be read. The database is the index — nothing ever finds a photo by scanning the filesystem — and at a thousand-photo cap a flat directory would be perfectly fine for APFS. Meaningful filenames, date fanout, and preserved original names would all be effort spent on an audience of nobody.
-
-One level of structure earns its place for mechanical reasons only:
+Nobody looks at the cache, so it is not designed to be *read* — but since Phase 1.5 it is designed to be *reconstructed*, because the index lives in the service's memory rather than in the database and is rebuilt from the filesystem at every launch. Meaningful filenames, date fanout, and preserved original names would still be effort spent on an audience of nobody; what the path has to carry is identity, resolution, and nothing else.
 
 ```
 cache/
-  3/000000124.heic
-  3/000000131.heic
-  7/000000502.heic
+  <source-uuid>/.original/<photo-uuid>.heic
+  <source-uuid>/3840x2160/<photo-uuid>.heic
+  <source-uuid>/1170x2532/<photo-uuid>.heic
 ```
+
+Two levels of structure, each earning its place mechanically:
 
 Source id at the top, photo id below. `pgr_ctl cache clear --source 3` becomes one directory removal instead of a thousand unlinks, and per-source byte totals become a directory size instead of a query plus a stat loop. That is the whole justification; if those two operations did not exist, flat would be correct.
 
 The cache directory is marked `isExcludedFromBackup`. Letting Time Machine copy tens of gigabytes of photos that are already in the Photos library or already in iCloud wastes the user's backup volume on data we can reconstruct.
 
-### Decode on demand; do not store derivatives
+### Decode on demand, in the service
 
-The cache stores originals. Scaling is the display engine's job, done at decode time, and there is no on-disk tier of pre-scaled copies.
+The service decodes; clients receive pixels. Scaling happens at decode time rather than by shrinking a full-size image, and the results are cached alongside the originals they came from — see *The cache becomes (photo, resolution), bounded by bytes*.
 
 `CGImageSourceCreateThumbnailAtIndex` with `kCGImageSourceThumbnailMaxPixelSize` does not decode fully and then shrink — it decodes at a subsampled scale, so peak memory is bounded by the *output* size rather than by the source's pixel count. A 48-megapixel HEIC rendered for a 6K display costs about what a 6K image costs. Handing the result to a layer is all the display side needs.
 
 An earlier draft of this plan justified stored derivatives by claiming a large decode would stutter the screensaver. That does not survive the queue: the next several pictures are known and already resident, so a decode happens on a background thread with enormous lead time. Even RAW, the slow case, has orders of magnitude more slack than it needs.
 
-The stronger argument is the one against derivatives. In a shuffle deck each photo is displayed once, then not again for at least a window's worth of deals — hundreds or thousands of cards. A cached derivative therefore serves about one read before the deck moves on, and by the time that photo becomes eligible again the cache has likely evicted it. A cache with a one-to-one write-to-read ratio is not a cache; it is write amplification, plus a second artifact to keep consistent with the first, plus more bytes against the cap.
+**This document argued at length against caching the results, and that argument was wrong at one end of its range.** It ran: in a shuffle deck each photo is displayed once and not again for at least a window's worth of deals, so a cached rendering serves about one read before the deck moves on — a one-to-one write-to-read ratio, which is write amplification rather than a cache. That is a claim about *large* libraries stated as though it were universal. It is a function of pool size: a photo recurs after roughly `pool` deals, so at four thousand photos a rendering is indeed dead before its second read, and at a hundred photos it is re-read every seventeen minutes at a ten-second dwell. The small end is exactly where a person notices, because a small library is one where everything comes round often. Renderings are therefore cached, bounded by bytes and evicted as peers of the originals.
 
 What the design does keep is a small **in-memory** decoded-image cache — the card being displayed and the next one or two, held as ready `CGImage`s. That is where the latency actually needs to be zero, it costs no disk, and it evicts itself when the process dies.
 
-**Two exceptions, both narrow, and neither of them a "tier":**
-
-- **Widget extensions.** A jetsam argument, not a speed one. A widget extension runs under a hard memory ceiling of roughly 30 MB, and decoder working memory for an arbitrary HEIC is not reliably bounded below it. The answer is not a cleverer decode inside the extension — it is that the server, which has no such ceiling, writes a small file sized to the widget family for the entries a widget is about to render. That is a handful of files, not a parallel copy of the library.
-- **Devices that never store the original at all.** On the Watch and on tvOS, the small file is not derived from a local original — it is the only copy that ever arrives, produced by the feeding device before transfer. That is a storage and bandwidth decision about what to *send*, and calling it a derivative tier conflated it with a decode-cost decision it has nothing to do with.
-
-**When a derivative is unavoidable it is fleeting, and if it must persist it is a separate cache.** Three levels, in order of preference:
-
-1. *In memory, at display time.* The decoded `CGImage` for the current and next card. Dies with the process, costs no disk, needs no consistency story.
-2. *A separate on-disk derivative cache,* only where a consumer genuinely cannot decode for itself — the widget case. Kept in `~/Library/Caches/`, not in Application Support, and this distinction is the whole point: the system may purge `Caches` whenever it likes, which is *correct* for derivatives, because regenerating one from a local original is cheap. Originals live in Application Support because losing them means re-downloading from iCloud, which is not.
-3. *Never a second copy inside the library cache.* Derivatives do not count against the photo-count cap, are not tracked in the deck, and can be deleted wholesale at any moment without the library noticing. Any code path that treats a missing derivative as an error rather than as a cue to regenerate has got the relationship backwards.
+**Two exceptions used to be carved out here, and Phase 1.5 absorbs both rather than keeping them.** *Widget extensions* needed the server to write a small file sized to the widget family, because an extension runs under a roughly 30 MB ceiling that an arbitrary HEIC decode cannot be trusted to stay below. *The Watch and tvOS* needed a small file that is not derived from a local original but is the only copy that ever arrives. Sizing for every client makes both of those the ordinary path: nobody decodes but the service, and what a client receives is already the size it asked for. Three mechanisms became one.
 
 **One measurement would close the remaining doubt,** and it belongs in Phase 2 as a `pgr_ctl` subcommand: subsampled decode time to display size for the worst files in a real library — a large ProRAW, a 48-megapixel HEIC, a stitched panorama — on this machine. If those land in the tens of milliseconds, as expected, the case for on-disk derivatives disappears entirely. If a panorama exceeds the GPU's maximum texture dimension, that is a separate problem needing tiling rather than a derivative file.
 
@@ -757,21 +766,22 @@ So each answer re-asks its own source, and the tick is only what gets it started
 
 ### Eviction
 
-FIFO by materialization time, capped at 1000 photos by default.
+FIFO by creation time, bounded by bytes, ranging over `(photo, resolution)` entries rather than over photos — so a photo can outlive its own original while a rendering of it survives, which is a feature rather than a defect. See *Entries compete individually*.
 
 The reason plain FIFO is correct here rather than something cleverer is that pictures are fetched in the order the deck offers them, so the order they enter the cache is roughly the order they will be shown. Oldest-added is therefore also longest-since-shown, and evicting from the front is evicting the picture the deck is furthest from reaching again. The cache is a sliding window over the deck: expire off the front, fill at the back.
 
 Two guards on top of it:
 
 - **Never evict a picture that is in the queue.** Anything queued is about to be shown, so it stays regardless of age. This used to be phrased as a guess about the deal horizon; the queue answers it exactly.
-- **A byte ceiling as a safety valve, secondary to the count cap.** A thousand photos is somewhere between 2 GB and 100 GB depending on whether they are phone JPEGs or ProRAW, so a count alone cannot bound disk use. The recommendation is a generous byte ceiling — 50 GB, say — that normally never triggers, purely so a library of enormous originals cannot fill the volume. Count remains the primary control; the ceiling only ever evicts early, never late.
+- **The byte ceiling is the primary control, and the only one.** A thousand photos is somewhere between 2 GB and 100 GB depending on whether they are phone JPEGs or ProRAW, so a count never bounded the thing that mattered — and it stopped meaning anything at all once one photo became an original plus several renderings. It began life as a safety valve behind a count cap; it is now the whole policy.
+- **An original is never evicted while a render pending on it needs it.** That is the entire coordination between the two kinds of entry — a check against work in flight, not a policy about deck position.
 
 ### Choosing the shipping default
 
-The 1000 default is explicitly a starting point to be replaced by measurement. The experiment belongs in Phase 2, as a shell loop over `pgr_ctl` against real sources, and it should record, for cache caps of roughly 250 / 500 / 1000 / 2000 / 4000:
+The default byte ceiling is explicitly a starting point to be replaced by measurement. The experiment belongs in Phase 2, as a shell loop against real sources, and it should record, for budgets of roughly 5 / 10 / 25 / 50 / 100 GB:
 
 - wall-clock time to fill the cache from cold, for a local folder and for an iCloud-optimized Photos album;
-- bytes on disk at each cap, for a representative library rather than a synthetic one;
+- how many photos and how many renderings a given byte budget actually holds, for a representative library rather than a synthetic one;
 - steady-state agent memory and CPU while filling;
 - how often a deal misses the cache during a long screensaver session, which is the number that actually matters — a cap is big enough when the fast consumer never outruns it.
 
@@ -779,7 +789,7 @@ The last measurement is the one that decides it. Everything else is a cost curve
 
 ### The iOS variant
 
-The same policy with much smaller numbers and a different filling schedule. A phone should not carry 1000 originals, so iOS caps lower, and the queue is shorter to match. Filling happens in the foreground and in `BGProcessingTask` windows when charging — and because one request yields one finished picture, a task that runs out of time simply stops asking. Nothing is ever half-done, so there is no boundary to resume from.
+The same policy with much smaller numbers and a different filling schedule. A phone should not carry gigabytes of originals, so iOS sets a much smaller byte ceiling, and the queue is shorter to match. Filling happens in the foreground and in `BGProcessingTask` windows when charging — and because one request yields one finished picture, a task that runs out of time simply stops asking. Nothing is ever half-done, so there is no boundary to resume from.
 
 ## Cold start
 
@@ -919,13 +929,245 @@ is — that is this document's job. A man page says what the command does; the p
 says why it does it that way. Converting to roff later, if `man photogoroundd` ever
 matters, is a mechanical step.
 
+## The service is the interface
+
+Phase 1.5, and a reversal of something this document asserted throughout. It is written up as a reversal rather than quietly amended, because the reasoning changed rather than the facts, and because the two readings of the old text were far apart enough to be worth recording.
+
+**What the old text said.** *The service does one thing* claimed that "the database is the transport, so anything that wants to inspect or change the library opens it directly and never needs the agent's cooperation at all." *What a client asks for, and what it gets back* laid out a four-step exchange whose first three steps are a service protocol — the client asks, the service selects and fetches and checks, the service answers *ready* or *nothing available* — and whose fourth step is "the client reads the card and loads the image." That one clause is where a display reaches into the database and the cache, and it is the entire difference between the two readings.
+
+**What changed.** The generalization was doing double duty. For `pgr_ctl` inspecting or configuring the library, *the database is the transport* is obviously right and stays right. For a screensaver getting a picture it is a completely different claim, and the sentence did not distinguish them. The arbitration was never in dispute: one shared queue, serving as the atomic step, no photo on two surfaces at once — precisely because there are multiple simultaneous clients. What moves is the wire.
+
+**So: clients ask the service for a picture and get bytes back. They never open the database and never open the cache.** The service is the only process that touches either.
+
+### Why HTTP, and why that is not a preference
+
+XPC does not leave the machine. The moment a Watch or an Apple TV is a client, XPC is off the table entirely, and of the four rungs the Phase 6 spike contemplated — direct container access, localhost HTTP, XPC, consumption journal — only HTTP spans devices. That settles it without appeal to taste.
+
+It also makes the clients language-agnostic, which is a real gain and worth not over-reading: it frees the *clients*, not the service. The service remains irreducibly Apple, because it is the thing that touches PhotoKit, TCC, ImageIO, and `NSWorkspace`. Two rewrites were considered and rejected on that ground, both recorded under *Alternatives considered* below.
+
+**HTTP is the Mac service's interface, not a universal one.** *The iOS family* rejects a local HTTP server on iOS for a reason that still holds — it is suspended along with the app the moment it backgrounds, so it would solve nothing while adding an entitlement and a security surface. iOS therefore stays service-and-client in one process, talking to itself through the same client type over an in-process transport. One implementation of *ask for a picture*, two transports underneath, and the retry policy written once rather than four times.
+
+### The protocol
+
+One endpoint matters. Everything else is inspection.
+
+```
+GET /v1/next?consumer=screensaver&display=<uuid>&w=3840&h=2160
+    Accept: image/heic, image/jpeg
+    Authorization: Bearer <token>
+
+→ 200  image/heic       the picture, decoded subsampled to fit
+       X-PGR-Card: 4821         X-PGR-Deal: 91043
+       X-PGR-Source: 3          X-PGR-Pixels: 8064x6048
+→ 204  No Content       nothing queued
+→ 401                   wrong token; do not retry on a timer
+```
+
+**`204` rather than an error**, because *no photos* is an ordinary reply. A fresh install answers that way until downloads land, and every surface has an empty state already.
+
+**Consumer identity is parameters, not registration.** The `consumer` table is a registry and a heartbeat, and a request is both — first sight creates the row, every sight updates `seen_at`. No register call, no session, nothing to reap.
+
+**Format by content negotiation.** Every client here is Apple, so HEIC is the default and roughly halves the bytes; JPEG stays as the fallback anything can decode.
+
+**Inspection**, for `pgr_ctl` and for Phase 3's instrument panel: `GET /v1/status`, `/v1/deck`, `/v1/queue`, `/v1/sources`, and `POST /v1/refresh`, `/v1/cache/evict`, `/v1/cache/clear`. Reads and actions only. **Source configuration deliberately does not appear here** — it stays a preferences write, so *This is also the control channel* keeps working with the service stopped and with nothing cooperating.
+
+### The request does not wait, because the queue already did
+
+An earlier version of this design had the client fire and forget, with the answer arriving later over Server-Sent Events carrying a download ID. It was rejected, and the reason it was rejected is the reason the synchronous shape is safe.
+
+The worry was that `GET /v1/next` would hold a socket open through an iCloud download. It cannot: producing a picture and fetching its bytes are the same operation, so **a picture is never queued unless it is ready to show**. The only work at request time is a subsampled decode and a re-encode — tens of milliseconds. An empty queue answers `204` immediately rather than waiting.
+
+Two further things killed the two-phase version. A WidgetKit extension does not run continuously and cannot hold an event stream open to hear an answer, so the surfaces with the tightest budgets were exactly the ones the callback could not serve. And holding a rendered file between the notification and the collection is a reservation with a lifetime and a reaper — the hand reservation this plan already deleted, reappearing under another name.
+
+### The pop, and what it costs
+
+**The endpoint servicing the download removes the queue entry, whether or not the download succeeds.** No reservation, no confirm, nothing with a lifetime, and the deck's atomicity stays exactly where *Consumers* put it — in the queue pop.
+
+Three consequences follow, and all three are accepted rather than mitigated.
+
+- **No `Range` requests and no resume.** "Download" usually implies both, but a resumed request cannot ask for the same card, because it is already out of the queue. A failed download is a lost picture; the client asks again and gets the next one.
+- **A client that never finishes eats the deck quietly.** A watch on bad cellular that times out every attempt spends a card each time and shows nothing. Harmless at any plausible rate against a real library, and visible in `consumer.seen_at` against a `times_shown` that never moves — but it is the one way this rule is wrong without saying so.
+- **Clients back off, voluntarily.** Three failed attempts, then wait, then try again. Only one failure mode actually spends a card, so the taxonomy matters: a refused connection or a Bonjour miss costs nothing because the pop never ran; a `204` is not a failure at all and must not count toward three strikes, or a fresh install backs off exactly when it should keep asking; a `401` should stop rather than retry, since a timer cannot fix a wrong token; a stream that started and did not finish is the one the rule is for; and a timeout with nothing received is genuinely ambiguous, because the service may have popped and started writing into a socket nobody was reading.
+
+The wait is **exponential with jitter** rather than fixed, for a reason specific to this design: a Mac going to sleep fails every client at once. Wallpaper, screensaver, two widgets and a watch hit their third strike within seconds of each other, and a fixed interval puts them back in lockstep for ever.
+
+### Fit to the size the client is about to draw at
+
+**The request carries the resolution and the service does the subsampled decode.** This is the change that pays for itself several times over.
+
+*Decode on demand; do not store derivatives* already carved out an exception for widget extensions: "the server, which has no such ceiling, writes a small file sized to the widget family." Sizing for everyone **absorbs that exception rather than keeping it**, and it does the same for the Watch and tvOS case, where the small file is not derived from a local original but is the only copy that ever arrives. Three mechanisms become one.
+
+It also means the phone stops needing to understand the watch. Under the old design the phone knew watch pixel dimensions and widget families and pre-rendered for them; now the watch asks for what it is about to draw and the phone answers like any other client, with `WCSession.transferFile` carrying the same exchange.
+
+**The request carries a width and a height, not one maximum dimension**, and the reason is what keeps the protocol still when the display side grows. The client names the box it wants filled; the service renders to it and knows nothing about fit mode, layout, or how many pictures are on screen. Alternate fits, tiling, and several pictures at once — all held back under *Beyond 0.1* — then arrive as parameters added alongside `w` and `h`, rather than as a change to what the existing ones mean. If the fit is ever worth moving into the service, it becomes another parameter and the box stays the box. A single maximum would have assumed one fit mode for ever, and would in fact render the wrong thing: a 4000×3000 photo fitted into 3840×2160 is 2880×2160 and into 2160×3840 is 2160×1620, where one `max=3840` gives 3840×2880 and is wrong for both.
+
+**And it reopens the cache design rather than settling it**, which is the subject of the next section. Rendering on demand at an arbitrary requested resolution requires an original to render from, so originals stay — but the renderings turn out to be worth keeping too, for a reason *Decode on demand; do not store derivatives* did not account for.
+
+### The cache becomes (photo, resolution), bounded by bytes
+
+*Decode on demand; do not store derivatives* rejected a derivative tier on the grounds that "in a shuffle deck each photo is displayed once, then not again for at least a window's worth of deals… a cached derivative therefore serves about one read before the deck moves on. A cache with a one-to-one write-to-read ratio is not a cache; it is write amplification."
+
+**That is a claim about large libraries, stated as though it were universal.** It is a function of pool size. A photo recurs after roughly `pool` deals, so at four thousand photos a rendering is evicted long before it is read twice — and at a hundred photos it is re-read every seventeen minutes at a ten-second dwell. The write-to-read ratio is 1:1 at one end and many-to-one at the other, and the small end is exactly where a person notices, because a small library is one where every photo comes round often.
+
+Two further facts make keeping renderings cheap rather than merely defensible. **The resolution space is small and stable** — clients ask at display sizes and widget-family sizes, so a real installation has perhaps five to ten distinct resolutions across every surface, not a continuum. And **a rendering is roughly a fifteenth of an original**: about 1.5 MB for a 4K frame against 25 MB for a 48-megapixel HEIC.
+
+**So the cache becomes a set of `(photo, width, height)` entries, and the original is simply the entry at native size.** Where that set is *recorded* is the subject of the subsection after next, and the answer turns out to be neither `photo` nor a new table.
+
+**Referenced versus materialized narrows to the native entry.** A boot-volume photo's native entry is a pointer rather than a copy, exactly as before; every rendering is always a real file, because a rendering has nothing to point at. The rule in *Reference in place on the internal volume* is unchanged, it simply applies to one row of the set rather than to the photo.
+
+**And the cap becomes bytes alone. `cachePhotoCap` goes.** A count stopped meaning anything the moment one photo became an original plus four renderings, and it was always a poor proxy for the thing actually being protected — a thousand photos is somewhere between 2 GB and 100 GB depending on whether they are phone JPEGs or ProRAW. The byte ceiling was already in the design as a safety valve, secondary to the count; it becomes the primary and only control, and the *Choosing the shipping default* experiment measures a byte budget rather than a photo count.
+
+#### Entries compete individually, so a photo can outlive its own original
+
+The two halves have very different recreation costs. A lost rendering is about thirty milliseconds of subsampled decode. A lost original is a network download, possibly metered, possibly minutes. That asymmetry could argue for evicting whole photos together — all entries at once, which would keep the sliding-window story exactly as written and leave FIFO obviously correct.
+
+**Entries compete individually instead, and the intermediate state that allows is a feature rather than a defect.** A photo whose original has been evicted but whose 3840×2160 rendering survives is completely serviceable to a wallpaper asking at 3840×2160 — it never needs the original again. Since a rendering is a fifteenth of the bytes, the same disk budget holds close to an order of magnitude more display-ready pictures. For the case this project actually runs in — a fixed set of displays, unchanged for months — that is most of the value on the table, and it costs only when a resolution appears that nobody has rendered: a new monitor, a resized window, one re-download.
+
+**One invariant stops it thrashing: an original is never evicted while a render pending on it needs it.** That is the whole of the coordination, and it is a check against work in flight rather than a policy about deck position.
+
+**FIFO survives at both ends**, which is the part that looks most likely to break. Renderings are created in deck order, the same as materialization, so oldest-created is still longest-since-dealt. On a large library renderings are 1:1 and eviction order is irrelevant to hit rate; on a small one the entire rendered set fits and nothing evicts at all. The awkward middle is where FIFO does least, and it is also where it costs least. The two existing guards are unchanged: nothing queued is ever evicted, and free space is checked before every fetch.
+
+#### The index lives in RAM, and the filenames rebuild it
+
+**The cache's metadata is not in the database.** It is an index in the service's memory, built at startup by walking the cache directory, and it is never written back.
+
+The reasoning is not that persisting is hard — persisting is what would *avoid* reconstruct-or-discard on restart. It is that **reconstruction is nearly free, because the path already encodes the identity.** A directory walk plus one `stat` per file yields everything the index holds: which photo, which resolution, how many bytes, how old, what format. A few thousand entries is milliseconds, and even fifty thousand is about 5 MB of memory in a process that idles at 36.
+
+**This inverts *Cache layout*,** which says "the database is the index — nothing ever finds a photo by scanning the filesystem." Now the filesystem is the index and the database copy was the denormalisation that could drift. And it is **Phase 1.5 that makes it possible**: while clients read the cache themselves they needed the database to find paths, so the index had to be somewhere shared. Now nobody but the service looks, so it can live in the process that owns it.
+
+**Filenames rather than EXIF.** A `stat` is microseconds; opening and parsing image metadata across thousands of files at every launch is orders of magnitude more, on the startup path, to recover things the path already carries. EXIF would only buy self-description if the files were ever moved or copied somewhere, and nothing ever does that.
+
+**`photo` gains a UUID, and the filename is exactly that UUID.**
+
+```
+cache/<source-uuid>/.original/<photo-uuid>.heic
+cache/<source-uuid>/3840x2160/<photo-uuid>.heic
+```
+
+**The resolution is a path component rather than part of the name**, so a filename is one identifier and nothing else, and the rebuild stays a walk plus a `stat` with no parsing of any kind. `.original/` is a reserved name rather than the native pixel size — otherwise every photo's original lands in a directory named for its own dimensions, and hundreds of one-off directories sit mixed in with the handful of live display sizes. The leading dot makes the reservation structural rather than conventional: a resolution directory is `<w>x<h>` and can never begin with one, so nothing has to remember that a name is taken. It also makes *the original is just another resolution* literally true of the layout.
+
+Source above resolution because `cache clear --source` is an operation that already exists and clear-by-resolution is not — though the second comes free in this order anyway: a monitor that goes away is one directory removal per source.
+
+The UUID is a column beside the row id, not a replacement for it: `id INTEGER PRIMARY KEY` stays as SQLite's rowid, because every index entry and every `queue.photo_id` references it and a 36-byte text key would inflate all of them on the table the deck reads at every deal. `uuid TEXT NOT NULL UNIQUE` is the only identity that ever leaves the database.
+
+**A row id would have been a silent corruption here, and it is worth being explicit about why.** The database is disposable — deleting it and rescanning is a legitimate recovery for any problem — and a rebuilt database renumbers from 1. With row ids in the filenames, a surviving cache would be *mis-attributed* rather than merely stale: photo 412's renderings served as photo 412, which is now a different picture entirely. Today that cannot happen only because `cache_path` lives in the database and dies with it; moving the index to the filesystem removes the thing that was protecting us.
+
+**So the rule at startup is: if the UUID in the filename is not in the database, delete the file.** That single check is `sweepOrphans` generalised — it cleans up after a deleted photo, after a removed source, and after a rebuilt database, and in the last case it correctly discards the whole cache rather than serving it under someone else's name. A photo removed and re-added gets a new UUID and therefore a clean cache, which is the same rule *Removal is a real delete* already states: a file that comes back is a new entry with no history.
+
+**Migration 3 is therefore a deletion, not an addition.** `cache_path` and `materialized_at` leave `photo` and nothing replaces them; `uuid` arrives, and so does one on `source`. `byte_size` stays, because it is scan metadata about the original rather than about our copy — and it is the column *Known shortcomings* item 2 wants a `modified_at` next to.
+
+**What else it removes:**
+
+- **`verifyResidency` goes entirely.** It exists because the database's claim about resident bytes can go stale against the disk. An index built *from* the disk cannot disagree with it.
+- **`sweepOrphans` collapses into the startup rule** above, plus an unlink at removal time.
+- **One cheap startup step arrives** in their place: prune queue entries whose bytes the walk did not find. The queue is durable and the index is not, so they are reconciled once at launch, in the direction of the disk.
+
+**One invariant the scheme rests on, and it needs writing down: render to a temporary name and rename atomically.** With no database to cross-check, a truncated file left by a crash mid-write would be indexed as real and served as garbage. Atomic rename is what makes *present* mean *complete*.
+
+**The per-source directory keeps both of its mechanical jobs** — `cache clear --source` stays one directory removal rather than thousands of unlinks, and per-source byte totals stay a directory size rather than a query and a stat loop. It is keyed by the source's UUID for the same reason the photo's is.
+
+#### The write amplification, measured rather than pre-optimized
+
+On a library large enough that renderings genuinely are 1:1, caching every one of them is about 13 GB of writes per day at a ten-second dwell, for no reads at all. That is nothing an SSD minds, and it belongs in the Phase 2 measurement rather than in a design decision.
+
+**If it ever does matter, the discriminator is one comparison the system already has the numbers for**: keep the rendering when `pool_size` is smaller than the eviction horizon in cards — that is, when the photo will come round again before eviction would have taken it. No mode, no configuration, and no second policy to explain. It is deliberately not built now, because building it before the measurement exists would be designing against an imagined library.
+
+### A photo that will not render
+
+The render joins the loop `serve` already runs. Today it pops, checks the photo is still in its source, and skips to the next queue entry when it is gone, answering *nothing* only when the queue is exhausted. **Rendering becomes the third step in that same loop**, so a photo that will not decode is skipped and the client gets the next one, rather than a `204` while the queue still holds two hundred good pictures.
+
+**A photo that fails to render is blacklisted after three attempts.** Removing it from the pool does not work, and the reason is worth recording because it is not obvious: the file is still sitting on disk, so the next refresh finds it and adds it straight back. It would cycle for ever, burning a card each time round. Contrast a download that fails from a source that is demonstrably online, where removal is right precisely because the file is gone.
+
+Four properties the blacklist needs:
+
+- **A counter, not one strike.** A decode can fail from memory pressure or from a file caught mid-copy, and neither says anything permanent about the photo. Three, matching the client's retry count.
+- **Somewhere that survives a rescan.** A column on `photo` does, since `upsert` keeps existing rows and only deletes when the file has gone.
+- **One more clause in the candidate predicate**, alongside the repeat window and the producer's claim.
+- **Visible and clearable from `pgr_ctl`.** Otherwise a transient failure removes a photo from the library for good with nothing anywhere saying so, which is the failure this plan spends most of its effort avoiding.
+
+### Revocation, and the staleness that is accepted
+
+Darwin notifications carry no payload, which was exactly right while both ends shared the database: the notification said *go look* and SQLite held what there was to look at. Clients no longer have anything to look at, and a notification never left the machine anyway.
+
+The doorbell works again as soon as a client has an endpoint to look at:
+
+- The service posts the Darwin notification — **outside world to local processes**, unchanged in mechanism.
+- A client fetches `GET /v1/revocations?since=<cursor>` and drops anything it is holding.
+
+The cursor is what lets a client that has been away fetch the delta rather than everything, and the list needs a bounded tail, for which `deck_event` is already the shape.
+
+**Widgets and the Watch may show a revoked picture until they rotate it out, and that is accepted.** They cannot hear a local notification and they render ahead of time. What makes this tolerable is where the gap falls: the surfaces that miss it are showing small images that rotate on their own within the hour, while the wallpaper — which *Known shortcomings* item 10 calls the worst case, since it holds one picture for as long as the user leaves it — is local and does hear it.
+
+**Darwin notifications keep exactly one job, and it is worth naming by direction.** Outside world to service, locally: `defaults write` reconfiguring a running agent with no cooperation from anything is still the property worth having, and both ends share the preferences domain, so *go look* is still sufficient there. Service to clients is HTTP.
+
+### Discovery, authorization, and being awake
+
+**Bonjour, `_photogoround._tcp`**, so nothing has a hostname typed into it. On iOS that needs `NSBonjourServices` and `NSLocalNetworkUsageDescription` and raises the Local Network prompt — TCC-shaped, and exactly the kind of gate this plan tracks. *Caveat, as elsewhere: whether watchOS and tvOS present the same gate, in which versions, and what App Transport Security enforces for cleartext to a `.local` address, all want verifying against the installed SDK rather than designing around memory.*
+
+**Authorization is real work now rather than a footnote**, because clients are on the network rather than on localhost — any device on the Wi-Fi can otherwise ask the library for photos. A bearer token in preferences that `pgr_ctl` prints is trivial on a Mac and miserable to type on an Apple TV. The Watch has an answer nothing else does: **the paired phone is a credential broker.** It can browse, resolve, and pass the endpoint and the token through `WCSession` application context, so discovery and authorization are both solved for the watch without anybody typing on it. The Apple TV has no such relationship and is left with on-screen code entry or an equivalent.
+
+**Three tiers of reachability, and they are genuinely different problems.** Same Wi-Fi as the Mac is Bonjour plus the local service and no infrastructure — which *tvOS storage* already contemplates, "refilled from either iCloud Photos directly or from a Mac on the same network." Phone present is `WCSession` carrying the same exchange. Cellular with the Mac unreachable is the one that costs something — NAT traversal, a relay, or a cloud endpoint — and it runs straight into *Nothing is shipped anywhere* and *Why nothing syncs between devices*.
+
+**And the Mac has to be awake.** A watch asking at three in the morning gets nothing from a sleeping Mac, and Bonjour sleep proxy is not something to promise. This is the standing weakness of the LAN design and it has no answer inside these three tiers.
+
+### What this collapses elsewhere
+
+The point of recording these together is that they are the return on the change, and several of them are the hardest unknowns in the plan.
+
+- **The Phase 6 spike shrinks to one question.** "Can a saver inside `legacyScreenSaver` read the cache and write the deck" becomes "can it make an HTTP request," and the four-rung ladder is resolved before the spike runs.
+- **The consumption journal fallback goes away**, since it existed only for a saver that could not write.
+- **The Phase 8 spike may go away entirely.** Confirming an unsandboxed Developer ID server and a sandboxed widget extension can share an App Group container stops mattering when the widget makes a request instead. *Known shortcomings* item 5 — `MacHostEnvironment.appGroupIdentifier` and `directoryName`, kept deliberately for Phases 5 and 8 — may become deletable rather than deferred.
+- **Cross-process concurrency becomes one process's internal business.** WAL, `BEGIN IMMEDIATE`, and the two-processes-one-deck tests stop being a distributed story. The producer's claim still earns its place, because the service runs four fetches per source concurrently inside itself.
+
+### What it costs
+
+- **The service has to be up.** Nothing needed anything else to be running before this. launchd buys most of it back — socket activation for a listener, so a client connecting starts the agent — but it moves the login item from Phase 6 to Phase 3, and `SMAppService.agent(plistName:)` returning `.notFound` from the agent bundle, with five plist shapes already ruled out, moves from *recorded and out of scope* onto the critical path.
+- **A second implementation of the client seam**, in-process for iOS and HTTP for everything else. Small, and it is where the retry policy lives.
+- **The reachability tiers above**, of which the third has no cheap answer.
+
+### Alternatives considered and rejected here
+
+- **Server-Sent Events with a two-phase download.** Client asks, service answers later with a download ID, client collects it. Rejected: the queue means there is nothing to wait for, a widget extension cannot hold the stream open to hear the answer, and holding a rendered file between the two calls is a reservation with a reaper — the hand design, returning under another name. SSE stays available if a genuine push need appears; revocation did not turn out to be one, because a payload-free notification plus a list endpoint does the same job for the clients that can hear it.
+- **A Node service.** Attractive because HTTP makes the transport language-agnostic, but the service is the one component that cannot be: there is no Node binding for PhotoKit and the file inside a `.photoslibrary` is undocumented and TCC-protected, so a Node service cannot get an original out of an iCloud-optimized library at all; TCC attaches to a signed bundle, so Photos access would be granted to the Node binary; fit-to-size means `CGImageSourceCreateThumbnailAtIndex`, against which the Node answer is a native module tree in a project that refuses even Apple's argument parser; and Phase 7's `NSWorkspace.setDesktopImageURL` needs a Swift helper regardless, at which point "no Apple dependencies" is already false.
+- **A C core, or running the service in AWS.** The portability argument does not require leaving Swift, which builds for Linux — a headless instance is a build target rather than a rewrite, with the Photos provider compiled in only where it exists. What actually decides where the service can run is **not the language but the geography of the photos**: it has to reach the bytes to serve them, and a folder is on a disk while a Photos library is on that Mac under TCC. A cloud instance would mean uploading a second copy of what iCloud already stores — roughly 200 GB for a fifty-thousand-photo library, at rest and paid for, plus egress — and it contradicts *Nothing is shipped anywhere* outright. **Phase 11 is the exception worth remembering**: Google Photos does not care where the service runs, because the bytes were never local, and a cloud instance serving from it needs no upload and no Mac awake at three in the morning.
+- **The whole thing dispensed with, keeping the database as the transport.** This was the plan until Phase 1.5. It fails on the surfaces that are the point of the project: it requires every sandboxed client to obtain file access to the container and the cache, and it cannot reach a Watch or an Apple TV at all.
+
+### What `pgr_ctl` stops needing to do
+
+The service's whole surface is curl-able by construction, which retires part of the rig rather than reimplementing it.
+
+**`serve` dissolves into a shell loop.** `curl -w '%{time_total}\n'` yields the per-request timing that `serve` was computing percentiles over, and the concurrency proof gets *better* rather than worse: four backgrounded `curl` invocations exercise the real client path over the wire, where four `pgr_ctl serve` processes were exercising a path no shipping surface will ever take. This is the same argument *`pgr_ctl`, the command-line tool* already makes for the cache-cap sweep being "a shell loop over `pgr_ctl` invocations, not a bespoke benchmark harness."
+
+**What survives is exactly what is not a service operation**: preferences — `get`, `set`, and the `source` verbs, which are preferences writes by design — plus `shuffle-test`, `notify`, and `log`. The inspection verbs become thin renderings of the JSON endpoints, for reading by a person rather than by `jq`.
+
+**`shuffle-test` keeps earning its place because a curl loop cannot assert.** It exits non-zero, which is what lets CI run the deck's correctness checks exactly as a person does.
+
+### What this revised, elsewhere in this document
+
+The reversal is recorded rather than quietly absorbed, because the old text was not vague — it was specific and wrong, and two readers took opposite meanings from it. Each passage below has been rewritten in place; this is the list of where, so nobody reads the current text and assumes it always said this.
+
+1. *Design Decisions* — "**Between our own components: the database is the transport, a Darwin notification is the doorbell.** No HTTP server, no sockets, no XPC." True of the control channel, no longer true of how a picture reaches a surface.
+2. *Design Decisions* — "**\"Calls it\" means the database and a Darwin notification, not a socket.**" The Mac app becomes a client of the service.
+3. *The service does one thing* — "the database is the transport, so anything that wants to inspect or change the library opens it directly." Still true of `pgr_ctl` and of `defaults write`. Not true of displays.
+4. *What a client asks for, and what it gets back* — step 4, "the client reads the card and loads the image," and "The database is the transport and the notification is the doorbell." Steps 1 through 3 survive intact.
+5. *Decode on demand; do not store derivatives* — the widget exception is absorbed rather than kept, and **the argument against a derivative tier no longer holds at small pool sizes**, where a rendering is re-read every few minutes rather than once. Renderings are cached; originals stay as the render source. The in-memory decoded-image cache at display time is unaffected.
+6. *Design Decisions* — "**The cache is capped by photo count, FIFO, default 1000.**" The bound becomes bytes alone and `cachePhotoCap` goes; FIFO and both guards stand.
+7. *Cache layout* and *Eviction* — the on-disk path is keyed by UUID and gains a resolution component, and eviction ranges over `(photo, resolution)` entries rather than over photos. *Choosing the shipping default* now measures a byte budget.
+8. *Cache layout* — "the database is the index — nothing ever finds a photo by scanning the filesystem" is inverted. The filesystem is the index; the service reads it once at startup into RAM and never writes it back. `verifyResidency` and `sweepOrphans` go with it.
+9. *Reference in place on the internal volume* — unchanged in substance, but it now describes the native entry rather than the photo.
+10. *Apple Watch* — "the phone keeps a small rolling set of watch-sized derivatives on the watch" becomes "the watch asks at its own size." The companion decision itself stands, on sourcing grounds rather than on reachability.
+11. *Phase 6* — the spike ladder "Direct container access, then localhost HTTP, then XPC, with a consumption journal as fallback" is resolved to HTTP in advance.
+12. *Phase 8* — the App Group spike may no longer be needed.
+13. *Phase 2* — `pgr_ctl` becomes the first client of the service rather than a direct reader of the database, for the picture path. Inspection and source configuration are unchanged.
+14. *`pgr_ctl`, the command-line tool* — the subcommand sketch lists `serve`, and "It has a head start" names it as written. `serve` is retired in favour of `curl`; see *What `pgr_ctl` stops needing to do* above.
+
 ## The service does one thing
 
 `photogoroundd` runs the queue. That is the entire command surface, and the constraint is deliberate rather than incidental.
 
 **It takes no command word, because there is nothing to choose between.** There was a `run` verb for a while, and it was pure ceremony: a program with one behaviour that makes you name the behaviour is asking a question with one answer. It survived only because the inspect verbs bound for `pgr_ctl` were still sharing the binary and made it look like a subcommand among subcommands. A bare invocation now runs the agent; an unrecognised word is still an error rather than a silent start, so a typo cannot launch a server by accident.
 
-A service that also answers questions is a service with two jobs, and the second one grows: first a status verb, then a way to add a source, then a way to change a preference, and now the thing that is supposed to be running unattended for a week has an interactive surface nobody is watching. Worse, it makes the service the *place* those things happen, when the whole architecture says otherwise — the database is the transport, so anything that wants to inspect or change the library opens it directly and never needs the agent's cooperation at all.
+A service that also answers questions is a service with two jobs, and the second one grows: first a status verb, then a way to add a source, then a way to change a preference, and now the thing that is supposed to be running unattended for a week has an interactive surface nobody is watching. Worse, it makes the service the *place* configuration happens, when the architecture says otherwise — sources and settings live in `UserDefaults`, so anything that wants to change the library writes there and never needs the agent's cooperation at all. Handing out pictures is a different matter and is the service's actual job; see *The service is the interface*.
 
 **So the service is configured, not commanded.** Everything it needs to know arrives before it starts:
 
@@ -933,9 +1175,9 @@ A service that also answers questions is a service with two jobs, and the second
 PGR_CONTAINER=…  PGR_FOLDERS=…  PGR_RECURSIVE=1  photogoroundd
 ```
 
-and everything else — what it found, what it has queued, what it will show next, what the preferences are — is answered by `pgr_ctl`, which opens the same database and rings the doorbell when it changes something. Neither process has to be running for the other to work, which is the property that made this design worth having.
+and everything else — what it found, what it has queued, what it will show next — is answered by the service's own inspection endpoints, while preferences are read and written directly in their domain. Configuration therefore still works with the service stopped, which is the property that made this design worth having; pictures, by definition, do not.
 
-**One consequence worth stating**: the service has no consumers of its own, so a staged agent fills the queue and then waits. That is correct and looks like nothing happening. Watching it do something means `pgr_ctl serve` in another terminal, or Phase 3's window.
+**One consequence worth stating**: the service has no consumers of its own, so a staged agent fills the queue and then waits. That is correct and looks like nothing happening. Watching it do something means `curl` against `/v1/next` in another terminal, or Phase 3's window.
 
 ## `pgr_ctl`, the command-line tool
 
@@ -952,7 +1194,6 @@ pgr_ctl refresh [--source <id>]        # re-enumerate sources into the pool
 pgr_ctl pool stats                     # rows per source, available, media types
 pgr_ctl queue peek [--count n]         # what is ready to serve, in order
 pgr_ctl queue fill                     # ask every source once, synchronously
-pgr_ctl serve [--count n]              # take pictures off the head, with timing
 pgr_ctl deck stats                     # showing counts, gap distribution, passes
 pgr_ctl cache status | evict | clear [--source <id>] [--unavailable]
 pgr_ctl shuffle-test --deals N         # the statistical assertions
@@ -967,9 +1208,11 @@ Four notes on building it:
 - **No argument-parsing package.** `swift-argument-parser` is Apple's, but it is still an SPM dependency, and the no-dependencies rule does not have an Apple exception. Hand-rolled parsing for a dozen subcommands is an afternoon and about two hundred lines.
 - **It goes through the same public kit API as every other host.** The temptation to let a debug tool reach past the API into raw SQL should be resisted for the same reason it should be in the app: a harness that bypasses the interface tests nothing.
 - **Being unshipped does not make it a scratch script.** No compatibility promise is not the same as no rigor: the assertions it runs are the project's real correctness checks for the deck, so they belong in version control and in CI alongside the unit tests.
-- **It doubles as the measurement rig.** The cache-cap experiment — fill times and cache-miss rates across caps of 250 through 4000 — is a shell loop over `pgr_ctl` invocations, not a bespoke benchmark harness. Same for validating that serving actually serialises: run several `pgr_ctl serve` processes concurrently and assert the union of what they got has no duplicates.
+- **It doubles as the measurement rig.** The cache-cap experiment — fill times and cache-miss rates across caps of 250 through 4000 — is a shell loop over `pgr_ctl` invocations, not a bespoke benchmark harness. Same for validating that serving actually serialises: run several `curl` requests concurrently and assert the union of what they got has no duplicates — which exercises the real client path rather than one no shipping surface will take.
 
-**It has a head start.** `source`, `status`, `queue peek`, `serve`, `get` and `set` are written, because standing the agent up needed a way to see what it thought was happening. They live in `pgr_ctl` from the outset rather than as subcommands of the server.
+**It has a head start.** `source`, `status`, `queue peek`, `get` and `set` are written, because standing the agent up needed a way to see what it thought was happening. They live in `pgr_ctl` from the outset rather than as subcommands of the server.
+
+**There is no `serve`, and no download verb at all.** Phase 1.5 makes the service's whole surface curl-able, so taking a picture off the head of the queue is `curl` and timing it is `curl -w '%{time_total}\n'`. What stays here is what is *not* a service operation — preferences, the statistical rig, the doorbell, and the log. See *What `pgr_ctl` stops needing to do*.
 
 Between them, `pgr_ctl` and the Mac app cover the two halves of the problem: the command line for anything scriptable, statistical, or repeatable, and the app for anything visual, interactive, or timing-dependent.
 
@@ -1015,7 +1258,7 @@ Because the logs are never collected, they have to be self-sufficient on the mac
 
 Above the unit tests sit three layers, each catching what the one below cannot:
 
-- **`pgr_ctl`** for anything scriptable, statistical, or concurrent — shuffle distribution over fifty thousand draws, cache-cap sweeps, and several processes serving at once to prove the queue pop actually serialises. These are assertions a test suite can run in CI as easily as a person can run them by hand.
+- **`pgr_ctl` and `curl`** for anything scriptable, statistical, or concurrent — shuffle distribution over fifty thousand draws, cache-budget sweeps, and several requests at once to prove the queue pop actually serialises. These are assertions a test suite can run in CI as easily as a person can run them by hand.
 - **The Mac app's instrument panel** for anything visual or timing-dependent — deck ordering seen at a glance, simulated consumers at different rates, Darwin notifications observed as they fire.
 - **Per-phase spikes and manual verification** for what neither can reach: wallpaper application, the saver's sandbox behavior, widget timeline budgets.
 
@@ -1218,7 +1461,9 @@ The Watch is the most constrained surface in the plan and the only one that viol
 
 So the Watch app is built as a companion and declares that dependency rather than degrading into it. watchOS permits independent apps that run without a paired phone; this one deliberately is not, because an unpaired watch would have an empty library and no way to fill it. Declaring the requirement means the failure is a clear "needs the iPhone app" at install time instead of a mysteriously blank widget later.
 
-The mechanism is `WCSession.transferFile`, which queues transfers opportunistically and survives the app not running on either end. The phone keeps a small rolling set of watch-sized derivatives on the watch — a handful, not a thousand — replacing the oldest as the deck advances. Practically, the phone serves a few pictures on the watch's behalf and pushes derivatives for them; the watch plays through what it has and shows the most recent if a transfer is late.
+The mechanism is `WCSession.transferFile`, which queues transfers opportunistically and survives the app not running on either end — and since Phase 1.5 it is a *transport for the ordinary exchange* rather than a bespoke feeding arrangement. The watch asks at the size it is about to draw at, exactly like every other client, and the phone answers from its own in-process service; the phone no longer has to know watch pixel dimensions or rendering families. A small rolling set still lives on the watch — a handful, not a thousand — because a watch out of range of both the phone and the Mac cannot ask anyone anything, and it plays through what it has if a transfer is late.
+
+**A cellular watch on its own Wi-Fi can also reach the Mac directly**, over Bonjour, with the paired phone acting as credential broker — it browses, resolves, and passes the endpoint and token through `WCSession` application context, so nothing has to be typed on a watch. That does not make the watch independent: it still has no sources of its own, which is what the dependency was always about.
 
 **The rendering mode is the thing most likely to disappoint.** WidgetKit on watchOS renders through `widgetRenderingMode`, and on most watch faces complications render accented or vibrant rather than full color — which turns a photograph into a luminance mask. A photo complication on a watch face will not look like a photo. The Smart Stack is the surface where full color is actually available, so that is the realistic target, and `.accessoryRectangular` is the only family with enough room for an image to read as an image at all.
 
@@ -1321,25 +1566,26 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 
 **Wrong behaviour, worth fixing now**
 
-1. **Selection and claim are not atomic.** Picking a candidate and marking it shown are separate statements with a fetch in between, so two producers can pick the same picture. Today that cannot happen — one agent, and a source refuses concurrent work beyond its limit — so this is a property of the deployment rather than of the code. The moment a second process produces, it costs a duplicated download. Cheap to fix by claiming at selection time; wrong to forget.
-2. **A file edited in place is never noticed.** A refresh compares storage and byte size, so an edit that preserves the byte count — a crop re-encoded to the same length, a metadata rewrite — leaves the stale copy cached for ever. Wants a `modified_at` column compared on refresh, treated as re-fetch rather than as a new entry so it keeps its place in the rotation.
+1. **A file edited in place is never noticed.** A refresh compares storage and byte size, so an edit that preserves the byte count — a crop re-encoded to the same length, a metadata rewrite — leaves the stale copy cached for ever. Wants a `modified_at` column compared on refresh, treated as re-fetch rather than as a new entry so it keeps its place in the rotation.
 
 **Dead weight left by refactoring**
 
-3. **`ScanChange` and `ScanResult` are named for a method called `refresh`.** Small, but the vocabulary should be one word.
-4. **Seven inspect verbs still live in `photogoroundd`** — `serve`, `status`, `source`, `queue`, `get`/`set`, and the service ones. They are Phase 2's, and the plan already says the service does one thing. Until they move, that claim is true of the default behaviour and not of the binary.
+2. **`ScanChange` and `ScanResult` are named for a method called `refresh`.** Small, but the vocabulary should be one word.
 
 **Declared but not wired up**
 
-5. **`MacHostEnvironment.appGroupIdentifier` and `directoryName` have no callers**, and that is deliberate rather than an oversight — Phase 5's widget and Phase 8's Mac widget need an App Group container, and the team-ID-prefixed spelling is the kind of detail that costs an afternoon when it is rediscovered rather than recorded. Left in place knowingly.
 
 **Cosmetic**
 
-6. **The status line reports cached photos against a cap that some libraries can never approach.** A boot-volume library is referenced in place and never copied, so `0/1000 cached` is correct and reads like a stalled fetch. It should say what is true — that there is nothing to cache — rather than making the reader work it out.
-7. **A folder that never existed is reported as "no longer at this path."** The check cannot tell "moved" from "never there", and says the more alarming of the two.
+3. **A folder that never existed is reported as "no longer at this path."** The check cannot tell "moved" from "never there", and says the more alarming of the two.
 
 **Done since this list was written**
 
+- **`MacHostEnvironment.appGroupIdentifier` is deleted.** It was kept for Phase 5's and Phase 8's widgets, whose App Group container Phase 1.5 removes the need for — a widget asks the service instead. What it was really preserving was a spelling, which belongs here rather than in an uncalled constant: **on macOS the App Group must be team-ID prefixed — `R5PQPZARC5.com.sydpolk.photogoround`, not `group.com.sydpolk.photogoround`.** Getting it wrong yields a nil container URL rather than an error, which is a classic afternoon lost, and the prefix differs between the Mac and iOS builds so it was never a shared constant either. `directoryName` still has a job and stays.
+- **Filling moved out of the agent and into the kit, and `SourceWorker` and `SourceWorkers` went with it.** Deciding *keep asking while the queue is short and this source still has something* is policy about the queue; which thread runs it and when the heartbeat fires is scheduling. Welded together in the host they were unreachable by the test suite, which is why a regression that cut a small library to one picture every five seconds survived. `QueueFiller` now holds the policy, takes *is it short* and *produce one* as injected closures, holds no database connection of its own, and has eight tests with no clock in any of them. The in-flight counting that let a source ignore a request while busy is done by the lane model and a per-round guard instead, so both worker types are gone along with their tests.
+- **Selection and claim were not atomic.** Picking a candidate and queuing it were separated by a fetch, so two producers asking one source could pick the same picture and both download it — reachable rather than theoretical, since a source runs four fetches at once. Selection now claims the photo in the same `BEGIN IMMEDIATE`, the claim is released when the picture reaches the queue or the attempt fails, and it expires so a producer that dies mid-fetch sidelines nothing. No reaper.
+- **The seven inspect verbs left `photogoroundd`.** `serve`, `status`, `source`, `queue`, `get`/`set` and the service verbs now live in `pgr_ctl`, so "the service does one thing" is true of the binary and not merely of its default. The agent has two cases left, and one of them prints usage.
+- **The status line lied about the cache cap twice over.** It reported `0/1000 cached` for a boot-volume library that is referenced in place and can never cache anything, which reads as a stalled fetch; and it froze the cap it was born with, so raising `cachePhotoCap` from a terminal left it reporting the old number for ever. Both fixed.
 - `.sourcesChanged` was announced and nobody listened, so a source added from a terminal sat idle until the next scheduled refresh. The agent now observes it and refreshes within a tick — verified against a live agent with the scan interval set to an hour.
 - `CacheSettings.chunkSize` and `burstSize` were vestigial after chunked ingestion went, along with their preferences. Removed.
 - `DarwinNotification.deckAdvanced` was a topic nobody rang; serving now posts it.
@@ -1347,7 +1593,8 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 - Dead API removed after an audit: `PhotoQueue.depthBySource`, `Source.contributesToDeck` (a second name for `enabled`), `PhotoExistence.isAbsent`, `Statement.optionalDouble`, `Preferences.removeSource(locator:)`, and `Preferences.bundleDomain` (a second spelling of `Deployment.identifier`). All had zero call sites.
 - Sources can be named at launch with `PGR_FOLDERS`, so Phase 1 needs no CLI.
 - The queue filled at one round of requests per tick rather than re-asking on each answer — four pictures every five seconds against a folder that fills a thousand-entry queue in three. Fixed, and written up under *Filling*.
-- A pool smaller than the queue's target had no stopping condition, so a small library meant a producer spinning against a queue that already held everything. It is now paced by the maintenance tick.
+- A pool smaller than the queue's target had no stopping condition, so a small library meant a producer spinning against a queue that already held everything. The stopping condition is the source that answers *nothing*, remembered for the round. **An earlier fix paced this on the maintenance tick instead, and that was a regression**: it reintroduced the one-round-per-tick filling that had just been removed, but only when the pool was smaller than the queue — so the 7,955-photo staging run never took the branch and a fifty-photo library took it every time, yielding one picture every five seconds however fast the queue drained. Measured at 6 pictures out of 40 requests before, 40 out of 40 after.
+- **Serving did not ask for more.** `PhotoQueue`'s own documentation says serving is the only thing that shortens the queue and therefore the only thing that can notice it has run low — and nothing in the agent ever acted on it; only the maintenance tick asked. `pgr_ctl serve` topped up inline, which is why this survived the Phase 2 gate, but no HTTP client could. The endpoint now asks after every picture it hands over, including when it hands over nothing.
 - The agent printed a count of sources and nothing about them. It now names each one at startup with its photo count and whether it is recursive, disabled, unavailable, or not yet scanned — the whole class of "it is running but showing nothing" is visible in the first second rather than after a session of reading the log.
 - The `run` verb is gone; a bare invocation runs the agent.
 - A refresh held the whole library in memory three times over — the provider's full enumeration, a dictionary of every existing row, and a `Set` of every external identifier. All three are gone, and with them the two per-file costs underneath. Written up under *Scanning is constant-memory, and what it took*.
@@ -1360,10 +1607,11 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 
 **Known and deliberately deferred**
 
-8. **No Xcode project until Phase 3.** A shared scheme in `.swiftpm/xcode/xcshareddata/xcschemes/` gives the package a debugger today, which is enough for the agent. A real project arrives with the Mac app, where the App Group container has to be settled anyway — and doing both at once means the container question is answered by the thing that actually has the problem.
-9. **The agent bundle and `SMAppService` are built but out of scope, and ahead of schedule.** `Scripts/make-agent-bundle.sh` assembles an `LSUIElement` app, and the server has `register` / `unregister` / `service-status` verbs. None of it is needed until there is a surface that wakes up on its own and expects the library to be there — the screensaver, the wallpaper, the widgets, and probably the Mac app that registers it on their behalf. Recorded because it exists and because the finding is worth keeping: `SMAppService.agent(plistName:)` reports `.notFound` from that bundle, having ruled out a missing plist, five plist shapes, ad-hoc versus Developer ID signing, and `Bundle.main` resolution. What is left is that the process probably has to be launched by LaunchServices as an app, which is how it will actually be used.
-10. **Watching the filesystem, and revoking a photo already on screen, are Phase 3 work and not built.** See *Revoking a photo that is already on screen*. The serve-time check covers hand-off and nothing else, so every surface that displays a photo for longer than an instant can show one that has since been deleted — the wallpaper worst of all. Two pieces are missing: a watcher (`FSEventStream`, `PHPhotoLibraryChangeObserver`) and a `.photoRevoked` topic for consumers to drop what they are holding.
-11. **The migrator refuses a database from a newer build.** Given the database is disposable, deleting and rebuilding would be a friendlier answer than an error — at the cost of one rescan. Worth revisiting when there is a second build to be older than.
+4. **No Xcode project until Phase 3.** A shared scheme in `.swiftpm/xcode/xcshareddata/xcschemes/` gives the package a debugger today, which is enough for the agent. A real project arrives with the Mac app, where the App Group container has to be settled anyway — and doing both at once means the container question is answered by the thing that actually has the problem.
+5. **The agent bundle and `SMAppService` are no longer ahead of schedule.** Phase 1.5 puts the service on the critical path for every surface, so a login item is needed from Phase 3 rather than from Phase 6, and this finding moves from recorded-and-deferred to blocking. `Scripts/make-agent-bundle.sh` assembles an `LSUIElement` app, and the server has `register` / `unregister` / `service-status` verbs. None of it is needed until there is a surface that wakes up on its own and expects the library to be there — the screensaver, the wallpaper, the widgets, and probably the Mac app that registers it on their behalf. Recorded because it exists and because the finding is worth keeping: `SMAppService.agent(plistName:)` reports `.notFound` from that bundle, having ruled out a missing plist, five plist shapes, ad-hoc versus Developer ID signing, and `Bundle.main` resolution. What is left is that the process probably has to be launched by LaunchServices as an app, which is how it will actually be used.
+6. **Watching the filesystem, and revoking a photo already on screen, are Phase 3 work and not built.** See *Revoking a photo that is already on screen*. The serve-time check covers hand-off and nothing else, so every surface that displays a photo for longer than an instant can show one that has since been deleted — the wallpaper worst of all. Two pieces are missing: a watcher (`FSEventStream`, `PHPhotoLibraryChangeObserver`) and a `.photoRevoked` topic for consumers to drop what they are holding.
+7. **The response does not name the picture.** A client is handed bytes, a card id and a deal ordinal, and nothing it could show a person or use as a filename — which is what made saving one from `curl` awkward enough to notice. The name should be the photo's own, **stripped of its extension**, because from step 2 onward the format returned is the one the client asked for through `Accept` rather than the one the original had, so the original extension would be a lie. An `X-PGR-Name` header alongside the others. One wrinkle to remember when building it: `external_id` is a source-*relative path* rather than a leaf name, so a recursive folder yields `2019/summer/sunset-05.png` and the header wants the last component with the extension removed.
+8. **The migrator refuses a database from a newer build.** Given the database is disposable, deleting and rebuilding would be a friendlier answer than an error — at the cost of one rescan. Worth revisiting when there is a second build to be older than.
 
 ## Expect the plan to change, and where it can absorb it
 
@@ -1541,6 +1789,7 @@ Two things to get right:
   It also fails on its own mechanical terms, which is worth recording separately from the principle. Apple's screensaver selection GUI chokes on folders containing large numbers of pictures — one of the original motivations for this project — so the approach depends on the very component already known to be broken. The slot design happens to dodge it, since a few hundred fixed slots stay small no matter how large the library behind them grows, but relying on a workaround to stay inside the limits of a UI that already fails at this exact task is not a foundation.
 
   Kept here in full, mechanics and all, because it is the standing contingency: if the Phase 6 spike shows a saver cannot reach the deck by any of the four mechanisms and the consumption journal turns out unworkable, this is the fallback that still puts full-resolution shuffled photos on the screen. Worse, but not nothing, and already designed.
+- **The database as the transport for pictures, not just for control.** This was the design until Phase 1.5, and it is written up in full under *The service is the interface*, along with the four alternatives killed alongside it — a two-phase download over Server-Sent Events, a Node service, a C core, and running the service in AWS. The short form: sharing SQLite works beautifully between a command-line tool and an agent on one machine, and fails on every surface that is the point of the project, because it requires each sandboxed client to obtain file access to the container and the cache, and cannot reach a Watch or an Apple TV at all.
 - **A real local cache on the Watch.** Technically possible — carve out space and keep a proper rolling library on-device. Declined, because it buys less than it appears to: the Watch still has no sources, so a bigger cache still has to be filled by the phone. All the extra storage purchases is more variety while out of range of the phone, in exchange for a second cache with its own eviction policy on the most storage-constrained device in the lineup. The small rolling set stays.
 
   One argument *against* it that does not hold, recorded so it does not get re-invented: that it would force us to down-convert images to the watch's resolution when we do not have to anywhere else. Down-conversion happens everywhere — it is what a subsampled decode to display size *is*, on every platform, for every photo. The watch's copies are produced on the *phone* in either design, so a local watch cache would add no new kind of work and move no resizing onto the watch. The reason above is the real one.

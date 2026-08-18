@@ -18,10 +18,21 @@ let package = Package(
     products: [
         .library(name: "PhotoGoRoundKit", targets: ["PhotoGoRoundKit"]),
         .executable(name: "photogoroundd", targets: ["photogoroundd"]),
+        // Internal, and never shipped. It is a product so that `swift run
+        // pgr_ctl` works; nothing about that puts it in a distributed bundle.
+        .executable(name: "pgr_ctl", targets: ["pgr_ctl"]),
     ],
     targets: [
         .target(
             name: "PhotoGoRoundKit",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // Terminal output, shared by the two executables and by nothing else.
+        // It is deliberately outside the kit: unified logging is the shipping
+        // mechanism and works from inside every sandbox we will ever be in,
+        // while this is for a person with a terminal open.
+        .target(
+            name: "Console",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // Named the way a command-line service is named, even though it is an
@@ -29,7 +40,14 @@ let package = Package(
         // find and to type.
         .executableTarget(
             name: "photogoroundd",
-            dependencies: ["PhotoGoRoundKit"],
+            dependencies: ["PhotoGoRoundKit", "Console"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // The rig. A separate binary because the service has exactly one job
+        // and answering questions is not it.
+        .executableTarget(
+            name: "pgr_ctl",
+            dependencies: ["PhotoGoRoundKit", "Console"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
@@ -40,6 +58,11 @@ let package = Package(
         .testTarget(
             name: "photogorounddTests",
             dependencies: ["photogoroundd"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "pgr_ctlTests",
+            dependencies: ["pgr_ctl"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

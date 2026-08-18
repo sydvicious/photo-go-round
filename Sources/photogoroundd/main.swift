@@ -1,28 +1,27 @@
+import Console
 import Foundation
 import PhotoGoRoundKit
 
 // The headless agent. It owns the library and does all the work; every other
 // surface is a consumer that reads the deck and displays cards.
 //
-// Running is the whole program, so it takes no command word: the agent is
-// configured, not commanded. The inspect subcommands below exist only so it can
-// be stood up and looked at from a terminal before `pgr_ctl` arrives in Phase 2,
-// and they leave with it.
+// **Running is the whole program, so it takes no command word.** A service that
+// also answers questions is a service with two jobs, and the second one grows:
+// first a status verb, then a way to add a source, then a way to change a
+// preference, and the thing that is supposed to run unattended for a week has an
+// interactive surface nobody is watching. Everything it needs to know arrives
+// before it starts; everything anybody wants to ask is answered by `pgr_ctl`,
+// which opens the same database and rings the doorbell when it changes
+// something.
+//
+// An unrecognised word is still an error rather than a silent start, so a typo
+// cannot launch a server by accident.
 
 // Line buffering, not block buffering. stdout is fully buffered whenever it is
 // not a terminal, so a watcher piped to a file or captured by launchd would
 // otherwise emit nothing until the buffer filled — and lose it entirely on
 // SIGTERM, which is exactly how this process ends.
 setvbuf(stdout, nil, _IOLBF, 0)
-
-func hostEnvironment(_ options: Options) -> MacHostEnvironment {
-    MacHostEnvironment(
-        deployment: options.deployment,
-        containerOverride: options.containerOverride,
-        databaseOverride: options.databaseOverride,
-        cacheOverride: options.cacheOverride
-    )
-}
 
 do {
     let options = try Options.parse(
@@ -37,46 +36,20 @@ do {
     case .run:
         Log.sources.notice("photogoroundd starting")
         try await RunCommand(
-            environment: hostEnvironment(options),
+            environment: MacHostEnvironment(
+                deployment: options.deployment,
+                containerOverride: options.containerOverride,
+                databaseOverride: options.databaseOverride,
+                cacheOverride: options.cacheOverride
+            ),
             foldersToAdd: options.foldersToAdd,
             recursive: options.recursive,
             tick: options.interval,
             once: options.once,
-            scanIntervalOverride: options.scanIntervalOverride
+            scanIntervalOverride: options.scanIntervalOverride,
+            servicePort: options.servicePort
         ).run()
-
-    case .serve:
-        try await ServeCommand(
-            environment: hostEnvironment(options),
-            consumerName: options.consumerName,
-            count: options.count,
-            repeatWindowFraction: options.repeatWindowFraction,
-            quiet: options.quiet
-        ).run()
-
-    case .source(let action):
-        try await InspectCommands.source(action, environment: hostEnvironment(options))
-
-    case .status:
-        try InspectCommands.status(environment: hostEnvironment(options))
-
-    case .queuePeek:
-        try InspectCommands.queuePeek(count: options.count, environment: hostEnvironment(options))
-
-    case .queueFill:
-        try await InspectCommands.queueFill(rounds: options.count, environment: hostEnvironment(options))
-
-    case .getPreferences:
-        InspectCommands.get(environment: hostEnvironment(options))
-
-    case .setPreference(let key, let value):
-        try InspectCommands.set(key: key, value: value, environment: hostEnvironment(options))
-
-    case .service(let action):
-        try ServiceCommand(action: action).run()
     }
-} catch let requested as ExitCode {
-    exit(requested.code)
 } catch {
     Console.failure(String(describing: error))
     exit(1)

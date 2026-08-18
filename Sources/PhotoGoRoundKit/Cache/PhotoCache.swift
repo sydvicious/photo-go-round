@@ -193,6 +193,13 @@ public struct PhotoCache {
             let candidate = try deck.nextCandidate(forSource: sourceID, settings: settings, now: now)
         else { return false }
 
+        // Selection claimed it so that a concurrent producer against this same
+        // source picks something else. The claim is ours until we are done with
+        // it, and it ends here whatever the outcome — queued, failed, or thrown
+        // past. A photo left claimed by a path nobody thought about waits out
+        // the timeout for no reason at all.
+        defer { try? deck.releaseClaim(photoID: candidate.id) }
+
         if candidate.storage == .materialized, candidate.cachePath == nil {
             let relative = Self.relativePath(
                 sourceID: sourceID, photoID: candidate.id, externalID: candidate.externalID
