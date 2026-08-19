@@ -38,28 +38,28 @@ enum SourceCommands {
     private static func add(
         _ requested: [Options.NewSource], environment: MacHostEnvironment
     ) async throws {
-        var specs: [SourceSpec] = []
-        for source in requested {
-            let resolved = URL(filePath: source.path).standardizedFileURL
-                .path(percentEncoded: false)
-            guard FileManager.default.fileExists(atPath: resolved) else {
-                Console.failure("not found: \(resolved)")
-                throw ExitCode(1)
+        // Resolving and refusing the batch lives in the kit, so the app runs
+        // the same rule rather than a second copy of it.
+        let resolution = SourceRequest.resolve(
+            requested.map {
+                SourceRequest(kind: $0.kind, path: $0.path, recursive: $0.recursive)
+            })
+        guard case .resolved(let specs) = resolution else {
+            if case .missing(let paths) = resolution {
+                for path in paths {
+                    Console.failure("not found: \(path)")
+                }
             }
-            specs.append(
-                source.kind == .file
-                    ? SourceSpec(kind: .file, locator: resolved)
-                    : SourceSpec.folder(resolved, recursive: source.recursive))
+            throw ExitCode(1)
         }
 
+        // One write, therefore one doorbell. Adding them one at a time posted a
+        // notification per path, and the agent refreshes on every one it hears.
         let preferences = environment.preferences
-        var added: [SourceSpec] = []
-        for spec in specs {
-            if preferences.addSource(spec) {
-                added.append(spec)
-            } else {
-                Console.note("already a source: \(spec.locator)")
-            }
+        let added = preferences.addSources(specs)
+        let wasNew = Set(added.map(\.locator))
+        for spec in specs where !wasNew.contains(spec.locator) {
+            Console.note("already a source: \(spec.locator)")
         }
         guard !added.isEmpty else { return }
 
@@ -85,7 +85,8 @@ enum SourceCommands {
                 Console.note("  \(result.added) photos found")
             }
         }
-        environment.announce(.sourcesChanged)
+        // `setSources` posted `.sourcesChanged` already; announcing here as
+        // well was a second doorbell for one change.
     }
 
     // MARK: - Listing

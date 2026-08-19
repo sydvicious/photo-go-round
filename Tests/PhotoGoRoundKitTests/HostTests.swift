@@ -291,6 +291,176 @@ struct HostTests {
         #expect(settings.criticalFreeBytes <= settings.minimumFreeBytes)
     }
 
+    // MARK: - The source list
+
+    @Test("A batch of new sources is added in the order given")
+    func batchAdds() {
+        let suite = Suite()
+        let added = suite.preferences.addSources([
+            .folder("/tmp/a"), .folder("/tmp/b"), .folder("/tmp/c"),
+        ])
+        #expect(added.count == 3)
+        #expect(suite.preferences.sources.map(\.locator) == ["/tmp/a", "/tmp/b", "/tmp/c"])
+    }
+
+    @Test("A batch skips what is already listed and keeps the rest")
+    func batchSkipsDuplicates() {
+        let suite = Suite()
+        suite.preferences.addSources([.folder("/tmp/a")])
+
+        let added = suite.preferences.addSources([.folder("/tmp/a"), .folder("/tmp/b")])
+        #expect(added.map(\.locator) == ["/tmp/b"])
+        #expect(suite.preferences.sources.count == 2)
+    }
+
+    /// Duplicates *within* one batch too, since a dialog can hand back the same
+    /// path twice by way of a symlink.
+    @Test("A batch containing the same path twice adds it once")
+    func batchDeduplicatesItself() {
+        let suite = Suite()
+        let added = suite.preferences.addSources([.folder("/tmp/a"), .folder("/tmp/a")])
+        #expect(added.count == 1)
+        #expect(suite.preferences.sources.count == 1)
+    }
+
+    /// The point of the batch: one write, therefore one notification, because
+    /// the agent refreshes on every one it hears.
+    /// The point of the batch: one write, therefore one notification, because
+    /// the agent refreshes on every one it hears.
+    ///
+    /// What is asserted here is the contract that guards the write — nothing
+    /// new, so nothing written. **The notification itself is deliberately not
+    /// counted**: Darwin notifications are process-wide and carry no payload,
+    /// so an observer of `.sourcesChanged` hears every other test that writes a
+    /// source list, and there is no way to tell those from this one. That
+    /// property is verified against a live agent instead, by watching a
+    /// multi-file add produce one refresh in `pgr_ctl log` rather than one per
+    /// file.
+    @Test("A batch of entirely known sources writes nothing at all")
+    func batchOfDuplicatesIsSilent() {
+        let suite = Suite()
+        suite.preferences.addSources([.folder("/tmp/a", recursive: true)])
+
+        let added = suite.preferences.addSources([.folder("/tmp/a"), .folder("/tmp/a")])
+        #expect(added.isEmpty)
+
+        // Unchanged, recursion included — a rewrite would have taken the second
+        // batch's answer, which says otherwise.
+        #expect(suite.preferences.sources.count == 1)
+        #expect(suite.preferences.sources[0].recursive)
+    }
+
+    @Test("Removing a batch takes every named source and leaves the others")
+    func batchRemoves() {
+        let suite = Suite()
+        suite.preferences.addSources([.folder("/tmp/a"), .folder("/tmp/b"), .folder("/tmp/c")])
+
+        let removed = suite.preferences.removeSources(locators: ["/tmp/a", "/tmp/c"])
+        #expect(removed == 2)
+        #expect(suite.preferences.sources.map(\.locator) == ["/tmp/b"])
+    }
+
+    @Test("Removing what was never listed changes nothing")
+    func removingAbsentIsNoOp() {
+        let suite = Suite()
+        suite.preferences.addSources([.folder("/tmp/a")])
+        #expect(suite.preferences.removeSources(locators: ["/tmp/nowhere"]) == 0)
+        #expect(suite.preferences.sources.count == 1)
+    }
+
+    // MARK: - What the agent found
+
+    @Test("Nothing is published until an agent has looked")
+    func noStatusYet() {
+        #expect(Suite().preferences.sourceStatus.isEmpty)
+    }
+
+    @Test("Published status is what a client reads back")
+    func statusRoundTrips() {
+        let suite = Suite()
+        let scanned = Date(timeIntervalSince1970: 1_700_000_000)
+        suite.preferences.publishSourceStatus([
+            SourceStatus(
+                locator: "/tmp/a", uuid: "AAA", photoCount: 8287, available: true,
+                scannedAt: scanned),
+            SourceStatus(
+                locator: "/tmp/b", uuid: "BBB", photoCount: 0, available: false,
+                unavailableReason: "drive not connected"),
+        ])
+
+        let read = suite.preferences.sourceStatus
+        #expect(read.count == 2)
+        #expect(read[0].photoCount == 8287)
+        #expect(read[0].scannedAt == scanned)
+        #expect(read[1].available == false)
+        #expect(read[1].unavailableReason == "drive not connected")
+        // Never scanned is a real state, told apart from scanned-to-nothing.
+        #expect(read[1].scannedAt == nil)
+    }
+
+    /// The two keys are separate so that neither can corrupt the other — one
+    /// is what the user chose and the other is what the agent found.
+    @Test("Publishing status does not disturb the source list")
+    func statusLeavesSourcesAlone() {
+        let suite = Suite()
+        suite.preferences.addSources([.folder("/tmp/a", recursive: true)])
+        suite.preferences.publishSourceStatus([
+            SourceStatus(locator: "/tmp/a", uuid: "AAA", photoCount: 3, available: true)
+        ])
+
+        #expect(suite.preferences.sources.count == 1)
+        #expect(suite.preferences.sources[0].recursive)
+        #expect(suite.preferences.sources[0].locator == "/tmp/a")
+    }
+
+    @Test("Republishing replaces rather than accumulates")
+    func statusReplaces() {
+        let suite = Suite()
+        suite.preferences.publishSourceStatus([
+            SourceStatus(locator: "/tmp/a", uuid: "AAA", photoCount: 1, available: true),
+            SourceStatus(locator: "/tmp/b", uuid: "BBB", photoCount: 2, available: true),
+        ])
+        suite.preferences.publishSourceStatus([
+            SourceStatus(locator: "/tmp/a", uuid: "AAA", photoCount: 9, available: true)
+        ])
+
+        let read = suite.preferences.sourceStatus
+        #expect(read.count == 1)
+        #expect(read[0].photoCount == 9)
+    }
+
+    /// `defaults write` accepts anything, and a status array is as reachable
+    /// from a terminal as any other key.
+    @Test("Nonsense in the status array is skipped, not honoured")
+    func statusTolerantOfGarbage() {
+        let suite = Suite()
+        suite.defaults.set(
+            [
+                "not a dictionary",
+                ["uuid": "no locator here"],
+                ["locator": ""],
+                ["locator": "/tmp/good", "uuid": "CCC", "photoCount": 4, "available": true],
+            ],
+            forKey: "sourceStatus")
+
+        let read = suite.preferences.sourceStatus
+        #expect(read.count == 1)
+        #expect(read[0].locator == "/tmp/good")
+        #expect(read[0].photoCount == 4)
+    }
+
+    /// A record from a build that did not have a field should not make a
+    /// working source look broken.
+    @Test("A status missing its availability reads as available")
+    func statusDefaultsToAvailable() {
+        let suite = Suite()
+        suite.defaults.set([["locator": "/tmp/a", "uuid": "AAA"]], forKey: "sourceStatus")
+        let read = suite.preferences.sourceStatus
+        #expect(read.count == 1)
+        #expect(read[0].available)
+        #expect(read[0].photoCount == 0)
+    }
+
     // MARK: - The doorbell
 
     @Test("A posted notification reaches an observer")
