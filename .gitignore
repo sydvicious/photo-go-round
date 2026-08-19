@@ -65,3 +65,5 @@ fastlane/test_output
 
 # Agent bundle assembled by Scripts/make-agent-bundle.sh
 build/
+
+*.xcworkspacedata
