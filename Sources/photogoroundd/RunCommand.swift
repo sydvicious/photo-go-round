@@ -19,7 +19,7 @@ struct RunCommand {
     /// Development convenience. Production takes this from preferences, where
     /// it can be changed without restarting the agent.
     var scanIntervalOverride: Duration?
-    var servicePort: UInt16
+    var servicePort: UInt16?
 
     /// Filling is policy and lives in the kit; what stays here is the two facts
     /// it needs — is the queue short, and produce one picture — each of which
@@ -36,13 +36,19 @@ struct RunCommand {
         let deck = Deck(database: database)
         var preferences = environment.preferences
 
+        // One index for the whole process, shared by everything that touches
+        // bytes: the endpoint's per-request caches, the producer's, and
+        // maintenance.
+        let store = PhotoStore(
+            root: environment.cacheRoot, byteCeiling: preferences.cacheSettings.byteCeiling)
         let cache = PhotoCache(
             database: database,
             root: environment.cacheRoot,
             settings: preferences.cacheSettings,
             sources: sources,
             deck: deck,
-            queueSize: preferences.queueSize
+            queueSize: preferences.queueSize,
+            store: store
         )
         try cache.prepare()
 
@@ -54,7 +60,8 @@ struct RunCommand {
         // rather than stacking with it, so calling this on every served picture
         // cannot outrun what the providers are willing to do.
         let databasePath = environment.databaseURL.path(percentEncoded: false)
-        filler.configure(databasePath: databasePath, cacheRoot: environment.cacheRoot)
+        filler.configure(
+            databasePath: databasePath, cacheRoot: environment.cacheRoot, store: store)
         let filler = self.filler
         let topUp: @Sendable () -> Void = {
             Task { await filler.fill(preferences: environment.preferences) }
@@ -64,21 +71,33 @@ struct RunCommand {
             databasePath: databasePath,
             cacheRoot: environment.cacheRoot,
             preferences: preferences,
+            store: store,
             queueRanShort: topUp
         )
-        let listener = HTTPListener(port: servicePort, advertising: PictureEndpoint.path) {
-            await endpoint.route($0)
-        }
+        // Where the service is, written where every local client can find it:
+        // a preference domain is a name rather than a path, which is the only
+        // thing both ends can locate without being told.
+        let listener = HTTPListener(
+            port: servicePort,
+            advertising: PictureEndpoint.path,
+            onReady: { environment.preferences.publishServicePort($0) }
+        ) { await endpoint.route($0) }
         try listener.start()
         defer { listener.stop() }
+
+        // **This process only ever ends by signal** — launchd sends `SIGTERM`,
+        // a person types Ctrl-C — so a `defer` is not where the published port
+        // can be withdrawn. Without this, every ordinary stop leaves an address
+        // behind and `pgr_ctl status` names a port nothing is answering on.
+        let shutdown = Self.withdrawPortOnTermination(environment.preferences)
+        _ = shutdown
 
         Console.banner(
             """
             database   \(environment.databaseURL.path(percentEncoded: false))
             cache      \(environment.cacheRoot.path(percentEncoded: false))
             roots from \(environment.origin.rawValue)
-            cache cap  \(preferences.cacheSettings.photoCap) photos, \
-            ceiling \(preferences.cacheSettings.byteCeiling / CacheSettings.gigabyte) GB
+            cache      ceiling \(preferences.cacheSettings.byteCeiling / CacheSettings.gigabyte) GB
             queue      \(preferences.queueSize) nominal, \(preferences.downloadConcurrency) fetches per source
             window     \(preferences.deckSettings.repeatWindowFraction)
             """
@@ -199,7 +218,8 @@ struct RunCommand {
                         root: environment.cacheRoot,
                         settings: preferences.cacheSettings,
                         sources: sources,
-                        deck: deck
+                        deck: deck,
+                        store: store
                     ),
                     deck: deck,
                     preferences: preferences,
@@ -321,21 +341,13 @@ struct RunCommand {
         preferences: Preferences,
         environment: MacHostEnvironment
     ) async throws {
-        let lost = try cache.verifyResidency()
-        if lost > 0 {
-            Console.event("\(lost) cache entries had lost their bytes")
-        }
-
-        let orphans = try cache.sweepOrphans()
-        if orphans.files > 0 {
-            Console.event(
-                "swept \(orphans.files) orphaned cache files, freeing \(Self.bytes(orphans.bytes))")
-        }
-
+        // No residency check and no orphan sweep: the index is built from the
+        // filesystem at launch, so it cannot disagree with it, and a file whose
+        // UUID nothing claims is deleted there rather than swept later.
         let eviction = try cache.evictIfNeeded()
         if eviction.evicted > 0 {
             Console.event(
-                "evicted \(eviction.evicted) photos, freed \(Self.bytes(eviction.bytesFreed))"
+                "evicted \(eviction.evicted) cache entries, freed \(Self.bytes(eviction.bytesFreed))"
                     + (eviction.protectedFromEviction > 0
                         ? " (\(eviction.protectedFromEviction) queued)" : "")
             )
@@ -348,8 +360,8 @@ struct RunCommand {
         let stats = try deck.stats(settings: preferences.deckSettings)
         return """
             \(stats.dealablePhotos) in pool · \(status.queued)/\(preferences.queueSize) queued · \
-            \(status.residentCount)/\(status.cap) cached · \(status.referencedCount) referenced · \
-            \(Self.bytes(status.bytesOnDisk)) on disk
+            \(status.residentCount) originals · \(status.renderingCount) renderings · \
+            \(status.referencedCount) referenced · \(Self.bytes(status.bytesOnDisk)) on disk
             """
     }
 
@@ -420,12 +432,15 @@ final class FillerBox: @unchecked Sendable {
     private var cacheRoot = URL(filePath: "/")
     private var filler: QueueFiller?
 
-    func configure(databasePath: String, cacheRoot: URL) {
+    func configure(databasePath: String, cacheRoot: URL, store: PhotoStore) {
         lock.lock()
         defer { lock.unlock() }
         self.databasePath = databasePath
         self.cacheRoot = cacheRoot
+        self.store = store
     }
+
+    private var store: PhotoStore?
 
     private func paths() -> (database: String, cache: URL) {
         lock.lock()
@@ -449,6 +464,9 @@ final class FillerBox: @unchecked Sendable {
 
         let gauge = Gauge(databasePath: path)
         let sizes = Sizes()
+        lock.lock()
+        let bytes = store
+        lock.unlock()
         let built = QueueFiller(
             isShort: { gauge.isShort(nominalSize: sizes.queueSize) },
             produce: { sourceID in
@@ -456,7 +474,7 @@ final class FillerBox: @unchecked Sendable {
                 let store = SourceStore(database: database)
                 let producer = PhotoCache(
                     database: database, root: root, settings: sizes.cacheSettings,
-                    sources: store, queueSize: sizes.queueSize)
+                    sources: store, queueSize: sizes.queueSize, store: bytes)
                 return (try? await producer.produce(
                     forSource: sourceID, settings: sizes.deckSettings)) ?? false
             })
@@ -568,6 +586,29 @@ final class Reporter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return anything
+    }
+}
+
+/// Takes the published address back down on the way out.
+///
+/// The sources are returned rather than discarded because a `DispatchSourceSignal`
+/// stops firing the moment nothing holds it, and this one has to outlive the
+/// call that made it.
+extension RunCommand {
+
+    static func withdrawPortOnTermination(_ preferences: Preferences) -> [DispatchSourceSignal] {
+        [SIGTERM, SIGINT].map { number in
+            // The default disposition kills the process before the handler ever
+            // runs, so it has to be turned off first.
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number)
+            source.setEventHandler {
+                preferences.withdrawServicePort()
+                exit(0)
+            }
+            source.resume()
+            return source
+        }
     }
 }
 

@@ -168,7 +168,6 @@ public struct Deck {
             """
             SELECT COUNT(*)                                                  AS total,
                    SUM(CASE WHEN last_dealt_seq IS NULL THEN 1 ELSE 0 END)   AS never_dealt,
-                   SUM(CASE WHEN cache_path IS NOT NULL THEN 1 ELSE 0 END)   AS resident,
                    IFNULL(MIN(times_shown), 0)                               AS shown_min,
                    IFNULL(MAX(times_shown), 0)                               AS shown_max,
                    IFNULL(SUM(times_shown), 0)                               AS shown_total
@@ -178,7 +177,6 @@ public struct Deck {
             (
                 total: try row.int("total"),
                 neverDealt: try row.optionalInt("never_dealt") ?? 0,
-                resident: try row.optionalInt("resident") ?? 0,
                 min: try row.int("shown_min"),
                 max: try row.int("shown_max"),
                 shownTotal: try row.int("shown_total")
@@ -189,7 +187,6 @@ public struct Deck {
             totalPhotos: counts?.total ?? 0,
             dealablePhotos: pool,
             neverDealt: counts?.neverDealt ?? 0,
-            residentPhotos: counts?.resident ?? 0,
             currentDealSeq: state.dealSeq,
             passStartSeq: state.passStartSeq,
             unusedInCurrentPass: try unusedInCurrentPass(),
@@ -213,8 +210,6 @@ public struct DeckStats: Sendable, Equatable {
     /// Photos the deck could deal right now, ignoring the pass and the window.
     public let dealablePhotos: Int
     public let neverDealt: Int
-    /// Photos whose bytes are resident — referenced in place or materialised.
-    public let residentPhotos: Int
     public let currentDealSeq: Int64
     public let passStartSeq: Int64
     /// Cards left before the deck reshuffles.

@@ -12,6 +12,8 @@ public enum Migrator {
     static let migrations: [Migration] = [
         Migration(version: 1, name: "initial schema", sql: SchemaV1.sql),
         Migration(version: 2, name: "claim at selection", sql: SchemaV2.sql),
+        Migration(version: 3, name: "render blacklist", sql: SchemaV3.sql),
+        Migration(version: 4, name: "cache leaves the database", sql: SchemaV4.sql),
     ]
 
     /// The version a fully migrated database reports.

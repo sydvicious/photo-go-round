@@ -257,9 +257,11 @@ struct OptionsTests {
 
     // MARK: - The service port
 
-    @Test("`--port` overrides the port the pictures are served on")
+    @Test("The port floats unless it is pinned")
     func portOverride() throws {
-        #expect(try parse([]).servicePort == 9000)
+        // Nothing rather than a number: the kernel is asked at launch, so there
+        // is no default here to be out of step with what actually gets bound.
+        #expect(try parse([]).servicePort == nil)
         #expect(try parse(["--port", "9101"]).servicePort == 9101)
     }
 

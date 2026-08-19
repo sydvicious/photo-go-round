@@ -47,8 +47,14 @@ struct TestLibrary {
     @discardableResult
     func addSource(kind: String = "folder", locator: String = "/photos", enabled: Bool = true) throws -> Int64 {
         try database.run(
-            "INSERT INTO source (kind, locator, enabled, added_at) VALUES (:kind, :locator, :enabled, 0);",
-            ["kind": .text(kind), "locator": .text(locator), "enabled": SQLValue(enabled)]
+            """
+            INSERT INTO source (uuid, kind, locator, enabled, added_at)
+            VALUES (:uuid, :kind, :locator, :enabled, 0);
+            """,
+            [
+                "uuid": .text(UUID().uuidString.lowercased()), "kind": .text(kind),
+                "locator": .text(locator), "enabled": SQLValue(enabled),
+            ]
         )
         return database.lastInsertRowID
     }
@@ -66,17 +72,17 @@ struct TestLibrary {
             for index in 0..<count {
                 try database.run(
                     """
-                    INSERT INTO photo (source_id, external_id, media_type, source_enabled,
-                                       storage, cache_path, shuffle_key, added_at)
-                    VALUES (:source, :external, :media, :enabled,
-                            'materialized', :path, :key, 0);
+                    INSERT INTO photo (uuid, source_id, external_id, media_type, source_enabled,
+                                       storage, shuffle_key, added_at)
+                    VALUES (:uuid, :source, :external, :media, :enabled,
+                            'materialized', :key, 0);
                     """,
                     [
+                        "uuid": .text(UUID().uuidString.lowercased()),
                         "source": .int(sourceID),
                         "external": .text("\(namePrefix)-\(index).heic"),
                         "media": .text(mediaType.rawValue),
                         "enabled": SQLValue(sourceEnabled),
-                        "path": .text("\(sourceID)/\(namePrefix)-\(index).heic"),
                         "key": .double(Double.random(in: 0..<1)),
                     ]
                 )

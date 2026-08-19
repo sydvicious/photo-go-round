@@ -66,13 +66,19 @@ cannot disturb anything. All three move together, deliberately: relocating the
 storage root alone would leave the source list pointing at the real one.
 
 `--port` *n*
-Which port to serve pictures on, pinning it to a number you choose. A
-development agent and a shipped one cannot both hold the same port, so each
-names its own.
+Which port to serve pictures on, pinning it to a number you choose. Worth doing
+when something has to reach the agent without asking where it is — a `curl` you
+type by hand, a client with a hard-coded URL.
 
-By default, the agent takes the port the kernel gives it at launch and publishes
-it to preferences, where all Mac processes can read it. Other clients will use
-Bonjour to discover the URL and port.
+By default the agent takes whatever port the kernel gives it at launch and
+publishes it to preferences under `servicePort`, where every process on the
+machine can read it. Nothing has to agree on a number in advance, and two agents
+can run side by side without either being told about the other. `pgr_ctl status`
+prints the published address.
+
+The value is withdrawn when the agent stops. A crash leaves it behind, and a
+client that tries it finds nothing listening — the same answer it gets when no
+agent is running.
 
 `--container` *dir*
 Storage root, holding `photogoround.sqlite` and its WAL sidecars. Defaults to
@@ -160,14 +166,14 @@ arguments, which is why every path has an environment form.
 
 ## SERVICE
 
-The agent listens on localhost — see `--port` — and answers one request that
-matters:
+The agent listens on localhost, on the port `pgr_ctl status` prints — see
+`--port` — and answers one request that matters:
 
     GET /v1/next?consumer=<name>&display=<id>&w=<pixels>&h=<pixels>
 
-`200` returns the picture, with `Content-Type` describing the format and
-`X-PGR-Card`, `X-PGR-Deal`, `X-PGR-Source` and `X-PGR-Storage` describing the
-photo and its place in the shuffle. `204 No Content` means the queue is empty,
+`200` returns the picture, with `Content-Type` describing the format,
+`X-PGR-Pixels` its size, and `X-PGR-Card`, `X-PGR-Deal`, `X-PGR-Source` and
+`X-PGR-Storage` describing the photograph and its place in the shuffle. `204 No Content` means the queue is empty,
 which is an ordinary answer rather than an error — a fresh library replies this
 way until the agent has produced something.
 
@@ -176,8 +182,29 @@ There is no reservation and nothing to reclaim from a client that disappears
 mid-transfer; a failed download is a lost picture and the client asks again. Two
 clients asking at once therefore never receive the same picture.
 
-For now, `w` and `h` are accepted and ignored: the bytes returned are the
-original, unmodified.
+**`w` and `h` are maximums.** No image returned will exceed either bound. What
+comes back is the largest that fits inside them with its aspect ratio intact,
+upright, and ready to draw 1:1 — a client never resamples what it is handed.
+Nothing is ever enlarged, so asking for a box larger than the original returns
+the original's pixels; `X-PGR-Pixels` reports what was actually produced. Naming
+neither returns the original bytes, untouched.
+
+Today that is the only fit: shrink or grow, aspect ratio preserved. More options
+will be added to the endpoint later.
+
+The format comes from `Accept`: HEIC unless the client will take only JPEG, since
+everything here decodes HEIC and it is roughly half the bytes.
+
+**A photograph that will not render is skipped**, and the next entry is tried, so
+a bad file costs a client the picture it would have had and nothing else. After
+three failures it is retired and never offered again. The row stays — the file is
+still on disk, and deleting the row would only mean the next rescan found it
+again.
+
+**Renderings are kept**, so asking twice for the same photograph at the same size
+decodes once. `X-PGR-Cache` says `hit` or `miss`. They survive a restart, and
+they are bounded by `cacheByteCeiling` along with the originals — a rendering is
+a fraction of an original's bytes, so the same budget holds far more of them.
 
 Serving is also what notices the queue has run short, and what asks the sources
 for more.
@@ -208,10 +235,9 @@ without restarting it and without any cooperation:
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
 | `maintenanceIntervalSeconds` | how often to verify, sweep, and evict | 30 |
 | `downloadConcurrency` | fetches in flight per source | 4 |
-| `cachePhotoCap` | copied photos to keep | 1000 |
-| `cacheByteCeiling` | bytes to keep, as a safety valve | 50 GB |
+| `cacheByteCeiling` | bytes of cached photographs and renderings to keep | 50 GB |
 | `cacheMinimumFreeBytes` | stop fetching below this much free space | 5 GB |
-| `cacheCriticalFreeBytes` | evict ahead of the cap below this much | 2 GB |
+| `cacheCriticalFreeBytes` | evict ahead of the ceiling below this much | 2 GB |
 
 Every read is a parse with a default and a clamp, because `defaults write` accepts
 anything. An out-of-range value is logged and clamped rather than honoured.
@@ -224,8 +250,13 @@ mode, so `-wal` and `-shm` sidecars sit beside it and "delete the database"
 means deleting all three.
 
 *cache-root*`/`
-Copied photo bytes. Only photos on volumes that can disappear are copied;
-anything on the boot volume is read where it lies.
+Copied photograph bytes, and the renderings made from them. Only photographs on
+volumes that can disappear are copied; anything on the boot volume is read where
+it lies, though renderings of it are still kept.
+
+Nothing in the database describes what is here. The service walks this directory
+at startup and rebuilds its index from the filenames, so the two cannot disagree
+— and a file the database does not claim is deleted rather than adopted.
 
 |                | storage root | cache root |
 | --- | --- | --- |

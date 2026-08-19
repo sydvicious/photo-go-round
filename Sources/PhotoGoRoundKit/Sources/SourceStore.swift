@@ -28,11 +28,11 @@ public struct ScanResult: Sendable, Equatable {
     /// the cache root is, so it reports them and whoever owns the root deletes
     /// them. Bounded by how many photos actually disappeared, not by library
     /// size — a scan that removes nothing carries nothing.
-    public let orphanedCachePaths: [String]
+    public let orphaned: [String]
 
     public init(
         sourceID: Int64, added: Int, removed: Int, unchanged: Int,
-        sourceUnavailable: Bool, reason: String?, orphanedCachePaths: [String] = []
+        sourceUnavailable: Bool, reason: String?, orphaned: [String] = []
     ) {
         self.sourceID = sourceID
         self.added = added
@@ -40,7 +40,7 @@ public struct ScanResult: Sendable, Equatable {
         self.unchanged = unchanged
         self.sourceUnavailable = sourceUnavailable
         self.reason = reason
-        self.orphanedCachePaths = orphanedCachePaths
+        self.orphaned = orphaned
     }
 
     public var isEmpty: Bool { added == 0 && removed == 0 }
@@ -105,10 +105,11 @@ public struct SourceStore {
         try database.transaction(.immediate) {
             try database.run(
                 """
-                INSERT INTO source (kind, locator, bookmark, stamp_uuid, enabled, recursive, added_at)
-                VALUES (:kind, :locator, :bookmark, :stamp, 1, :recursive, :now);
+                INSERT INTO source (uuid, kind, locator, bookmark, stamp_uuid, enabled, recursive, added_at)
+                VALUES (:uuid, :kind, :locator, :bookmark, :stamp, 1, :recursive, :now);
                 """,
                 [
+                    "uuid": .text(UUID().uuidString.lowercased()),
                     "kind": .text(kind.rawValue),
                     "locator": .text(locator),
                     "bookmark": bookmark.map { SQLValue.blob($0) } ?? .null,
@@ -391,7 +392,7 @@ public struct SourceStore {
         // rather than tracked here, which would mean knowing which rows were new.
         var survived = 0
         var cursor: Int64 = 0
-        var orphanedCachePaths: [String] = []
+        var orphaned: [String] = []
 
         while true {
             let batch = try pool.page(ofSource: source.id, after: cursor)
@@ -414,7 +415,7 @@ public struct SourceStore {
             if !departed.isEmpty {
                 let removal = try pool.remove(departed)
                 removed += removal.count
-                orphanedCachePaths += removal.orphanedCachePaths
+                orphaned += removal.orphaned
             }
         }
 
@@ -423,7 +424,7 @@ public struct SourceStore {
         let result = ScanResult(
             sourceID: source.id, added: added, removed: removed,
             unchanged: max(0, survived - added), sourceUnavailable: false, reason: nil,
-            orphanedCachePaths: orphanedCachePaths
+            orphaned: orphaned
         )
         if !result.isEmpty {
             Log.sources.notice(
@@ -489,7 +490,7 @@ public struct SourceStore {
     }
 
     private static let selectSourceSQL = """
-        SELECT id, kind, locator, bookmark, stamp_uuid, enabled, recursive,
+        SELECT id, uuid, kind, locator, bookmark, stamp_uuid, enabled, recursive,
                available, unavailable_reason, unavailable_at, added_at, scanned_at
           FROM source
         """

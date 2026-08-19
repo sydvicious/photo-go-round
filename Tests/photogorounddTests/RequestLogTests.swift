@@ -38,10 +38,12 @@ struct RequestLogTests {
         let path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
         try Migrator.migrate(Database(path: path))
 
+        let cacheRoot = directory.appending(path: "cache")
         var endpoint = PictureEndpoint(
             databasePath: path,
-            cacheRoot: directory.appending(path: "cache"),
+            cacheRoot: cacheRoot,
             preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.log.\(UUID())")!),
+            store: PhotoStore(root: cacheRoot),
             queueRanShort: {}
         )
         endpoint.log = { collector.record($0) }

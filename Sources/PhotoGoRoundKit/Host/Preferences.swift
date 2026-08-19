@@ -47,7 +47,6 @@ public struct Preferences: @unchecked Sendable {
         public init(_ rawValue: String) { self.rawValue = rawValue }
 
         public static let repeatWindowFraction = Key("repeatWindowFraction")
-        public static let cachePhotoCap = Key("cachePhotoCap")
         public static let cacheByteCeiling = Key("cacheByteCeiling")
         public static let cacheMinimumFreeBytes = Key("cacheMinimumFreeBytes")
         public static let cacheCriticalFreeBytes = Key("cacheCriticalFreeBytes")
@@ -57,6 +56,9 @@ public struct Preferences: @unchecked Sendable {
         public static let queueSize = Key("queueSize")
         public static let queueRefreshIntervalSeconds = Key("queueRefreshIntervalSeconds")
         public static let sources = Key("sources")
+        /// Where the service is listening. Written by the agent, read by every
+        /// local client.
+        public static let servicePort = Key("servicePort")
     }
 
     // MARK: - Reading, with a default and a clamp
@@ -125,7 +127,6 @@ public struct Preferences: @unchecked Sendable {
     public var cacheSettings: CacheSettings {
         let defaultSettings = CacheSettings.default
         return CacheSettings(
-            photoCap: integer(.cachePhotoCap, default: defaultSettings.photoCap, in: 0...1_000_000),
             byteCeiling: bytes(
                 .cacheByteCeiling, default: defaultSettings.byteCeiling, in: 0...Int64.max
             ),
@@ -240,6 +241,39 @@ public struct Preferences: @unchecked Sendable {
         return true
     }
 
+    // MARK: - Where the service is
+
+    /// The port the agent is listening on, or nil when none is running or it has
+    /// not said yet.
+    ///
+    /// **This is state in a store meant for preferences, and the exception is
+    /// deliberate.** Clients no longer open the database, so `UserDefaults` is
+    /// the only place both ends can find without being told a path — a domain is
+    /// a name rather than a location. The same argument that put the source list
+    /// here puts this here.
+    ///
+    /// A stale value outlives a crash. A client finds nothing listening, which is
+    /// the same answer it gets when the agent is simply stopped, and backs off.
+    public var servicePort: UInt16? {
+        guard defaults.object(forKey: Key.servicePort.rawValue) != nil else { return nil }
+        let raw = defaults.integer(forKey: Key.servicePort.rawValue)
+        guard raw > 0, raw <= Int(UInt16.max) else { return nil }
+        return UInt16(raw)
+    }
+
+    /// Says where to find the service. The agent's to call, nobody else's.
+    public func publishServicePort(_ port: UInt16) {
+        defaults.set(Int(port), forKey: Key.servicePort.rawValue)
+        DarwinNotification.post(.preferencesChanged)
+    }
+
+    /// Withdraws it on the way out, so nothing points at a service that has
+    /// stopped.
+    public func withdrawServicePort() {
+        defaults.removeObject(forKey: Key.servicePort.rawValue)
+        DarwinNotification.post(.preferencesChanged)
+    }
+
     // MARK: - Writing
 
     /// `pgr` owns preference writes, because it knows the correct domain for
@@ -279,7 +313,6 @@ public struct Preferences: @unchecked Sendable {
     public func effectiveValue(for key: Key) -> String? {
         switch key {
         case .repeatWindowFraction: String(deckSettings.repeatWindowFraction)
-        case .cachePhotoCap: String(cacheSettings.photoCap)
         case .cacheByteCeiling: String(cacheSettings.byteCeiling)
         case .cacheMinimumFreeBytes: String(cacheSettings.minimumFreeBytes)
         case .cacheCriticalFreeBytes: String(cacheSettings.criticalFreeBytes)
@@ -305,7 +338,7 @@ public struct Preferences: @unchecked Sendable {
     }
 
     public static let allKeys: [Key] = [
-        .repeatWindowFraction, .cachePhotoCap, .cacheByteCeiling,
+        .repeatWindowFraction, .cacheByteCeiling,
         .cacheMinimumFreeBytes, .cacheCriticalFreeBytes,
         .scanIntervalSeconds, .maintenanceIntervalSeconds, .downloadConcurrency, .queueSize,
         .queueRefreshIntervalSeconds,

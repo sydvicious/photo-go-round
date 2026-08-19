@@ -550,8 +550,6 @@ struct SourceTests {
         #expect(stats.total == 6)
         #expect(stats.images == 4)
         #expect(stats.videos == 2)
-        // `addPhotos` writes a cache path, so these count as resident.
-        #expect(stats.resident == 6)
         #expect(stats.referenced == 0)
         #expect(stats.claimed == 0)
 

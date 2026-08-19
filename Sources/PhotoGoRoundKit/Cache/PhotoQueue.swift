@@ -48,8 +48,10 @@ public struct PhotoQueue {
     public func peek(_ count: Int = 1) throws -> [DeckCard] {
         try database.all(
             """
-            SELECT p.id, p.source_id, p.external_id, p.storage, p.cache_path
-              FROM queue q JOIN photo p ON p.id = q.photo_id
+            SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
+              FROM queue q
+              JOIN photo p ON p.id = q.photo_id
+              JOIN source s ON s.id = p.source_id
              ORDER BY q.position
              LIMIT :limit;
             """,
@@ -96,8 +98,11 @@ public struct PhotoQueue {
         try database.transaction(.immediate) {
             let head = try database.first(
                 """
-                SELECT q.position, p.id, p.source_id, p.external_id, p.storage, p.cache_path
-                  FROM queue q JOIN photo p ON p.id = q.photo_id
+                SELECT q.position, p.id, p.uuid, p.source_id, s.uuid AS source_uuid,
+                       p.external_id, p.storage
+                  FROM queue q
+                  JOIN photo p ON p.id = q.photo_id
+                  JOIN source s ON s.id = p.source_id
                  ORDER BY q.position
                  LIMIT 1;
                 """

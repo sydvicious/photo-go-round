@@ -62,11 +62,22 @@ struct CacheTests {
 
     // MARK: - Layout
 
-    @Test("Cache paths are source id over photo id, so a source is one directory")
-    func cacheLayoutIsSourceThenPhoto() {
-        let path = PhotoCache.relativePath(sourceID: 3, photoID: 124, externalID: "holiday/beach.HEIC")
-        #expect(path == "3/000000124.heic")
-        #expect(PhotoCache.relativePath(sourceID: 7, photoID: 1, externalID: "noext") == "7/000000001")
+    @Test("Cache paths are source, then size, then the photograph's own identity")
+    func cacheLayoutIsSourceThenSize() {
+        let store = PhotoStore(root: URL(filePath: "/cache"))
+        let original = store.url(
+            for: PhotoStore.Key(photoUUID: "abc"), sourceUUID: "src", pathExtension: "HEIC")
+        #expect(original.path(percentEncoded: false) == "/cache/src/.original/abc.heic")
+
+        let rendered = store.url(
+            for: PhotoStore.Key(photoUUID: "abc", size: .init(width: 3840, height: 2160)),
+            sourceUUID: "src", pathExtension: "heic")
+        #expect(rendered.path(percentEncoded: false) == "/cache/src/3840x2160/abc.heic")
+
+        // A file with no extension keeps none, rather than gaining a stray dot.
+        let bare = store.url(
+            for: PhotoStore.Key(photoUUID: "abc"), sourceUUID: "src", pathExtension: "")
+        #expect(bare.path(percentEncoded: false) == "/cache/src/.original/abc")
     }
 
     @Test("The cache directory is kept out of backups")
@@ -183,7 +194,7 @@ struct CacheTests {
         }
         #expect(served == ["keep.png"])
         #expect(try fixture.deck.poolSize() == 1)
-        #expect(try fixture.cache.sweepOrphans().files == 0)
+        #expect(try fixture.cache.indexCache().discarded == 0)
     }
 
     @Test("Existence is three-valued, and offline is not deletion")
@@ -224,60 +235,67 @@ struct CacheTests {
 
     // MARK: - Eviction
 
-    @Test("Eviction is FIFO by materialization time")
+    /// Entries are written in deck order, so oldest-written is longest-since-
+    /// dealt. The test ages them by hand because a produce loop finishes in
+    /// microseconds and every file would otherwise share a timestamp.
+    private func age(_ fixture: Fixture, oldestFirst uuids: [String]) throws {
+        for (index, uuid) in uuids.enumerated() {
+            guard let url = fixture.cache.store.url(for: PhotoStore.Key(photoUUID: uuid))
+            else { continue }
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: Double(1000 + index))],
+                ofItemAtPath: url.path(percentEncoded: false))
+        }
+        try fixture.cache.indexCache()
+    }
+
+    private func uuidsByID(_ fixture: Fixture) throws -> [String] {
+        try fixture.library.database.all("SELECT uuid FROM photo ORDER BY id;") {
+            try $0.string("uuid")
+        }
+    }
+
+    @Test("Eviction is FIFO by the order entries were written")
     func evictionIsFIFO() async throws {
         let fixture = try await Fixture(
             photos: (0..<10).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 10)
+            settings: CacheSettings(byteCeiling: 10_000)
         )
         try await fixture.produceAll()
 
-        let ids = try fixture.library.database.all("SELECT id FROM photo ORDER BY id;") {
-            try $0.int64("id")
-        }
-        for (index, id) in ids.enumerated() {
-            try fixture.library.database.run(
-                "UPDATE photo SET materialized_at = :at WHERE id = :id;",
-                ["at": .int(Int64(1000 + index)), "id": .int(id)]
-            )
-        }
+        let uuids = try uuidsByID(fixture)
         // Nothing queued, so nothing is protected.
         try fixture.library.database.run("DELETE FROM queue;")
+        try age(fixture, oldestFirst: uuids)
 
-        let tighter = PhotoCache(
-            database: fixture.library.database, root: fixture.cache.root,
-            settings: CacheSettings(photoCap: 4), sources: fixture.store
-        )
-        let result = try tighter.evictIfNeeded()
+        fixture.cache.store.byteCeiling = 400
+        let result = fixture.cache.store.evictIfNeeded()
         #expect(result.evicted == 6)
-        let remaining = try fixture.library.database.all(
-            "SELECT id FROM photo WHERE cache_path IS NOT NULL ORDER BY id;") { try $0.int64("id") }
-        #expect(remaining == Array(ids.suffix(4)))
+
+        // The four newest survive; the six oldest are the ones the deck is
+        // furthest from reaching again.
+        let held = uuids.filter {
+            fixture.cache.store.url(for: PhotoStore.Key(photoUUID: $0)) != nil
+        }
+        #expect(held == Array(uuids.suffix(4)))
     }
 
     @Test("A queued picture is never evicted, however old")
     func queuedPicturesAreProtected() async throws {
         let fixture = try await Fixture(
             photos: (0..<10).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 10)
+            settings: CacheSettings(byteCeiling: 10_000)
         )
         try await fixture.produceAll()
 
-        let ids = try fixture.library.database.all("SELECT id FROM photo ORDER BY id;") {
-            try $0.int64("id")
-        }
-        for (index, id) in ids.enumerated() {
-            try fixture.library.database.run(
-                "UPDATE photo SET materialized_at = :at WHERE id = :id;",
-                ["at": .int(Int64(1000 + index)), "id": .int(id)]
-            )
-        }
+        try age(fixture, oldestFirst: try uuidsByID(fixture))
 
         // Everything is queued, so nothing may be evicted — these are about to
         // be shown.
         let tighter = PhotoCache(
             database: fixture.library.database, root: fixture.cache.root,
-            settings: CacheSettings(photoCap: 3), sources: fixture.store
+            settings: CacheSettings(byteCeiling: 300), sources: fixture.store,
+            store: fixture.cache.store
         )
         let result = try tighter.evictIfNeeded()
         #expect(result.evicted == 0)
@@ -288,7 +306,7 @@ struct CacheTests {
     func byteCeilingIsASafetyValve() async throws {
         let fixture = try await Fixture(
             photos: (0..<10).map { "photo-\($0).png" },
-            settings: CacheSettings(photoCap: 100)
+            settings: CacheSettings(byteCeiling: 10_000)
         )
         try await fixture.produceAll()
         try fixture.library.database.run("DELETE FROM queue;")
@@ -296,7 +314,8 @@ struct CacheTests {
 
         let capped = PhotoCache(
             database: fixture.library.database, root: fixture.cache.root,
-            settings: CacheSettings(photoCap: 100, byteCeiling: 450), sources: fixture.store
+            settings: CacheSettings(byteCeiling: 450), sources: fixture.store,
+            store: fixture.cache.store
         )
         #expect(try capped.evictIfNeeded().evicted > 0)
         #expect(try capped.status().bytesOnDisk <= 450)
@@ -313,53 +332,56 @@ struct CacheTests {
             try fixture.library.database.first(
                 "SELECT id FROM photo WHERE external_id = 'a.png';") { try $0.int64("id") }
         )
-        let path = try #require(
+        let uuid = try #require(
             try fixture.library.database.first(
-                "SELECT cache_path FROM photo WHERE id = :id;", ["id": .int(doomed)]
-            ) { try $0.string("cache_path") }
+                "SELECT uuid FROM photo WHERE id = :id;", ["id": .int(doomed)]
+            ) { try $0.string("uuid") }
         )
+        let held = try #require(fixture.cache.store.url(for: PhotoStore.Key(photoUUID: uuid)))
 
         #expect(try fixture.cache.remove(doomed).count == 1)
-        #expect(
-            !FileManager.default.fileExists(
-                atPath: fixture.cache.root.appending(path: path).path(percentEncoded: false))
-        )
+        #expect(!FileManager.default.fileExists(atPath: held.path(percentEncoded: false)))
         // And it left the queue by cascade.
         #expect(try fixture.cache.queue.size() == 1)
-        #expect(try fixture.cache.sweepOrphans().files == 0)
+        #expect(try fixture.cache.indexCache().discarded == 0)
     }
 
-    @Test("Bytes left behind by a crash are swept up")
-    func orphanedBytesAreSwept() async throws {
+    @Test("A file nothing claims is deleted when the index is rebuilt")
+    func unclaimedBytesAreDiscarded() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         try await fixture.produceAll()
 
-        // A file the database does not claim: what a crash between the copy and
-        // the row update leaves behind.
-        let stray = fixture.cache.root.appending(path: "\(fixture.source.id)/999999999.png")
+        // A file whose UUID is in no row: what a crash mid-write leaves, and
+        // what a rebuilt database leaves behind of its predecessor.
+        let stray = fixture.cache.root
+            .appending(path: fixture.source.uuid)
+            .appending(path: PhotoStore.originalDirectory)
+            .appending(path: "\(UUID().uuidString).png")
         try Data(count: 250).write(to: stray)
 
-        let swept = try fixture.cache.sweepOrphans()
-        #expect(swept.files == 1)
-        #expect(swept.bytes == 250)
+        let result = try fixture.cache.indexCache()
+        #expect(result.discarded == 1)
+        #expect(!FileManager.default.fileExists(atPath: stray.path(percentEncoded: false)))
         #expect(try fixture.cache.status().residentCount == 2)
     }
 
-    @Test("A cache entry that lost its bytes is queued for re-fetch")
-    func residencyIsVerified() async throws {
+    @Test("Bytes that vanished are noticed at the next rebuild, not served")
+    func missingBytesAreForgotten() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         try await fixture.produceAll()
 
-        let path = try #require(
-            try fixture.library.database.first("SELECT cache_path FROM photo ORDER BY id LIMIT 1;") {
-                try $0.string("cache_path")
+        let uuid = try #require(
+            try fixture.library.database.first("SELECT uuid FROM photo ORDER BY id LIMIT 1;") {
+                try $0.string("uuid")
             }
         )
-        try FileManager.default.removeItem(at: fixture.cache.root.appending(path: path))
+        let held = try #require(fixture.cache.store.url(for: PhotoStore.Key(photoUUID: uuid)))
+        try FileManager.default.removeItem(at: held)
 
-        #expect(try fixture.cache.verifyResidency() == 1)
+        // The index is built *from* the disk, so it cannot claim what is not
+        // there — and the queue is reconciled in the same direction.
+        try fixture.cache.indexCache()
         #expect(try fixture.cache.status().residentCount == 1)
-        // It left the queue too, so nothing serves a picture with no bytes.
         #expect(try fixture.cache.queue.size() == 1)
     }
 

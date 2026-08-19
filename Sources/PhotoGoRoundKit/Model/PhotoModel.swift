@@ -42,41 +42,46 @@ public enum MediaType: String, Sendable, CaseIterable {
 /// One card, as handed to a consumer.
 public struct DeckCard: Sendable, Equatable, Identifiable {
     public let id: Int64
+    /// Durable identity, and what the cache's filenames carry. The row id is not
+    /// stable: the database is disposable and a rebuilt one renumbers from 1.
+    public let uuid: String
     public let sourceID: Int64
+    /// The source's durable identity, which names its directory in the cache.
+    public let sourceUUID: String
     /// A `PHAsset` local identifier, a Google media item id, or — for folder
     /// sources — the path relative to the source's own path.
     public let externalID: String
     public let storage: PhotoStorage
-    /// Absolute for referenced photos; relative to the cache root for
-    /// materialized ones. Nil when the bytes are not resident.
-    public let cachePath: String?
     /// The ordinal assigned when this picture was shown. Nil for one that is
     /// queued or merely selected, and so has not been shown yet.
     public let dealSeq: Int64?
 
     public init(
         id: Int64,
+        uuid: String,
         sourceID: Int64,
+        sourceUUID: String,
         externalID: String,
         storage: PhotoStorage,
-        cachePath: String?,
         dealSeq: Int64?
     ) {
         self.id = id
+        self.uuid = uuid
         self.sourceID = sourceID
+        self.sourceUUID = sourceUUID
         self.externalID = externalID
         self.storage = storage
-        self.cachePath = cachePath
         self.dealSeq = dealSeq
     }
 
     init(row: Row, dealSeq: Int64?) throws {
         self.init(
             id: try row.int64("id"),
+            uuid: try row.string("uuid"),
             sourceID: try row.int64("source_id"),
+            sourceUUID: try row.string("source_uuid"),
             externalID: try row.string("external_id"),
             storage: PhotoStorage(rawValue: try row.string("storage")) ?? .materialized,
-            cachePath: try row.optionalString("cache_path"),
             dealSeq: dealSeq
         )
     }

@@ -194,13 +194,55 @@ struct HostTests {
         #expect(suite.preferences.effectiveValue(for: .sources) == nil)
     }
 
+    // MARK: - Where the service says it is
+
+    @Test("Nothing is published until an agent says so")
+    func servicePortIsUnsetUntilPublished() {
+        let suite = Suite()
+        #expect(suite.preferences.servicePort == nil)
+    }
+
+    @Test("A published port is what a client reads back")
+    func servicePortRoundTrips() {
+        let suite = Suite()
+        suite.preferences.publishServicePort(52_001)
+        #expect(suite.preferences.servicePort == 52_001)
+
+        // A second agent's launch replaces it rather than accumulating.
+        suite.preferences.publishServicePort(52_002)
+        #expect(suite.preferences.servicePort == 52_002)
+
+        suite.preferences.withdrawServicePort()
+        #expect(suite.preferences.servicePort == nil)
+    }
+
+    @Test("A port that cannot be one reads as nothing published")
+    func servicePortRejectsNonsense() {
+        // `defaults write` reaches this domain, and 0 is what an unbound
+        // listener would report. Neither is an address, so neither is offered
+        // as one.
+        let suite = Suite()
+        for nonsense in [0, -1, 70_000] {
+            suite.defaults.set(nonsense, forKey: Preferences.Key.servicePort.rawValue)
+            #expect(suite.preferences.servicePort == nil, "\(nonsense) is not a port")
+        }
+    }
+
+    @Test("The published port is not a preference anyone sets")
+    func servicePortIsNotASetting() {
+        // It is state the agent writes, so it stays out of the list `pgr_ctl
+        // get` walks and `pgr_ctl set` validates against — a person setting it
+        // would be lying to every client about where to look.
+        #expect(!Preferences.allKeys.contains(.servicePort))
+    }
+
     @Test("A value that is set is used")
     func setValuesAreRead() {
         let suite = Suite()
         suite.defaults.set(0.25, forKey: Preferences.Key.repeatWindowFraction.rawValue)
-        suite.defaults.set(250, forKey: Preferences.Key.cachePhotoCap.rawValue)
+        suite.defaults.set(9_000_000_000, forKey: Preferences.Key.cacheByteCeiling.rawValue)
         #expect(suite.preferences.deckSettings.repeatWindowFraction == 0.25)
-        #expect(suite.preferences.cacheSettings.photoCap == 250)
+        #expect(suite.preferences.cacheSettings.byteCeiling == 9_000_000_000)
     }
 
     @Test("Nonsense from `defaults write` is clamped, never accepted")
@@ -216,8 +258,8 @@ struct HostTests {
         suite.defaults.set(-9, forKey: Preferences.Key.repeatWindowFraction.rawValue)
         #expect(suite.preferences.deckSettings.repeatWindowFraction == 0.0)
 
-        suite.defaults.set(-500, forKey: Preferences.Key.cachePhotoCap.rawValue)
-        #expect(suite.preferences.cacheSettings.photoCap == 0)
+        suite.defaults.set(-500, forKey: Preferences.Key.cacheByteCeiling.rawValue)
+        #expect(suite.preferences.cacheSettings.byteCeiling == 0)
 
         suite.defaults.set(0, forKey: Preferences.Key.queueSize.rawValue)
         #expect(suite.preferences.queueSize == 1)

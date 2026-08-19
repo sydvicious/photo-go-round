@@ -17,15 +17,15 @@ struct Options {
     var interval: Duration = .seconds(2)
     var once = false
     var scanIntervalOverride: Duration?
-    /// Which port to serve pictures on.
+    /// Which port to serve pictures on, or nil to take whatever the kernel
+    /// gives.
     ///
     /// **Permanent, and for the same reason `--prod` and `--container` are**: a
     /// development agent has to be able to run beside a shipped one on the same
     /// machine, and two listeners cannot hold one port. It keeps earning its
-    /// place once the default is a port the kernel assigns, because a pinned
-    /// number is one you can `curl` without first reading the published one out
-    /// of preferences.
-    var servicePort: UInt16 = HTTPListener.defaultPort
+    /// place now the default floats, because a pinned number is one you can
+    /// `curl` without first reading the published one out of preferences.
+    var servicePort: UInt16?
     var containerOverride: URL?
     var databaseOverride: URL?
     var cacheOverride: URL?
@@ -168,8 +168,9 @@ struct Options {
           -d, --database <path>   Database file. Default: <container>/\(Deployment.databaseFilename)
               --container <dir>   Storage root
           -i, --interval <secs>   How often the loop wakes. Default: 2
-              --port <n>          Port to serve pictures on. The agent prints the
-                                  one it bound, at startup
+              --port <n>          Pin the port. Without it the kernel assigns one
+                                  and the agent publishes it to preferences and
+                                  prints it at startup
           -h, --help              This
 
         ENVIRONMENT

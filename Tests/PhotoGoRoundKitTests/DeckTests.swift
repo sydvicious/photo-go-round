@@ -372,7 +372,6 @@ struct DeckTests {
         #expect(stats.timesShownTotal == 4)
         #expect(stats.timesShownMin == 0)
         #expect(stats.timesShownMax == 1)
-        #expect(stats.residentPhotos == 13)
         // Still in the first pass, with six of the ten dealable cards to go.
         #expect(stats.passStartSeq == 0)
         #expect(stats.unusedInCurrentPass == 6)
@@ -469,6 +468,72 @@ struct DeckTests {
         let picked = collected.withLock { $0 }
         #expect(picked.count == 400)
         #expect(Set(picked).count == picked.count, "two producers picked the same picture")
+    }
+
+    // MARK: - Photographs that will not render
+
+    @Test("A photo is retired after three failed renders, not the first")
+    func blacklistTakesThreeAttempts() throws {
+        let (library, ids) = try TestLibrary.withPhotos(2)
+        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let deck = library.deck
+        let doomed = ids[0]
+
+        // A decode can fail from memory pressure or a file caught mid-copy, so
+        // one failure says nothing permanent.
+        #expect(try deck.recordRenderFailure(photoID: doomed) == 1)
+        #expect(try deck.recordRenderFailure(photoID: doomed) == 2)
+        #expect(try deck.blacklisted().isEmpty)
+
+        #expect(try deck.recordRenderFailure(photoID: doomed) == 3)
+        #expect(try deck.blacklisted().map(\.id) == [doomed])
+    }
+
+    @Test("A retired photo is never offered again")
+    func blacklistedIsNotDealt() throws {
+        let (library, ids) = try TestLibrary.withPhotos(2)
+        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let deck = library.deck
+
+        for _ in 0..<Deck.renderFailureLimit {
+            try deck.recordRenderFailure(photoID: ids[0])
+        }
+
+        // The other photo is still dealt; the retired one is not, however many
+        // times it is asked for.
+        var offered: Set<Int64> = []
+        for _ in 0..<6 {
+            guard let card = try deck.nextCandidate(forSource: source) else { break }
+            offered.insert(card.id)
+            _ = try deck.markShown(photoID: card.id)
+        }
+        #expect(offered == [ids[1]])
+    }
+
+    @Test("Retiring keeps the row, because the file is still there")
+    func blacklistIsNotADeletion() throws {
+        let (library, ids) = try TestLibrary.withPhotos(1)
+        let deck = library.deck
+        for _ in 0..<Deck.renderFailureLimit { try deck.recordRenderFailure(photoID: ids[0]) }
+
+        // Removing it from the pool would not work: the next refresh finds the
+        // file on disk and adds it straight back.
+        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 1)
+        #expect(try deck.blacklisted().count == 1)
+        #expect(try deck.recentEvents().contains { $0.kind == "blacklist" })
+    }
+
+    @Test("Clearing the failures puts them back in contention")
+    func clearingRestoresThem() throws {
+        let (library, ids) = try TestLibrary.withPhotos(1)
+        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let deck = library.deck
+        for _ in 0..<Deck.renderFailureLimit { try deck.recordRenderFailure(photoID: ids[0]) }
+        #expect(try deck.nextCandidate(forSource: source) == nil)
+
+        #expect(try deck.clearRenderFailures() == 1)
+        #expect(try deck.blacklisted().isEmpty)
+        #expect(try deck.nextCandidate(forSource: source)?.id == ids[0])
     }
 
     // MARK: - Two processes, one deck

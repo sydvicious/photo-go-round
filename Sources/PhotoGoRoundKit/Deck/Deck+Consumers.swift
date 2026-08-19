@@ -179,6 +179,66 @@ extension Deck {
     /// late costs one photo its turn. Both are cheaper than a reaper.
     public static let claimTimeout: TimeInterval = 300
 
+    /// How many failed renders retire a photograph.
+    ///
+    /// More than one because a decode can fail from memory pressure or from a
+    /// file caught mid-copy, neither of which says anything permanent about it.
+    /// Few enough that a genuinely bad file stops costing cards quickly.
+    public static let renderFailureLimit = 3
+
+    /// Records that this photograph could not be rendered, and answers how many
+    /// times that has now happened.
+    ///
+    /// At `renderFailureLimit` it stops being offered. The row stays — removing
+    /// it would not work, since the file is still on disk and the next refresh
+    /// would find it and add it back.
+    @discardableResult
+    public func recordRenderFailure(photoID: Int64, now: Date = Date()) throws -> Int {
+        try database.transaction(.immediate) {
+            try database.run(
+                "UPDATE photo SET render_failures = render_failures + 1 WHERE id = :id;",
+                ["id": .int(photoID)]
+            )
+            let count =
+                try database.scalarInt(
+                    "SELECT render_failures FROM photo WHERE id = :id;", ["id": .int(photoID)]
+                ) ?? 0
+            if count >= Self.renderFailureLimit {
+                Log.deck.notice(
+                    "photo \(photoID, privacy: .public) failed to render \(count, privacy: .public) times; retiring it"
+                )
+                try recordEvent(
+                    kind: "blacklist", detail: "photo \(photoID) after \(count) render failures",
+                    at: now)
+            }
+            return count
+        }
+    }
+
+    /// Photographs retired for failing to render, so the tool can show them.
+    public func blacklisted() throws -> [(id: Int64, externalID: String, failures: Int)] {
+        try database.all(
+            """
+            SELECT id, external_id, render_failures FROM photo
+             WHERE render_failures >= :limit ORDER BY id;
+            """,
+            ["limit": .int(Int64(Self.renderFailureLimit))]
+        ) {
+            (
+                id: try $0.int64("id"), externalID: try $0.string("external_id"),
+                failures: try $0.int("render_failures")
+            )
+        }
+    }
+
+    /// Puts them back in contention, for when the cause was the machine rather
+    /// than the file.
+    @discardableResult
+    public func clearRenderFailures() throws -> Int {
+        try database.run("UPDATE photo SET render_failures = 0 WHERE render_failures > 0;")
+        return database.changes
+    }
+
     /// Gives a claimed photo back, whether or not it made it to the queue.
     ///
     /// Queued is its own exclusion, so releasing on success is not a hole; the
@@ -238,6 +298,7 @@ extension Deck {
           AND p.media_type = 'image'
           AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold)
           AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry)
+          AND p.render_failures < \(Deck.renderFailureLimit)
           AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.photo_id = p.id)
         """
 
@@ -246,8 +307,8 @@ extension Deck {
         """
 
     static let candidateSQL = """
-        SELECT p.id, p.source_id, p.external_id, p.storage, p.cache_path
-          FROM photo p
+        SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
+          FROM photo p JOIN source s ON s.id = p.source_id
          WHERE \(candidatePredicate)
          ORDER BY p.shuffle_key
          LIMIT 1 OFFSET :offset;

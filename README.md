@@ -22,7 +22,7 @@ once; it is written through to preferences, and every later run needs no
 arguments at all:
 
 ```
-./Scripts/photogoroundd
+./Scripts/photogoroundd --port 9000
 ```
 
 `--add-folder` does not walk subdirectories unless `--recursive` is given between
@@ -31,8 +31,10 @@ under `.build`, where a
 development run cannot disturb a real library — reaching the real one takes
 `--prod`, typed on purpose.
 
-The agent serves pictures on port 9000. Two agents cannot hold the same port, so
-`--port` is how a development one runs beside another that is already going.
+The agent serves pictures on a port the kernel assigns, and publishes it where
+every process on the machine can read it; `pgr_ctl status` prints the address.
+`--port` pins a number instead, which is what you want for a URL you are going
+to type.
 
 ## Inspecting and configuring it
 
@@ -45,9 +47,13 @@ the deck's statistical checks. It never needs the agent running.
 
 ## Testing the picture endpoint
 
-The agent serves pictures over HTTP on port 9000. Clients ask it for one and are
-handed the bytes; they never open the database or the cache. From a terminal that
-means `curl`.
+The agent serves pictures over HTTP. Clients ask it for one and are handed the
+bytes; they never open the database or the cache. From a terminal that means
+`curl`.
+
+The port is whatever the kernel gave the agent at launch, so the examples below
+pin one with `--port` rather than making you look it up. Without it, `pgr_ctl
+status` prints the address.
 
 Start the agent in one terminal and leave it running — it prints the URL once the
 listener is up, then a line for every request it answers:
@@ -60,16 +66,18 @@ In another terminal, take a picture:
 
 ```
 curl -sS -D - -o /tmp/pgr.bin "http://localhost:9000/v1/next?consumer=cli&w=3840&h=2160"
+
 ```
 
 The response headers say what you got — `Content-Type` for the format,
 `X-PGR-Card` for the photo's row id, `X-PGR-Deal` for its ordinal in the shuffle.
 Requesting again gives a *different* picture, because serving pops the queue.
 
-**The bytes are the original**, untouched: `w` and `h` are accepted and currently
-ignored, so what comes back is byte-for-byte the file on disk. That means the
-extension matters if you want Preview to open it — save it with the one the
-`Content-Type` implies:
+`w` and `h` are maximums — nothing comes back larger than either — and what you
+get is the largest that fits inside them with its aspect ratio intact. HEIC
+unless you ask for JPEG with `Accept`. Leave both out and you get the original
+bytes, untouched. Either way the extension matters if
+you want Preview to open it, so save it with the one the `Content-Type` implies:
 
 ```
 curl -sS -D /tmp/pgr.head -o /tmp/pgr.body "http://localhost:9000/v1/next?w=3840&h=2160" && ext=$(awk -F/ 'tolower($0) ~ /^content-type/ {gsub(/\r/,""); print $2}' /tmp/pgr.head) && mv /tmp/pgr.body "/tmp/pgr.$ext" && open "/tmp/pgr.$ext"

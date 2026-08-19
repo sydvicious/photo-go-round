@@ -20,6 +20,9 @@ public struct PhotoCache {
 
     /// Pictures that are ready to show. The cache fills it and serves from it.
     public let queue: PhotoQueue
+    /// The bytes, and the only record of them. Nothing in the database describes
+    /// what is cached.
+    public let store: PhotoStore
 
     private let sources: SourceStore
     private let deck: Deck
@@ -30,7 +33,8 @@ public struct PhotoCache {
         settings: CacheSettings = .default,
         sources: SourceStore,
         deck: Deck? = nil,
-        queueSize: Int = 1000
+        queueSize: Int = 1000,
+        store: PhotoStore? = nil
     ) {
         self.database = database
         self.root = root
@@ -38,6 +42,7 @@ public struct PhotoCache {
         self.sources = sources
         self.deck = deck ?? Deck(database: database)
         self.queue = PhotoQueue(database: database, nominalSize: queueSize)
+        self.store = store ?? PhotoStore(root: root, byteCeiling: settings.byteCeiling)
     }
 
     /// Creates the cache directory and keeps it out of Time Machine.
@@ -51,22 +56,47 @@ public struct PhotoCache {
         values.isExcludedFromBackup = true
         var mutableRoot = root
         try? mutableRoot.setResourceValues(values)
+        try indexCache()
+    }
+
+    /// Rebuilds the byte index from the disk, discarding anything the database
+    /// does not claim.
+    ///
+    /// This is the whole of what used to be `verifyResidency` and
+    /// `sweepOrphans`: an index built *from* the filesystem cannot disagree with
+    /// it, and a file whose UUID is unknown has no owner left that could name it
+    /// correctly.
+    @discardableResult
+    public func indexCache() throws -> (kept: Int, discarded: Int, bytes: Int64) {
+        var owners: [String: String] = [:]
+        try database.query(
+            """
+            SELECT p.uuid AS photo_uuid, s.uuid AS source_uuid
+              FROM photo p JOIN source s ON s.id = p.source_id;
+            """
+        ) { row in
+            owners[try row.string("photo_uuid")] = try row.string("source_uuid")
+        }
+        let result = store.rebuild(photos: owners)
+
+        // The queue is durable and the index is not, so they are reconciled once
+        // at launch, in the direction of the disk.
+        var stale = 0
+        for card in try queue.peek(Int.max) where card.storage == .materialized {
+            if store.url(for: PhotoStore.Key(photoUUID: card.uuid)) == nil {
+                try queue.remove(photoID: card.id)
+                stale += 1
+            }
+        }
+        if stale > 0 {
+            Log.cache.notice(
+                "dropped \(stale, privacy: .public) queued pictures whose bytes are not here"
+            )
+        }
+        return result
     }
 
     // MARK: - Where bytes are
-
-    /// The cache-relative path a photo's bytes would live at.
-    ///
-    /// One level of structure, and it earns its place for exactly two mechanical
-    /// reasons: `clear --source 3` becomes one directory removal instead of a
-    /// thousand unlinks, and per-source byte totals become a directory size
-    /// instead of a query plus a stat loop. Nobody reads the cache, so it is not
-    /// designed to be read.
-    static func relativePath(sourceID: Int64, photoID: Int64, externalID: String) -> String {
-        let ext = (externalID as NSString).pathExtension
-        let suffix = ext.isEmpty ? "" : ".\(ext.lowercased())"
-        return "\(sourceID)/\(String(format: "%09lld", photoID))\(suffix)"
-    }
 
     /// A readable URL for a photo's bytes, or nil when they are not resident.
     ///
@@ -76,14 +106,14 @@ public struct PhotoCache {
     public func residentURL(forPhoto photoID: Int64) throws -> URL? {
         let row = try database.first(
             """
-            SELECT p.storage, p.cache_path, p.external_id, p.source_id
+            SELECT p.storage, p.uuid, p.external_id, p.source_id
               FROM photo p WHERE p.id = :id;
             """,
             ["id": .int(photoID)]
         ) { row in
             (
                 storage: PhotoStorage(rawValue: try row.string("storage")) ?? .materialized,
-                cachePath: try row.optionalString("cache_path"),
+                uuid: try row.string("uuid"),
                 externalID: try row.string("external_id"),
                 sourceID: try row.int64("source_id")
             )
@@ -92,9 +122,7 @@ public struct PhotoCache {
 
         switch row.storage {
         case .materialized:
-            guard let cachePath = row.cachePath else { return nil }
-            let url = root.appending(path: cachePath)
-            return FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) ? url : nil
+            return store.url(for: PhotoStore.Key(photoUUID: row.uuid))
         case .referenced:
             guard let source = try sources.source(id: row.sourceID) else { return nil }
             // Through the seam, never from the stored path — so this keeps
@@ -108,48 +136,39 @@ public struct PhotoCache {
     // MARK: - Status
 
     public struct Status: Sendable, Equatable {
-        /// Materialized photos with bytes on disk. This is what the cap governs.
+        /// Materialized photos whose original is held.
         public let residentCount: Int
-        /// Photos referenced in place. Not copied, not capped, free.
+        /// Photos referenced in place. Not copied, not budgeted, free.
         public let referencedCount: Int
         /// Materialized photos still waiting for their bytes.
         public let pendingCount: Int
+        /// Renderings held, across every size and photograph.
+        public let renderingCount: Int
         public let bytesOnDisk: Int64
-        public let cap: Int
+        public let byteCeiling: Int64
         public let freeBytesOnVolume: Int64
         /// Pictures waiting in the queue, ready to show.
         public let queued: Int
     }
 
     public func status() throws -> Status {
-        let counts = try database.first(
-            """
-            SELECT
-              SUM(CASE WHEN storage = 'materialized' AND cache_path IS NOT NULL THEN 1 ELSE 0 END) AS resident,
-              SUM(CASE WHEN storage = 'referenced' THEN 1 ELSE 0 END)                              AS referenced,
-              SUM(CASE WHEN storage = 'materialized' AND cache_path IS NULL THEN 1 ELSE 0 END)    AS pending,
-              IFNULL(SUM(CASE WHEN cache_path IS NOT NULL THEN byte_size ELSE 0 END), 0)          AS bytes
-              FROM photo;
-            """
-        ) { row in
-            (
-                resident: try row.optionalInt("resident") ?? 0,
-                referenced: try row.optionalInt("referenced") ?? 0,
-                pending: try row.optionalInt("pending") ?? 0,
-                bytes: try row.optionalInt64("bytes") ?? 0
-            )
-        }
-
-        let queued = try queue.size()
+        let materialized =
+            try database.scalarInt(
+                "SELECT COUNT(*) FROM photo WHERE storage = 'materialized';") ?? 0
+        let referenced =
+            try database.scalarInt(
+                "SELECT COUNT(*) FROM photo WHERE storage = 'referenced';") ?? 0
+        let totals = store.totals
 
         return Status(
-            residentCount: counts?.resident ?? 0,
-            referencedCount: counts?.referenced ?? 0,
-            pendingCount: counts?.pending ?? 0,
-            bytesOnDisk: counts?.bytes ?? 0,
-            cap: settings.photoCap,
+            residentCount: totals.originals,
+            referencedCount: referenced,
+            pendingCount: max(0, materialized - totals.originals),
+            renderingCount: totals.renderings,
+            bytesOnDisk: totals.byteCount,
+            byteCeiling: settings.byteCeiling,
             freeBytesOnVolume: freeBytesOnVolume(),
-            queued: queued
+            queued: try queue.size()
         )
     }
 
@@ -200,31 +219,35 @@ public struct PhotoCache {
         // the timeout for no reason at all.
         defer { try? deck.releaseClaim(photoID: candidate.id) }
 
-        if candidate.storage == .materialized, candidate.cachePath == nil {
-            let relative = Self.relativePath(
-                sourceID: sourceID, photoID: candidate.id, externalID: candidate.externalID
-            )
+        let originalKey = PhotoStore.Key(photoUUID: candidate.uuid)
+        if candidate.storage == .materialized, !store.contains(originalKey) {
+            let extension_ = (candidate.externalID as NSString).pathExtension
+            let staging = root.appending(path: ".staging")
+            try? FileManager.default.createDirectory(
+                at: staging, withIntermediateDirectories: true)
+            let temporary = staging.appending(
+                path: extension_.isEmpty ? candidate.uuid : "\(candidate.uuid).\(extension_)")
+
             do {
                 let file = try await provider.materialize(
-                    externalID: candidate.externalID,
-                    from: source,
-                    to: root.appending(path: relative)
-                )
+                    externalID: candidate.externalID, from: source, to: temporary)
+                try store.adopt(
+                    fileAt: temporary, for: originalKey,
+                    sourceUUID: candidate.sourceUUID, pathExtension: extension_, now: now)
                 try database.run(
-                    """
-                    UPDATE photo
-                       SET cache_path = :path, byte_size = :size, materialized_at = :now
-                     WHERE id = :id;
-                    """,
-                    [
-                        "path": .text(relative), "size": .int(file.byteSize),
-                        "now": SQLValue(now), "id": .int(candidate.id),
-                    ]
+                    "UPDATE photo SET byte_size = :size WHERE id = :id;",
+                    ["size": .int(file.byteSize), "id": .int(candidate.id)]
                 )
             } catch {
+                try? FileManager.default.removeItem(at: temporary)
                 try handleFailedDownload(candidate, source: source, error: error)
                 return false
             }
+        } else if candidate.storage == .referenced {
+            // Referenced photographs are never copied, but the store still has
+            // to know which source they belong to, so a rendering of one lands
+            // in the right directory.
+            store.note(photoUUID: candidate.uuid, sourceUUID: candidate.sourceUUID)
         }
 
         return try queue.append(photoID: candidate.id, sourceID: sourceID, at: now)
@@ -251,6 +274,22 @@ public struct PhotoCache {
             )
             try queue.remove(photoID: card.id)
         }
+    }
+
+    /// The rendering held for this photograph at this size, if any.
+    public func rendering(of card: DeckCard, at size: PhotoStore.Size) -> URL? {
+        store.url(for: PhotoStore.Key(photoUUID: card.uuid, size: size))
+    }
+
+    /// Keeps a rendering, so the next request for the same photograph at the
+    /// same size is a file read rather than a decode.
+    @discardableResult
+    public func keep(
+        _ bytes: Data, of card: DeckCard, at size: PhotoStore.Size, pathExtension: String
+    ) throws -> URL {
+        try store.store(
+            bytes, for: PhotoStore.Key(photoUUID: card.uuid, size: size),
+            sourceUUID: card.sourceUUID, pathExtension: pathExtension)
     }
 
     // MARK: - Serving one picture
@@ -292,8 +331,9 @@ public struct PhotoCache {
                 DarwinNotification.post(.deckAdvanced)
                 return (
                     DeckCard(
-                        id: card.id, sourceID: card.sourceID, externalID: card.externalID,
-                        storage: card.storage, cachePath: card.cachePath, dealSeq: seq
+                        id: card.id, uuid: card.uuid, sourceID: card.sourceID,
+                        sourceUUID: card.sourceUUID, externalID: card.externalID,
+                        storage: card.storage, dealSeq: seq
                     ),
                     url
                 )
@@ -316,9 +356,7 @@ public struct PhotoCache {
     @discardableResult
     public func remove(_ photoIDs: [Int64]) throws -> PhotoPool.Removal {
         let removal = try sources.pool.remove(photoIDs)
-        for path in removal.orphanedCachePaths {
-            try? FileManager.default.removeItem(at: root.appending(path: path))
-        }
+        for uuid in removal.orphaned { store.remove(photoUUID: uuid) }
         return removal
     }
 
@@ -327,180 +365,53 @@ public struct PhotoCache {
         try remove([photoID])
     }
 
-    /// Confirms every materialized entry's bytes are still on disk, and clears
-    /// the ones that are not.
-    ///
-    /// The database's claim can go stale without anybody lying: a purge, a
-    /// half-written entry from a run killed mid-copy, someone tidying a
-    /// directory. Clearing `cache_path` puts the photo back in contention rather
-    /// than leaving a queue entry that resolves to nothing.
-    @discardableResult
-    public func verifyResidency() throws -> Int {
-        let claimed = try database.all(Self.residentSQL) {
-            (id: try $0.int64("id"), path: try $0.string("cache_path"))
-        }
-        var cleared = 0
-        for entry in claimed {
-            let url = root.appending(path: entry.path)
-            guard !FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else {
-                continue
-            }
-            try database.run(
-                "UPDATE photo SET cache_path = NULL, materialized_at = NULL WHERE id = :id;",
-                ["id": .int(entry.id)]
-            )
-            try queue.remove(photoID: entry.id)
-            cleared += 1
-        }
-        if cleared > 0 {
-            Log.cache.notice(
-                "\(cleared, privacy: .public) cache entries had lost their bytes"
-            )
-        }
-        return cleared
-    }
-
-    /// Deletes cached bytes that no pool entry claims.
-    ///
-    /// Removing an entry deletes its row, which cascades to the queue but says
-    /// nothing about the file on disk — and once the row is gone the evictor
-    /// cannot see those bytes either, because it walks rows rather than the
-    /// filesystem. Without this they would sit there for ever. It also cleans up
-    /// after a crash between the copy and the row update.
-    @discardableResult
-    public func sweepOrphans() throws -> (files: Int, bytes: Int64) {
-        var claimed = Set<String>()
-        try database.query("SELECT cache_path FROM photo WHERE cache_path IS NOT NULL;") { row in
-            claimed.insert(try row.string("cache_path"))
-        }
-
-        guard
-            let directories = try? FileManager.default.contentsOfDirectory(
-                at: root, includingPropertiesForKeys: nil
-            )
-        else { return (0, 0) }
-
-        var files = 0
-        var bytes: Int64 = 0
-        for directory in directories {
-            let sourceComponent = directory.lastPathComponent
-            guard Int64(sourceComponent) != nil else { continue }
-            let contents =
-                (try? FileManager.default.contentsOfDirectory(
-                    at: directory, includingPropertiesForKeys: [.fileSizeKey]
-                )) ?? []
-
-            for file in contents {
-                let relative = "\(sourceComponent)/\(file.lastPathComponent)"
-                guard !claimed.contains(relative) else { continue }
-                let size =
-                    (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-                try? FileManager.default.removeItem(at: file)
-                files += 1
-                bytes += size
-            }
-
-            if (try? FileManager.default.contentsOfDirectory(atPath: directory.path(percentEncoded: false)))?
-                .isEmpty == true
-            {
-                try? FileManager.default.removeItem(at: directory)
-            }
-        }
-
-        if files > 0 {
-            Log.cache.notice(
-                "swept \(files, privacy: .public) orphaned cache files, freeing \(bytes, privacy: .public) bytes"
-            )
-        }
-        return (files, bytes)
-    }
-
     // MARK: - Eviction
 
     public struct EvictionResult: Sendable, Equatable {
         public let evicted: Int
         public let bytesFreed: Int64
-        /// Pictures that were over the cap but sitting in the queue, and so left
-        /// alone.
+        /// Entries over the ceiling that were left alone because their
+        /// photograph is queued.
         public let protectedFromEviction: Int
     }
 
-    /// FIFO by materialization time, with two guards.
+    /// FIFO by creation time, bounded by bytes, over `(photo, resolution)`
+    /// entries rather than over photographs.
     ///
-    /// Plain FIFO is correct here rather than something cleverer because
-    /// materialization happens *in deck order*: the order photos enter the cache
-    /// is the order they will be dealt, so oldest-added is also
-    /// longest-since-dealt. The cache is a sliding window over the deck —
-    /// expiring off the front, filling at the back.
+    /// Plain FIFO is correct rather than something cleverer because entries are
+    /// written *in deck order*: the order bytes enter the cache is the order
+    /// they will be shown, so oldest-written is also longest-since-dealt. The
+    /// cache is a sliding window over the deck — expiring off the front, filling
+    /// at the back.
     @discardableResult
     public func evictIfNeeded() throws -> EvictionResult {
-        let protectedIDs = try queuedPhotoIDs()
-        var evicted = 0
-        var freed: Int64 = 0
-        var skipped = 0
-
-        // The disk-space guard evicts ahead of the cap, so it is folded in as a
-        // lower effective cap rather than as a second pass.
+        // The disk-space guard evicts ahead of the ceiling, folded in as a lower
+        // effective ceiling rather than as a second pass.
         let free = freeBytesOnVolume()
-        let underPressure = free < settings.criticalFreeBytes
-        if underPressure {
+        if free < settings.criticalFreeBytes {
             Log.cache.notice(
-                "evicting ahead of the cap: only \(free, privacy: .public) bytes free"
+                "evicting ahead of the ceiling: only \(free, privacy: .public) bytes free"
             )
+            store.byteCeiling = max(0, settings.byteCeiling / 2)
+        } else {
+            store.byteCeiling = settings.byteCeiling
         }
 
-        let resident = try database.all(Self.residentSQL) { row in
-            (
-                id: try row.int64("id"),
-                path: try row.string("cache_path"),
-                bytes: try row.optionalInt64("byte_size") ?? 0
-            )
-        }
-
-        var count = resident.count
-        var bytes = resident.reduce(Int64(0)) { $0 + $1.bytes }
-        let targetCount = underPressure ? max(0, settings.photoCap / 2) : settings.photoCap
-
-        for entry in resident {
-            let overCount = count > targetCount
-            let overBytes = bytes > settings.byteCeiling
-            guard overCount || overBytes else { break }
-
-            // Never evict a picture that is in the queue, whatever its age — it
-            // is about to be shown. Without this a fast consumer could evict a
-            // photo moments before asking for it.
-            guard !protectedIDs.contains(entry.id) else {
-                skipped += 1
-                continue
-            }
-
-            try evictEntry(photoID: entry.id, relativePath: entry.path)
-            evicted += 1
-            freed += entry.bytes
-            count -= 1
-            bytes -= entry.bytes
-        }
-
-        if evicted > 0 {
-            Log.cache.info(
-                "evicted \(evicted, privacy: .public) photos, freed \(freed, privacy: .public) bytes"
-            )
-        }
-        return EvictionResult(evicted: evicted, bytesFreed: freed, protectedFromEviction: skipped)
-    }
-
-    /// Pictures waiting in the queue, which the evictor must not touch whatever
-    /// their age — they are about to be shown.
-    func queuedPhotoIDs() throws -> Set<Int64> {
-        Set(try database.all("SELECT photo_id FROM queue;") { try $0.int64("photo_id") })
-    }
-
-    private func evictEntry(photoID: Int64, relativePath: String) throws {
-        try? FileManager.default.removeItem(at: root.appending(path: relativePath))
-        try database.run(
-            "UPDATE photo SET cache_path = NULL, materialized_at = NULL WHERE id = :id;",
-            ["id": .int(photoID)]
+        let result = store.evictIfNeeded(protecting: try queuedPhotoUUIDs())
+        return EvictionResult(
+            evicted: result.evicted,
+            bytesFreed: result.bytesFreed,
+            protectedFromEviction: result.protected
         )
+    }
+
+    /// Photographs waiting in the queue, which eviction must not touch whatever
+    /// their age — they are about to be shown.
+    func queuedPhotoUUIDs() throws -> Set<String> {
+        Set(
+            try database.all(
+                "SELECT p.uuid FROM queue q JOIN photo p ON p.id = q.photo_id;"
+            ) { try $0.string("uuid") })
     }
 
     // MARK: - Clearing on purpose
@@ -536,27 +447,33 @@ public struct PhotoCache {
 
     public func costOfClearing(_ scope: ClearScope) throws -> ClearCost {
         let (predicate, bindings) = Self.scopePredicate(scope)
-        let row = try database.first(
+        let rows = try database.all(
             """
-            SELECT
-              SUM(CASE WHEN p.cache_path IS NOT NULL THEN 1 ELSE 0 END)               AS refetch,
-              IFNULL(SUM(CASE WHEN p.cache_path IS NOT NULL THEN p.byte_size ELSE 0 END), 0) AS bytes,
-              SUM(CASE WHEN p.storage = 'referenced' THEN 1 ELSE 0 END)               AS referenced
-              FROM photo p JOIN source s ON s.id = p.source_id
+            SELECT p.uuid, p.storage FROM photo p JOIN source s ON s.id = p.source_id
              WHERE \(predicate);
             """,
             bindings
-        ) { row in
-            (
-                refetch: try row.optionalInt("refetch") ?? 0,
-                bytes: try row.optionalInt64("bytes") ?? 0,
-                referenced: try row.optionalInt("referenced") ?? 0
-            )
+        ) { (uuid: try $0.string("uuid"), storage: try $0.string("storage")) }
+
+        var refetch = 0
+        var bytes: Int64 = 0
+        var referenced = 0
+        for row in rows {
+            if row.storage == "referenced" { referenced += 1 }
+            let held = store.sizes(forPhoto: row.uuid).count
+                + (store.contains(PhotoStore.Key(photoUUID: row.uuid)) ? 1 : 0)
+            guard held > 0 else { continue }
+            if row.storage == "materialized" { refetch += 1 }
         }
+        // The byte total comes from the index, since the database no longer
+        // records what is held.
+        let claimed = Set(rows.map(\.uuid))
+        bytes = store.byteCount(ofPhotos: claimed)
+
         return ClearCost(
-            needingRefetch: row?.refetch ?? 0,
-            bytesFreed: row?.bytes ?? 0,
-            referencedAndFree: row?.referenced ?? 0,
+            needingRefetch: refetch,
+            bytesFreed: bytes,
+            referencedAndFree: referenced,
             costsNothingToRefetch: scope == .unavailableSources
         )
     }
@@ -575,35 +492,34 @@ public struct PhotoCache {
     /// library. Clearing is a storage operation, never a shuffle operation.
     @discardableResult
     public func clear(_ scope: ClearScope) throws -> ClearResult {
-        let cost = try costOfClearing(scope)
         let (predicate, bindings) = Self.scopePredicate(scope)
-
-        let paths = try database.all(
+        let uuids = try database.all(
             """
-            SELECT p.id, p.cache_path FROM photo p JOIN source s ON s.id = p.source_id
-             WHERE \(predicate) AND p.cache_path IS NOT NULL;
+            SELECT p.uuid FROM photo p JOIN source s ON s.id = p.source_id
+             WHERE \(predicate);
             """,
             bindings
-        ) { (try $0.int64("id"), try $0.string("cache_path")) }
+        ) { try $0.string("uuid") }
 
-        // One directory removal instead of a thousand unlinks, which is the
-        // whole reason the cache has a level of structure at all.
-        if case .source(let sourceID) = scope {
-            try? FileManager.default.removeItem(at: root.appending(path: "\(sourceID)"))
-        } else if scope == .everything {
-            try? FileManager.default.removeItem(at: root)
-            try prepare()
-        }
+        var freed: Int64 = 0
+        var cleared = 0
 
-        try database.transaction(.immediate) {
-            for (photoID, path) in paths {
-                if case .unavailableSources = scope {
-                    try? FileManager.default.removeItem(at: root.appending(path: path))
-                }
-                try database.run(
-                    "UPDATE photo SET cache_path = NULL, materialized_at = NULL WHERE id = :id;",
-                    ["id": .int(photoID)]
-                )
+        switch scope {
+        case .everything:
+            freed = store.removeAll()
+            cleared = uuids.count
+        case .source(let sourceID):
+            // One directory removal rather than thousands of unlinks, which is
+            // the whole reason the layout has that level.
+            if let uuid = try sources.source(id: sourceID)?.uuid {
+                freed = store.removeSource(uuid)
+            }
+            cleared = uuids.count
+        case .unavailableSources:
+            for uuid in uuids {
+                let before = store.byteCount(ofPhotos: [uuid])
+                if before > 0 { cleared += 1 }
+                freed += store.remove(photoUUID: uuid)
             }
         }
 
@@ -619,11 +535,9 @@ public struct PhotoCache {
         }
 
         Log.cache.notice(
-            "cleared \(paths.count, privacy: .public) cached photos, freeing \(cost.bytesFreed, privacy: .public) bytes"
+            "cleared \(cleared, privacy: .public) photographs, freeing \(freed, privacy: .public) bytes"
         )
-        return ClearResult(
-            cleared: paths.count, bytesFreed: cost.bytesFreed, queueCleared: queueCleared
-        )
+        return ClearResult(cleared: cleared, bytesFreed: freed, queueCleared: queueCleared)
     }
 
     private static func scopePredicate(_ scope: ClearScope) -> (String, SQLBindings) {
@@ -639,10 +553,4 @@ public struct PhotoCache {
 
     // MARK: - SQL
 
-    private static let residentSQL = """
-        SELECT id, cache_path, byte_size
-          FROM photo
-         WHERE storage = 'materialized' AND cache_path IS NOT NULL
-         ORDER BY materialized_at, id;
-        """
 }

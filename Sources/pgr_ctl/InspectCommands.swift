@@ -25,6 +25,7 @@ enum InspectCommands {
             database   \(environment.databaseURL.path(percentEncoded: false))
             cache      \(environment.cacheRoot.path(percentEncoded: false))
             roots from \(environment.origin.rawValue)
+            service    \(describeService(preferences))
             """
         )
         Console.note(
@@ -55,6 +56,18 @@ enum InspectCommands {
         }
     }
 
+    /// Where the agent said it was listening, which is the only way anything
+    /// finds it: the port floats, so there is no number to assume.
+    ///
+    /// A value outlives the process that wrote it, so this describes what was
+    /// published rather than promising something is answering there.
+    private static func describeService(_ preferences: Preferences) -> String {
+        guard let port = preferences.servicePort else {
+            return "no port published — the agent is not running, or has not started listening"
+        }
+        return "http://localhost:\(port)"
+    }
+
     /// A cap some libraries can never approach reads like a stalled fetch, so
     /// say what is true instead. A boot-volume library is referenced in place
     /// and never copied: there is nothing to cache, which is not the same fact
@@ -66,7 +79,7 @@ enum InspectCommands {
                 ? "nothing to cache — \(status.referencedCount) photos are referenced in place"
                 : "empty"
         }
-        return "\(status.residentCount)/\(status.cap) cached, "
+        return "\(status.residentCount) originals, \(status.renderingCount) renderings, "
             + "\(status.referencedCount) referenced, \(bytes) on disk"
     }
 
@@ -84,7 +97,7 @@ enum InspectCommands {
 
         for source in sources {
             let counts = try context.sources.pool.stats(forSource: source.id)
-            var traits = ["\(counts.referenced) referenced", "\(counts.resident) resident"]
+            var traits = ["\(counts.referenced) referenced"]
             if counts.videos > 0 { traits.append("\(counts.videos) video (never dealt)") }
             // In-flight producers. A handful is normal; a lot means producers
             // are dying mid-fetch, and the claims expire on their own either
@@ -166,7 +179,7 @@ enum InspectCommands {
             + "\(stats.unusedInCurrentPass) cards left unused in it")
         Console.note("showings      min \(stats.timesShownMin), max \(stats.timesShownMax), "
             + "\(stats.timesShownTotal) total, \(stats.neverDealt) never shown")
-        Console.note("resident      \(stats.residentPhotos) photos have bytes")
+        Console.note("blacklisted   \(try context.deck.blacklisted().count) will not render")
 
         let histogram = try context.deck.showingHistogram()
 
@@ -197,11 +210,12 @@ enum InspectCommands {
     static func cacheStatus(environment: MacHostEnvironment) throws {
         let context = try Library.context(environment)
         let status = try context.cache.status()
-        Console.note("resident     \(status.residentCount)/\(status.cap) materialized photos")
+        Console.note("originals    \(status.residentCount) materialized photographs held")
+        Console.note("renderings   \(status.renderingCount) across every size asked for")
         Console.note("referenced   \(status.referencedCount) photos, never copied, no budget")
         Console.note("pending      \(status.pendingCount) materialized photos with no bytes yet")
         Console.note("on disk      \(Library.bytes(status.bytesOnDisk))")
-        Console.note("ceiling      \(Library.bytes(context.preferences.cacheSettings.byteCeiling))")
+        Console.note("ceiling      \(Library.bytes(status.byteCeiling))")
         Console.note("free         \(Library.bytes(status.freeBytesOnVolume)) on the cache volume")
         Console.note("queued       \(status.queued) pictures, none of which can be evicted")
         Console.note("root         \(environment.cacheRoot.path(percentEncoded: false))")

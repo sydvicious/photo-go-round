@@ -47,6 +47,10 @@ extension SourceKind: CustomStringConvertible {
 /// A row in `source`. Never a setting.
 public struct Source: Sendable, Equatable, Identifiable {
     public let id: Int64
+    /// Durable identity, and what names this source's directory in the cache.
+    /// The row id is not stable: the database is disposable and a rebuilt one
+    /// renumbers from 1.
+    public let uuid: String
     public let kind: SourceKind
     /// Path, `PHAssetCollection` id, `PHAsset` id, Google album id. For folder
     /// and file sources this is the only absolute path in the system — photos
@@ -74,6 +78,7 @@ public struct Source: Sendable, Equatable, Identifiable {
 
     init(row: Row) throws {
         id = try row.int64("id")
+        uuid = try row.string("uuid")
         kind = SourceKind(try row.string("kind"))
         locator = try row.string("locator")
         bookmark = try row.optionalData("bookmark")

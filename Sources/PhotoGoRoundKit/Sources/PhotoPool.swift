@@ -37,7 +37,7 @@ public struct PhotoPool {
     ) throws -> [Entry] {
         try database.all(
             """
-            SELECT id, external_id, storage, byte_size, cache_path
+            SELECT id, uuid, external_id, storage, byte_size
               FROM photo
              WHERE source_id = :id AND id > :after
              ORDER BY id
@@ -47,23 +47,21 @@ public struct PhotoPool {
         ) { row in
             Entry(
                 id: try row.int64("id"),
+                uuid: try row.string("uuid"),
                 externalID: try row.string("external_id"),
                 storage: PhotoStorage(rawValue: try row.string("storage")) ?? .materialized,
-                byteSize: try row.optionalInt64("byte_size"),
-                isCached: try row.optionalString("cache_path") != nil
+                byteSize: try row.optionalInt64("byte_size")
             )
         }
     }
 
     public struct Entry: Sendable, Equatable {
         public let id: Int64
+        /// Durable identity, and what the cache's filenames carry.
+        public let uuid: String
         public let externalID: String
         public let storage: PhotoStorage
         public let byteSize: Int64?
-        /// For a materialized photo, whether its bytes have been fetched. For a
-        /// referenced one this is meaningless — its cache entry *is* the pointer
-        /// to the file, which exists as soon as the entry does.
-        public let isCached: Bool
     }
 
     /// Rows per write transaction. Large enough that a fifty-thousand-photo
@@ -95,11 +93,15 @@ public struct PhotoPool {
                     try database.run(
                         """
                         INSERT OR IGNORE INTO photo
-                            (source_id, external_id, media_type, source_enabled,
+                            (uuid, source_id, external_id, media_type, source_enabled,
                              storage, byte_size, shuffle_key, added_at)
-                        VALUES (:source, :external, :media, :enabled, :storage, :size, :key, :now);
+                        VALUES (:uuid, :source, :external, :media, :enabled, :storage, :size, :key, :now);
                         """,
                         [
+                            // Durable identity, generated here because it is what
+                            // the cache's filenames carry and the row id is not
+                            // stable across a rebuilt database.
+                            "uuid": .text(UUID().uuidString.lowercased()),
                             "source": .int(source.id),
                             "external": .text(photo.externalID),
                             "media": .text(photo.mediaType.rawValue),
@@ -144,13 +146,12 @@ public struct PhotoPool {
     /// What a removal left behind for someone else to clean up.
     public struct Removal: Sendable, Equatable {
         public let count: Int
-        /// Cache-relative paths whose entries no longer exist. The pool has no
-        /// idea where the cache root is, so it reports these rather than
-        /// deleting them; whoever owns the root deletes them at once, and
-        /// `PhotoCache.sweepOrphans` catches anything missed.
-        public let orphanedCachePaths: [String]
+        /// The identities of the photographs that went. The pool has no idea
+        /// where the cache root is, so it reports these rather than deleting
+        /// anything; whoever owns the bytes discards them by identity.
+        public let orphaned: [String]
 
-        public static let none = Removal(count: 0, orphanedCachePaths: [])
+        public static let none = Removal(count: 0, orphaned: [])
     }
 
     /// Removes entries by row id.
@@ -176,12 +177,11 @@ public struct PhotoPool {
                     // Doubly optional because the query may match no row and the
                     // column itself is nullable — a referenced photo has no
                     // cache path. Both mean "nothing to delete", so they flatten.
-                    let cached = try database.first(
-                        "SELECT cache_path FROM photo WHERE id = :id;", ["id": .int(id)],
-                        { try $0.optionalString("cache_path") }
-                    )
-                    if let path = cached ?? nil {
-                        orphaned.append(path)
+                    if let uuid = try database.first(
+                        "SELECT uuid FROM photo WHERE id = :id;", ["id": .int(id)],
+                        { try $0.string("uuid") }
+                    ) {
+                        orphaned.append(uuid)
                     }
                     try database.run("DELETE FROM photo WHERE id = :id;", ["id": .int(id)])
                     removed += database.changes
@@ -191,7 +191,7 @@ public struct PhotoPool {
         if removed > 0 {
             Log.sources.notice("removed \(removed, privacy: .public) entries from the pool")
         }
-        return Removal(count: removed, orphanedCachePaths: orphaned)
+        return Removal(count: removed, orphaned: orphaned)
     }
 
     @discardableResult
@@ -239,8 +239,6 @@ public struct PhotoPool {
         public let videos: Int
         /// Referenced in place: no copy, no cache budget.
         public let referenced: Int
-        /// Bytes are present, whether referenced or materialized.
-        public let resident: Int
         /// Claimed by a producer that is fetching them. A handful is normal; a
         /// lot means producers are dying mid-fetch, and the claims will expire
         /// on their own either way.
@@ -253,7 +251,6 @@ public struct PhotoPool {
             SELECT COUNT(*)                                                AS total,
                    SUM(CASE WHEN media_type = 'image' THEN 1 ELSE 0 END)   AS images,
                    SUM(CASE WHEN storage = 'referenced' THEN 1 ELSE 0 END) AS referenced,
-                   SUM(CASE WHEN cache_path IS NOT NULL THEN 1 ELSE 0 END) AS resident,
                    SUM(CASE WHEN claimed_at IS NOT NULL THEN 1 ELSE 0 END) AS claimed
               FROM photo WHERE source_id = :id;
             """,
@@ -266,10 +263,9 @@ public struct PhotoPool {
                 images: images,
                 videos: total - images,
                 referenced: try row.optionalInt("referenced") ?? 0,
-                resident: try row.optionalInt("resident") ?? 0,
                 claimed: try row.optionalInt("claimed") ?? 0
             )
-        } ?? SourceStats(total: 0, images: 0, videos: 0, referenced: 0, resident: 0, claimed: 0)
+        } ?? SourceStats(total: 0, images: 0, videos: 0, referenced: 0, claimed: 0)
     }
 
     /// How many photos the deck can actually draw on — enabled sources only.

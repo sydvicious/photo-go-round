@@ -62,10 +62,7 @@ final class HTTPListener: @unchecked Sendable {
         }
     }
 
-    /// Where pictures are served when nothing says otherwise.
-    static let defaultPort: UInt16 = 9000
-
-    private let port: NWEndpoint.Port
+    private let port: NWEndpoint.Port?
     private let queue = DispatchQueue(label: "com.sydpolk.photogoround.http")
     private var listener: NWListener?
     private let route: @Sendable (Request) async -> Response
@@ -74,28 +71,39 @@ final class HTTPListener: @unchecked Sendable {
     /// nothing itself.
     private let advertising: String
 
+    /// A ready listener reports the port it actually bound.
+    private let onReady: @Sendable (UInt16) -> Void
+
+    /// `port` nil asks the kernel for a free one, which is how this normally
+    /// runs: nothing has to guess a number, two agents cannot collide, and the
+    /// answer is published for clients to read.
     init(
-        port: UInt16,
+        port: UInt16?,
         advertising: String,
+        onReady: @escaping @Sendable (UInt16) -> Void = { _ in },
         route: @escaping @Sendable (Request) async -> Response
     ) {
-        self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port(rawValue: Self.defaultPort)!
+        self.port = port.flatMap { NWEndpoint.Port(rawValue: $0) }
         self.advertising = advertising
+        self.onReady = onReady
         self.route = route
     }
 
-    /// The port actually bound. Fixed today; once the listener asks for `.any`
-    /// this is what gets written to preferences for local clients to read.
+    /// The port actually bound, known only once the listener is ready. Zero
+    /// until then, which is why `onReady` exists rather than callers polling
+    /// this.
     private(set) var boundPort: UInt16 = 0
 
     func start() throws {
         let parameters = NWParameters.tcp
-        // Loopback only for now. It has to widen before any off-machine client
-        // works, and that arrives with Bonjour rather than on its own.
+        // Loopback only, and settled: every platform runs its own agent against
+        // its own library, so nothing off this machine has any reason to reach
+        // this listener.
         parameters.requiredInterfaceType = .loopback
         parameters.allowLocalEndpointReuse = true
 
-        let listener = try NWListener(using: parameters, on: port)
+        let listener = try port.map { try NWListener(using: parameters, on: $0) }
+            ?? NWListener(using: parameters)
         self.listener = listener
 
         listener.stateUpdateHandler = { [weak self] state in
@@ -106,6 +114,7 @@ final class HTTPListener: @unchecked Sendable {
                 Console.recovered(
                     "serving pictures on http://localhost:\(self.boundPort)\(self.advertising)")
                 Log.deck.notice("http listener ready on port \(self.boundPort, privacy: .public)")
+                self.onReady(self.boundPort)
             case .failed(let error):
                 Console.alert("http listener failed: \(error)")
                 Log.deck.error("http listener failed: \(String(describing: error), privacy: .public)")

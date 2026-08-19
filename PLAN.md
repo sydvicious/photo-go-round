@@ -35,7 +35,7 @@ Each phase carries its own spike rather than front-loading them all, so the firs
     Both of those numbers needed a baseline to mean anything, which is the part worth keeping. An idle agent sits at **36 MB** and a scan peaks it at **96 MB**, returning afterwards — so 92 MB at the ten-hour mark is a sample that landed during a scan, not ten hours of growth. And the CPU reading is the one that rules out the failure this gate exists to catch: a wedged agent prints nothing *and* burns nothing, so silence alone proves neither. It was working.
   - A library that only ever runs under `swift test` has not been shown to work, it has been shown not to crash. Everything this project has found that the test suite missed — stdout buffering that only bites when stdout is not a terminal, an unavailability reason that said the wrong thing, a schema column deleted along with its neighbour — was found by standing it up.
 - **Phase 1.5** — **The service is the interface.** An HTTP endpoint on the Mac that hands a client a picture rendered to the resolution it asked for. Clients stop opening the database and the cache; the service becomes the only thing that touches either.
-  Built in three milestones, each run before the next begins, so that the risky
+  Built in milestones, each run before the next begins, so that the risky
   part is the only new thing at any moment.
 
   - **1.5.1 — the endpoint, returning originals. Done.** `GET /v1/next` carrying
@@ -44,39 +44,65 @@ Each phase carries its own spike rather than front-loading them all, so the firs
     or not the download succeeds; there is no reservation and nothing to reclaim.
     One console line per request, with the consumer, the size asked for, the deal
     ordinal, the bytes, and the latency.
-  - **1.5.2 — the renderer.** `w` and `h` stop being ignored:
+  - **1.5.2 — the renderer. Done.** `w` and `h` stopped being ignored:
     `CGImageSourceCreateThumbnailAtIndex` off the main thread, `Accept` deciding
     HEIC or JPEG, and the client drawing what it is handed 1:1 without
-    resampling. A photo that will not render is skipped to the next queue entry,
-    and blacklisted after three attempts.
-  - **1.5.3 — the rendering cache.** The cache becomes `(photo, resolution)`,
-    bounded by bytes alone; `cachePhotoCap` goes. Its metadata lives in RAM,
-    rebuilt at startup from UUID-keyed filenames, so migration 3 is a deletion.
+    resampling. Nothing is enlarged, so a box bigger than the original returns
+    the original's pixels. A photo that will not render is skipped to the next
+    queue entry and retired after three attempts, which is migration 3 — a
+    `render_failures` column, since removing the row would only mean the next
+    rescan found the file again.
+  - **1.5.3 — the rendering cache. Done.** The cache became `(photo, resolution)`,
+    bounded by bytes alone; `cachePhotoCap` is gone. Its index lives in memory,
+    rebuilt at startup by walking UUID-keyed filenames, so migration 4 both adds
+    the identities and drops `cache_path` and `materialized_at`. `verifyResidency`
+    and `sweepOrphans` went with them: an index built *from* the disk cannot
+    disagree with it, and a file the database does not claim is deleted at the
+    rebuild.
 
-  Deliberately absent from 1.5.1, and not oversights:
+    **Measured, twenty alternating requests at 100×100 and 1000×1000 across
+    three photographs:** six misses — exactly one render per photograph per size
+    — then fourteen hits. After killing the agent and starting a fresh process,
+    eight hits from eight, the index rebuilt from filenames with nothing in
+    memory and nothing in the database recording what was held.
 
-  - The listener binds loopback only. It has to widen before any off-machine
-    client works.
-  - There is no authorization. Every device on the Wi-Fi could otherwise ask the
-    library for photographs, so this lands with the listener widening.
-  - The port does not float. It is fixed at 9000 rather than assigned by the
-    kernel at launch and published to preferences for local clients to read.
-    `--port` pins it meanwhile, and permanently after, so a development agent can
-    run beside a shipped one.
-  - `GET /v1/revocations?since=` does not exist.
-  - Phase 2's `pgr_ctl` still reads the database directly for the picture path,
-    rather than being the service's first client.
+  - **1.5.4 — the floating port. Done.** The listener asks the kernel for a port
+    rather than holding 9000, and publishes what it gets to preferences under
+    `servicePort`, where every process on the machine can read it; `pgr_ctl
+    status` prints it. Two agents can now run side by side without either being
+    told about the other. `--port` still pins a number, which is what a `curl`
+    you type by hand wants.
 
-  - **Exit gate: two clients draw from one deck over the wire, and neither can read the container.** Revoke `pgr_ctl`'s file access to the storage root and confirm it still serves; run it against the service from a second machine on the same Wi-Fi.
+    The withdraw on the way out could not be a `defer`: **this process only ever
+    ends by signal**, so the `defer` never ran and every ordinary stop left an
+    address behind that `pgr_ctl status` then named. It is a `DispatchSourceSignal`
+    on `SIGTERM` and `SIGINT` — the agent's only graceful-shutdown machinery, and
+    it exists solely to take the address down.
+
+  Nothing on this phase's absent list is outstanding any more, and three things
+  it used to carry are settled rather than deferred. **The listener binds loopback
+  and stays there** — nothing off this Mac talks to its service, so there is
+  nothing to widen. **Authorization is not needed** at that boundary: on loopback
+  the only reachable caller is a process already running as this user, which is a
+  different question from every device on the Wi-Fi and does not want the same
+  answer. And **revocation moved past 0.1**, since there is nothing for
+  `GET /v1/revocations?since=` to tell until a client is holding a picture up,
+  and the serve-time check already covers hand-off.
+
+  - **Exit gate: a client draws pictures over the wire without ever opening the container.** Two `curl` processes asking at once never receive the same photograph; the same photograph asked for twice at one size decodes once and is served from disk thereafter; and both survive the agent being restarted, since the index is rebuilt from the filenames. Met. *The gate previously said "from a second machine on the same Wi-Fi", which belonged to the cross-device design that every-platform-serves-itself replaced.*
 
 - **Phase 2** — **`pgr_ctl`, an internal Swift command-line tool to exercise the server.** A **separate binary**, because the service has exactly one job and answering questions is not it. Add sources, refresh them, peek at the queue, inspect the cache, read and write preferences, run the shuffle-quality statistics. Serving pictures is `curl` against Phase 1.5's endpoint, so the rig covers what is *not* a service operation. This is how the server is proven correct before any window exists, and it stays the rig for everything scriptable afterwards. Never shipped.
+  - **Built, and its gate is met**: a folder added, the pool filled, the queue filled behind it, a hundred pictures served, a photograph deleted mid-queue and never shown again, a drive unplugged with the cached ones still coming.
+  - **Two measurements remain, and both were blocked on Phase 1.5.** Decode time to display size for the worst files in a real library — a large ProRAW, a 48-megapixel HEIC, a stitched panorama — which is the number that justifies rendering on demand at all. And the byte-budget sweep across roughly 5 / 10 / 25 / 50 / 100 GB, to replace the guessed ceiling with a measured one. Both are now possible.
   - **Exit gate: `pgr_ctl` builds and drives a running server end to end.** Add a folder, watch the pool fill, watch the queue fill behind it, serve a hundred pictures, remove a photo and confirm it never appears again, unplug a drive and confirm the cached ones keep coming. Every one of those is a thing you do at a prompt against a live agent, and none of them is a unit test.
   - The two gates are the same principle applied twice, and it is worth naming: **a phase ends when you have used it, not when it compiles.** Everything found in this project so far that a test suite missed — stdout buffering under launchd, an unavailability reason that said the wrong thing, a schema column deleted along with its neighbour — was found by running the thing.
 - **Phase 3** — **The Mac app that calls it.** Just a window showing the shuffle — sized to fit, with the pan — that can be taken full screen. No source management, no settings: `pgr_ctl` already does that. This is the milestone that proves the whole idea, and it is small.
   - Full screen makes it the screensaver's rehearsal space. The fit, the pan, the transitions, and the empty state all get tuned here, in a window with a debugger attached, long before Phase 6 has to make them work inside someone else's sandbox.
   - **The Apple Photos provider lands here too** — albums, smart albums, Favorites, and individually pinned assets, at full resolution — so the window is showing a real library rather than a test folder. Spike first: confirm `PHAssetResourceManager` returns true originals for iCloud-optimized assets, and measure throughput.
   - **Settle the App Group container before anything else in this phase.** An Xcode-launched sandboxed app does not use `~/Library/Containers`; CoreDevice redirects it. See *Where an Xcode-launched app puts its container*.
-  - **Watching, and revoking a photo already on screen, land here.** This is the first surface that *holds* a picture up rather than printing a path and exiting, which is what makes it the first one that can show somebody a photo they have deleted. See *Revoking a photo that is already on screen*.
+  - **Watching lands here.** `FSEventStream` and `PHPhotoLibraryChangeObserver`, so the pool stops depending on the scan interval to notice that a folder changed. **Telling a client to drop a picture it is already showing does not** — that is post-0.1. See *Revoking a photo that is already on screen* and *Deferred: retracting a photo already on screen*.
+  - **All of the fit and aspect options land here**, rather than being held back to *Beyond 0.1*. A window is the first place a person can see the difference between fitting, filling, and tiling, and the first place the choice can be made by eye instead of by argument. The service already takes a box and knows nothing about what fills it, so a `fit` parameter arrives alongside `w` and `h` without changing what either means.
+  - **The App Group container question may have gone.** Phase 1.5 makes the app a client that is handed bytes, so it need not open the container at all. Confirm that before spending an afternoon on CoreDevice's redirection.
   - Diagnostic panels accrete later, as the phases that need them arrive — not in Phase 3.
 - **Phase 4** — iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
 - **Phase 5** — iOS widget: WidgetKit extension sharing an App Group container, serving from the queue in the timeline provider.
@@ -92,7 +118,7 @@ Each phase carries its own spike rather than front-loading them all, so the firs
 
 Distribution is a 1.0 concern, not an 0.1 one: 0.1 runs from Xcode and from a locally built binary. What 1.0 needs — packaging, agent registration, screensaver installation, and an update mechanism — is worked out under *Shipping it* below, where the conclusion is that `SMAppService` probably removes the need for an installer altogether.
 
-Everything above is 0.1, and it ships with one fit, one layout, and one transition. Display richness — alternate fits, tiling, transition styles, per-surface timing, more widget families — is deliberately held back and collected under "Beyond 0.1" below, where it is also argued that none of it is architecture.
+Everything above is 0.1, and it ships with one fit, one layout, and one transition. Display richness — alternate fits, tiling, transition styles, per-surface timing, more widget families — is deliberately held back and collected under "Beyond 0.1" below, where what each item costs is sketched rather than gated.
 
 Phases 1 and 2 run on file-backed sources alone — folders and individually selected photos — so the deck, the queue, and the cache are proven where there is no permission flow and no network to fail. Apple Photos then arrives with the Mac app, which is the point at which there is somewhere to look at it.
 
@@ -348,7 +374,7 @@ So there are two halves, and only the first is what "FSEvents" usually means:
 
 For the widget and the Watch, that same topic is what drives `WidgetCenter.reloadTimelines`, which is the only lever that retracts an entry already rendered.
 
-**Both halves land in Phase 3**, with the Mac app. Not because the app is special, but because it is the first thing that holds a picture in front of a person: `pgr_ctl` prints a path and exits, so there is nothing on screen to retract and no way to observe the bug. Phases 6 and 7 then inherit a solved problem rather than discovering it in a screensaver sandbox.
+**The halves split.** Noticing lands in Phase 3 with the Mac app, because that is the first thing that holds a picture in front of a person: `pgr_ctl` prints a path and exits, so there is nothing on screen to retract and no way to observe the bug. **Retracting is post-0.1** — see *Deferred: retracting a photo already on screen*. 0.1 therefore ships with a photo able to linger on a surface after it is deleted, which is *Known shortcomings* item 6 and is accepted rather than overlooked.
 
 **Does a shorter scan interval substitute?** Partly, and less than it looks. Scanning is now constant-memory and fast — 0.45s for 8,287 photos — so a thirty-second interval is a one-and-a-half percent duty cycle and would narrow the window considerably. But a scan of a million-photo source takes about two minutes, so the interval cannot be shortened where it matters most, and this project exists for libraries that large. Polling narrows the window; it cannot close it.
 
@@ -1022,7 +1048,7 @@ The wait is **exponential with jitter** rather than fixed, for a reason specific
 
 It also means the phone stops needing to understand the watch. Under the old design the phone knew watch pixel dimensions and widget families and pre-rendered for them; now the watch asks for what it is about to draw and the phone answers like any other client, with `WCSession.transferFile` carrying the same exchange.
 
-**The request carries a width and a height, not one maximum dimension**, and the reason is what keeps the protocol still when the display side grows. The client names the box it wants filled; the service renders to it and knows nothing about fit mode, layout, or how many pictures are on screen. Alternate fits, tiling, and several pictures at once — all held back under *Beyond 0.1* — then arrive as parameters added alongside `w` and `h`, rather than as a change to what the existing ones mean. If the fit is ever worth moving into the service, it becomes another parameter and the box stays the box. A single maximum would have assumed one fit mode for ever, and would in fact render the wrong thing: a 4000×3000 photo fitted into 3840×2160 is 2880×2160 and into 2160×3840 is 2160×1620, where one `max=3840` gives 3840×2880 and is wrong for both.
+Right now, the image is resized with shrink or grow, keeping aspect ratio. Eventually, there will be more options added to the endpoint to provide more flexibility.
 
 **And it reopens the cache design rather than settling it**, which is the subject of the next section. Rendering on demand at an arbitrary requested resolution requires an original to render from, so originals stay — but the renderings turn out to be worth keeping too, for a reason *Decode on demand; do not store derivatives* did not account for.
 
@@ -1077,7 +1103,7 @@ The UUID is a column beside the row id, not a replacement for it: `id INTEGER PR
 
 **So the rule at startup is: if the UUID in the filename is not in the database, delete the file.** That single check is `sweepOrphans` generalised — it cleans up after a deleted photo, after a removed source, and after a rebuilt database, and in the last case it correctly discards the whole cache rather than serving it under someone else's name. A photo removed and re-added gets a new UUID and therefore a clean cache, which is the same rule *Removal is a real delete* already states: a file that comes back is a new entry with no history.
 
-**Migration 3 is therefore a deletion, not an addition.** `cache_path` and `materialized_at` leave `photo` and nothing replaces them; `uuid` arrives, and so does one on `source`. `byte_size` stays, because it is scan metadata about the original rather than about our copy — and it is the column *Known shortcomings* item 2 wants a `modified_at` next to.
+**Migration 4 is therefore a deletion, not an addition.** `cache_path` and `materialized_at` leave `photo` and nothing replaces them; `uuid` arrives, and so does one on `source`. `byte_size` stays, because it is scan metadata about the original rather than about our copy — and it is the column *Known shortcomings* item 2 wants a `modified_at` next to.
 
 **What else it removes:**
 
@@ -1111,6 +1137,8 @@ Four properties the blacklist needs:
 ### Revocation, and the staleness that is accepted
 
 Darwin notifications carry no payload, which was exactly right while both ends shared the database: the notification said *go look* and SQLite held what there was to look at. Clients no longer have anything to look at, and a notification never left the machine anyway.
+
+**This is post-0.1.** It was on Phase 1.5's absent list while the plan still expected the service to grow every client-facing endpoint before any client existed. Nothing holds a picture up today, so there is nothing for a revocation to interrupt — and once something does, the question of whether a picture vanishing under a viewer is better or worse than one that lingers is answerable by looking at it, which is not a thing that can be settled ahead of the surfaces.
 
 The doorbell works again as soon as a client has an endpoint to look at:
 
@@ -1184,7 +1212,7 @@ The reversal is recorded rather than quietly absorbed, because the old text was 
 10. *Apple Watch* — "the phone keeps a small rolling set of watch-sized derivatives on the watch" becomes "the watch asks at its own size." The companion decision itself stands, on sourcing grounds rather than on reachability.
 11. *Phase 6* — the spike ladder "Direct container access, then localhost HTTP, then XPC, with a consumption journal as fallback" is resolved to HTTP in advance.
 12. *Phase 8* — the App Group spike may no longer be needed.
-13. *Phase 2* — `pgr_ctl` becomes the first client of the service rather than a direct reader of the database, for the picture path. Inspection and source configuration are unchanged.
+13. *Phase 2* — `pgr_ctl` has no picture path at all. Taking a picture is `curl` against the service, so the tool covers only what is not a service operation: preferences, the statistical rig, the doorbell, and the log.
 14. *`pgr_ctl`, the command-line tool* — the subcommand sketch lists `serve`, and "It has a head start" names it as written. `serve` is retired in favour of `curl`; see *What `pgr_ctl` stops needing to do* above.
 
 ## The service does one thing
@@ -1284,7 +1312,8 @@ Because the logs are never collected, they have to be self-sufficient on the mac
 
 Above the unit tests sit three layers, each catching what the one below cannot:
 
-- **`pgr_ctl` and `curl`** for anything scriptable, statistical, or concurrent — shuffle distribution over fifty thousand draws, cache-budget sweeps, and several requests at once to prove the queue pop actually serialises. These are assertions a test suite can run in CI as easily as a person can run them by hand.
+- **`pgr_ctl` and `curl`** for anything scriptable, statistical, or concurrent — shuffle distribution over fifty thousand draws, cache-budget sweeps, and several requests at once to prove the queue pop actually serialises.
+- **A caveat learned the hard way about where that line falls.** Everything below the HTTP layer can be right while the layer itself is wrong: the byte store's tests passed in full while the endpoint missed its cache on every single request, because it was building a fresh index per request and no test drove `route` twice. A component tested through the seam beneath it is not tested. Where a decision only exists at the wiring — a cache lookup, a header, a skip-and-continue — there has to be a test that goes in the front door. These are assertions a test suite can run in CI as easily as a person can run them by hand.
 - **The Mac app's instrument panel** for anything visual or timing-dependent — deck ordering seen at a glance, simulated consumers at different rates, Darwin notifications observed as they fire.
 - **Per-phase spikes and manual verification** for what neither can reach: wallpaper application, the saver's sandbox behavior, widget timeline budgets.
 
@@ -1592,7 +1621,7 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 
 **Wrong behaviour, worth fixing now**
 
-1. **A file edited in place is never noticed.** A refresh compares storage and byte size, so an edit that preserves the byte count — a crop re-encoded to the same length, a metadata rewrite — leaves the stale copy cached for ever. Wants a `modified_at` column compared on refresh, treated as re-fetch rather than as a new entry so it keeps its place in the rotation.
+1. **A file edited in place is never noticed.** A refresh compares storage and byte size, so an edit that preserves the byte count — a crop re-encoded to the same length, a metadata rewrite — leaves the stale copy cached for ever. Wants a `modified_at` column compared on refresh, treated as re-fetch rather than as a new entry so it keeps its place in the rotation. **It now leaves stale *renderings* too**, which nothing invalidates.
 
 **Dead weight left by refactoring**
 
@@ -1606,6 +1635,29 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 3. **A folder that never existed is reported as "no longer at this path."** The check cannot tell "moved" from "never there", and says the more alarming of the two.
 
 **Done since this list was written**
+
+- **The endpoint had no test that served a picture.** `PictureEndpoint` was
+  covered by one file, and every test in it ran against an empty library — so
+  nothing exercised rendering, the cache, or the headers, and the
+  fresh-index-per-request bug above would have stayed green for ever. It now has
+  a suite that drives `route` directly, over a **single-photograph library**:
+  serving pops the queue, so with one photograph every request is the same card,
+  which is what makes a hit observable at all. It caught a bug on its first run —
+  a cache *hit* reported `X-PGR-Pixels` as the box that was asked for rather than
+  the pixels actually sent, so one header meant two things depending on cache
+  state. Failing test, then fix, then passing test.
+- **Phase 1.5 is complete: the renderer and the rendering cache.** `w` and `h`
+  name a box, the service fits the photograph inside it and encodes to whatever
+  `Accept` allows, and the result is kept so the same photograph at the same size
+  decodes once. Two bugs surfaced by running it that the suite did not catch, and
+  both are worth keeping. **New rows were getting no UUID at all** — migration 4
+  backfilled the existing ones and nothing generated them on insert, so every
+  scan after it failed on a NOT NULL index. And **the endpoint built a fresh
+  `PhotoCache` per request, each with its own empty index**, so it wrote
+  renderings and never saw them again: a hundred per cent misses against a cache
+  that was full on disk. The index is now one per process, shared by the
+  endpoint, the producer, and maintenance. Neither was reachable from a unit
+  test; both took twenty seconds against a live agent.
 
 - **`MacHostEnvironment.appGroupIdentifier` is deleted.** It was kept for Phase 5's and Phase 8's widgets, whose App Group container Phase 1.5 removes the need for — a widget asks the service instead. What it was really preserving was a spelling, which belongs here rather than in an uncalled constant: **on macOS the App Group must be team-ID prefixed — `R5PQPZARC5.com.sydpolk.photogoround`, not `group.com.sydpolk.photogoround`.** Getting it wrong yields a nil container URL rather than an error, which is a classic afternoon lost, and the prefix differs between the Mac and iOS builds so it was never a shared constant either. `directoryName` still has a job and stays.
 - **Filling moved out of the agent and into the kit, and `SourceWorker` and `SourceWorkers` went with it.** Deciding *keep asking while the queue is short and this source still has something* is policy about the queue; which thread runs it and when the heartbeat fires is scheduling. Welded together in the host they were unreachable by the test suite, which is why a regression that cut a small library to one picture every five seconds survived. `QueueFiller` now holds the policy, takes *is it short* and *produce one* as injected closures, holds no database connection of its own, and has eight tests with no clock in any of them. The in-flight counting that let a source ignore a request while busy is done by the lane model and a per-round guard instead, so both worker types are gone along with their tests.
@@ -1635,7 +1687,7 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 
 4. **No Xcode project until Phase 3.** A shared scheme in `.swiftpm/xcode/xcshareddata/xcschemes/` gives the package a debugger today, which is enough for the agent. A real project arrives with the Mac app, where the App Group container has to be settled anyway — and doing both at once means the container question is answered by the thing that actually has the problem.
 5. **The agent bundle and `SMAppService` are no longer ahead of schedule.** Phase 1.5 puts the service on the critical path for every surface, so a login item is needed from Phase 3 rather than from Phase 6, and this finding moves from recorded-and-deferred to blocking. `Scripts/make-agent-bundle.sh` assembles an `LSUIElement` app, and the server has `register` / `unregister` / `service-status` verbs. None of it is needed until there is a surface that wakes up on its own and expects the library to be there — the screensaver, the wallpaper, the widgets, and probably the Mac app that registers it on their behalf. Recorded because it exists and because the finding is worth keeping: `SMAppService.agent(plistName:)` reports `.notFound` from that bundle, having ruled out a missing plist, five plist shapes, ad-hoc versus Developer ID signing, and `Bundle.main` resolution. What is left is that the process probably has to be launched by LaunchServices as an app, which is how it will actually be used.
-6. **Watching the filesystem, and revoking a photo already on screen, are Phase 3 work and not built.** See *Revoking a photo that is already on screen*. The serve-time check covers hand-off and nothing else, so every surface that displays a photo for longer than an instant can show one that has since been deleted — the wallpaper worst of all. Two pieces are missing: a watcher (`FSEventStream`, `PHPhotoLibraryChangeObserver`) and a `.photoRevoked` topic for consumers to drop what they are holding.
+6. **Watching the filesystem is Phase 3 work; revoking a photo already on screen is post-0.1.** See *Revoking a photo that is already on screen*. The serve-time check covers hand-off and nothing else, so every surface that displays a photo for longer than an instant can show one that has since been deleted — the wallpaper worst of all. **0.1 ships with that.** The watcher (`FSEventStream`, `PHPhotoLibraryChangeObserver`) arrives with the app; the `.photoRevoked` topic and `GET /v1/revocations?since=` wait until there are surfaces to judge them against.
 7. **tvOS and visionOS have no answer for where their service runs.** Every other platform serves itself — the Mac from its agent, iOS in-process, the Watch fed by its phone — and these two are simply unexamined. The questions are whether an app on either can run something that survives long enough to keep a queue full, what a tvOS app may keep in a container that is not purged under pressure (see *tvOS storage*), and whether visionOS is close enough to iOS that the in-process shape carries straight over. **Investigate before designing**: the answer decides whether they are ordinary hosts of the kit or whether they need feeding by something else, the way the Watch does.
 8. **The response does not name the picture.** A client is handed bytes, a card id and a deal ordinal, and nothing it could show a person or use as a filename — which is what made saving one from `curl` awkward enough to notice. The name should be the photo's own, **stripped of its extension**, because from step 2 onward the format returned is the one the client asked for through `Accept` rather than the one the original had, so the original extension would be a lie. An `X-PGR-Name` header alongside the others. One wrinkle to remember when building it: `external_id` is a source-*relative path* rather than a leaf name, so a recursive folder yields `2019/summer/sunset-05.png` and the header wants the last component with the extension removed.
 9. **The logger is not abstracted, so nothing that logs can be tested.** `Log` interpolates straight into `Logger`, and those records go to the system's log store — read back with `log show`, long after anything could assert on them. That is the same problem as a data lake: the logs exist and are not queryable by a test. What it wants is a logger behind a seam, defaulting to `os_log`, that a test can replace with a collector and then read — asserting the contents, or just the count. `PictureEndpoint.Served` is the shape that works, and is currently the only place with it: a value describing what happened, and an injected sink that formats and reports. **`os_log` must stay the default** rather than a file, because it is the only mechanism that works from inside the screensaver's and the widget's sandboxes, where a hand-rolled file logger could not write at all.
@@ -1773,15 +1825,23 @@ The upside of owning it is that the transition list can start at one. A cross-fa
 
 ### Features versus architecture
 
-The governing rule, and it is a rule rather than a hope: **nothing in this section may require a change below the display layer.** From that follows a test for whether a piece of work deserves a phase or is merely a feature.
+A rough guide to how much work an item is, and nothing stronger. **This used to be a rule** — *nothing in this section may require a change below the display layer* — and the rule is gone. It was drawn before there was anything running to check it against, and the first item that failed it (retracting a photo already on screen) failed on a technicality while being obviously the right thing to defer. A prohibition that has to be argued around on its first real case is not carrying its weight.
+
+**What made the rule seem necessary was a wire, and there is no wire.** A protocol frozen for clients you cannot change is worth defending that hard; `/v1/next` has no such clients. Every one is on this machine, in this repository, built and shipped in the same breath as the service — see *Every device serves itself, so the service never leaves the machine*. Adding a parameter or an endpoint means editing both ends and rebuilding, which is an afternoon rather than a compatibility problem. The `/v1` in the path stays as cheap insurance, not as a promise anybody is holding us to.
 
 **Architecture — the first instance of a new class of surface.** The first widget is real work: App Group container resolution across a sandbox boundary, timeline budgets, the memory ceiling, writing small files for an outstanding hand. The first `.saver` is real work: someone else's sandbox, and a transport that may not be the database. Those earn phases.
 
 **Features — every instance after the first.** Once widgets work, more widgets are sizes and layouts. Small, medium, large, Lock Screen, Notification Center, desktop, Smart Stack — each is a new `WidgetFamily` case, a SwiftUI view, and a consumer row. No new mechanism, nothing below the display layer touched. The same is true of display styles: a new fit, a new transition, a tiled layout, a collage is an enum case plus a renderer that receives a decoded image and a rectangle. And of sources: once the provider protocol exists, a new source kind is a provider, which is why Google Photos is a late phase only because of its OAuth flow, not because of anything structural.
 
-**The warning signal.** If something that looks like a feature seems to need something from the library layer, either it is smuggling in a new capability or the layering has drifted. Video is the known example — it presents as just another display style and is in fact a capability reaching down to per-consumer filtering in the deal query, which is exactly why it is a 2.0 item rather than an entry in a transitions list.
+**Reaching below the display layer is a size estimate, not a disqualification.** Some items here do it. Retracting a photo already on screen needs an endpoint and a notification topic — a small thing when both ends ship together. Video needs per-consumer filtering in the deal query, which is a large thing, and is why it is a 2.0 item rather than an entry in a transitions list. The estimate tells you what an item costs before you start it. It does not tell you whether to start it, and it does not promote it to a phase on its own.
 
-The practical consequence is that this whole section is safe to defer indefinitely and safe to pick from in any order, one item at a time, whenever one sounds fun.
+The practical consequence is that this whole section is safe to defer indefinitely and safe to pick from in any order, one item at a time, whenever one sounds fun. **If one turns out to want work underneath, that is a thing to find out by building it**, and to write down here afterwards — which is how everything else in this plan has been decided.
+
+### Deferred: retracting a photo already on screen
+
+Deferred here rather than built into 0.1: a payload-free `.photoRevoked` topic plus `GET /v1/revocations?since=<cursor>`, so a surface holding a deleted photo drops it instead of waiting to rotate. Worked out in full under *Revocation, and the staleness that is accepted*; the reason it waits is that whether a picture vanishing under a viewer reads better or worse than one that lingers is a question you answer by watching it happen.
+
+It reaches below the display layer — an endpoint and a notification topic — which is a note on what it costs rather than a reason it does not belong here.
 
 ### Display styles
 

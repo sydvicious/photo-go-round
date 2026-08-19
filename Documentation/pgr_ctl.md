@@ -191,10 +191,10 @@ measure: a spread of one to three across a library is a healthy fraction below
 1.0, and a spread of three to four hundred is starvation.
 
 `cache status`
-Resident photos against the cap, how many are referenced in place rather than
-copied, how many are waiting for bytes, what is on disk, and what is free on the
-volume. Also the number of queued pictures, which are the ones eviction will not
-touch whatever their age.
+Originals held, renderings held, how many photographs are referenced in place
+rather than copied, how many are waiting for bytes, what is on disk against the
+byte ceiling, and what is free on the volume. Also the number of queued pictures,
+which are the ones eviction will not touch whatever their age.
 
 `cache evict`
 Runs an eviction pass now rather than waiting for the agent's maintenance
@@ -283,11 +283,13 @@ pgr_ctl sources add --folder --recursive ~/Pictures/Wallpaper
 pgr_ctl status
 ```
 
-Prove the queue pop serialises across clients:
+Prove the queue pop serialises across clients. The port floats, so ask `status`
+where the agent is rather than assuming a number:
 
 ```
+PORT=$(pgr_ctl status | grep -o "localhost:[0-9]*" | cut -d: -f2)
 for c in a b c d; do
-  curl -sS -D - -o /dev/null "http://localhost:9000/v1/next?consumer=display-$c&w=1920&h=1080" &
+  curl -sS -D - -o /dev/null "http://localhost:$PORT/v1/next?consumer=display-$c&w=1920&h=1080" &
 done; wait
 ```
 
