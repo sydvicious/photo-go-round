@@ -9,9 +9,20 @@ import SwiftUI
 /// database nor the cache.
 @main
 struct PhotoGoRoundApp: App {
+    @Environment(\.openWindow) private var openWindow
+
     var body: some Scene {
         WindowGroup("Photo-Go-Round") {
             ContentView()
+        }
+        // Replacing rather than adding: the standard item opens AppKit's own
+        // panel, and two About boxes is one too many.
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About \(Bundle.main.displayName)") {
+                    openWindow(id: AboutView.windowID)
+                }
+            }
         }
         // An ordinary title bar, and the photograph strictly below it. The
         // controls are not allowed to sit on top of the picture — a window is
@@ -23,5 +34,12 @@ struct PhotoGoRoundApp: App {
         // the title bar away on its own, which is when the photograph does get
         // the whole surface.
         .defaultSize(width: 1280, height: 800)
+
+        Window("About \(Bundle.main.displayName)", id: AboutView.windowID) {
+            AboutView()
+        }
+        // It is exactly as big as its text, and nothing about it is resizable.
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
     }
 }
