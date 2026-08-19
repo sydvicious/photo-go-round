@@ -6,17 +6,15 @@ The Mac app's own features — what the window gains beyond showing a photograph
 
 `PLAN.md` plans a system: a library, a service, and a sequence of surfaces that consume it. The app accumulates features that live entirely inside its window and matter to nothing else, and threading each through the phase list would bury the shape of the project under interface detail. They also arrive on their own cadence — the app is the only place a person touches any of this, so it grows whenever using it makes an absence obvious rather than when a phase says so.
 
-Building the first of them forced a decision that is **not** app-specific: the database became private to the service and preferences became how every process asks and answers. That lives in `PLAN.md` under *The database is private to the service*, because it governs the screensaver, the widgets, and iOS as much as this window. The first two deliverables below are that work; the rest is the app.
+Building the first of them forced a decision that is **not** app-specific: the database became private to the service, and a client asks it over HTTP rather than reading the store. That lives in `PLAN.md` under *The database is private to the service*, because it governs the screensaver, the widgets, and iOS as much as this window. The first deliverable below is that work; the rest is the app.
 
 # Phases
 
-- *Source status published to preferences* — the agent writes what it found where anything can read it.
-  - `sourceStatus`, keyed by locator and carrying the source's `uuid`: photo count, availability, reason, `scannedAt`.
-  - Published after each reconcile and each refresh. **Rings no doorbell.**
-- *`pgr_ctl`'s sources verbs stop opening the database* — they become a friendlier `defaults write`.
-  - `add` writes preferences and rings once; it no longer reconciles or scans. **Done** — it resolves through the kit and writes the batch in one go.
-  - `list` reads `sources`, merges `sourceStatus`, works with no agent running.
-  - `remove`, `enable`, `disable` address a source by locator rather than a row id.
+- *Web services for managing sources* — the agent answers, so a client never opens the store.
+  - `GET /v1/sources` — the list, with photo count, availability, reason, and the source's `uuid`.
+  - `POST /v1/sources` — add an array, all or none; returns what was created.
+  - `DELETE /v1/sources/<uuid>` — remove one.
+  - `pgr_ctl` is unchanged: it keeps preferences and the database, and never makes a web request. Command-line HTTP is `curl`.
 - *Sources in Settings* — one panel that shows what is configured and changes it.
   - A list with icon, name, count, and state; path secondary.
   - `Add Files…` — files only, multiple selection, one source per file.
@@ -29,11 +27,11 @@ Building the first of them forced a decision that is **not** app-specific: the d
 
 # Design Decisions
 
-- **The architecture is `PLAN.md`'s, not this document's.** The database is private to the service, preferences are the RPC mechanism, bytes travel over HTTP and facts through preferences, `sources` and `sourceStatus` are separate keys, and a source's identity is the database's `Source.uuid`, which travels outward in published status while preferences address a source by locator. See *The database is private to the service*.
+- **The architecture is `PLAN.md`'s, not this document's.** The database is private to the service; a client asks over HTTP and never opens the store; preferences stay the durable source list, the discovery channel, and `pgr_ctl`'s business; a source is named by its `Source.uuid`. See *The database is private to the service*.
 - **Settings, not the File menu.** Adding and removing act on one list, and only one of them has a picker shape.
 - **One source per file, collapsed in the UI later.** The deck already treats a pinned photograph and a folder of ten thousand alike; changing that to tidy a list would be a schema change.
 - **"Also use nested folders", not "Recursive."** Read by people who have never heard the word. Per folder, default off, not sticky.
-- **One write, one doorbell.** A batch assembles the whole list and writes once, because the agent refreshes on every notification it hears.
+- **One request, one write, one doorbell.** `POST` takes an array rather than one source, because adding two hundred one at a time would ask the agent to refresh two hundred times.
 - **Advancing is gated from the draw, not the request.** A slow fetch is then harmless, and coalescing needs no separate mechanism.
 - **The photograph window acknowledges nothing.** New pictures simply appear; the panel is where a change is confirmed, because that is where it was made.
 
@@ -47,7 +45,7 @@ One statement in `PLAN.md` says this should not exist, and it is the one argued 
 
 ## The architecture this rests on lives in PLAN.md
 
-Building this panel forced a system-wide decision, and it is recorded where every surface reads it rather than here: **`PLAN.md`, *The database is private to the service*.** In short — nothing but the agent opens the database, preferences are the RPC mechanism, HTTP carries bytes and preferences carry facts, `sources` and `sourceStatus` are separate keys, a source's identity is the database's `Source.uuid` while preferences address it by locator, and WAL stays for reasons that moved inside the agent.
+Building this panel forced a system-wide decision, and it is recorded where every surface reads it rather than here: **`PLAN.md`, *The database is private to the service*.** In short — no client opens the database, clients ask the agent over HTTP for pictures *and* for facts, preferences remain the durable source list and the way `servicePort` is found, `pgr_ctl` is the rig rather than a client and keeps its direct access, and WAL stays for reasons that moved inside the agent.
 
 That section also carries what it revised elsewhere in `PLAN.md`, and the debt it leaves in `pgr_ctl`'s remaining verbs. Everything below is what is specific to this app.
 
@@ -65,13 +63,15 @@ A panel dissolves that. The list is what you act on, removal is selecting a row,
 
 macOS has a place for this: SwiftUI's `Settings` scene, which is the standard window and takes ⌘, for free.
 
-## The beat between writing and knowing
+## The beat between asking and knowing
 
-The app writes, the agent scans, the count arrives when status is next published. A freshly added folder appears at once with its name and icon and no count, and the number fills in a moment later.
+`POST /v1/sources` does not wait for the scan. It resolves the paths, writes them, and answers — because a folder of eight thousand photographs takes seconds to walk, and a request that blocked on it would look like a hang for the one case that matters most.
 
-That is honest rather than a gap — the delay *is* the agent doing the work, and a count that appeared instantly would be a lie about a folder of eight thousand photographs. With no agent running, adding still works, the row still appears, and no count ever arrives; the panel says why, reusing the wording `Shuffle.Trouble.noAgent` already has.
+So a freshly added folder appears at once with its name, its icon, and no count, and the number arrives on a later `GET`. That is honest rather than a gap: the delay *is* the agent doing the work, and a count that appeared instantly would be a lie.
 
-What stays silent is narrower than it was but not nothing: an empty folder and a folder still being scanned look alike until the number lands, and a denied TCC prompt shows as unavailable only once the agent has tried.
+What the status code does buy, which publication never could, is the immediate half of the answer. A path that stopped resolving between the dialog and the request comes back as a refusal naming it, rather than as a source that quietly never produces anything.
+
+What stays silent is narrower but not nothing: an empty folder and a folder still being scanned look alike until the number lands, and a denied TCC grant shows as unavailable only once the agent has tried. With no agent, nothing can be added at all — and nothing could be shown either, so the panel says the same thing the window does.
 
 ## TCC, the pickers, and whose grant is whose
 
@@ -89,7 +89,7 @@ What the picker buys is timing. A background process with no window prompting fo
 
 An earlier draft of this document claimed the panel had to show bare paths because that was all the app could see without the database. **That was wrong twice over.**
 
-The app is unsandboxed and links the kit, so the filesystem is directly available: leaf names, `NSWorkspace.shared.icon(forFile:)`, and QuickLook thumbnails, none of which involve the database, the cache, or the service. And with `sourceStatus` published, real counts and availability arrive too.
+The app is unsandboxed and links the kit, so the filesystem is directly available: leaf names, `NSWorkspace.shared.icon(forFile:)`, and QuickLook thumbnails, none of which involve the database, the cache, or the service. And `GET /v1/sources` supplies the rest — real counts and availability, from the one process that knows them.
 
 So the list shows an icon, a name, a count, and a state, with the path secondary — and an icon-grid modality is a later refinement rather than a different architecture. The one degradation to expect: a source added by `pgr_ctl` may sit somewhere the *app* has never been granted, and the graceful answer is a generic icon rather than a prompt.
 
@@ -170,9 +170,9 @@ Two facts that already exist and would otherwise be rediscovered. **Saving** wan
 
 Not edited here; recorded so the contradictions are deliberate.
 
-- **`Documentation/photogoroundd.md`** — the PREFERENCES table gains `sourceStatus` and `advanceIntervalSeconds`, and the sentence that derived state lives in the database needs its exception naming.
-- **`Documentation/pgr_ctl.md`** — `sources add` no longer scans immediately; `remove`, `enable`, and `disable` take a UUID; "every command here opens the same SQLite database or writes the same preference domain" narrows.
-- **`PLAN.md`** — *The Mac app as instrument panel*, *Identifiers*' rule that `pgr_ctl` owns preference writes, and *Preferences*' derived-state sentence.
+- **`Documentation/photogoroundd.md`** — SERVICE says the agent "answers one request that matters"; it will answer four once the source endpoints land, and the PREFERENCES table will gain `advanceIntervalSeconds`, the first key the agent itself does not read. Both wait until the code exists, because a man page that describes something unbuilt is worse than one that is behind.
+- **`Documentation/pgr_ctl.md`** — unaffected. `pgr_ctl` keeps preferences and the database and gains no web verbs, so every word of it stays true.
+- **`PLAN.md`** — already reconciled: *The Mac app as instrument panel* now records the reversal, and *The database is private to the service* carries the rest.
 
 # References
 

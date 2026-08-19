@@ -123,7 +123,6 @@ struct RunCommand {
         }
 
         describeSources(try sources.all(), pool: sources.pool)
-        publishStatus(environment: environment, sources: sources)
 
         // Raw `defaults write` must work from any terminal with no cooperation,
         // and cross-process UserDefaults observation is unreliable — so the
@@ -170,10 +169,6 @@ struct RunCommand {
                     Console.event(
                         "sources changed in preferences: +\(changes.added) -\(changes.removed) ~\(changes.changed)")
                     sourcesChanged.raise()
-                    // A source that has just appeared has no status yet, and a
-                    // removed one must stop having one; both are visible before
-                    // the scan that follows.
-                    publishStatus(environment: environment, sources: sources)
                 }
                 if rang { Console.event("preferences re-read") }
             }
@@ -186,9 +181,6 @@ struct RunCommand {
             let asked = sourcesChanged.lower()
             if asked || now.timeIntervalSince(lastScan) >= scanInterval.totalSeconds || once {
                 try await runRefresh(environment: environment, sources: sources)
-                // A refresh is the moment what-we-found changes, so it is the
-                // moment to say so. Silently: see `publishSourceStatus`.
-                publishStatus(environment: environment, sources: sources)
                 lastScan = now
 
                 // A refresh that changed something announces it, and we observe
@@ -303,20 +295,6 @@ struct RunCommand {
         }
 
         if reported.sawAnything() { environment.announce(.sourcesChanged) }
-    }
-
-    /// Says what the agent found, where anything can read it.
-    ///
-    /// The database is private to this process, so a count reaches the app and
-    /// `pgr_ctl` by being published rather than queried. Failure to publish is
-    /// not failure to run: a status nobody could write is a stale number, and
-    /// the alternative is an agent that stops serving pictures over it.
-    func publishStatus(environment: MacHostEnvironment, sources: SourceStore) {
-        guard let statuses = try? sources.statuses() else {
-            Log.sources.error("could not read source status to publish it")
-            return
-        }
-        environment.preferences.publishSourceStatus(statuses)
     }
 
     static let maximumConcurrentRefreshes = 4

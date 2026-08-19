@@ -103,6 +103,8 @@ Each phase carries its own spike rather than front-loading them all, so the firs
   - **All of the fit and aspect options land here**, rather than being held back to *Beyond 0.1*. A window is the first place a person can see the difference between fitting, filling, and tiling, and the first place the choice can be made by eye instead of by argument. The service already takes a box and knows nothing about what fills it, so a `fit` parameter arrives alongside `w` and `h` without changing what either means.
   - **The App Group container question may have gone.** Phase 1.5 makes the app a client that is handed bytes, so it need not open the container at all. Confirm that before spending an afternoon on CoreDevice's redirection.
   - **Two measurements move here from Phase 2**, where they were parked as blocked and were never part of that gate. Decode time to display size for the worst files in a real library — a large ProRAW, a 48-megapixel HEIC, a stitched panorama — which is the number that justifies rendering on demand at all, and which a window is the first place anyone can *feel* rather than read off a log. And the byte-budget sweep across roughly 5 / 10 / 25 / 50 / 100 GB, to replace the guessed `cacheByteCeiling` with a measured one.
+  - **Web services for managing sources**: `GET`, `POST`, and `DELETE /v1/sources` on the agent, so a client can list, add, and remove without opening the database. See *The database is private to the service*.
+  - **UI for managing them in the app**: a Settings panel showing what is configured with its counts and state, pickers to add, and a button to remove. See `app/mac/FEATURES.md`.
   - Diagnostic panels accrete later, as the phases that need them arrive — not in Phase 3.
   - **The app's own features have their own plan**: `app/mac/FEATURES.md`, starting with a Settings panel that adds and removes sources. That reverses *The Mac app as instrument panel*'s "it manages no sources", and the reversal is argued there rather than here.
 - **Phase 4** — iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
@@ -130,8 +132,8 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **The only things outside our own code are Apple's OS frameworks and the photo libraries themselves.** No packages, no SDKs, no vendored source. Since PhotoKit is Apple's, the sole genuine external dependency in the entire project is the Google Photos web API — one optional provider, at the very end.
 - **Raw SQLite and hand-written SQL. No ORM, no wrapper.** `libsqlite3` ships in the OS on every Apple platform, so there is nothing to bundle and nothing to vet. WAL mode is what makes the agent's own concurrent connections safe — one per in-flight request — which Core Data's SQLite store explicitly is not, and the deck is set-based SQL that an ORM would only obscure.
 - **The database is disposable; only preferences are durable.** Everything in SQLite — the pool, the queue, cache bookkeeping — is derivable by rescanning and re-fetching. **The source list is the one thing that is not**, which is exactly why it lives in `UserDefaults` and the `source` table is a copy of it. Deleting it and the cache alongside is a legitimate recovery for any problem, and costs one rescan. Preferences live in `UserDefaults` precisely because they are the one thing that cannot be reconstructed. This is why schema changes before 1.0 need no migration, and why nothing in the design pays to protect data that can simply be rebuilt.
-- **The database is private to the service, and preferences are how anything else asks.** Nothing but the agent opens it, so SQLite stays a choice that can be unmade. What another process needs to know is *published* into `UserDefaults` — `sources` is what the user chose, `sourceStatus` is what the agent found — and bytes still travel over HTTP. See *The database is private to the service*.
-- **A source's identity is `Source.uuid`, which the database already mints and the cache already uses to name its storage.** Preferences address a source by locator, because that is the thing the user actually chose; the UUID travels *outward* in published status, so a client can cross-reference a source without opening the database.
+- **The database is private to the service; clients ask over HTTP.** No client opens it, so SQLite stays a choice that can be unmade. A client asks the agent for a picture *and* for facts about the library, and changes it the same way. Preferences keep the durable source list, the published `servicePort`, and every setting. `pgr_ctl` is the exception and stays one — it is the rig, not a client. See *The database is private to the service*.
+- **A source's identity is `Source.uuid`, which the database already mints and the cache already uses to name its storage.** Preferences address a source by locator, because that is the thing the user actually chose; the UUID is what `GET /v1/sources` returns and what `DELETE /v1/sources/<uuid>` takes, so a client can name a source without opening the database.
 - **Rows are cheap and complete; bytes are expensive and windowed.** The database holds an identifier row for *every* photo in every source, however many that is. The cache holds a bounded window of actual image files. Conflating the two would cap the shuffle at the cache size.
 - **The deck is a circular queue of eligible cards, with a pass reshuffle as the floor beneath it.** A photo is eligible once *w* deals have gone by since it was dealt, which leaves `N − w` candidates available at every deal and never runs dry; the pass rule catches only the two cases where the window has no answer — fraction 1.0, and a library too small for `N − w` to reach 1. Both rules are one comparison against `max(pass_start_seq, deal_seq - w)`, and the pass is one integer in a one-row table.
 - **A photo may repeat across a pass boundary, and we accept it.** This is a photo shuffle, not a casino. Preventing it costs a guard band and a relaxation path, to spare someone who happens to be watching when two passes meet — every few weeks — from seeing a picture twice.
@@ -187,7 +189,7 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **Mac ships Developer ID direct, the iOS family ships App Store.** Your call, and it is the right one — a sandboxed app cannot install a `.saver` bundle, so App Store distribution and a screensaver are mutually exclusive.
 - **A LaunchAgent, not a LaunchDaemon.** Photos access is per-user TCC and requires a user session; a system daemon cannot reach the library at all.
 - **Installs are fully independent — no cross-device sync at all, with one forced exception.** iCloud Photos already puts the same photos on every device, so each install shuffles the same pool on its own; this buys out of `PHCloudIdentifier` mapping, a CloudKit layer, and deal-time conflict resolution entirely. The Apple Watch is the exception, because watchOS has no Photos framework and no sources of its own — the paired iPhone feeds it, one-directionally.
-- **Clients ask the service over HTTP and get bytes; preferences are the control channel, never the picture path.** A surface requests a picture at the resolution it is about to draw at and is handed the pixels — it opens neither the database nor the cache. Multiple simultaneous clients, several of them on other devices, are what force it, since XPC cannot leave the machine. Darwin notifications keep exactly one job and one direction: locally, from the outside world to the service, where `defaults write` reconfigures a running agent and both ends share the preferences domain, so "go look" is still sufficient — and status published *back* rings no bell at all, because the agent listens to that topic itself. See *The service is the interface* and *The database is private to the service*.
+- **Clients ask the service over HTTP; preferences are the durable store and the control channel, never a client transport.** A surface requests a picture at the resolution it is about to draw at and is handed the pixels — it opens neither the database nor the cache. Multiple simultaneous clients, several of them on other devices, are what force it, since XPC cannot leave the machine. Darwin notifications keep exactly one job and one direction: locally, from the outside world to the service, where `defaults write` reconfigures a running agent and both ends share the preferences domain, so "go look" is still sufficient. Nothing rings the other way: a client wanting an answer asks for one. See *The service is the interface* and *The database is private to the service*.
 - **Minimum deployment target 27.0 on every platform, temporarily held at 26.0 until 27 ships.** The target is 27: no back-deployment guards, no availability checks, no legacy code paths. The hold exists only because this machine is on a 27 seed while the second Mac — the one that has to keep the agent running during a vacation — is on the current public release. 27 will have shipped by the time the server is done, so the hold lifts on its own. Nothing may be designed around it.
 
 *Engineering*
@@ -196,7 +198,7 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **Structured logging through `OSLog`, and logs go nowhere.** No crash reporter, analytics, or telemetry — never popular enough to justify it, and addable later if that changes. Unified logging is also the only mechanism that works from inside the screensaver's and widget's sandboxes, where a hand-rolled file logger could not write at all.
 - **Swift 6 strict concurrency, shared core as a Swift package.** Every target — agent, app, saver, widget — links the same package.
 - **The name is "Photo-Go-Round", hyphenated, for now; the bundle identifier is `com.sydpolk.photogoround`.** The hyphens are user-facing only — display name, Application Support directory. Every bundle hangs off that identifier, Swift modules stay `PhotoGoRoundKit`, and the shared preferences and App Group domains derive from it.
-- **The database holds state; `UserDefaults` holds preferences — with one named exception.** Sources, pool, queue, and cache are state. Fits, timings, transitions, and caps are preferences, living in the App Group suite so they are settable from the command line. The exception is state the agent *publishes* for other processes to read — `servicePort`, and per-source counts and availability — which lives under its own keys so it can never be mistaken for, or clobber, what the user chose.
+- **The database holds state; `UserDefaults` holds preferences — with one named exception.** Sources, pool, queue, and cache are state. Fits, timings, transitions, and caps are preferences, living in the App Group suite so they are settable from the command line. The exception is `servicePort`, which the agent publishes because a client needs it to find the service at all and there is no other way to be told. Everything else the agent derives is answered over HTTP rather than written down.
 - **Raw `defaults write` is noticed, and no preference ever needs the agent restarted.** Cross-process `UserDefaults` observation is unreliable, so the server watches the backing plist's *directory* and re-reads; every preference then has an explicit apply action, timers included.
 
 # Background
@@ -1277,55 +1279,62 @@ Between them, `pgr_ctl` and the Mac app cover the two halves of the problem: the
 
 Settled in Phase 3, and written up as a reversal rather than folded in quietly, because it revises several statements above and because the reasoning is what matters rather than the conclusion.
 
-**Nothing but the agent opens the database.** Not `pgr_ctl`, not the app, not any surface. Every claim about the library that another process needs is *published* — into preferences — rather than queried.
+**No client opens the database.** Not the app, not the screensaver, not a widget — every claim about the library a client needs, and every change it wants to make, goes over HTTP to the agent. `pgr_ctl` is the deliberate exception and stays one: it is the rig rather than a client, and *`pgr_ctl` keeps the database* below says why.
 
-**What prompted it was small and the answer is not.** A settings panel needs to show photo counts per source, and every way of getting them was bad. The app could open the database itself, which means a second process holding locks and a second bundle needing file-access consent. It could shell out to `pgr_ctl`, which never ships, has no compatibility promise, and could not be spawned from a sandbox. It could call a new endpoint, which works but gives the service a second job.
+**What prompted it was small and the answer is not.** A settings panel needs to show photo counts per source, and every way of getting them was bad. The app could open the database itself, which means a second process holding locks and a second bundle needing file-access consent. It could shell out to `pgr_ctl`, which never ships, has no compatibility promise, and could not be spawned from a sandbox. **Or the service could answer, which is where this landed** — at the price of giving the service a second job, which is the cheapest of the three prices on offer.
 
 **The decision is about encapsulation, not convenience.** SQLite is a choice the agent should be able to unmake. Today's schema is the fourth migration of a store that has already lost `cache_path`, `materialized_at`, `verifyResidency`, and `sweepOrphans`, and *the database is disposable* says outright that it can be deleted and rebuilt at the cost of a rescan. A store that disposable should not have three programs reaching into it. Keeping it private is what makes replacing it later a decision rather than an excavation.
 
-### Preferences are the RPC mechanism
+### Clients ask over HTTP
 
-Configuration in, status out. And the mechanism is not new — `servicePort` has worked this way since Phase 1.5: the agent takes whatever port the kernel gives it and writes it where "every process on the machine can read it. Nothing has to agree on a number in advance."
+The service already hands out pictures on loopback. It also answers questions about the library, and takes changes to it:
 
-That is the property worth naming. A preference domain is a *name* rather than a location, so it needs no discovery, no coordination, and nothing running at the far end when a reader looks. Source status is the same shape of fact and inherits the same caveat, which `--port` already states: a published value outlives the process that wrote it. A crashed agent leaves stale counts exactly as it leaves a stale address. That is why every published record carries when it was written.
+```
+GET    /v1/sources           the list, with counts and availability
+POST   /v1/sources           add one or more, all or none
+DELETE /v1/sources/<uuid>    remove one
+```
 
-**The split to hold in mind: bytes travel over HTTP, facts travel through preferences.** *The service is the interface* moved the picture path and explicitly left configuration where it was; this finishes the sentence by moving the *answers* too.
+That is the whole client-facing surface for sources. **Preferences are not a client transport**, which is the reversal below.
 
-### What prefs-as-RPC cannot do
+### Preferences as a client transport, tried and reversed
 
-The limits are invisible until something hits one.
+Recorded because it was built and undone, and because the reasons are the useful part rather than the conclusion.
 
-- **It is publication, not request-response.** No return value, nowhere to report a failure. Right for *what is true* — counts, availability, the port. Wrong for *do this and tell me how it went*.
-- **It is eventually consistent.** `cfprefsd` owns the files and flushes on its own schedule, so a reader may briefly see a stale value and a dead writer leaves one indefinitely.
-- **It is not a bulk store.** A few hundred sources is unremarkable; a record per photograph would not be. Anything that scales with the library stays in the database and is summarised on the way out.
-- **It is unauthorized by construction.** Anything running as this user can read or write it — the same position as today, and the same reason the listener binds loopback.
+The idea was that the agent publishes what it found into `sourceStatus`, clients read it, and clients write `sources` themselves. The attractions are real: it needs no agent running, it crosses every process boundary for free, `defaults read` shows the whole thing, and `servicePort` already proves the pattern works.
 
-### Why not an endpoint
+What it cannot do, and every one of these bites a settings panel specifically:
 
-`GET /v1/sources` is the tidy alternative: the service exists, already answers on loopback, and a sandboxed widget could use it later. Three reasons compound against it.
+- **There is no return value.** Adding a source can fail — a path that stopped resolving between the dialog and the write, a folder the agent is refused access to — and publication has nowhere to say so. "Did that work?" degrades into "wait and see whether a count appears."
+- **Two writers, one array, no transaction.** The app and `pgr_ctl` both rewriting `sources` is a lost update waiting to happen, and `UserDefaults` has no compare-and-swap to prevent it.
+- **It is eventually consistent.** `cfprefsd` flushes on its own schedule, so a panel that writes and re-reads can watch its own change arrive late.
+- **Every reader reimplements the join.** Two arrays keyed by locator, merged by hand, in every client that will ever exist.
+- **No versioning, no authorization.** A shape change breaks every reader silently, and there is no boundary at which to notice.
 
-It requires the agent to be running, and **adding the first source is exactly when nothing is running** — a fresh install with no library, no queue, and no reason for an agent to have started. It makes the service answer questions, which is the job `pgr_ctl` was split into a separate binary to avoid. And it is a second mechanism doing what preferences already do for `servicePort`, leaving the project with two answers to one question.
+An endpoint answers all five: a status code, a single writer, a synchronous response, one joined representation, and a version in the path.
 
-Endpoints for the preferences themselves were considered on the same occasion and rejected for the same reason: overkill against a channel that already crosses every boundary that matters.
+### What preferences are still for
 
-### Two keys, and keeping them apart
+Narrowed to the agent's side, not abolished.
 
-| key | written by | meaning |
-| --- | --- | --- |
-| `sources` | the user, via `pgr_ctl` or the app | what was chosen. Durable, and the one thing that cannot be rebuilt. |
-| `sourceStatus` | the agent | what was found — count, availability, reason, `scannedAt`. Derived and disposable. |
+- **The durable source list.** `sources` is still where what-the-user-chose lives, still the thing the `source` table is a projection of, still readable and repairable with `defaults`. What changes is that a client no longer writes it — the service does, on the client's behalf.
+- **Discovery.** `servicePort` cannot be an endpoint, because you need it to find the endpoints. Preferences are the only answer to that chicken and egg.
+- **Settings.** Every tuning preference is untouched: `defaults write` still reconfigures a running agent with no cooperation from it, which is a stated property of this design and stays one.
+- **Bootstrap.** `pgr_ctl` writes preferences directly, which is what keeps a library configurable with nothing running.
 
-This is where *the database holds state; `UserDefaults` holds preferences* gains its exception. `servicePort` had already crossed that line once; this makes it a pattern, which is worth saying rather than letting happen quietly.
+### Requiring the agent is not a cost
 
-What keeps it honest is the separate key. A `defaults write` that mangles one cannot corrupt the other, deleting `sourceStatus` costs a rescan and nothing else, and nothing reading configuration can pick up a derived number and treat it as a setting.
+The obvious objection is that a client can no longer add a source with the agent stopped, and that adding the first one is exactly when nothing is running. It does not survive contact with what a client is for.
 
-### The doorbell must not ring back
+**A client with no agent has nothing to do.** It cannot show a photograph, because pictures come from the service, and the empty state for a stopped agent already exists and already says so. Adding a source in that condition would configure a library that can produce nothing until the agent starts, so the ability buys a few seconds of ordering rather than a capability.
 
-`setSources` posts `.sourcesChanged`, and **the agent observes that topic**. So an agent publishing status through anything that announces itself is announcing, to itself, a change it made in response to an announcement. *The doorbell rings back at you* records this exact failure already: an unavailable source that announced itself at every refresh drove a refresh loop.
+The property that actually matters is untouched: **configuring this library never requires the agent to be up**, because `pgr_ctl` writes preferences directly. The rig covers the cold case; a client covers the case where there is a running system to talk to. The app is also what registers the agent as a login item, so a user who has one has the other.
 
-So publishing status posts nothing at all, and readers pick it up when they next look. `publishServicePort` gets away with announcing because it fires twice in a process lifetime; status fires on every scan.
+### The doorbell, and the batching it still demands
 
-The same hazard from the other side is why writes are batched. `addSource` posts per call, so a two-hundred-file selection asks the agent to refresh two hundred times — and `pgr_ctl sources add` loops it *and* announces again at the end, so today two hundred files post two hundred and one notifications. One write, one doorbell.
+`.sourcesChanged` keeps its job: `pgr_ctl` writes preferences and rings it, the agent notices within a tick. What goes away is the agent publishing *back* through the same channel, and with it the hazard of the agent announcing to itself a change it had just made.
+
+The batching rule survives and applies to the endpoint too. `addSource` posts per call, so a two-hundred-file selection asks the agent to refresh two hundred times; `addSources` merges and writes once. `POST /v1/sources` therefore takes an array rather than one source, and one request is one write and one doorbell.
 
 ### Which identity a source has
 
@@ -1336,9 +1345,9 @@ Sources have had a durable identity since the first schema: `Source.uuid`, minte
 So there is one identity and it lives in the database. Two consequences follow:
 
 - **Preferences address a source by locator**, which is what the user chose and what `reconcile` already matches on. `addSources` and `removeSources` are locator-keyed, and so is the panel's remove.
-- **The UUID travels outward** in published status, beside the locator. That is what lets a client name a source in a log, or line one up against `pgr_ctl sources list`, without opening anything.
+- **The UUID is what a client names a source by**, since it is what `GET /v1/sources` returns and what `DELETE /v1/sources/<uuid>` takes. It is stable where the row id is not.
 
-`pgr_ctl remove`, `enable`, and `disable` keep taking a row id for now, since they still open the database. When they stop, the locator is what they will take — a source the user can name is a source they can point at.
+`pgr_ctl remove`, `enable`, and `disable` keep taking a row id, because they open the database and always will.
 
 ### WAL stays, for a different reason than it arrived
 
@@ -1348,24 +1357,32 @@ So there is one identity and it lives in the database. Two consequences follow:
 
 What single-process ownership does retire is the cross-process half: no other program holding a read lock, no sidecars anything else opens, and no way for a tool and the agent to be looking at different containers — which `pgr_ctl`'s own documentation calls the most common way to waste twenty minutes here.
 
-### What this leaves undone in `pgr_ctl`
+### `pgr_ctl` keeps the database, and never speaks HTTP
 
-The sources verbs move first, because the app needs them. `pool stats`, `queue peek`, `queue fill`, `deck stats`, `cache status`, `evict`, `clear`, `refresh`, and `status` still open the database. Under this principle that is debt rather than design, and the two halves want different answers — which is why doing it in one go would be a mistake.
+Worth being explicit, because "the database is private to the service" sounds like it ought to apply to everything and does not.
 
-- **The readers** — `pool stats`, `deck stats`, `cache status`, `queue peek`, `status` — are summaries, so they become published status alongside `sourceStatus` on the agent's maintenance tick. Mechanical.
-- **The imperatives** — `refresh`, `queue fill`, `cache evict`, `cache clear` — cannot be published, because publication has no return value and these can fail. They also exist largely *for when no agent is running*, which is exactly when an RPC has nobody to answer. The `notify` topics fit the fire-and-forget ones; the rest may simply belong to the agent.
+**Clients ask over HTTP** — the app, the screensaver, the widgets. They cannot open the database and should not want to: some are sandboxed, some are on other machines, all of them want an answer with a status code. They are what the private-database rule exists for.
+
+**`pgr_ctl` is not a client.** It is the rig: internal, never shipped, and allowed to know exactly how the library is stored. It reads and writes preferences and opens the database directly, which is what lets every one of its verbs work with **no agent running** — the state a rig is most needed in. Nothing about it changes.
+
+**It will not gain HTTP verbs either.** Command-line HTTP is `curl`, which is already how a picture is taken from a terminal and is documented that way in `README.md`. A second HTTP client inside the rig would duplicate that for nothing and hand the tool the dependency it exists to avoid.
+
+The consequence worth keeping: **the two views can disagree, and that is useful.** `pgr_ctl` sees the store; a client sees what the service says about the store. When they differ, the difference is the bug, and two independent windows onto it are what make it findable.
 
 ### What this revised, elsewhere in this document
 
-- *Raw SQLite and hand-written SQL* justified WAL by multi-process access. WAL stays; the justification is now intra-process concurrency.
-- *The database holds state; `UserDefaults` holds preferences* gains a named exception for agent-published status.
-- *Identifiers* said flatly that **`pgr_ctl` owns preference writes**. The rule's reason was domain selection, and it is better restated: nothing writes preferences by naming a domain. `pgr_ctl` and the app both go through the kit, which is what actually prevents the failure.
-- *`pgr_ctl`, the command-line tool* and its man page describe every command as opening the database or writing preferences, and `sources add` as scanning immediately. The sources verbs stop doing both.
+- **The agent is *configured, not commanded*, and `POST /v1/sources` is a command.** That sentence opens `photogoroundd`'s description and is now half true: the agent is still *configured* by flags, environment, preferences, and `pgr_ctl`, none of which need it running — and it is *additionally* commanded by clients, which cannot reach preferences meaningfully. The property underneath survives and is the one that mattered: **configuring this library never requires the agent to be up.**
+- **`Identifiers` said `pgr_ctl` owns preference writes.** It still does, for the command line. What is new is that the service also writes them, on behalf of a client that asked over HTTP. Nothing writes them by naming a domain, which was the rule's actual purpose.
+- *Raw SQLite and hand-written SQL* justified WAL by multi-process access. WAL stays; the justification is now the agent's own per-request connections.
+- *The database holds state; `UserDefaults` holds preferences* keeps one published exception, `servicePort`, and no longer needs a second.
+- **`sourceStatus` was built and is superseded.** Per-source counts and availability published into preferences, replaced by `GET /v1/sources` before anything consumed it. `Preferences.publishSourceStatus`, `Preferences.sourceStatus`, `SourceStatus`, `SourceStore.statuses()`, and the three publish calls in `RunCommand` are all deleted — nothing called them, and the endpoint can grow what it needs when it exists. `SourceRequest` and `Preferences.addSources` survive, because `pgr_ctl` uses both.
 - *The Mac app as instrument panel* said the app manages no sources. See `app/mac/FEATURES.md`.
 
 ## The Mac app as instrument panel
 
-**In Phase 3 the app is deliberately almost nothing.** A window, a photo in it sized to fit, the pan, a timer, and standard full-screen support — the green button and `toggleFullScreen:`, no bespoke presentation layer. It manages no sources and exposes no settings, because `pgr_ctl` shipped one phase earlier and already does both. That keeps the milestone small and keeps the app honest: it is a *consumer*, and consumers display cards.
+**In Phase 3 the app is deliberately almost nothing.** A window, a photo in it sized to fit, the pan, a timer, and standard full-screen support — the green button and `toggleFullScreen:`, no bespoke presentation layer. That keeps the milestone small and keeps the app honest: it is a *consumer*, and consumers display cards.
+
+**It does manage sources, and that is a reversal of what this section said.** The original text — "it manages no sources and exposes no settings, because `pgr_ctl` shipped one phase earlier and already does both" — did not weigh that `pgr_ctl` never ships, which makes it no answer at all for anybody who is not the author. A Settings panel for sources arrives here; every other verb stays in the rig. See `app/mac/FEATURES.md`.
 
 Full screen is worth more than it looks. A full-screen window showing one photo, fit, slowly panning, is visually the same thing the screensaver will be. Every piece of that behavior — the axis choice, the pan speed and easing, the cross-fade, the black bars, the bouncing empty state — gets built and tuned here, in a normal app, with a debugger attached and print statements that work. Phase 6 then has to solve exactly one new problem, which is the sandbox, rather than solving the sandbox and the visual design at the same time.
 
@@ -1418,7 +1435,7 @@ Worth recording because the obvious fix does not work. Tests that touch preferen
 
 The reason is that `cfprefsd` owns those files and writes them on its own schedule — including *after* the test process has exited. Neither `deinit` nor an `atexit` handler can catch the stragglers, because nothing inside the process is still running when the daemon flushes. Measured directly: zero files two seconds after a run, nine a minute later.
 
-So the sweep runs at the *start* of a run instead, clearing what the previous one left, and removes only files older than the current process so two concurrent runs cannot delete each other's live suites. Per-suite teardown still does its part. Together they bound the leak at one run's worth — under ten files, oscillating — rather than letting it grow without limit.
+So the sweep runs at the *start* of a run instead, clearing what the previous one left, and removes only files older than the current process so two concurrent runs cannot delete each other's live suites. Per-suite teardown still does its part. Together they bound the leak at one run's worth — one file per throwaway suite in the previous run, so tens rather than hundreds — rather than letting it grow without limit.
 
 ## The agent: registration and permissions
 

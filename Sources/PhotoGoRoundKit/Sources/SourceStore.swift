@@ -247,25 +247,6 @@ public struct SourceStore {
         return result
     }
 
-    /// What every source currently amounts to, for publishing.
-    ///
-    /// The database is private to the service, so this is how a count reaches
-    /// anything else: the agent asks, then writes the answer to preferences.
-    /// It is the same pair of questions `sources list` asks — the row, and the
-    /// pool's size for it.
-    public func statuses() throws -> [SourceStatus] {
-        try all().map { source in
-            SourceStatus(
-                locator: source.locator,
-                uuid: source.uuid,
-                photoCount: (try? pool.size(forSource: source.id)) ?? 0,
-                available: source.available,
-                unavailableReason: source.unavailableReason,
-                scannedAt: source.scannedAt
-            )
-        }
-    }
-
     // MARK: - Refreshing
 
     /// Refreshes every enabled source, one after another.

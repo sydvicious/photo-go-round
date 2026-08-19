@@ -59,9 +59,6 @@ public struct Preferences: @unchecked Sendable {
         /// Where the service is listening. Written by the agent, read by every
         /// local client.
         public static let servicePort = Key("servicePort")
-        /// What the agent found in each source. Written by the agent, read by
-        /// anything that wants to show a library it cannot open.
-        public static let sourceStatus = Key("sourceStatus")
     }
 
     // MARK: - Reading, with a default and a clamp
@@ -245,48 +242,6 @@ public struct Preferences: @unchecked Sendable {
         guard !added.isEmpty else { return [] }
         setSources(current)
         return added
-    }
-
-    /// Removes several sources in one write, for the same reason.
-    ///
-    /// Returns how many were listed and are not any longer, so removing
-    /// something twice is a no-op rather than an error.
-    @discardableResult
-    public func removeSources(locators: [String]) -> Int {
-        let doomed = Set(locators)
-        guard !doomed.isEmpty else { return 0 }
-        let current = sources
-        let remaining = current.filter { !doomed.contains($0.locator) }
-        let removed = current.count - remaining.count
-        guard removed > 0 else { return 0 }
-        setSources(remaining)
-        return removed
-    }
-
-    // MARK: - What the agent found
-
-    /// Per-source counts and availability, as the agent last saw them.
-    ///
-    /// Empty when nothing has ever published — a fresh library, or an agent
-    /// that has not finished its first scan. A reader joins these to its own
-    /// `sources` by locator and shows what it has; a source with no status is
-    /// configured and not yet looked at, which is a real state rather than a
-    /// gap.
-    public var sourceStatus: [SourceStatus] {
-        let raw = defaults.array(forKey: Key.sourceStatus.rawValue) ?? []
-        return raw.compactMap(SourceStatus.init(propertyList:))
-    }
-
-    /// The agent saying what it found. Nobody else's to call.
-    ///
-    /// **This posts no notification, deliberately.** The agent observes
-    /// `.sourcesChanged` itself, and it publishes *because* it just refreshed —
-    /// so announcing here would be the agent telling itself to redo the work it
-    /// has just done. That loop has happened before: an unavailable source that
-    /// announced itself at every refresh rang the doorbell that scheduled the
-    /// refresh that rang it again. Readers pick this up when they next look.
-    public func publishSourceStatus(_ statuses: [SourceStatus]) {
-        defaults.set(statuses.map(\.propertyList), forKey: Key.sourceStatus.rawValue)
     }
 
     /// Removes a source by locator. Returns false when it was not listed,
