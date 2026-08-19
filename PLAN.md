@@ -35,15 +35,38 @@ Each phase carries its own spike rather than front-loading them all, so the firs
     Both of those numbers needed a baseline to mean anything, which is the part worth keeping. An idle agent sits at **36 MB** and a scan peaks it at **96 MB**, returning afterwards — so 92 MB at the ten-hour mark is a sample that landed during a scan, not ten hours of growth. And the CPU reading is the one that rules out the failure this gate exists to catch: a wedged agent prints nothing *and* burns nothing, so silence alone proves neither. It was working.
   - A library that only ever runs under `swift test` has not been shown to work, it has been shown not to crash. Everything this project has found that the test suite missed — stdout buffering that only bites when stdout is not a terminal, an unavailability reason that said the wrong thing, a schema column deleted along with its neighbour — was found by standing it up.
 - **Phase 1.5** — **The service is the interface.** An HTTP endpoint on the Mac that hands a client a picture rendered to the resolution it asked for. Clients stop opening the database and the cache; the service becomes the only thing that touches either.
-  - `GET /v1/next` carrying a resolution — `200` and the bytes, or `204` when there is nothing queued.
-  - The endpoint pops the queue entry whether or not the download succeeds; there is no reservation and nothing to reclaim.
-  - A photo that will not render is skipped to the next queue entry, and blacklisted after three attempts.
-  - `GET /v1/revocations?since=` plus a Darwin notification, for local surfaces holding a picture that has since been deleted.
-  - Bonjour `_photogoround._tcp` for discovery, a bearer token for authorization.
-  - The port defaults to one the kernel assigns and is published to preferences for local clients; `--port` pins it, permanently, so a development agent can run beside a shipped one.
-  - The cache becomes `(photo, resolution)`, bounded by bytes alone; `cachePhotoCap` goes.
-  - Cache metadata lives in RAM, rebuilt at startup from UUID-keyed filenames; migration 3 is a deletion.
-  - Phase 2's `pgr_ctl` becomes the first client, which is how the protocol gets designed before any window exists.
+  Built in three milestones, each run before the next begins, so that the risky
+  part is the only new thing at any moment.
+
+  - **1.5.1 — the endpoint, returning originals. Done.** `GET /v1/next` carrying
+    a resolution, which is accepted and ignored: `200` and the original bytes, or
+    `204` when there is nothing queued. The endpoint pops the queue entry whether
+    or not the download succeeds; there is no reservation and nothing to reclaim.
+    One console line per request, with the consumer, the size asked for, the deal
+    ordinal, the bytes, and the latency.
+  - **1.5.2 — the renderer.** `w` and `h` stop being ignored:
+    `CGImageSourceCreateThumbnailAtIndex` off the main thread, `Accept` deciding
+    HEIC or JPEG, and the client drawing what it is handed 1:1 without
+    resampling. A photo that will not render is skipped to the next queue entry,
+    and blacklisted after three attempts.
+  - **1.5.3 — the rendering cache.** The cache becomes `(photo, resolution)`,
+    bounded by bytes alone; `cachePhotoCap` goes. Its metadata lives in RAM,
+    rebuilt at startup from UUID-keyed filenames, so migration 3 is a deletion.
+
+  Deliberately absent from 1.5.1, and not oversights:
+
+  - The listener binds loopback only. It has to widen before any off-machine
+    client works.
+  - There is no authorization. Every device on the Wi-Fi could otherwise ask the
+    library for photographs, so this lands with the listener widening.
+  - The port does not float. It is fixed at 9000 rather than assigned by the
+    kernel at launch and published to preferences for local clients to read.
+    `--port` pins it meanwhile, and permanently after, so a development agent can
+    run beside a shipped one.
+  - `GET /v1/revocations?since=` does not exist.
+  - Phase 2's `pgr_ctl` still reads the database directly for the picture path,
+    rather than being the service's first client.
+
   - **Exit gate: two clients draw from one deck over the wire, and neither can read the container.** Revoke `pgr_ctl`'s file access to the storage root and confirm it still serves; run it against the service from a second machine on the same Wi-Fi.
 
 - **Phase 2** — **`pgr_ctl`, an internal Swift command-line tool to exercise the server.** A **separate binary**, because the service has exactly one job and answering questions is not it. Add sources, refresh them, peek at the queue, inspect the cache, read and write preferences, run the shuffle-quality statistics. Serving pictures is `curl` against Phase 1.5's endpoint, so the rig covers what is *not* a service operation. This is how the server is proven correct before any window exists, and it stays the rig for everything scriptable afterwards. Never shipped.
@@ -987,7 +1010,7 @@ Three consequences follow, and all three are accepted rather than mitigated.
 
 - **No `Range` requests and no resume.** "Download" usually implies both, but a resumed request cannot ask for the same card, because it is already out of the queue. A failed download is a lost picture; the client asks again and gets the next one.
 - **A client that never finishes eats the deck quietly.** A watch on bad cellular that times out every attempt spends a card each time and shows nothing. Harmless at any plausible rate against a real library, and visible in `consumer.seen_at` against a `times_shown` that never moves — but it is the one way this rule is wrong without saying so.
-- **Clients back off, voluntarily.** Three failed attempts, then wait, then try again. Only one failure mode actually spends a card, so the taxonomy matters: a refused connection or a Bonjour miss costs nothing because the pop never ran; a `204` is not a failure at all and must not count toward three strikes, or a fresh install backs off exactly when it should keep asking; a `401` should stop rather than retry, since a timer cannot fix a wrong token; a stream that started and did not finish is the one the rule is for; and a timeout with nothing received is genuinely ambiguous, because the service may have popped and started writing into a socket nobody was reading.
+- **Clients back off, voluntarily.** Three failed attempts, then wait, then try again. Only one failure mode actually spends a card, so the taxonomy matters: a refused connection costs nothing because the pop never ran; a `204` is not a failure at all and must not count toward three strikes, or a fresh install backs off exactly when it should keep asking; a `401` should stop rather than retry, since a timer cannot fix a wrong token; a stream that started and did not finish is the one the rule is for; and a timeout with nothing received is genuinely ambiguous, because the service may have popped and started writing into a socket nobody was reading.
 
 The wait is **exponential with jitter** rather than fixed, for a reason specific to this design: a Mac going to sleep fails every client at once. Wallpaper, screensaver, two widgets and a watch hit their third strike within seconds of each other, and a fixed interval puts them back in lockstep for ever.
 
@@ -1100,15 +1123,18 @@ The cursor is what lets a client that has been away fetch the delta rather than 
 
 **Darwin notifications keep exactly one job, and it is worth naming by direction.** Outside world to service, locally: `defaults write` reconfiguring a running agent with no cooperation from anything is still the property worth having, and both ends share the preferences domain, so *go look* is still sufficient there. Service to clients is HTTP.
 
-### Discovery, authorization, and being awake
+### Every device serves itself, so the service never leaves the machine
 
-**Bonjour, `_photogoround._tcp`**, so nothing has a hostname typed into it. On iOS that needs `NSBonjourServices` and `NSLocalNetworkUsageDescription` and raises the Local Network prompt — TCC-shaped, and exactly the kind of gate this plan tracks. *Caveat, as elsewhere: whether watchOS and tvOS present the same gate, in which versions, and what App Transport Security enforces for cleartext to a `.local` address, all want verifying against the installed SDK rather than designing around memory.*
+**Nothing off the Mac talks to the Mac's service.** Each platform runs its own, and the one relationship that crosses a device boundary is the one that already existed: the Watch is fed by its paired iPhone.
 
-**Authorization is real work now rather than a footnote**, because clients are on the network rather than on localhost — any device on the Wi-Fi can otherwise ask the library for photos. A bearer token in preferences that `pgr_ctl` prints is trivial on a Mac and miserable to type on an Apple TV. The Watch has an answer nothing else does: **the paired phone is a credential broker.** It can browse, resolve, and pass the endpoint and the token through `WCSession` application context, so discovery and authorization are both solved for the watch without anybody typing on it. The Apple TV has no such relationship and is left with on-screen code entry or an equivalent.
+- **The Mac** runs the agent and serves its own surfaces over `localhost` — the app, the screensaver, the wallpaper, the widgets, `curl`.
+- **iOS and iPadOS** run service and client in one process, for the reason *The iOS family* already gives: a local HTTP server there is suspended along with the app the moment it backgrounds.
+- **The Watch** is fed by the phone over `WCSession`, which is where the dependency was always going to be, since watchOS has no sources of its own.
+- **tvOS and visionOS** are unanswered and are a to-do rather than a design — see the ledger.
 
-**Three tiers of reachability, and they are genuinely different problems.** Same Wi-Fi as the Mac is Bonjour plus the local service and no infrastructure — which *tvOS storage* already contemplates, "refilled from either iCloud Photos directly or from a Mac on the same network." Phone present is `WCSession` carrying the same exchange. Cellular with the Mac unreachable is the one that costs something — NAT traversal, a relay, or a cloud endpoint — and it runs straight into *Nothing is shipped anywhere* and *Why nothing syncs between devices*.
+**That removes a great deal.** No Bonjour, so no `NSBonjourServices`, no `NSLocalNetworkUsageDescription`, and no Local Network prompt to reason about on three platforms. No App Transport Security question about cleartext to a `.local` address. No bearer token, no on-screen code entry on an Apple TV, and no paired phone acting as credential broker. No NAT traversal, relay, or cloud endpoint for a cellular watch — which was the tier that ran straight into *Nothing is shipped anywhere*. And **the Mac no longer has to be awake for anything but its own surfaces**, which was the standing weakness of a design where other devices depended on it.
 
-**And the Mac has to be awake.** A watch asking at three in the morning gets nothing from a sleeping Mac, and Bonjour sleep proxy is not something to promise. This is the standing weakness of the LAN design and it has no answer inside these three tiers.
+**The listener binds loopback and stays there.** Authorization drops from real work to a question about local processes, which is a much weaker threat model than every device on the Wi-Fi: a process that can already reach the loopback interface on this Mac is a process running as this user.
 
 ### What this collapses elsewhere
 
@@ -1463,7 +1489,7 @@ So the Watch app is built as a companion and declares that dependency rather tha
 
 The mechanism is `WCSession.transferFile`, which queues transfers opportunistically and survives the app not running on either end — and since Phase 1.5 it is a *transport for the ordinary exchange* rather than a bespoke feeding arrangement. The watch asks at the size it is about to draw at, exactly like every other client, and the phone answers from its own in-process service; the phone no longer has to know watch pixel dimensions or rendering families. A small rolling set still lives on the watch — a handful, not a thousand — because a watch out of range of both the phone and the Mac cannot ask anyone anything, and it plays through what it has if a transfer is late.
 
-**A cellular watch on its own Wi-Fi can also reach the Mac directly**, over Bonjour, with the paired phone acting as credential broker — it browses, resolves, and passes the endpoint and token through `WCSession` application context, so nothing has to be typed on a watch. That does not make the watch independent: it still has no sources of its own, which is what the dependency was always about.
+**The watch talks to the phone and to nothing else.** It has no sources of its own, which is what the dependency was always about, and the phone runs a service already — so there is no case for the watch reaching the Mac directly, and none of the discovery or authorization that would have required.
 
 **The rendering mode is the thing most likely to disappoint.** WidgetKit on watchOS renders through `widgetRenderingMode`, and on most watch faces complications render accented or vibrant rather than full color — which turns a photograph into a luminance mask. A photo complication on a watch face will not look like a photo. The Smart Stack is the surface where full color is actually available, so that is the realistic target, and `.accessoryRectangular` is the only family with enough room for an image to read as an image at all.
 
@@ -1610,8 +1636,13 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 4. **No Xcode project until Phase 3.** A shared scheme in `.swiftpm/xcode/xcshareddata/xcschemes/` gives the package a debugger today, which is enough for the agent. A real project arrives with the Mac app, where the App Group container has to be settled anyway — and doing both at once means the container question is answered by the thing that actually has the problem.
 5. **The agent bundle and `SMAppService` are no longer ahead of schedule.** Phase 1.5 puts the service on the critical path for every surface, so a login item is needed from Phase 3 rather than from Phase 6, and this finding moves from recorded-and-deferred to blocking. `Scripts/make-agent-bundle.sh` assembles an `LSUIElement` app, and the server has `register` / `unregister` / `service-status` verbs. None of it is needed until there is a surface that wakes up on its own and expects the library to be there — the screensaver, the wallpaper, the widgets, and probably the Mac app that registers it on their behalf. Recorded because it exists and because the finding is worth keeping: `SMAppService.agent(plistName:)` reports `.notFound` from that bundle, having ruled out a missing plist, five plist shapes, ad-hoc versus Developer ID signing, and `Bundle.main` resolution. What is left is that the process probably has to be launched by LaunchServices as an app, which is how it will actually be used.
 6. **Watching the filesystem, and revoking a photo already on screen, are Phase 3 work and not built.** See *Revoking a photo that is already on screen*. The serve-time check covers hand-off and nothing else, so every surface that displays a photo for longer than an instant can show one that has since been deleted — the wallpaper worst of all. Two pieces are missing: a watcher (`FSEventStream`, `PHPhotoLibraryChangeObserver`) and a `.photoRevoked` topic for consumers to drop what they are holding.
-7. **The response does not name the picture.** A client is handed bytes, a card id and a deal ordinal, and nothing it could show a person or use as a filename — which is what made saving one from `curl` awkward enough to notice. The name should be the photo's own, **stripped of its extension**, because from step 2 onward the format returned is the one the client asked for through `Accept` rather than the one the original had, so the original extension would be a lie. An `X-PGR-Name` header alongside the others. One wrinkle to remember when building it: `external_id` is a source-*relative path* rather than a leaf name, so a recursive folder yields `2019/summer/sunset-05.png` and the header wants the last component with the extension removed.
-8. **The migrator refuses a database from a newer build.** Given the database is disposable, deleting and rebuilding would be a friendlier answer than an error — at the cost of one rescan. Worth revisiting when there is a second build to be older than.
+7. **tvOS and visionOS have no answer for where their service runs.** Every other platform serves itself — the Mac from its agent, iOS in-process, the Watch fed by its phone — and these two are simply unexamined. The questions are whether an app on either can run something that survives long enough to keep a queue full, what a tvOS app may keep in a container that is not purged under pressure (see *tvOS storage*), and whether visionOS is close enough to iOS that the in-process shape carries straight over. **Investigate before designing**: the answer decides whether they are ordinary hosts of the kit or whether they need feeding by something else, the way the Watch does.
+8. **The response does not name the picture.** A client is handed bytes, a card id and a deal ordinal, and nothing it could show a person or use as a filename — which is what made saving one from `curl` awkward enough to notice. The name should be the photo's own, **stripped of its extension**, because from step 2 onward the format returned is the one the client asked for through `Accept` rather than the one the original had, so the original extension would be a lie. An `X-PGR-Name` header alongside the others. One wrinkle to remember when building it: `external_id` is a source-*relative path* rather than a leaf name, so a recursive folder yields `2019/summer/sunset-05.png` and the header wants the last component with the extension removed.
+9. **The logger is not abstracted, so nothing that logs can be tested.** `Log` interpolates straight into `Logger`, and those records go to the system's log store — read back with `log show`, long after anything could assert on them. That is the same problem as a data lake: the logs exist and are not queryable by a test. What it wants is a logger behind a seam, defaulting to `os_log`, that a test can replace with a collector and then read — asserting the contents, or just the count. `PictureEndpoint.Served` is the shape that works, and is currently the only place with it: a value describing what happened, and an injected sink that formats and reports. **`os_log` must stay the default** rather than a file, because it is the only mechanism that works from inside the screensaver's and the widget's sandboxes, where a hand-rolled file logger could not write at all.
+10. **Hand-rolled parsing lets the help text drift from the parser.** Both binaries build their usage as a string literal, so nothing connects a flag to its documentation and nothing fails when they disagree. It has already bitten: changing `--recursive` into a modifier on the folder it precedes left both `EXAMPLES` sections showing `--add-folder <path> -r`, which the new parser *rejects* — usage text that would not run. **`swift-argument-parser` generates the option list from the declarations**, so a flag cannot exist undocumented and a rename cannot leave the help behind.
+
+    Three things to weigh before adopting it, because this is not a free win. It is an SPM dependency, and *No argument-parsing package* rules one out on the grounds that the no-dependencies rule has no Apple exception — so taking it is a reversal of a stated decision rather than an omission being corrected. It would not have caught the failure above either: `EXAMPLES` is prose in a `discussion` block and drifts exactly as it does now, so the examples still want a test that runs them. And the grammar may not survive the move: `--add-folder [--recursive] <path>`, where a flag modifies the value of the option it precedes, is not something a declarative parser expresses, so adopting it could mean changing the command line rather than merely how it is parsed.
+11. **The migrator refuses a database from a newer build.** Given the database is disposable, deleting and rebuilding would be a friendlier answer than an error — at the cost of one rescan. Worth revisiting when there is a second build to be older than.
 
 ## Expect the plan to change, and where it can absorb it
 

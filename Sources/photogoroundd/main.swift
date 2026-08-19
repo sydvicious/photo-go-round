@@ -5,7 +5,7 @@ import PhotoGoRoundKit
 // The headless agent. It owns the library and does all the work; every other
 // surface is a consumer that reads the deck and displays cards.
 //
-// **Running is the whole program, so it takes no command word.** A service that
+// **Running is the whole program, so it takes no subcommand.** A service that
 // also answers questions is a service with two jobs, and the second one grows:
 // first a status verb, then a way to add a source, then a way to change a
 // preference, and the thing that is supposed to run unattended for a week has an
@@ -43,7 +43,6 @@ do {
                 cacheOverride: options.cacheOverride
             ),
             foldersToAdd: options.foldersToAdd,
-            recursive: options.recursive,
             tick: options.interval,
             once: options.once,
             scanIntervalOverride: options.scanIntervalOverride,

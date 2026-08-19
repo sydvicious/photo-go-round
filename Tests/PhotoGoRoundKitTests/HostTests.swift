@@ -172,6 +172,28 @@ struct HostTests {
         #expect(suite.preferences.scanInterval == .seconds(300))
     }
 
+    @Test("The effective value is what the agent would use, set or not")
+    func effectiveValueAnswersWhatTheAgentWouldUse() {
+        let suite = Suite()
+
+        // Nothing stored: the answer is the default rather than a blank,
+        // because the question is what the agent would use.
+        #expect(suite.preferences.effectiveValue(for: .queueSize) == "1000")
+        #expect(suite.preferences.effectiveValue(for: .downloadConcurrency) == "4")
+        #expect(suite.preferences.effectiveValue(for: .repeatWindowFraction) == "0.5")
+
+        suite.defaults.set(250, forKey: Preferences.Key.queueSize.rawValue)
+        #expect(suite.preferences.effectiveValue(for: .queueSize) == "250")
+
+        // Clamped on the way out, so this reports what the agent would use
+        // rather than what was typed.
+        suite.defaults.set(999, forKey: Preferences.Key.downloadConcurrency.rawValue)
+        #expect(suite.preferences.effectiveValue(for: .downloadConcurrency) == "32")
+
+        // The source list is not a scalar setting and has no effective value.
+        #expect(suite.preferences.effectiveValue(for: .sources) == nil)
+    }
+
     @Test("A value that is set is used")
     func setValuesAreRead() {
         let suite = Suite()

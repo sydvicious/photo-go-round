@@ -25,7 +25,7 @@ struct TestLibrary {
     }
 
     static func path(in directory: URL) -> String {
-        directory.appending(path: "library.sqlite").path(percentEncoded: false)
+        directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
     }
 
     private init(database: Database) {

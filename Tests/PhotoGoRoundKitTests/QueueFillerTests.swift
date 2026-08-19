@@ -10,10 +10,9 @@ struct QueueFillerTests {
     /// then says it has nothing, which is the only two things a real producer
     /// ever tells the filler.
     ///
-    /// Counting the calls is the point. Most of what went wrong here was not a
-    /// wrong answer but a wrong *number of questions* — asked once per timer
-    /// tick when it should have been asked continuously, or asked forever when
-    /// it should have stopped.
+    /// Counting the calls is the point: what matters here is not the answer but
+    /// the *number of questions*, which is where filling goes wrong in both
+    /// directions — too few and the queue starves, too many and it spins.
     final class MockProducer: @unchecked Sendable {
         private let queue: PhotoQueue
         private let lock = NSLock()
@@ -103,9 +102,9 @@ struct QueueFillerTests {
 
     @Test("A library smaller than the queue fills what it has and stops")
     func smallLibraryDoesNotSpin() async throws {
-        // The original spinning bug: a pool smaller than nominal can never
-        // satisfy it, so the stopping condition has to be the source saying
-        // *nothing* rather than the queue saying *full*.
+        // A pool smaller than nominal can never satisfy it, so the stopping
+        // condition has to be the source saying *nothing* rather than the queue
+        // saying *full*.
         let (_, queue, source, ids) = try library(photos: 20, nominal: 1000)
         let producer = MockProducer(queue: queue, photos: [source: ids])
         let filler = QueueFiller(isShort: { producer.isShort() }, produce: { producer.produce($0) })
@@ -178,11 +177,9 @@ struct QueueFillerTests {
 
     @Test("A drained queue refills at the rate the producer answers, not one per round")
     func refillIsNotRationed() async throws {
-        // The regression this suite exists for. A pool smaller than the queue's
-        // target used to be filled one picture per maintenance tick, so a fifty-
-        // photo library served roughly one picture every five seconds however
-        // fast the queue drained. A single round must restore everything the
-        // producer is willing to give.
+        // A single round must restore everything the producer is willing to
+        // give, however far below nominal the pool is. Anything that rations it
+        // starves a small library the moment something draws from it.
         let (_, queue, source, ids) = try library(photos: 50, nominal: 1000)
         let producer = MockProducer(queue: queue, photos: [source: ids])
         let filler = QueueFiller(isShort: { producer.isShort() }, produce: { producer.produce($0) })

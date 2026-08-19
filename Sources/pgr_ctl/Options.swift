@@ -7,8 +7,8 @@ import PhotoGoRoundKit
 /// have an Apple exception.
 ///
 /// **Positionals are collected first and interpreted last.** Flags may appear
-/// anywhere, including before the command word and between a verb and its
-/// argument, so `source add --folder /a -r` and `-r source add --folder /a` mean
+/// anywhere, including before the subcommand and between a verb and its
+/// argument, so `sources add --folder /a -r` and `-r sources add --folder /a` mean
 /// the same thing. That falls out of separating "what was typed" from "what it
 /// means" rather than from a rule about ordering.
 struct Options {
@@ -19,7 +19,6 @@ struct Options {
         case poolStats
         case queuePeek
         case queueFill
-        case serve
         case deckStats
         case cache(CacheAction)
         case shuffleTest
@@ -31,8 +30,16 @@ struct Options {
         case help
     }
 
+    /// One source named on the command line.
+    struct NewSource: Equatable {
+        var path: String
+        var kind: SourceKind
+        /// Only ever true for a folder, and only when `--recursive` preceded it.
+        var recursive: Bool
+    }
+
     enum SourceAction: Equatable {
-        case add(path: String, kind: SourceKind, recursive: Bool)
+        case add([NewSource])
         case list
         case remove(id: Int64)
         case enable(id: Int64)
@@ -68,12 +75,10 @@ struct Options {
     var cacheOverride: URL?
 
     var count = 10
-    var consumerName = "cli"
-    var quiet = false
-    var recursive = false
     var repeatWindowFraction = DeckSettings.defaultRepeatWindowFraction
     var deals = 50_000
     var photos = 4_000
+    var noDefaultValues = false
     var follow = false
     var lastInterval = "1h"
 
@@ -85,8 +90,7 @@ struct Options {
         var options = Options()
 
         var positional: [String] = []
-        var sourcePath: String?
-        var sourceKind: SourceKind = .folder
+        var newSources: [NewSource] = []
         var scopeSourceID: Int64?
         var refreshSourceID: Int64?
         var clearUnavailable = false
@@ -124,17 +128,26 @@ struct Options {
                 options.containerOverride = URL(filePath: try next(argument))
             case "--database", "-d":
                 options.databaseOverride = URL(filePath: try next(argument))
-            case "--cache":
+            case "--cache-root":
                 options.cacheOverride = URL(filePath: try next(argument))
 
             case "--folder":
-                sourcePath = try next(argument)
-                sourceKind = .folder
+                // `--recursive` is a modifier on the folder that follows it, so
+                // a flat directory and a nested tree can be named in one command
+                // and each keeps its own answer. Repeatable.
+                var walk = false
+                var path = try next(argument)
+                if path == "--recursive" || path == "-r" {
+                    walk = true
+                    path = try next("--folder --recursive")
+                }
+                newSources.append(NewSource(path: path, kind: .folder, recursive: walk))
             case "--file":
-                sourcePath = try next(argument)
-                sourceKind = .file
+                newSources.append(
+                    NewSource(path: try next(argument), kind: .file, recursive: false))
             case "--recursive", "-r":
-                options.recursive = true
+                // Only meaningful attached to a folder.
+                throw OptionsError.misplacedRecursive
 
             case "--source":
                 let id = try nextID(argument)
@@ -147,10 +160,6 @@ struct Options {
 
             case "--count", "-n":
                 options.count = try nextInt(argument)
-            case "--consumer":
-                options.consumerName = try next(argument)
-            case "--quiet", "-q":
-                options.quiet = true
             case "--window", "-w":
                 let raw = try next(argument)
                 guard let fraction = Double(raw), (0...1).contains(fraction) else {
@@ -163,6 +172,8 @@ struct Options {
             case "--photos":
                 options.photos = try nextInt(argument)
 
+            case "--no-default-values":
+                options.noDefaultValues = true
             case "--follow", "-f":
                 options.follow = true
             case "--last":
@@ -185,9 +196,7 @@ struct Options {
 
         options.command = try Self.command(
             from: positional,
-            sourcePath: sourcePath,
-            sourceKind: sourceKind,
-            recursive: options.recursive,
+            newSources: newSources,
             refreshSourceID: refreshSourceID,
             scopeSourceID: scopeSourceID,
             clearUnavailable: clearUnavailable,
@@ -199,9 +208,7 @@ struct Options {
     /// What the positional words meant, resolved once every flag has been seen.
     private static func command(
         from words: [String],
-        sourcePath: String?,
-        sourceKind: SourceKind,
-        recursive: Bool,
+        newSources: [NewSource],
         refreshSourceID: Int64?,
         scopeSourceID: Int64?,
         clearUnavailable: Bool,
@@ -224,23 +231,23 @@ struct Options {
         case "status":
             return .status
 
-        case "source":
+        case "sources":
             switch verb(1) {
             case "add":
-                guard let sourcePath else {
-                    throw OptionsError.missingValue(flag: "source add --folder|--file")
+                guard !newSources.isEmpty else {
+                    throw OptionsError.missingValue(flag: "sources add --folder|--file")
                 }
-                return .source(.add(path: sourcePath, kind: sourceKind, recursive: recursive))
+                return .source(.add(newSources))
             case "list", nil:
                 return .source(.list)
             case "remove":
-                return .source(.remove(id: try requireID("source remove <id>")))
+                return .source(.remove(id: try requireID("sources remove <id>")))
             case "enable":
-                return .source(.enable(id: try requireID("source enable <id>")))
+                return .source(.enable(id: try requireID("sources enable <id>")))
             case "disable":
-                return .source(.disable(id: try requireID("source disable <id>")))
+                return .source(.disable(id: try requireID("sources disable <id>")))
             case let other:
-                throw OptionsError.unknownVerb("source \(other ?? "")")
+                throw OptionsError.unknownVerb("sources \(other ?? "")")
             }
 
         case "refresh":
@@ -258,9 +265,6 @@ struct Options {
             case "fill": return .queueFill
             case let other: throw OptionsError.unknownVerb("queue \(other ?? "")")
             }
-
-        case "serve":
-            return .serve
 
         case "deck":
             switch verb(1) {
@@ -332,17 +336,18 @@ struct Options {
 
         COMMANDS
           status                    Sources, pool, queue, cache, shuffle position
-          source add --folder <p> [-r]
-          source add --file <p>     Add a source. Written to preferences, which
-                                    are the truth; the source table is a projection
-          source list               Sources with their photo counts and state
-          source remove <id>
-          source enable <id> | disable <id>
+          sources add [--folder [--recursive] <p>] [--file <p>] …
+                                    Add sources. Repeatable, and `--recursive`
+                                    applies only to the folder it precedes.
+                                    Written to preferences, which are the truth;
+                                    the source table is a projection
+          sources list              Sources with their photo counts and state
+          sources remove <id>
+          sources enable <id> | disable <id>
           refresh [--source <id>]   Re-enumerate sources into the pool
           pool stats                Rows per source, storage, cache residency
           queue peek [-n <n>]       What is ready to serve, in order
           queue fill [-n <rounds>]  Ask every source for a picture, synchronously
-          serve [-n <n>]            Take pictures off the head, with timing
           deck stats                Showing counts, pass position, recent events
           cache status              Resident, referenced, bytes, free space
           cache evict               Run an eviction pass now
@@ -351,8 +356,8 @@ struct Options {
           shuffle-test [--deals <n>] [--photos <n>] [-w <f>]
                                     The statistical assertions, against a
                                     throwaway library. Never touches yours
-          get [<key>] | set <key> <value>
-                                    Preferences, in the domain the agent reads
+          get [<key>] [--no-default-values]
+          set <key> <value>         Preferences, in the domain the agent reads
           notify <topic>            Ring a doorbell by hand: prefs, deck,
                                     sources, cache
           log [-f] [--last <time>]  What every process has been logging
@@ -367,15 +372,14 @@ struct Options {
                                   .build, so a plain run cannot disturb anything
               --container <dir>   Storage root
           -d, --database <path>   Database file
-              --cache <dir>       Cache root
-          -n, --count <n>         How many to serve, peek at, or fill. Default: 10
-              --consumer <name>   Consumer identity for `serve`. Default: cli
-          -q, --quiet             Only print the summary
-          -r, --recursive         Walk subdirectories of an added folder
+              --cache-root <dir>  Cache root
+          -n, --count <n>         How many to peek at, or rounds to fill. Default: 10
               --source <id>       Scope `refresh` or `cache clear` to one source
               --unavailable       Scope `cache clear` to sources that are gone
               --yes               Do not ask before clearing
-          -w, --window <0-1>      Repeat window fraction. Default: 0.5
+              --no-default-values `get` reports what is stored, blank where
+                                  nothing is, rather than what the agent would use
+          -w, --window <0-1>      Repeat window fraction for shuffle-test. Default: 0.5
               --deals <n>         Cards to deal in shuffle-test. Default: 50000
               --photos <n>        Library size for shuffle-test. Default: 4000
           -f, --follow            Stream the log rather than printing it
@@ -385,7 +389,7 @@ struct Options {
         ENVIRONMENT
           PGR_CONTAINER    Storage root. Same as --container; the flag wins.
           PGR_DATABASE     Database file. Same as --database; the flag wins.
-          PGR_CACHE        Cache root. Same as --cache; the flag wins.
+          PGR_CACHE        Cache root. Same as --cache-root; the flag wins.
 
           Setting PGR_CONTAINER once per shell is the usual way to work, since
           every command has to agree with the running agent about where the
@@ -393,15 +397,16 @@ struct Options {
 
         EXAMPLES
           export PGR_CONTAINER="$HOME/Library/Application Support/Photo-Go-Round"
-          pgr_ctl source add --folder ~/Pictures/Wallpaper -r
+          pgr_ctl sources add --folder --recursive ~/Pictures/Albums \\
+                              --folder ~/Pictures/Wallpaper
           pgr_ctl status
-          pgr_ctl serve -n 100 --consumer screensaver
           pgr_ctl shuffle-test --deals 50000 --photos 4000
         """
 }
 
 enum OptionsError: Error, CustomStringConvertible {
     case unknownFlag(String)
+    case misplacedRecursive
     case unknownVerb(String)
     case missingValue(flag: String)
     case badValue(flag: String, value: String)
@@ -409,6 +414,7 @@ enum OptionsError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .unknownFlag(let flag): "unknown option \(flag)"
+        case .misplacedRecursive: "--recursive belongs between --folder and its path"
         case .unknownVerb(let verb): "unknown command \(verb). `pgr_ctl --help` lists them."
         case .missingValue(let flag): "\(flag) needs a value"
         case .badValue(let flag, let value): "\(flag) does not accept \(value)"

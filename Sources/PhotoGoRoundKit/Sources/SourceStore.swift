@@ -385,11 +385,6 @@ public struct SourceStore {
         // is still there, which is the same three-valued check that guarantees a
         // deleted photo is never shown.
         //
-        // Using it here retires a heuristic as well. There used to be a rule
-        // that a source enumerating to nothing when it was not empty before had
-        // "become unavailable" — an approximation of exactly what `.unknown`
-        // states outright. An unmounted volume answers `.unknown` for every
-        // photo, so nothing is deleted, and the guess is no longer needed.
         var removed = 0
         // Photos the walk found still in place. The walk runs after the inserts,
         // so it sees this pass's additions too — they are discounted at the end

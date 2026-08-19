@@ -270,6 +270,28 @@ public struct Preferences: @unchecked Sendable {
         CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
     }
 
+    /// The value the agent would actually use for a key: whatever is stored,
+    /// otherwise the default, in both cases after the clamp.
+    ///
+    /// It answers by calling the same accessors the agent calls rather than by
+    /// consulting a table of defaults, so it cannot drift from them. Returns nil
+    /// for a key that is not a scalar setting — the source list is the only one.
+    public func effectiveValue(for key: Key) -> String? {
+        switch key {
+        case .repeatWindowFraction: String(deckSettings.repeatWindowFraction)
+        case .cachePhotoCap: String(cacheSettings.photoCap)
+        case .cacheByteCeiling: String(cacheSettings.byteCeiling)
+        case .cacheMinimumFreeBytes: String(cacheSettings.minimumFreeBytes)
+        case .cacheCriticalFreeBytes: String(cacheSettings.criticalFreeBytes)
+        case .scanIntervalSeconds: String(Int(scanInterval.totalSeconds))
+        case .maintenanceIntervalSeconds: String(Int(maintenanceInterval.totalSeconds))
+        case .downloadConcurrency: String(downloadConcurrency)
+        case .queueSize: String(queueSize)
+        case .queueRefreshIntervalSeconds: String(Int(queueRefreshInterval.totalSeconds))
+        default: nil
+        }
+    }
+
     /// Everything currently set, for `pgr get` and for logging what a run
     /// started with.
     public func all() -> [String: String] {

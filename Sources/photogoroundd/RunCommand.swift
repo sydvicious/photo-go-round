@@ -14,7 +14,6 @@ import PhotoGoRoundKit
 struct RunCommand {
     var environment: MacHostEnvironment
     var foldersToAdd: [(url: URL, recursive: Bool)]
-    var recursive: Bool
     var tick: Duration
     var once: Bool
     /// Development convenience. Production takes this from preferences, where
@@ -51,12 +50,9 @@ struct RunCommand {
         // the bytes, and never open the database or the cache themselves.
         //
         // **Serving is what notices the queue has run short**, and therefore what
-        // asks for more. Without this the queue only ever refilled on the
-        // maintenance tick, so a consumer drawing faster than that tick drained it
-        // and got *no photos available* while the library sat there full.
-        // A source already at its concurrency limit drops the request on the
-        // floor, so calling this on every served picture cannot outrun what the
-        // providers are willing to do.
+        // asks for more. A round already in progress absorbs the next request
+        // rather than stacking with it, so calling this on every served picture
+        // cannot outrun what the providers are willing to do.
         let databasePath = environment.databaseURL.path(percentEncoded: false)
         filler.configure(databasePath: databasePath, cacheRoot: environment.cacheRoot)
         let filler = self.filler
@@ -70,7 +66,9 @@ struct RunCommand {
             preferences: preferences,
             queueRanShort: topUp
         )
-        let listener = HTTPListener(port: servicePort) { await endpoint.route($0) }
+        let listener = HTTPListener(port: servicePort, advertising: PictureEndpoint.path) {
+            await endpoint.route($0)
+        }
         try listener.start()
         defer { listener.stop() }
 
@@ -311,13 +309,9 @@ struct RunCommand {
     ) async throws {
 
 
-        // The pump keeps asking as each answer lands. What stops it is a source
-        // that has nothing left to offer, which is answered once and remembered
-        // for the round — so a library smaller than the queue's target does not
-        // spin, it simply stops early. An earlier version paced this on the
-        // maintenance tick instead, which starved a small library the moment
-        // anything drew from it: fifty photos against a thousand-entry queue
-        // meant one picture every five seconds however fast the queue drained.
+        // The heartbeat, for when nothing is serving. Serving is what normally
+        // notices the queue is short; with no consumer there is nothing to
+        // notice it, so the loop asks on its own schedule.
         await filler.fill(preferences: preferences)
     }
 

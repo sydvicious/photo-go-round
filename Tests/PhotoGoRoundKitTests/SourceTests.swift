@@ -538,6 +538,37 @@ struct SourceTests {
         #expect(try library.deck.poolSize() == 3)
     }
 
+    @Test("Per-source stats split the pool the way the questions are asked")
+    func sourceStatsSplitThePool() throws {
+        let library = try TestLibrary()
+        let source = try library.addSource()
+        let images = try library.addPhotos(4, to: source, namePrefix: "still")
+        try library.addPhotos(2, to: source, mediaType: .video, namePrefix: "clip")
+
+        let pool = PhotoPool(database: library.database)
+        var stats = try pool.stats(forSource: source)
+        #expect(stats.total == 6)
+        #expect(stats.images == 4)
+        #expect(stats.videos == 2)
+        // `addPhotos` writes a cache path, so these count as resident.
+        #expect(stats.resident == 6)
+        #expect(stats.referenced == 0)
+        #expect(stats.claimed == 0)
+
+        // A claim taken at selection is visible, which is what makes a stuck
+        // producer something you can see rather than something you infer.
+        _ = try library.deck.nextCandidate(forSource: source)
+        stats = try pool.stats(forSource: source)
+        #expect(stats.claimed == 1)
+
+        for id in images { try library.deck.releaseClaim(photoID: id) }
+        #expect(try pool.stats(forSource: source).claimed == 0)
+
+        // A source with nothing in it answers zeroes rather than failing.
+        let empty = try library.addSource(locator: "/empty")
+        #expect(try pool.stats(forSource: empty).total == 0)
+    }
+
     @Test("Removing a source removes its photos and their queue entries")
     func removingCascades() async throws {
         let folder = TemporaryFolder()

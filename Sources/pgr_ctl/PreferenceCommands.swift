@@ -11,24 +11,58 @@ import PhotoGoRoundKit
 /// reads.
 enum PreferenceCommands {
 
-    static func get(key: String?, environment: MacHostEnvironment) throws {
-        let values = environment.preferences.all()
+    /// Reads preferences.
+    ///
+    /// **What is printed is the value the agent would use**, so an unset
+    /// preference reports its default rather than nothing. That is almost always
+    /// the question being asked, and it keeps the output free of anything a
+    /// caller would have to strip: a bare value, never a value with a marker
+    /// glued to it.
+    ///
+    /// `--no-default-values` asks the other question — what is actually stored —
+    /// and answers it with a blank for anything that is not. The two questions
+    /// are genuinely different and neither answer can express the other, which is
+    /// why this is a flag rather than a formatting choice.
+    static func get(
+        key: String?, showDefaults: Bool, environment: MacHostEnvironment
+    ) throws {
+        let preferences = environment.preferences
+        let stored = preferences.all()
+
+        func value(_ preference: Preferences.Key) -> String {
+            Self.value(of: preference, in: preferences, stored: stored, showDefaults: showDefaults)
+        }
 
         if let key {
-            guard Preferences.allKeys.contains(where: { $0.rawValue == key }) else {
+            guard let match = Preferences.allKeys.first(where: { $0.rawValue == key }) else {
                 Console.failure("unknown preference \(key). `pgr_ctl get` lists them.")
                 throw ExitCode(1)
             }
             // Bare, so it can be read by a script without any parsing.
-            print(values[key] ?? "")
+            print(value(match))
             return
         }
 
         for preference in Preferences.allKeys {
-            let value = values[preference.rawValue] ?? "(default)"
             Console.note(
-                "\(preference.rawValue.padding(toLength: 28, withPad: " ", startingAt: 0)) \(value)")
+                "\(preference.rawValue.padding(toLength: 28, withPad: " ", startingAt: 0)) "
+                    + value(preference))
         }
+    }
+
+    /// What `get` prints for one preference, which is the whole of its policy.
+    ///
+    /// Separated from the printing so it can be asserted directly: the two
+    /// questions this answers differ only in what an *unset* preference reports,
+    /// and that is exactly the case a test needs to pin.
+    static func value(
+        of key: Preferences.Key,
+        in preferences: Preferences,
+        stored: [String: String],
+        showDefaults: Bool
+    ) -> String {
+        guard showDefaults else { return stored[key.rawValue] ?? "" }
+        return preferences.effectiveValue(for: key) ?? stored[key.rawValue] ?? ""
     }
 
     static func set(key: String, value: String, environment: MacHostEnvironment) throws {
@@ -88,14 +122,20 @@ enum NotifyCommand {
 /// reaching them has to be one word.
 enum LogCommand {
 
-    static func run(follow: Bool, last: String) throws {
-        let predicate = "subsystem == \"com.sydpolk.photogoround\""
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/log")
-        process.arguments =
-            follow
+    static let predicate = "subsystem == \"com.sydpolk.photogoround\""
+
+    /// What `log` asks `/usr/bin/log` for. The whole of this command's decision;
+    /// running the process is plumbing around it.
+    static func arguments(follow: Bool, last: String) -> [String] {
+        follow
             ? ["stream", "--predicate", predicate, "--level", "info"]
             : ["show", "--predicate", predicate, "--last", last, "--info", "--style", "compact"]
+    }
+
+    static func run(follow: Bool, last: String) throws {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/log")
+        process.arguments = arguments(follow: follow, last: last)
 
         try process.run()
         process.waitUntilExit()

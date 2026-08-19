@@ -63,7 +63,7 @@ enum Library {
     /// The same, but it creates the library rather than refusing when there is
     /// none.
     ///
-    /// Only `source add` wants this: adding the first source may genuinely be
+    /// Only `sources add` wants this: adding the first source may genuinely be
     /// the first thing anybody has ever done, and "run the agent once before you
     /// can configure it" is a chicken-and-egg nobody should have to solve. Every
     /// other command refuses, because an empty library is almost always the

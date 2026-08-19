@@ -15,8 +15,8 @@ enum SourceCommands {
 
     static func run(_ action: Options.SourceAction, environment: MacHostEnvironment) async throws {
         switch action {
-        case .add(let path, let kind, let recursive):
-            try await add(path: path, kind: kind, recursive: recursive, environment: environment)
+        case .add(let sources):
+            try await add(sources, environment: environment)
         case .list:
             try list(environment: environment)
         case .remove(let id):
@@ -30,43 +30,60 @@ enum SourceCommands {
 
     // MARK: - Adding
 
+    /// Adds every source named on the command line.
+    ///
+    /// **Nothing is added until all of them resolve.** A command naming three
+    /// folders where the second is misspelled should add none of them, rather
+    /// than leaving the library in a state that depends on argument order.
     private static func add(
-        path: String, kind: SourceKind, recursive: Bool, environment: MacHostEnvironment
+        _ requested: [Options.NewSource], environment: MacHostEnvironment
     ) async throws {
-        let resolved = URL(filePath: path).standardizedFileURL.path(percentEncoded: false)
-        guard FileManager.default.fileExists(atPath: resolved) else {
-            Console.failure("not found: \(resolved)")
-            throw ExitCode(1)
+        var specs: [SourceSpec] = []
+        for source in requested {
+            let resolved = URL(filePath: source.path).standardizedFileURL
+                .path(percentEncoded: false)
+            guard FileManager.default.fileExists(atPath: resolved) else {
+                Console.failure("not found: \(resolved)")
+                throw ExitCode(1)
+            }
+            specs.append(
+                source.kind == .file
+                    ? SourceSpec(kind: .file, locator: resolved)
+                    : SourceSpec.folder(resolved, recursive: source.recursive))
         }
 
         let preferences = environment.preferences
-        let spec =
-            kind == .file
-            ? SourceSpec(kind: .file, locator: resolved)
-            : SourceSpec.folder(resolved, recursive: recursive)
-        guard preferences.addSource(spec) else {
-            Console.note("already a source: \(resolved)")
-            return
+        var added: [SourceSpec] = []
+        for spec in specs {
+            if preferences.addSource(spec) {
+                added.append(spec)
+            } else {
+                Console.note("already a source: \(spec.locator)")
+            }
         }
+        guard !added.isEmpty else { return }
 
         // The database may not exist yet — this may be the first thing anyone
-        // has ever done — so the source is created rather than merely projected.
+        // has ever done — so the sources are created rather than merely projected.
         let context = try Library.contextCreatingIfNeeded(environment)
         try context.sources.reconcile(with: preferences.sources)
-        guard let source = try context.sources.all().first(where: { $0.locator == resolved }) else {
-            Console.failure("added to preferences but the source table did not take it")
-            throw ExitCode(1)
-        }
 
-        Console.recovered("added source #\(source.id): \(resolved)")
+        for spec in added {
+            guard let source = try context.sources.all().first(where: { $0.locator == spec.locator })
+            else {
+                Console.failure("added to preferences but the source table did not take it")
+                throw ExitCode(1)
+            }
+            Console.recovered("added source #\(source.id): \(spec.locator)")
 
-        // Scan it now rather than making the caller wait for the agent's next
-        // pass. Adding a source is the one moment somebody is watching.
-        let result = await context.sources.refresh(source)
-        if result.sourceUnavailable {
-            Console.alert("unavailable: \(result.reason ?? "unknown")")
-        } else {
-            Console.note("  \(result.added) photos found")
+            // Scan it now rather than making the caller wait for the agent's next
+            // pass. Adding a source is the one moment somebody is watching.
+            let result = await context.sources.refresh(source)
+            if result.sourceUnavailable {
+                Console.alert("unavailable: \(result.reason ?? "unknown")")
+            } else {
+                Console.note("  \(result.added) photos found")
+            }
         }
         environment.announce(.sourcesChanged)
     }
@@ -77,7 +94,7 @@ enum SourceCommands {
         let context = try Library.context(environment)
         let sources = try context.sources.all()
         guard !sources.isEmpty else {
-            Console.note("no sources. add one with:  pgr_ctl source add --folder <path>")
+            Console.note("no sources. add one with:  pgr_ctl sources add --folder <path>")
             return
         }
         for source in sources {

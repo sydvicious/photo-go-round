@@ -53,36 +53,43 @@ struct OptionsTests {
         #expect(options.foldersToAdd[0].recursive == false)
     }
 
-    @Test("`--add-folder-recursive` walks that folder and only that folder")
-    func perFolderRecursion() throws {
+    @Test("`--recursive` applies to the folder it precedes, and to no other")
+    func recursionIsPerFolder() throws {
         let options = try parse([
+            "--add-folder", "--recursive", "/tmp/tree",
             "--add-folder", "/tmp/flat",
-            "--add-folder-recursive", "/tmp/tree",
+            "--add-folder", "--recursive", "/tmp/other-tree",
         ])
         let byPath = Dictionary(
             uniqueKeysWithValues: options.foldersToAdd.map {
                 ($0.url.lastPathComponent, $0.recursive)
             })
-        #expect(byPath["flat"] == false)
         #expect(byPath["tree"] == true)
+        #expect(byPath["flat"] == false)
+        #expect(byPath["other-tree"] == true)
+        #expect(options.foldersToAdd.count == 3)
     }
 
-    @Test("`-r` applies to every plain folder, wherever it appears")
-    func recursiveFlagAppliesToPlainFolders() throws {
-        // It may follow the paths it applies to, so the folders cannot be
-        // resolved until every argument has been seen.
-        let options = try parse(["--add-folder", "/tmp/a", "--add-folder", "/tmp/b", "-r"])
-        #expect(options.foldersToAdd.count == 2)
-        #expect(options.foldersToAdd.allSatisfy { $0.recursive })
+    @Test("`-r` is the same modifier, spelled short")
+    func shortRecursiveIsTheSame() throws {
+        let long = try parse(["--add-folder", "--recursive", "/tmp/tree"])
+        let short = try parse(["--add-folder", "-r", "/tmp/tree"])
+        #expect(long.foldersToAdd.map(\.recursive) == short.foldersToAdd.map(\.recursive))
+        #expect(short.foldersToAdd[0].recursive)
     }
 
-    @Test("`--add-folder-recursive` is recursive with or without `-r`")
-    func explicitRecursionDoesNotDependOnOrdering() throws {
-        let without = try parse(["--add-folder-recursive", "/tmp/tree"])
-        #expect(without.foldersToAdd[0].recursive == true)
+    @Test("`--recursive` standing alone is refused rather than guessed at")
+    func looseRecursiveIsAnError() {
+        // It used to mean "every folder on this line", which is exactly the
+        // ambiguity a per-folder modifier removes.
+        #expect(throws: (any Error).self) { try parse(["-r"]) }
+        #expect(throws: (any Error).self) { try parse(["--recursive", "--add-folder", "/tmp/a"]) }
+        #expect(throws: (any Error).self) { try parse(["--add-folder", "/tmp/a", "-r"]) }
+    }
 
-        let with = try parse(["--add-folder-recursive", "/tmp/tree", "-r"])
-        #expect(with.foldersToAdd[0].recursive == true)
+    @Test("`--recursive` with no folder after it is an error, not a folder named --recursive")
+    func recursiveNeedsAPath() {
+        #expect(throws: (any Error).self) { try parse(["--add-folder", "--recursive"]) }
     }
 
     // MARK: - The environment forms
@@ -137,7 +144,7 @@ struct OptionsTests {
     @Test("Explicit roots are taken as given")
     func explicitRoots() throws {
         let options = try parse([
-            "--container", "/tmp/c", "--cache", "/tmp/k", "--database", "/tmp/d/lib.sqlite",
+            "--container", "/tmp/c", "--cache-root", "/tmp/k", "--database", "/tmp/d/lib.sqlite",
         ])
         #expect(options.containerOverride?.path(percentEncoded: false) == "/tmp/c")
         #expect(options.cacheOverride?.path(percentEncoded: false) == "/tmp/k")
@@ -146,7 +153,7 @@ struct OptionsTests {
 
     @Test("A flag that takes a value fails when the value is missing")
     func missingValuesAreErrors() {
-        for flag in ["--add-folder", "--add-folder-recursive", "--container", "--cache"] {
+        for flag in ["--add-folder", "--container", "--cache-root"] {
             #expect(throws: (any Error).self, "\(flag) with no value") {
                 try parse([flag])
             }
@@ -165,8 +172,8 @@ struct OptionsTests {
     // this list is the thing to update *on purpose* when the surface changes.
 
     static let frozenFlags = [
-        "--add-folder", "--add-folder-recursive", "-r", "--recursive",
-        "--prod", "--container", "--cache", "--database", "-d",
+        "--add-folder", "-r", "--recursive",
+        "--prod", "--container", "--cache-root", "--database", "-d",
         "--once", "-i", "--interval", "--scan-interval", "--port", "-h", "--help",
     ]
 
@@ -177,12 +184,22 @@ struct OptionsTests {
 
     @Test("Every frozen flag is still accepted", arguments: OptionsTests.frozenFlags)
     func frozenFlagsStillParse(flag: String) throws {
-        // Flags taking a value get a plausible one; the rest stand alone.
+        // Three shapes: a flag taking a value, a flag modifying the folder that
+        // follows it, and a flag standing alone.
         let needsValue = [
-            "--add-folder", "--add-folder-recursive", "--container", "--cache",
+            "--add-folder", "--container", "--cache-root",
             "--database", "-d", "-i", "--interval", "--scan-interval", "--port",
         ]
-        let arguments = needsValue.contains(flag) ? [flag, valueFor(flag)] : [flag]
+        let modifiesAFolder = ["-r", "--recursive"]
+
+        let arguments =
+            if modifiesAFolder.contains(flag) {
+                ["--add-folder", flag, "/tmp/frozen"]
+            } else if needsValue.contains(flag) {
+                [flag, valueFor(flag)]
+            } else {
+                [flag]
+            }
         _ = try parse(arguments)
     }
 
@@ -222,7 +239,7 @@ struct OptionsTests {
             cacheOverride: options.cacheOverride,
             environment: ["PGR_CONTAINER": "/tmp/c", "PGR_CACHE": "/tmp/k"]
         )
-        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/c/library.sqlite")
+        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/c/photogoround.sqlite")
         #expect(environment.cacheRoot.path(percentEncoded: false) == "/tmp/k")
         #expect(environment.origin == .environment)
     }
@@ -234,7 +251,7 @@ struct OptionsTests {
             containerOverride: URL(filePath: "/tmp/flag"),
             environment: ["PGR_CONTAINER": "/tmp/env"]
         )
-        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/flag/library.sqlite")
+        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/flag/photogoround.sqlite")
         #expect(environment.origin == .explicitOverride)
     }
 

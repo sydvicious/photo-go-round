@@ -8,14 +8,12 @@
 
 ```
 pgr_ctl status
-pgr_ctl source add --folder <path> [-r] | --file <path>
-pgr_ctl source list | remove <id> | enable <id> | disable <id>
+pgr_ctl sources {add [--folder [--recursive] <path>] [--file <path>] … | list | remove <id> | enable <id> | disable <id>}
 pgr_ctl refresh [--source <id>]
 pgr_ctl pool stats
-pgr_ctl queue peek [-n <count>] | fill [-n <rounds>]
-pgr_ctl serve [-n <count>] [--consumer <name>] [-q] [-w <fraction>]
+pgr_ctl queue {peek [-n <count>] | fill [-n <rounds>]}
 pgr_ctl deck stats
-pgr_ctl cache status | evict | clear [--source <id>] [--unavailable] [--yes]
+pgr_ctl cache {status | evict | clear [--source <id>] [--unavailable] [--yes]}
 pgr_ctl shuffle-test [--deals <n>] [--photos <n>] [-w <fraction>]
 pgr_ctl get [<key>] | set <key> <value>
 pgr_ctl notify <topic>
@@ -28,11 +26,14 @@ pgr_ctl register | unregister | service-status
 `pgr_ctl` is the rig. It is a separate binary from `photogoroundd` because the
 service has exactly one job and answering questions is not it.
 
-**It never talks to the agent.** Every command opens the same SQLite database,
-changes what it came to change, and rings a Darwin notification — so the agent
-does not have to be running for any of this to work, and when it is running it
-notices within a tick. Neither process has to be running for the other to make
-progress, which is the property that made the design worth having.
+**It configures and inspects; it does not hand out pictures.** Every command here
+opens the same SQLite database or writes the same preference domain, then rings a
+Darwin notification — so the agent does not have to be running for any of it to
+work, and when it is running it notices within a tick.
+
+Getting a picture is the agent's job and does not live here: a client asks it
+over HTTP and is handed bytes. From a terminal that is `curl`; see *Testing the
+picture endpoint* in `README.md`.
 
 It is internal and never ships: it is not in any distributed bundle, has no
 signing or notarization pipeline, and carries no compatibility promise —
@@ -41,7 +42,7 @@ unshipped does not make it a scratch script, though. `shuffle-test` holds the
 project's real correctness checks for the deck, and they exit non-zero so CI can
 run them exactly as a person does.
 
-**Where a source lives is a preference, not a row.** `source add`, `remove`,
+**Where a source lives is a preference, not a row.** `sources add`, `remove`,
 `enable`, and `disable` write to `UserDefaults` and then reconcile the database
 in the same breath. The source table is a projection of the durable list, and the
 agent reconciles the two on a thirty-second poll — so a row written straight into
@@ -55,160 +56,211 @@ Every command has to agree with the running agent about the container, so these
 are spelled exactly as the agent spells them.
 
 `--prod`
-: Use the real library: `~/Library/Containers`, `~/Library/Caches`, and the real
+Use the real library: `~/Library/Containers`, `~/Library/Caches`, and the real
 preference domain. Without it everything lives under `<repo>/.build`, so a plain
 run cannot disturb anything. All three move together, deliberately.
 
 `--container <dir>`
-: Storage root. Default: `<repo>/.build/pgr-container`.
+Storage root. Defaults to `<repo>/.build/pgr-container`, or with `--prod` to
+`~/Library/Containers/com.sydpolk.photogoround`.
 
 `-d`, `--database <path>`
-: Database file. Default: `<container>/library.sqlite`.
+Database file. Defaults to `<container>/photogoround.sqlite` in both deployments.
 
-`--cache <dir>`
-: Cache root. Default: `<repo>/.build/pgr-cache`.
+`--cache-root <dir>`
+Cache root. Defaults to `<repo>/.build/pgr-cache`, or with `--prod` to
+`~/Library/Caches/com.sydpolk.photogoround`. Naming a container takes the cache
+with it: give `--container` or `PGR_CONTAINER` and this defaults to
+`<container>/cache` instead.
 
 ### Per command
 
 `--folder <path>`, `--file <path>`
-: What `source add` is adding. A folder source enumerates its contents; a file
-source is one pinned photo.
+What `sources add` is adding, and required by it — at least one. Both are
+repeatable, so several sources can be named in one command. Used by no other
+command.
 
-`-r`, `--recursive`
-: Walk subdirectories of an added folder. Off by default, because the surprising
-direction is the expensive one. Recursion belongs to the folder rather than to
-the command, so it is stored per source.
+`--recursive`, `-r`
+Walks subdirectories of the folder it precedes, and of no other. It belongs
+between `--folder` and its path; standing on its own it is an error rather than a
+setting for the command. Off unless asked for, because the surprising direction
+is the expensive one: walking a home directory by accident costs minutes and
+thousands of photographs nobody meant to add.
 
 `--source <id>`
-: Scope `refresh` or `cache clear` to one source.
+Scope `refresh` or `cache clear` to the one source with that id, instead of
+acting on all of them. The id is the number `sources list` prints; note that it
+is a row id in a disposable database, so deleting the library renumbers sources
+from 1 and `--source 3` means "whichever is third now" rather than a particular
+folder.
 
 `--unavailable`
-: Scope `cache clear` to sources that are gone. These can never be re-fetched
+Scope `cache clear` to sources that are gone. These can never be re-fetched
 anyway, which makes this the variant to reach for first: it frees space at zero
 future cost.
 
 `--yes`
-: Do not ask before clearing. Required when stdin is not a terminal.
+Do not ask before clearing. Required when stdin is not a terminal.
 
 `-n`, `--count <n>`
-: How many pictures to serve or peek at, or how many rounds to fill. Default: 10.
-
-`--consumer <name>`
-: Consumer identity for `serve`, recorded in the consumer registry. Default:
-`cli`.
-
-`-q`, `--quiet`
-: Print only the summary.
+How many entries to peek at, or how many rounds to fill. Default: 10.
 
 `-w`, `--window <0-1>`
-: Repeat window fraction for `serve` and `shuffle-test`. Default: 0.5.
+Repeat window fraction for `shuffle-test`. Default: 0.5.
 
 `--deals <n>`, `--photos <n>`
-: The size of the `shuffle-test` run. Defaults: 50000 deals across 4000 photos.
+The size of the `shuffle-test` run. Defaults: 50000 deals across 4000 photos.
 
 `-f`, `--follow`, `--last <time>`
-: Stream the log rather than printing it, and how far back to read. Default: 1h.
+Stream the log rather than printing it, and how far back to read. Default: 1h.
 
 `-h`, `--help`
-: Usage.
+Usage.
 
-Flags may appear anywhere, including before the command word. Positionals are
-collected first and interpreted last, so `source add --folder /a -r` and
-`-r --folder /a source add` mean the same thing.
+Flags may appear anywhere, including before the subcommand. Positionals are
+collected first and interpreted last, so `sources add --folder /a -r` and
+`-r --folder /a sources add` mean the same thing.
 
 ## COMMANDS
 
 `status`
-: Sources, pool, queue, cache, shuffle position, and the preferences in force.
+Sources, pool, queue, cache, shuffle position, and the preferences in force.
 The one command to run when something is wrong and you do not yet know what. It
 prints which rung supplied the roots, so that is never a guess.
 
-`source`
-: Manage sources. `add` scans the new source immediately rather than making you
-wait for the agent's next pass. `disable` is not `remove`: the photos leave the
-deck and the queue but keep their deal history, so re-enabling brings them
-straight back.
+`sources add`
+Adds one or more sources. `--folder <path>` enumerates a folder's contents;
+`--folder --recursive <path>` walks its subdirectories too. `--file <path>` pins
+one photograph — a first-class kind rather than a folder special case, since
+pinning one photo and adding a folder of ten thousand are the same operation to
+the deck.
+
+Both flags are repeatable and may be mixed, and each folder keeps its own answer
+about recursion:
+
+    pgr_ctl sources add --folder --recursive ~/Pictures/Albums \
+                        --folder ~/Pictures/Wallpaper
+
+Each is written to preferences and then scanned immediately, rather than making
+you wait for the agent's next pass. A path that is already a source is a no-op.
+**Nothing is added unless every path resolves**, so a command naming three
+folders with one misspelled adds none of them.
+
+`sources list`
+Every source with its id, kind, photo count, and state — `ok`, `disabled`, or
+`UNAVAILABLE` with the reason. The id it prints is what the other subcommands
+take. This is also what a bare `pgr_ctl sources` does, that being the harmless
+reading.
+
+`sources remove <id>`
+Drops it from preferences; its photos and their queue entries go with it by
+cascade. Its cached bytes are *not* deleted at that moment — the rows that named
+them are gone, so nothing is left pointing at the files. A running agent
+reclaims them on its next maintenance pass, which sweeps cached files no pool
+entry claims. To free the space immediately, or with no agent running, use
+`cache clear --source <id>` **before** removing it.
+
+`sources enable <id>`, `sources disable <id>`
+Switch a source off without discarding it. **Disabling is not removing**: the
+photos leave the deck and the queue immediately, but keep their deal history, so
+re-enabling brings them straight back where they were (_primarily for internal testing_).
 
 `refresh`
-: Re-enumerate sources into the pool. Reports `+added -removed =unchanged` per
+Re-enumerate sources into the pool. Reports `+added -removed =unchanged` per
 source, or the reason a source is unavailable.
 
 `pool stats`
-: Rows per source, split by what explains everything else — referenced against
+Rows per source, split by what explains everything else — referenced against
 materialized, how much has bytes, and how much is claimed by a producer that is
 fetching it right now.
 
 `queue peek`
-: What is ready to serve, in order. `queue fill` does the agent's topping-up by
-hand, synchronously, one round at a time — which is the only way to fill a queue
-with no agent running.
+What is ready to serve, in order, head first. Takes `-n` for how many to show,
+and reports the total. Peeking consumes nothing.
 
-`serve`
-: Take pictures off the head of the queue as a named consumer, reporting each one
-and the latency. This is what a display does, reduced to a terminal, and it
-answers questions no unit test can: does the queue stay responsive while a
-refresh runs in another process, does a deleted photo really never appear, does
-an unplugged drive really keep serving from cache. Run several at once to show
-the queue pop serialises — the union of what they got has no duplicates.
+`queue fill`
+Does the agent's topping-up by hand: asks every enabled source for a picture,
+synchronously, and reports what each round produced. Takes `-n` for how many
+rounds, and stops early when a round produces nothing. This is the only way to
+fill a queue with no agent running.
 
 `deck stats`
-: Where the shuffle stands, plus the distribution of showing counts. `times_shown`
+Where the shuffle stands, plus the distribution of showing counts. `times_shown`
 is a statistic and nothing orders by it, which is what makes it the honest
 measure: a spread of one to three across a library is a healthy fraction below
 1.0, and a spread of three to four hundred is starvation.
 
-`cache`
-: `status` reports resident against the cap, bytes on disk, and free space.
-`evict` runs a pass now. `clear` discards bytes and never shuffle state — deal
-ordinals, shuffle keys, and last-shown times are untouched, so a cleared cache
-refills into the same rotation. It states its price before charging it.
+`cache status`
+Resident photos against the cap, how many are referenced in place rather than
+copied, how many are waiting for bytes, what is on disk, and what is free on the
+volume. Also the number of queued pictures, which are the ones eviction will not
+touch whatever their age.
+
+`cache evict`
+Runs an eviction pass now rather than waiting for the agent's maintenance
+interval. Reports what went and what it freed, and says how many were left alone
+because they are queued.
+
+`cache clear`
+Discards cached bytes, optionally scoped by `--source` or to
+`--unavailable` sources. Prompts with data of how much would be cleared and asks
+for confirmation to proceed. It does not touch anything else in the system, including
+shuffle order (_internal testing only_).
 
 `shuffle-test`
-: The statistical assertions, run against a throwaway library of empty files and
-an in-memory database. It never touches yours. At fraction 1.0 it asserts every
-pass contains every photo exactly once and that showings have zero variance;
-below 1.0 it asserts no repeat inside the window. It always reports the gap
-distribution. Exits non-zero on any failure.
+Test the shuffle algorithms against a dummy library of empty files and an in-memory
+database (_internal testing only_).
 
-`get` / `set`
-: Preferences, written to the domain the agent actually reads — which `--prod`
-and the development default disagree about, and getting it wrong writes a setting
-nothing consults. `get <key>` prints the bare value, for scripts.
+`get [<key>]`
+Reads preferences. With no key it lists every setting with its stored value, or
+`(default)` where nothing is stored. With a key it prints that value alone, for
+scripts — an empty line if nothing is stored, rather than the default the agent
+would use. An unknown key is an error.
 
-`notify`
-: Ring a doorbell by hand: `prefs`, `deck`, `sources`, `cache`. Diagnostic — when
-something does not update, this separates "the notification never fired" from
-"the listener ignored it".
+`set <key> <value>`
+Writes one preference, to the current domain. A running agent picks the change
+up immediately. For a list of valid keys, see `get`.
+
+`notify <topic>`
+Announces that something changed, without changing it, so that every process
+listening goes and looks. Valid topics are `prefs`, `sources`, `deck`, and
+`cache` — the preferences, the source list, the shuffle's position, and the
+cached bytes respectively.
 
 `log`
-: Wraps `log show --predicate 'subsystem == "com.sydpolk.photogoround"'` with
-sensible defaults, because nobody should have to remember predicate syntax.
+What this project's processes have recorded. They all write to the system log
+under one subsystem, and this reads back that subsystem and nothing else. `-f`
+follows it as it happens; `--last` bounds how far back to read.
 
-`register` / `unregister` / `service-status`
-: The login item, via `SMAppService`. Only works from a built bundle — see
-`./Scripts/make-agent-bundle.sh`.
+`register`, `unregister`
+Add or remove the agent as a login item, via `SMAppService`. Only works from a
+built bundle — see `./Scripts/make-agent-bundle.sh`.
+
+`service-status`
+What launchd makes of that registration: not registered, enabled, waiting for
+approval in System Settings, or not found.
 
 ## ENVIRONMENT
 
 `PGR_CONTAINER`
-: Storage root. Same as `--container`; the flag wins.
+Storage root. Same as `--container`; the flag wins.
 
 `PGR_DATABASE`
-: Database file. Same as `--database`; the flag wins.
+Database file. Same as `--database`; the flag wins.
 
 `PGR_CACHE`
-: Cache root. Same as `--cache`; the flag wins.
+Cache root. Same as `--cache-root`; the flag wins.
 
 Setting `PGR_CONTAINER` once per shell is the usual way to work.
 
 ## FILES
 
-`<container>/library.sqlite`
-: The database, and its WAL sidecars.
+`<container>/photogoround.sqlite`
+The database, and its WAL sidecars.
 
-`<cache>/<source-id>/<photo-id>.<ext>`
-: Materialized photo bytes. One level of structure, so clearing one source is a
-directory removal rather than a thousand unlinks.
+`<cache>/`
+Materialized photo bytes. Only photos on volumes that can disappear are copied;
+anything on the boot volume is read where it lies.
 
 ## EXIT STATUS
 
@@ -227,14 +279,16 @@ export PGR_CONTAINER="$HOME/Library/Application Support/Photo-Go-Round"
 Add a folder and watch the queue fill behind it:
 
 ```
-pgr_ctl source add --folder ~/Pictures/Wallpaper -r
+pgr_ctl sources add --folder --recursive ~/Pictures/Wallpaper
 pgr_ctl status
 ```
 
-Prove the queue pop serialises across processes:
+Prove the queue pop serialises across clients:
 
 ```
-for c in a b c d; do pgr_ctl serve -n 40 --consumer "display-$c" & done; wait
+for c in a b c d; do
+  curl -sS -D - -o /dev/null "http://localhost:9000/v1/next?consumer=display-$c&w=1920&h=1080" &
+done; wait
 ```
 
 Run the deck's correctness checks:
@@ -246,4 +300,7 @@ pgr_ctl shuffle-test --deals 50000 --photos 4000 -w 1.0
 
 ## SEE ALSO
 
-`photogoroundd(1)`, `Documentation/photogoroundd.md`, `PLAN.md`
+`photogoroundd(1)`, `Documentation/photogoroundd.md`
+
+`README.md`, *Testing the picture endpoint* — taking a picture, which is `curl`
+against the agent rather than anything in this tool.

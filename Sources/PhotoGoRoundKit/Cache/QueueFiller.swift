@@ -5,20 +5,15 @@ import Foundation
 /// **This is policy, not scheduling, and it lives in the kit for that reason.**
 /// "Keep asking while the queue is short and this source still has something" is
 /// a rule about the queue; which thread runs it and when the heartbeat fires are
-/// the host's business. They were welded together in the agent for a while, and
-/// the weld was exactly where the tests stopped — a regression that cut a small
-/// library to one picture every five seconds lived there undetected because
-/// nothing in the suite could reach it.
+/// the host's business.
 ///
 /// Two things stop it, and neither is a timer:
 ///
 /// - **The queue reaching nominal.** Checked before every ask, so a queue that
 ///   fills mid-round stops the round.
 /// - **A source that answers *nothing*.** Remembered for the rest of the round,
-///   which is what keeps an exhausted library from spinning. It is the only
-///   stopping condition that was ever needed; pacing the asks on a clock was a
-///   timing-shaped answer to a state-shaped problem, and it throttled the
-///   legitimate case along with the pathological one.
+///   which is what keeps an exhausted library from spinning, and is the only
+///   stopping condition needed.
 ///
 /// **It holds no database connection**, and that is deliberate rather than
 /// incidental. A `Database` belongs to one isolation domain, and this runs

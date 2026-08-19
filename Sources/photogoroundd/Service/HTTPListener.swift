@@ -62,13 +62,25 @@ final class HTTPListener: @unchecked Sendable {
         }
     }
 
+    /// Where pictures are served when nothing says otherwise.
+    static let defaultPort: UInt16 = 9000
+
     private let port: NWEndpoint.Port
     private let queue = DispatchQueue(label: "com.sydpolk.photogoround.http")
     private var listener: NWListener?
     private let route: @Sendable (Request) async -> Response
+    /// Named in the ready message, so the line a person reads is one they can
+    /// paste. Passed in rather than known here, since the listener routes
+    /// nothing itself.
+    private let advertising: String
 
-    init(port: UInt16, route: @escaping @Sendable (Request) async -> Response) {
-        self.port = NWEndpoint.Port(rawValue: port) ?? 9000
+    init(
+        port: UInt16,
+        advertising: String,
+        route: @escaping @Sendable (Request) async -> Response
+    ) {
+        self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port(rawValue: Self.defaultPort)!
+        self.advertising = advertising
         self.route = route
     }
 
@@ -91,7 +103,8 @@ final class HTTPListener: @unchecked Sendable {
             switch state {
             case .ready:
                 self.boundPort = listener.port?.rawValue ?? 0
-                Console.recovered("serving pictures on http://localhost:\(self.boundPort)/v1/next")
+                Console.recovered(
+                    "serving pictures on http://localhost:\(self.boundPort)\(self.advertising)")
                 Log.deck.notice("http listener ready on port \(self.boundPort, privacy: .public)")
             case .failed(let error):
                 Console.alert("http listener failed: \(error)")

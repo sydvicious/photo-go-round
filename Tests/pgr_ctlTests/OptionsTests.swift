@@ -30,7 +30,7 @@ struct OptionsTests {
     @Test("An unknown command is an error rather than a guess")
     func unknownCommandFails() {
         #expect(throws: (any Error).self) { try command(["stats"]) }
-        #expect(throws: (any Error).self) { try command(["source", "rename"]) }
+        #expect(throws: (any Error).self) { try command(["sources", "rename"]) }
         #expect(throws: (any Error).self) { try command(["--no-such-flag"]) }
     }
 
@@ -38,10 +38,12 @@ struct OptionsTests {
     func flagsAreOrderIndependent() throws {
         // Positionals are collected first and interpreted last, so ordering is
         // not a rule anybody has to remember.
-        let after = try command(["source", "add", "--folder", "/tmp/a", "-r"])
-        let before = try command(["-r", "--folder", "/tmp/a", "source", "add"])
+        let after = try command(["sources", "add", "--folder", "--recursive", "/tmp/a"])
+        let before = try command(["--folder", "--recursive", "/tmp/a", "sources", "add"])
         #expect(after == before)
-        #expect(after == .source(.add(path: "/tmp/a", kind: .folder, recursive: true)))
+        #expect(
+            after
+                == .source(.add([.init(path: "/tmp/a", kind: .folder, recursive: true)])))
     }
 
     // MARK: - Sources
@@ -49,39 +51,65 @@ struct OptionsTests {
     @Test("A folder is not walked unless asked")
     func addIsNotRecursiveByDefault() throws {
         #expect(
-            try command(["source", "add", "--folder", "/tmp/a"])
-                == .source(.add(path: "/tmp/a", kind: .folder, recursive: false)))
+            try command(["sources", "add", "--folder", "/tmp/a"])
+                == .source(.add([.init(path: "/tmp/a", kind: .folder, recursive: false)])))
     }
 
     @Test("`--file` pins one photo rather than a folder")
     func addAFile() throws {
         #expect(
-            try command(["source", "add", "--file", "/tmp/one.heic"])
-                == .source(.add(path: "/tmp/one.heic", kind: .file, recursive: false)))
+            try command(["sources", "add", "--file", "/tmp/one.heic"])
+                == .source(.add([.init(path: "/tmp/one.heic", kind: .file, recursive: false)])))
     }
 
-    @Test("`source add` with no path says so rather than adding nothing")
+    @Test("Several sources can be named in one command, each with its own answer")
+    func addIsRepeatable() throws {
+        let parsed = try command([
+            "sources", "add",
+            "--folder", "--recursive", "/tmp/tree",
+            "--folder", "/tmp/flat",
+            "--file", "/tmp/one.heic",
+        ])
+        #expect(
+            parsed
+                == .source(
+                    .add([
+                        .init(path: "/tmp/tree", kind: .folder, recursive: true),
+                        .init(path: "/tmp/flat", kind: .folder, recursive: false),
+                        .init(path: "/tmp/one.heic", kind: .file, recursive: false),
+                    ])))
+    }
+
+    @Test("`--recursive` standing alone is refused rather than guessed at")
+    func looseRecursiveIsAnError() {
+        #expect(throws: (any Error).self) { try command(["sources", "add", "-r"]) }
+        #expect(throws: (any Error).self) {
+            try command(["sources", "add", "--folder", "/tmp/a", "-r"])
+        }
+    }
+
+    @Test("`sources add` with no path says so rather than adding nothing")
     func addNeedsAPath() {
-        #expect(throws: (any Error).self) { try command(["source", "add"]) }
+        #expect(throws: (any Error).self) { try command(["sources", "add"]) }
     }
 
-    @Test("`source` on its own lists, which is the harmless reading")
+    @Test("`sources` on its own lists, which is the harmless reading")
     func bareSourceLists() throws {
-        #expect(try command(["source"]) == .source(.list))
-        #expect(try command(["source", "list"]) == .source(.list))
+        #expect(try command(["sources"]) == .source(.list))
+        #expect(try command(["sources", "list"]) == .source(.list))
     }
 
     @Test("The verbs that take an id demand one")
     func idVerbsNeedAnID() throws {
-        #expect(try command(["source", "remove", "3"]) == .source(.remove(id: 3)))
-        #expect(try command(["source", "enable", "3"]) == .source(.enable(id: 3)))
-        #expect(try command(["source", "disable", "3"]) == .source(.disable(id: 3)))
+        #expect(try command(["sources", "remove", "3"]) == .source(.remove(id: 3)))
+        #expect(try command(["sources", "enable", "3"]) == .source(.enable(id: 3)))
+        #expect(try command(["sources", "disable", "3"]) == .source(.disable(id: 3)))
         for verb in ["remove", "enable", "disable"] {
-            #expect(throws: (any Error).self, "source \(verb)") {
-                try command(["source", verb])
+            #expect(throws: (any Error).self, "sources \(verb)") {
+                try command(["sources", verb])
             }
             #expect(throws: (any Error).self, "source \(verb) notanumber") {
-                try command(["source", verb, "wat"])
+                try command(["sources", verb, "wat"])
             }
         }
     }
@@ -132,6 +160,9 @@ struct OptionsTests {
         #expect(try command(["get"]) == .getPreferences(key: nil))
         #expect(try command(["get", "queueSize"]) == .getPreferences(key: "queueSize"))
         #expect(try command(["set", "queueSize", "500"]) == .setPreference(key: "queueSize", value: "500"))
+        #expect(try parse(["get"]).noDefaultValues == false)
+        #expect(try parse(["get", "--no-default-values"]).noDefaultValues)
+        #expect(try parse(["get", "queueSize", "--no-default-values"]).noDefaultValues)
         #expect(throws: (any Error).self) { try command(["set", "queueSize"]) }
     }
 
@@ -152,16 +183,16 @@ struct OptionsTests {
 
     @Test("Counts, windows, and sizes are parsed and rejected on sight")
     func numericOptions() throws {
-        #expect(try parse(["serve", "-n", "100"]).count == 100)
-        #expect(try parse(["serve", "--count", "100"]).count == 100)
-        #expect(try parse(["serve", "-w", "1.0"]).repeatWindowFraction == 1.0)
+        #expect(try parse(["queue", "peek", "-n", "100"]).count == 100)
+        #expect(try parse(["queue", "peek", "--count", "100"]).count == 100)
+        #expect(try parse(["shuffle-test", "-w", "1.0"]).repeatWindowFraction == 1.0)
         #expect(try parse(["shuffle-test", "--deals", "10", "--photos", "5"]).deals == 10)
         #expect(try parse(["shuffle-test", "--deals", "10", "--photos", "5"]).photos == 5)
 
-        #expect(throws: (any Error).self) { try parse(["serve", "-n", "0"]) }
-        #expect(throws: (any Error).self) { try parse(["serve", "-n", "wat"]) }
-        #expect(throws: (any Error).self) { try parse(["serve", "-w", "2"]) }
-        #expect(throws: (any Error).self) { try parse(["serve", "-w", "-1"]) }
+        #expect(throws: (any Error).self) { try parse(["queue", "peek", "-n", "0"]) }
+        #expect(throws: (any Error).self) { try parse(["queue", "peek", "-n", "wat"]) }
+        #expect(throws: (any Error).self) { try parse(["shuffle-test", "-w", "2"]) }
+        #expect(throws: (any Error).self) { try parse(["shuffle-test", "-w", "-1"]) }
     }
 
     @Test("Defaults are the plan's numbers")
@@ -170,15 +201,14 @@ struct OptionsTests {
         #expect(options.deals == 50_000)
         #expect(options.photos == 4_000)
         #expect(options.repeatWindowFraction == DeckSettings.defaultRepeatWindowFraction)
-        #expect(try parse(["serve"]).consumerName == "cli")
-        #expect(try parse(["serve"]).count == 10)
+        #expect(try parse(["queue", "peek"]).count == 10)
     }
 
     @Test("A flag that takes a value fails when the value is missing")
     func missingValuesAreErrors() {
         for flag in [
-            "--container", "--database", "--cache", "--folder", "--file", "--source",
-            "--count", "--consumer", "--window", "--deals", "--photos", "--last",
+            "--container", "--database", "--cache-root", "--folder", "--file", "--source",
+            "--count", "--window", "--deals", "--photos", "--last",
         ] {
             #expect(throws: (any Error).self, "\(flag) with no value") { try parse([flag]) }
         }
@@ -195,7 +225,7 @@ struct OptionsTests {
     @Test("Explicit roots are taken as given")
     func explicitRoots() throws {
         let options = try parse([
-            "status", "--container", "/tmp/c", "--cache", "/tmp/k", "-d", "/tmp/d/lib.sqlite",
+            "status", "--container", "/tmp/c", "--cache-root", "/tmp/k", "-d", "/tmp/d/lib.sqlite",
         ])
         #expect(options.containerOverride?.path(percentEncoded: false) == "/tmp/c")
         #expect(options.cacheOverride?.path(percentEncoded: false) == "/tmp/k")
@@ -208,8 +238,8 @@ struct OptionsTests {
     func everyCommandIsDocumented() {
         // A subcommand `--help` never mentions is a subcommand nobody will find.
         let words = [
-            "status", "source add", "source list", "source remove", "source enable",
-            "refresh", "pool stats", "queue peek", "queue fill", "serve", "deck stats",
+            "status", "sources add", "sources list", "sources remove", "sources enable",
+            "refresh", "pool stats", "queue peek", "queue fill", "deck stats",
             "cache status", "cache evict", "cache clear", "shuffle-test", "get", "set",
             "notify", "log", "register", "unregister", "service-status",
         ]
@@ -221,9 +251,9 @@ struct OptionsTests {
     @Test("Every flag the parser accepts appears in the usage text")
     func everyFlagIsDocumented() {
         let flags = [
-            "--prod", "--container", "--database", "--cache", "--folder", "--file",
-            "--recursive", "--source", "--unavailable", "--yes", "--count", "--consumer",
-            "--quiet", "--window", "--deals", "--photos", "--follow", "--last", "--help",
+            "--prod", "--container", "--database", "--cache-root", "--folder", "--file",
+            "--recursive", "--source", "--unavailable", "--yes", "--count", "--no-default-values",
+            "--window", "--deals", "--photos", "--follow", "--last", "--help",
         ]
         for flag in flags {
             #expect(Options.usage.contains(flag), "\(flag) is missing from the usage text")

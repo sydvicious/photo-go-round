@@ -50,15 +50,6 @@ do {
         try await InspectCommands.queueFill(
             rounds: options.count, environment: hostEnvironment(options))
 
-    case .serve:
-        try await ServeCommand(
-            environment: hostEnvironment(options),
-            consumerName: options.consumerName,
-            count: options.count,
-            repeatWindowFraction: options.repeatWindowFraction,
-            quiet: options.quiet
-        ).run()
-
     case .deckStats:
         try InspectCommands.deckStats(environment: hostEnvironment(options))
 
@@ -78,7 +69,9 @@ do {
             fraction: options.repeatWindowFraction)
 
     case .getPreferences(let key):
-        try PreferenceCommands.get(key: key, environment: hostEnvironment(options))
+        try PreferenceCommands.get(
+            key: key, showDefaults: !options.noDefaultValues,
+            environment: hostEnvironment(options))
 
     case .setPreference(let key, let value):
         try PreferenceCommands.set(key: key, value: value, environment: hostEnvironment(options))

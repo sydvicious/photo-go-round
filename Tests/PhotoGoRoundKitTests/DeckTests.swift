@@ -318,6 +318,43 @@ struct DeckTests {
 
     // MARK: - Peeking and stats
 
+    @Test("The showing histogram counts photos per showing count")
+    func showingHistogramGroupsByCount() throws {
+        let (library, ids) = try TestLibrary.withPhotos(6)
+        let deck = library.deck
+
+        // Nothing dealt: every photo sits at zero.
+        var histogram = try deck.showingHistogram()
+        #expect(histogram.map(\.shown) == [0])
+        #expect(histogram.map(\.photos) == [6])
+
+        for id in ids.prefix(2) { _ = try deck.markShown(photoID: id) }
+        _ = try deck.markShown(photoID: ids[0])
+
+        // One photo shown twice, one once, four never.
+        histogram = try deck.showingHistogram()
+        #expect(histogram.map(\.shown) == [0, 1, 2])
+        #expect(histogram.map(\.photos) == [4, 1, 1])
+    }
+
+    @Test("The histogram ignores photos the deck cannot deal")
+    func showingHistogramExcludesUndealables() throws {
+        let library = try TestLibrary()
+        let source = try library.addSource()
+        try library.addPhotos(3, to: source, namePrefix: "still")
+        try library.addPhotos(2, to: source, mediaType: .video, namePrefix: "clip")
+
+        // Videos are in the database and never in the deck, so they are not in
+        // a report about what the deck has been doing.
+        let histogram = try library.deck.showingHistogram()
+        #expect(histogram.map(\.shown) == [0])
+        #expect(histogram.map(\.photos) == [3])
+
+        try library.setSourceEnabled(source, false)
+        #expect(try library.deck.showingHistogram().isEmpty)
+    }
+
+
     @Test("Stats describe the library rather than guessing at it")
     func statsAreAccurate() throws {
         let library = try TestLibrary()
@@ -413,10 +450,10 @@ struct DeckTests {
         try library.addPhotos(400, to: source)
         let path = TestLibrary.path(in: directory)
 
-        // This is ledger item 1. Selection and the fetch that follows it are
-        // separated in time, so the claim is what stops two producers spending
-        // two downloads on one picture. Nothing is released here, which is the
-        // point: 400 selections against 400 photos must be 400 distinct photos.
+        // Selection and the fetch that follows it are separated in time, so the
+        // claim is what stops two producers spending two downloads on one
+        // picture. Nothing is released here, which is the point: 400 selections
+        // against 400 photos must be 400 distinct photos.
         let collected = Mutex<[Int64]>([])
         DispatchQueue.concurrentPerform(iterations: 4) { _ in
             guard let database = try? Database(path: path) else { return }
@@ -447,10 +484,10 @@ struct DeckTests {
         for id in ids { try library.enqueue(id, sourceID: source) }
         let path = TestLibrary.path(in: directory)
 
-        // The atomicity that used to live in the fused deal now lives in two
-        // places: the claim taken at selection, which keeps two producers off
-        // one picture, and this — the queue pop, where removing the entry under
-        // BEGIN IMMEDIATE means exactly one consumer can ever win it.
+        // Atomicity lives in two places: the claim taken at selection, which
+        // keeps two producers off one picture, and this — the queue pop, where
+        // removing the entry under BEGIN IMMEDIATE means exactly one consumer
+        // can ever win it.
         let collected = Mutex<[Int64]>([])
         DispatchQueue.concurrentPerform(iterations: 4) { _ in
             guard let database = try? Database(path: path) else { return }

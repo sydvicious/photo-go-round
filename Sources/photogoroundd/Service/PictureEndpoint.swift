@@ -11,10 +11,9 @@ import UniformTypeIdentifiers
 /// → 204  nothing queued
 /// ```
 ///
-/// **Step 1 accepts `w`, `h` and `depth` and ignores all three**, answering with
-/// the original bytes. The parameters are in the URL from the outset so the
-/// shape is settled before the renderer makes them real, and so a client written
-/// against this endpoint today needs no change when it starts being obeyed.
+/// **`w`, `h` and `depth` are accepted and ignored**, and the answer is the
+/// original bytes. They are in the URL so that a client written against this
+/// endpoint needs no change when they start being obeyed.
 ///
 /// The pop happens here, and it happens whether or not the download succeeds.
 /// There is no reservation, nothing with a lifetime, and nothing to reclaim from
@@ -28,6 +27,57 @@ struct PictureEndpoint {
     /// that shortens the queue and therefore the only thing that can notice it
     /// has run low. The host decides what to do about it; this just says so.
     let queueRanShort: @Sendable () -> Void
+    /// The one route this serves.
+    static let path = "/v1/next"
+
+    /// Where a served request is recorded. Injected so a test can collect the
+    /// entries and read them, rather than watching a terminal.
+    var log: @Sendable (Served) -> Void = { $0.report() }
+
+    /// One request, as it happened. A value rather than a formatted line, so the
+    /// facts can be asserted without parsing the sentence they end up in.
+    struct Served: Sendable, Equatable {
+        var status: Int
+        /// The photograph's name when one was served, and what went wrong when
+        /// one was not.
+        var detail: String
+        var consumer: String
+        var width: String?
+        var height: String?
+        var card: Int64?
+        var deal: Int64?
+        var bytes: Int64
+        var milliseconds: Double
+
+        /// Everything after the name, and the only place that wording lives.
+        var summary: String {
+            var parts = [consumer]
+            if let width, let height { parts.append("\(width)x\(height)") }
+            if let deal { parts.append("deal #\(deal)") }
+            if bytes > 0 { parts.append(RunCommand.bytes(bytes)) }
+            parts.append(milliseconds.formatted(.number.precision(.fractionLength(1))) + "ms")
+            return parts.joined(separator: " · ")
+        }
+
+        /// The console line and the unified-log record. Separate from the value
+        /// above so that what a request *was* can be asserted without asserting
+        /// how it happens to be phrased.
+        func report() {
+            switch status {
+            case 200: Console.change("▸", detail, .yellow, suffix: summary)
+            case 500...599: Console.alert("\(status) \(detail) · \(summary)")
+            default: Console.event("\(status) \(detail) · \(summary)")
+            }
+
+            Log.deck.notice(
+                """
+                served status=\(status, privacy: .public) consumer=\(consumer, privacy: .public) \
+                card=\(card ?? 0, privacy: .public) deal=\(deal ?? 0, privacy: .public) \
+                bytes=\(bytes, privacy: .public) ms=\(milliseconds, privacy: .public)
+                """
+            )
+        }
+    }
 
     /// A connection per request rather than one shared.
     ///
@@ -59,7 +109,7 @@ struct PictureEndpoint {
             return .text("only GET is served\n", status: 405, reason: "Method Not Allowed")
         }
         switch request.path {
-        case "/v1/next":
+        case Self.path:
             return await next(request)
         default:
             report(request, status: 404, detail: "no such endpoint")
@@ -72,8 +122,6 @@ struct PictureEndpoint {
     /// Deliberately separate from the unified log below it: `os_log` is the
     /// shipping mechanism and works from inside every sandbox, but a person
     /// standing the service up needs the request to appear the moment it lands.
-    /// Without it the only visible evidence a client had been served was the
-    /// queue getting shorter, which is the wrong end of the telescope.
     private func report(
         _ request: HTTPListener.Request,
         status: Int,
@@ -81,31 +129,18 @@ struct PictureEndpoint {
         card: DeckCard? = nil,
         bytes: Int64 = 0
     ) {
-        let elapsed = (ContinuousClock.now - request.receivedAt).totalSeconds * 1000
-        let who = request.query("consumer") ?? "anonymous"
-        let size = [request.query("w"), request.query("h")].compactMap(\.self).joined(separator: "x")
-        var parts = [who]
-        if !size.isEmpty { parts.append(size) }
-        if let card { parts.append("deal #\(card.dealSeq ?? 0)") }
-        if bytes > 0 { parts.append(RunCommand.bytes(bytes)) }
-        parts.append(elapsed.formatted(.number.precision(.fractionLength(1))) + "ms")
-        let suffix = parts.joined(separator: " · ")
-
-        switch status {
-        case 200:
-            Console.change("▸", detail, .yellow, suffix: suffix)
-        case 500...599:
-            Console.alert("\(status) \(detail) · \(suffix)")
-        default:
-            Console.event("\(status) \(detail) · \(suffix)")
-        }
-
-        Log.deck.notice(
-            """
-            served status=\(status, privacy: .public) consumer=\(who, privacy: .public) \
-            card=\(card?.id ?? 0, privacy: .public) deal=\(card?.dealSeq ?? 0, privacy: .public) \
-            bytes=\(bytes, privacy: .public) ms=\(elapsed, privacy: .public)
-            """
+        log(
+            Served(
+                status: status,
+                detail: detail,
+                consumer: request.query("consumer") ?? "anonymous",
+                width: request.query("w"),
+                height: request.query("h"),
+                card: card?.id,
+                deal: card?.dealSeq,
+                bytes: bytes,
+                milliseconds: (ContinuousClock.now - request.receivedAt).totalSeconds * 1000
+            )
         )
     }
 

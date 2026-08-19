@@ -35,9 +35,6 @@ let package = Package(
             name: "Console",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
-        // Named the way a command-line service is named, even though it is an
-        // agent rather than a daemon: `somethingd` is what a person expects to
-        // find and to type.
         .executableTarget(
             name: "photogoroundd",
             dependencies: ["PhotoGoRoundKit", "Console"],

@@ -41,6 +41,10 @@ public enum Deployment: String, Sendable {
     /// The bundle identifier, which is also the preference domain and the last
     /// path component of both production directories.
     static let identifier = "com.sydpolk.photogoround"
+
+    /// The database's name inside the storage root, in every deployment. Public
+    /// because the hosts name it in their usage text as well as opening it.
+    public static let databaseFilename = "photogoround.sqlite"
 }
 
 /// Where the storage root came from, so that it is never a mystery.
@@ -92,7 +96,7 @@ public struct MacHostEnvironment: HostEnvironment {
         databaseURL =
             databaseOverride
             ?? environment["PGR_DATABASE"].flatMap { $0.isEmpty ? nil : URL(filePath: $0) }
-            ?? resolved.container.appending(path: "library.sqlite")
+            ?? resolved.container.appending(path: Deployment.databaseFilename)
 
         cacheRoot =
             cacheOverride

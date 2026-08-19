@@ -13,7 +13,7 @@ struct DatabaseTests {
         let directory = URL.temporaryDirectory.appending(path: "pgr-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try Database(path: directory.appending(path: "library.sqlite").path(percentEncoded: false))
+        let database = try Database(path: directory.appending(path: "photogoround.sqlite").path(percentEncoded: false))
         return try body(database)
     }
 
@@ -247,7 +247,7 @@ struct DatabaseTests {
         let directory = URL.temporaryDirectory.appending(path: "pgr-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appending(path: "library.sqlite").path(percentEncoded: false)
+        let path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
 
         let writer = try Database(path: path)
         let reader = try Database(path: path, busyTimeout: .milliseconds(50))
@@ -329,7 +329,7 @@ struct DatabaseTests {
         let directory = URL.temporaryDirectory.appending(path: "pgr-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appending(path: "library.sqlite").path(percentEncoded: false)
+        let path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
 
         // Touching one connection from two threads is exactly what the rest of
         // the kit avoids, and the compiler is right to say so. It is safe here

@@ -5,9 +5,9 @@ import PhotoGoRoundKit
 /// Hand-rolled argument parsing. A dozen flags is an afternoon and about two
 /// hundred lines, which is cheaper than taking a dependency for it.
 struct Options {
-    /// Two cases, and one of them only prints. The inspect verbs that used to
-    /// live here moved to `pgr_ctl` in Phase 2, which is what makes "the service
-    /// does one thing" true of the binary and not merely of its default.
+    /// Two cases, and one of them only prints. Inspecting and configuring a
+    /// library is `pgr_ctl`'s job, which is what makes "the service does one
+    /// thing" true of the binary rather than merely of its default.
     enum Command {
         case run
         case help
@@ -15,7 +15,6 @@ struct Options {
 
     var command: Command = .run
     var interval: Duration = .seconds(2)
-    var recursive = false
     var once = false
     var scanIntervalOverride: Duration?
     /// Which port to serve pictures on.
@@ -26,7 +25,7 @@ struct Options {
     /// place once the default is a port the kernel assigns, because a pinned
     /// number is one you can `curl` without first reading the published one out
     /// of preferences.
-    var servicePort: UInt16 = 9000
+    var servicePort: UInt16 = HTTPListener.defaultPort
     var containerOverride: URL?
     var databaseOverride: URL?
     var cacheOverride: URL?
@@ -64,10 +63,6 @@ struct Options {
             options.foldersToAdd += folders.split(separator: ":")
                 .map { (URL(filePath: String($0)), true) }
         }
-        options.recursive = recursiveByDefault
-
-        // Held aside because `-r` may appear after the path it applies to.
-        var plainFolders: [URL] = []
         var index = arguments.startIndex
 
         func next(_ flag: String) throws -> String {
@@ -82,9 +77,20 @@ struct Options {
             case "--prod":
                 options.deployment = .production
             case "--add-folder":
-                plainFolders.append(URL(filePath: try next(argument)))
-            case "--add-folder-recursive":
-                options.foldersToAdd.append((URL(filePath: try next(argument)), true))
+                // `--recursive` is a modifier on the folder that follows it, not
+                // a setting for the run — so a flat directory and a nested tree
+                // can be named in one invocation and each keeps its own answer.
+                var walk = false
+                var path = try next(argument)
+                if path == "--recursive" || path == "-r" {
+                    walk = true
+                    path = try next("--add-folder --recursive")
+                }
+                options.foldersToAdd.append((URL(filePath: path), walk))
+            case "--recursive", "-r":
+                // Only meaningful attached to a folder. Standing alone it used to
+                // mean "all of them", which is the ambiguity this removes.
+                throw OptionsError.misplacedRecursive
             case "--once":
                 options.once = true
             case "--port":
@@ -99,7 +105,7 @@ struct Options {
                     throw OptionsError.badValue(flag: argument, value: raw)
                 }
                 options.scanIntervalOverride = .seconds(seconds)
-            case "--cache":
+            case "--cache-root":
                 options.cacheOverride = URL(filePath: try next(argument))
             case "--database", "-d":
                 options.databaseOverride = URL(filePath: try next(argument))
@@ -111,8 +117,6 @@ struct Options {
                     throw OptionsError.badValue(flag: argument, value: raw)
                 }
                 options.interval = .seconds(seconds)
-            case "--recursive", "-r":
-                options.recursive = true
             case "--help", "-h":
                 options.command = .help
             default:
@@ -120,11 +124,6 @@ struct Options {
             }
             index += 1
         }
-
-        // `-r` may appear anywhere, so folders given with the plain flag are
-        // resolved once every argument has been seen. `--add-folder-recursive`
-        // needs none of this: it says so itself, which is the point of having it.
-        options.foldersToAdd += plainFolders.map { ($0, options.recursive) }
 
         return options
     }
@@ -135,7 +134,7 @@ struct Options {
         USAGE
           photogoroundd [options]
 
-        It takes no command word, because there is nothing to choose between: it
+        It takes no subcommand, because there is nothing to choose between: it
         scans every source, keeps the queue full, and evicts and sweeps the
         cache, on the intervals in preferences. Photos on the boot volume are
         referenced in place and never copied; only removable, network, and iCloud
@@ -154,32 +153,29 @@ struct Options {
         another terminal.
 
         OPTIONS
-              --add-folder <path> Register a folder source if it is not already there.
-                                  Repeatable; `-r` applies to all of them
-              --add-folder-recursive <path>
-                                  The same, but this one folder is walked whether
-                                  or not `-r` was given. Recursion belongs to the
-                                  folder, so a flat wallpaper directory and a
-                                  nested album tree can be named in one command
+              --add-folder [--recursive] <path>
+                                  Register a folder source if it is not already
+                                  there. Repeatable, and `--recursive` applies
+                                  only to the folder it precedes
               --prod              Use the real library: ~/Library/Containers,
                                   ~/Library/Caches, and the real preference
                                   domain. Without it everything lives under
                                   .build, so a plain run cannot disturb anything.
-              --cache <dir>       Cache root
+              --cache-root <dir>  Cache root
               --once              Do one pass and exit, rather than looping
               --scan-interval <s> How often to rescan sources. Default: the
                                   scanIntervalSeconds preference (300)
-          -d, --database <path>   Database file. Default: <container>/library.sqlite
+          -d, --database <path>   Database file. Default: <container>/\(Deployment.databaseFilename)
               --container <dir>   Storage root
           -i, --interval <secs>   How often the loop wakes. Default: 2
-              --port <n>          Port to serve pictures on. Default: 9000
-          -r, --recursive         Walk subdirectories too
+              --port <n>          Port to serve pictures on. The agent prints the
+                                  one it bound, at startup
           -h, --help              This
 
         ENVIRONMENT
           PGR_CONTAINER    Storage root. Same as --container; the flag wins.
           PGR_DATABASE     Database file. Same as --database; the flag wins.
-          PGR_CACHE        Cache root. Same as --cache; the flag wins.
+          PGR_CACHE        Cache root. Same as --cache-root; the flag wins.
           PGR_FOLDERS      Colon-separated folders to ensure as sources at launch,
                            the way PATH is written. Adding one twice is a no-op,
                            so it is safe to leave set across restarts.
@@ -193,7 +189,8 @@ struct Options {
 
         EXAMPLES
           export PGR_CONTAINER="$HOME/Library/Application Support/Photo-Go-Round"
-          photogoroundd --add-folder ~/Pictures/Wallpaper -r
+          photogoroundd --add-folder --recursive ~/Pictures/Albums \\
+                        --add-folder ~/Pictures/Wallpaper
 
           PGR_FOLDERS=~/Pictures/A:~/Pictures/B PGR_RECURSIVE=1 photogoroundd
 
@@ -204,12 +201,14 @@ struct Options {
 
 enum OptionsError: Error, CustomStringConvertible {
     case unknownFlag(String)
+    case misplacedRecursive
     case missingValue(flag: String)
     case badValue(flag: String, value: String)
 
     var description: String {
         switch self {
         case .unknownFlag(let flag): "unknown option \(flag)"
+        case .misplacedRecursive: "--recursive belongs between --add-folder and its path"
         case .missingValue(let flag): "\(flag) needs a value"
         case .badValue(let flag, let value): "\(flag) does not accept \(value)"
         }
