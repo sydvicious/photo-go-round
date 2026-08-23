@@ -10,11 +10,12 @@ import PhotoGoRoundKit
 /// no-dependencies rule has no exception for web frameworks. `NWListener` is in
 /// the OS on every platform we run on.
 ///
-/// **Deliberately not general.** One method, no keep-alive, no chunked request
-/// bodies, no compression. Every response says `Connection: close` and the
-/// connection is closed when it has been written, which removes the entire
-/// state machine that HTTP keep-alive would otherwise need. The cost is one TCP
-/// handshake per picture, against a picture that arrives every several seconds.
+/// **Deliberately not general.** No keep-alive, no chunked request bodies, no
+/// compression, and a request body read whole under a hard cap rather than
+/// streamed. Every response says `Connection: close` and the connection is
+/// closed when it has been written, which removes the entire state machine that
+/// HTTP keep-alive would otherwise need. The cost is one TCP handshake per
+/// picture, against a picture that arrives every several seconds.
 final class HTTPListener: @unchecked Sendable {
 
     struct Request {
@@ -26,6 +27,13 @@ final class HTTPListener: @unchecked Sendable {
         /// took to answer. Serve latency is the number this whole design is
         /// judged on, and it is invisible unless something measures it.
         let receivedAt: ContinuousClock.Instant
+        /// Whatever `Content-Length` said would follow the head, read whole.
+        ///
+        /// Whole rather than streamed, because the only body this serves is a
+        /// list of sources a person just picked in a dialog — kilobytes, with a
+        /// hard cap above it. Pictures go the other way, and *that* direction is
+        /// streamed.
+        var body: Data = Data()
 
         func query(_ name: String) -> String? { query[name] }
         func header(_ name: String) -> String? { headers[name.lowercased()] }
@@ -141,8 +149,9 @@ final class HTTPListener: @unchecked Sendable {
         receiveHead(connection, buffer: Data())
     }
 
-    /// Reads until the blank line that ends the headers. A request with no body
-    /// is the only kind this serves, so that blank line is the whole message.
+    /// Reads until the blank line that ends the headers. For a `GET` that blank
+    /// line is the whole message; anything with a `Content-Length` continues
+    /// into `receiveBody`.
     private func receiveHead(_ connection: NWConnection, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) {
             [weak self] chunk, _, isComplete, error in
@@ -154,7 +163,19 @@ final class HTTPListener: @unchecked Sendable {
 
             if let terminator = buffer.range(of: Data("\r\n\r\n".utf8)) {
                 let head = buffer[buffer.startIndex..<terminator.lowerBound]
-                self.handle(String(decoding: head, as: UTF8.self), on: connection)
+                guard let request = Self.parse(String(decoding: head, as: UTF8.self)) else {
+                    self.write(
+                        .text("malformed request\n", status: 400, reason: "Bad Request"),
+                        to: connection)
+                    return
+                }
+                // Anything already read past the blank line is the beginning of
+                // the body, not a second request: this listener closes the
+                // connection after one, so there is never another to confuse it
+                // with.
+                self.receiveBody(
+                    connection, request: request,
+                    buffer: Data(buffer[terminator.upperBound...]))
                 return
             }
             // A header block this large is not a request we are interested in.
@@ -166,18 +187,59 @@ final class HTTPListener: @unchecked Sendable {
         }
     }
 
-    private func handle(_ head: String, on connection: NWConnection) {
-        guard let request = Self.parse(head) else {
-            write(.text("malformed request\n", status: 400, reason: "Bad Request"), to: connection)
+    /// Reads `Content-Length` bytes, however many arrived with the head.
+    ///
+    /// A request with no body — every `GET` — takes the first branch and never
+    /// waits, which is what keeps the picture path exactly as fast as it was
+    /// before bodies existed.
+    private func receiveBody(_ connection: NWConnection, request: Request, buffer: Data) {
+        let expected = request.header("Content-Length").flatMap(Int.init) ?? 0
+        guard expected > 0 else { return dispatch(request, on: connection) }
+        guard expected <= Self.maximumBodyBytes else {
+            write(
+                .text("body too large\n", status: 413, reason: "Payload Too Large"),
+                to: connection)
             return
         }
+        guard buffer.count < expected else {
+            var complete = request
+            complete.body = buffer.prefix(expected)
+            return dispatch(complete, on: connection)
+        }
+
+        connection.receive(minimumIncompleteLength: 1, maximumLength: Self.chunkSize) {
+            [weak self] chunk, _, isComplete, error in
+            guard let self else { return }
+            guard error == nil else { connection.cancel(); return }
+
+            var buffer = buffer
+            if let chunk { buffer.append(chunk) }
+            // A client that hung up mid-body sent us half a request. Answering
+            // it would mean acting on half a list of sources.
+            guard !isComplete || buffer.count >= expected else {
+                self.write(
+                    .text("incomplete body\n", status: 400, reason: "Bad Request"),
+                    to: connection)
+                return
+            }
+            self.receiveBody(connection, request: request, buffer: buffer)
+        }
+    }
+
+    private func dispatch(_ request: Request, on connection: NWConnection) {
         Task { [route] in
             let response = await route(request)
             self.write(response, to: connection)
         }
     }
 
-    static func parse(_ head: String, receivedAt: ContinuousClock.Instant = .now) -> Request? {
+    /// A body this large is not a source list, and reading it would be the only
+    /// place in this process where memory scales with what a client sent.
+    static let maximumBodyBytes = 1 << 20
+
+    static func parse(
+        _ head: String, body: Data = Data(), receivedAt: ContinuousClock.Instant = .now
+    ) -> Request? {
         var lines = head.split(separator: "\r\n", omittingEmptySubsequences: false)
         guard !lines.isEmpty else { return nil }
 
@@ -206,7 +268,8 @@ final class HTTPListener: @unchecked Sendable {
             path: components?.path ?? target,
             query: query,
             headers: headers,
-            receivedAt: receivedAt
+            receivedAt: receivedAt,
+            body: body
         )
     }
 

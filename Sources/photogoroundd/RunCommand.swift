@@ -74,6 +74,15 @@ struct RunCommand {
             store: store,
             queueRanShort: topUp
         )
+        // Sources are managed over the same listener, because a client cannot
+        // meaningfully write preferences and should not open the database. The
+        // endpoint writes preferences on its behalf, which rings `.sourcesChanged`
+        // — and this loop is already listening for it, so an added folder is
+        // scanned within a tick rather than at the next scheduled pass.
+        let router = Router(
+            pictures: endpoint,
+            sources: SourceEndpoint(databasePath: databasePath, preferences: preferences)
+        )
         // Where the service is, written where every local client can find it:
         // a preference domain is a name rather than a path, which is the only
         // thing both ends can locate without being told.
@@ -81,7 +90,7 @@ struct RunCommand {
             port: servicePort,
             advertising: PictureEndpoint.path,
             onReady: { environment.preferences.publishServicePort($0) }
-        ) { await endpoint.route($0) }
+        ) { await router.route($0) }
         try listener.start()
         defer { listener.stop() }
 

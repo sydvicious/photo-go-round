@@ -132,6 +132,18 @@ public struct SourceStore {
         }
     }
 
+    /// The one a client named.
+    ///
+    /// **`uuid` rather than `id`, because the row id is not stable**: the
+    /// database is disposable and a rebuilt one renumbers sources from 1, while
+    /// the UUID is minted once and is already what names a source's bytes in the
+    /// cache. It is therefore what the service hands out and what it takes back.
+    public func source(uuid: String) throws -> Source? {
+        try database.first(
+            Self.selectSourceSQL + " WHERE uuid = :uuid;", ["uuid": .text(uuid)]
+        ) { try Source(row: $0) }
+    }
+
     public func all() throws -> [Source] {
         try database.all(Self.selectSourceSQL + " ORDER BY id;") { try Source(row: $0) }
     }

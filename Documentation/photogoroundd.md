@@ -36,6 +36,11 @@ There are four ways to say what that state is:
 None of the four needs the agent running, which is the property worth having:
 configuring the library and running it are separate acts.
 
+A client changes one thing over HTTP rather than through any of the four: **the
+source list**, which it can neither write safely nor read joined with what the
+agent found. See **SERVICE**. The property above is untouched, because `pgr_ctl`
+writes the same preferences with nothing running.
+
 **Getting a picture does go through the agent.** It serves pictures over HTTP: a
 client asks for one at the size it is about to draw at and is handed the bytes,
 and never opens the database or the cache. That is what lets a screensaver inside
@@ -211,6 +216,50 @@ for more.
 
 Every request is logged to the console with the consumer, the size asked for, the
 deal ordinal, the bytes, and the latency.
+
+### Sources
+
+The same listener manages the source list, because **the database is private to
+the service**: a client asks for what it needs and never opens the store.
+
+    GET    /v1/sources           the list, with counts and availability
+    POST   /v1/sources           add an array, all or none
+    GET    /v1/sources/<uuid>    one source, with the options it was added with
+    DELETE /v1/sources/<uuid>    remove one
+
+**A source is named by its `uuid`**, which is minted when the row is inserted and
+is what names its bytes in the cache. The row id `pgr_ctl` prints is not stable —
+the database is disposable and a rebuilt one renumbers from 1.
+
+Answers are JSON. One source reads:
+
+    {"uuid": "…", "kind": "folder", "locator": "/Users/me/Pictures/Sunsets",
+     "recursive": true, "enabled": true, "available": true, "photos": 1284,
+     "addedAt": "2026-08-23T18:04:11Z", "scannedAt": "2026-08-23T18:04:12Z"}
+
+`recursive` is absent for kinds that have no such option, `unavailableReason`
+appears only when `available` is false, and `photos` is how many that source has
+put in the pool.
+
+`POST` takes an array of `{kind, path, recursive}`; `kind` defaults to `folder`,
+and `folder` and `file` are the two that can be added. **All of them or none of
+them** — one path that does not resolve refuses the whole batch with `400`, names
+every path that was missing, and writes nothing. A path already listed is not
+added twice, and a request that creates nothing answers `200` with an empty array
+rather than `201`. A body over 1 MB is refused with `413`.
+
+**Changes go through preferences, exactly as `pgr_ctl`'s do**: the service writes
+the durable list on the client's behalf and reconciles the table from it before
+answering, so one request is one write and one doorbell. **Adding does not wait
+for the scan** — the answer carries the new source's `uuid` and a count of zero,
+and the count arrives on a later `GET`.
+
+`DELETE` answers `204`, and takes the source's photographs and queue entries with
+it. Removal is not deletion: nothing on disk is touched. Cached bytes are
+reclaimed on the next maintenance pass, once nothing points at them.
+
+Enabling, disabling, and refreshing are not here. They stay in `pgr_ctl`, which
+keeps the database and preferences and never makes a web request.
 
 ## PREFERENCES
 

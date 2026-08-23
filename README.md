@@ -92,6 +92,37 @@ never hand out the same picture, because serving removes the queue entry:
 for c in a b c d; do curl -sS -D - -o /dev/null "http://localhost:9000/v1/next?consumer=display-$c&w=1920&h=1080" & done; wait
 ```
 
+## Managing sources over HTTP
+
+The same listener manages the source list, because the database is private to the
+agent — a client asks rather than opening the store. `pgr_ctl sources` does all of
+this without the agent running; this is the path a shipping client takes.
+
+List what is configured, with counts and availability:
+
+```
+curl -sS "http://localhost:9000/v1/sources"
+```
+
+Add one or more. The body is an array, `kind` defaults to `folder`, and the batch
+is all-or-none — one path that does not resolve refuses the lot and names it:
+
+```
+curl -sS -X POST "http://localhost:9000/v1/sources" -H 'Content-Type: application/json' -d '[{"path": "/Users/me/Pictures/Sunsets", "recursive": true}]'
+```
+
+The answer carries each new source's `uuid`, which is what names it afterwards —
+the row id `pgr_ctl` prints belongs to a disposable database. It does **not** wait
+for the folder to be scanned, so `photos` is zero until a later request:
+
+```
+curl -sS "http://localhost:9000/v1/sources/<uuid>"
+curl -sS -X DELETE -D - "http://localhost:9000/v1/sources/<uuid>"
+```
+
+`DELETE` answers `204` and takes the source's photographs with it. Removal is not
+deletion: nothing on disk is touched.
+
 ## Documentation
 
 - [`Documentation/photogoroundd.md`](Documentation/photogoroundd.md) — the

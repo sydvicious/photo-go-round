@@ -352,7 +352,13 @@ struct DatabaseTests {
         try contender.transaction {
             try contender.run("INSERT INTO t (i) VALUES (:i);", ["i": 1])
         }
-        released.wait()
+        // Bounded: the signal comes from a dispatched block that always runs,
+        // so a wait that does not end means the machine is wedged rather than
+        // the test being slow — and an unbounded one would take the suite down
+        // with it, silently.
+        #expect(
+            released.wait(timeout: .now() + 5) == .success,
+            "the holding transaction never committed")
         #expect(try contender.scalarInt("SELECT COUNT(*) FROM t;") == 1)
     }
 

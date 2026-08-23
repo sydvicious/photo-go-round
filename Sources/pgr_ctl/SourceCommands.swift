@@ -38,46 +38,45 @@ enum SourceCommands {
     private static func add(
         _ requested: [Options.NewSource], environment: MacHostEnvironment
     ) async throws {
-        // Resolving and refusing the batch lives in the kit, so the app runs
-        // the same rule rather than a second copy of it.
-        let resolution = SourceRequest.resolve(
-            requested.map {
-                SourceRequest(kind: $0.kind, path: $0.path, recursive: $0.recursive)
-            })
-        guard case .resolved(let specs) = resolution else {
-            if case .missing(let paths) = resolution {
-                for path in paths {
-                    Console.failure("not found: \(path)")
-                }
-            }
-            throw ExitCode(1)
-        }
-
-        // One write, therefore one doorbell. Adding them one at a time posted a
-        // notification per path, and the agent refreshes on every one it hears.
-        let preferences = environment.preferences
-        let added = preferences.addSources(specs)
-        let wasNew = Set(added.map(\.locator))
-        for spec in specs where !wasNew.contains(spec.locator) {
-            Console.note("already a source: \(spec.locator)")
-        }
-        guard !added.isEmpty else { return }
-
         // The database may not exist yet — this may be the first thing anyone
         // has ever done — so the sources are created rather than merely projected.
         let context = try Library.contextCreatingIfNeeded(environment)
-        try context.sources.reconcile(with: preferences.sources)
 
-        for spec in added {
-            guard let source = try context.sources.all().first(where: { $0.locator == spec.locator })
-            else {
-                Console.failure("added to preferences but the source table did not take it")
-                throw ExitCode(1)
+        // Resolving, refusing the batch, the single preferences write, and the
+        // reconcile are all `SourceStore.add`. The service calls the same one
+        // for a client that asked over HTTP; what differs either side of it is
+        // only who is told, and what happens next.
+        let addition: SourceStore.Addition
+        do {
+            addition = try context.sources.add(
+                requested.map {
+                    SourceRequest(kind: $0.kind, path: $0.path, recursive: $0.recursive)
+                },
+                to: context.preferences)
+        } catch SourceStore.EditFailure.pathsNotFound(let paths) {
+            for path in paths {
+                Console.failure("not found: \(path)")
             }
-            Console.recovered("added source #\(source.id): \(spec.locator)")
+            throw ExitCode(1)
+        } catch SourceStore.EditFailure.unsupportedKind(let kind) {
+            Console.failure("\(kind) sources cannot be added")
+            throw ExitCode(1)
+        } catch SourceStore.EditFailure.notProjected(let locator) {
+            Console.failure("added to preferences but the source table did not take it: \(locator)")
+            throw ExitCode(1)
+        }
+
+        for locator in addition.alreadyListed {
+            Console.note("already a source: \(locator)")
+        }
+
+        for source in addition.added {
+            Console.recovered("added source #\(source.id): \(source.locator)")
 
             // Scan it now rather than making the caller wait for the agent's next
-            // pass. Adding a source is the one moment somebody is watching.
+            // pass. Adding a source is the one moment somebody is watching — and
+            // it is the one thing the service deliberately does *not* do here,
+            // because a client is waiting on a status code rather than watching.
             let result = await context.sources.refresh(source)
             if result.sourceUnavailable {
                 Console.alert("unavailable: \(result.reason ?? "unknown")")
@@ -119,8 +118,7 @@ enum SourceCommands {
             Console.failure("no source #\(id)")
             throw ExitCode(1)
         }
-        environment.preferences.removeSource(locator: source.locator)
-        try context.sources.reconcile(with: environment.preferences.sources)
+        try context.sources.remove(source, from: environment.preferences)
         Console.recovered("removed source #\(id): \(source.locator)")
         environment.announce(.sourcesChanged)
     }
