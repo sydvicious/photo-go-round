@@ -367,6 +367,49 @@ struct SourceEndpointTests {
         #expect(try library.store.all().isEmpty)
     }
 
+    @Test("A file added as a folder refuses the batch and names the path")
+    func aFileAddedAsAFolderIsRefused() async throws {
+        let library = try Library()
+        let folder = library.folder("real", photographs: 1)
+        let file = library.path(of: folder.appending(path: "photo-0.png"))
+
+        let response = try await library.post(#"[{"kind": "folder", "path": "\#(file)"}]"#)
+        #expect(response.status == 400)
+        let refusal = try failure(response)
+        #expect(refusal.mismatched == [file])
+
+        // A source that exists but is the wrong shape would be accepted, never
+        // produce anything, and read as broken — so nothing was written.
+        #expect(library.preferences.sources.isEmpty)
+        #expect(try library.store.all().isEmpty)
+    }
+
+    @Test("A folder added as a file refuses the batch the same way")
+    func aFolderAddedAsAFileIsRefused() async throws {
+        let library = try Library()
+        let folder = library.path(of: library.folder("directory"))
+
+        let response = try await library.post(#"[{"kind": "file", "path": "\#(folder)"}]"#)
+        #expect(response.status == 400)
+        #expect(try failure(response).mismatched?.count == 1)
+        #expect(library.preferences.sources.isEmpty)
+    }
+
+    @Test("Recursion on a file source is refused at add, exactly as PATCH refuses it")
+    func recursionOnAFileIsRefusedAtAdd() async throws {
+        let library = try Library()
+        let folder = library.folder("real", photographs: 1)
+        let file = library.path(of: folder.appending(path: "photo-0.png"))
+
+        // PATCH refuses this with 400; silently dropping the option at POST
+        // would make the two verbs disagree about whether it is an error.
+        let response = try await library.post(
+            #"[{"kind": "file", "path": "\#(file)", "recursive": true}]"#)
+        #expect(response.status == 400)
+        #expect(try failure(response).error == "a file source has no recursive option")
+        #expect(library.preferences.sources.isEmpty)
+    }
+
     @Test("Adding the same folder twice is not an error, and does not add it twice")
     func addingTwiceIsNotAnError() async throws {
         let library = try Library()

@@ -135,7 +135,7 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **The database is private to the service; clients ask over HTTP.** No client opens it, so SQLite stays a choice that can be unmade. A client asks the agent for a picture *and* for facts about the library, and changes it the same way. Preferences keep the durable source list, the published `servicePort`, and every setting. `pgr_ctl` is the exception and stays one — it is the rig, not a client. See *The database is private to the service*.
 - **A source's identity is `Source.uuid`, which the database already mints and the cache already uses to name its storage.** Preferences address a source by locator, because that is the thing the user actually chose; the UUID is what `GET /v1/sources` returns and what `DELETE /v1/sources/<uuid>` takes, so a client can name a source without opening the database.
 - **Rows are cheap and complete; bytes are expensive and windowed.** The database holds an identifier row for *every* photo in every source, however many that is. The cache holds a bounded window of actual image files. Conflating the two would cap the shuffle at the cache size.
-- **The deck is a circular queue of eligible cards, with a pass reshuffle as the floor beneath it.** A photo is eligible once *w* deals have gone by since it was dealt, which leaves `N − w` candidates available at every deal and never runs dry; the pass rule catches only the two cases where the window has no answer — fraction 1.0, and a library too small for `N − w` to reach 1. Both rules are one comparison against `max(pass_start_seq, deal_seq - w)`, and the pass is one integer in a one-row table.
+- **The deck is a circular queue of eligible cards, with a pass reshuffle as the floor beneath it.** A photo is eligible once more than *w* deals have gone by since it was dealt, which leaves `N − w − 1` candidates available at every deal and never runs dry; the pass rule catches only the two cases where the window has no answer — fraction 1.0, and a library whose dealable population is within `w + 1`. Both rules are one comparison against `max(pass_start_seq, deal_seq - w - 1)`, and the pass is one integer in a one-row table.
 - **A photo may repeat across a pass boundary, and we accept it.** This is a photo shuffle, not a casino. Preventing it costs a guard band and a relaxation path, to spare someone who happens to be watching when two passes meet — every few weeks — from seeing a picture twice.
 - **Selection takes a uniformly random offset into the eligible set, never its first row.** Ordering by a re-rolled random key and taking the minimum starves photos permanently: a high key loses, is never re-rolled *because* it lost, and loses forever. Measured at fraction 0.5, that gives showings from 3 to 391 where a random offset gives 186 to 217.
 - **The window is a configurable fraction of the pool, default 0.5.** At 1.0 the window is unsatisfiable and the pass alone governs: the classic every-photo-once-before-any-repeat shuffle, reshuffled each time through. Lower values let photos recur sooner, which matters on a fifty-thousand-photo library where strict fairness means never seeing a favourite again. Exposed as a user default from day one, and worth a slider later.
@@ -143,10 +143,10 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 
 *Consumers*
 
-- **One deck, shared by every surface.** Wallpaper, screensaver, and widgets all deal from the same sequence, so no photo repeats anywhere until every photo has been shown. Dealing is therefore a cross-process atomic operation, and the cache must stay ahead of the *fastest* consumer, not the average one.
+- **One deck, shared by every surface.** Wallpaper, screensaver, and widgets all deal from the same sequence, so the repeat window holds across every surface together — a photo just shown on one cannot immediately reappear on another. Dealing is therefore a cross-process atomic operation, and the cache must stay ahead of the *fastest* consumer, not the average one.
 - **The Watch app is a companion and requires the paired iPhone.** Not an independent watchOS app, even though the platform permits one. With no Photos framework and no sources of its own, an unpaired watch has nothing to show — so the dependency is declared up front rather than degraded into at runtime.
 - **One global queue of ready pictures, and consumers just take the head.** Producers fill it, clients drain it, and two displays get different pictures because serving *removes* the entry rather than because they were dealt disjoint sets in advance. There are no per-consumer reservations, no hand sizes, and nothing to reclaim from a display that goes away.
-- **The queue's size is a target, not a ceiling.** Producers answer independently, so a nominal thousand overshoots by up to `sources × concurrency` and that is fine — refusing work already done, or blocking a provider being helpful, would both be worse than a number that floats. Nothing is evicted when an entry arrives; serving is the only thing that shortens the queue.
+- **The queue's size is a target, not a ceiling.** Dealing is paced to pictures served and a card returning from a completed fetch is never refused, so the depth floats around the target rather than being held at it — refusing work already done would be worse than a number that floats. Nothing is evicted when an entry arrives; serving is the only thing that shortens the queue.
 
 *Sources*
 
@@ -166,11 +166,11 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 *Cache*
 
 - **Reference in place on the internal volume; materialize from anywhere that can disappear.** A file on the boot volume is always there, so copying it is pure waste. A file on an external, removable, network, or iCloud Drive volume can vanish without notice, so it is copied into the cache. Whether a photo is referenced or materialized is a property of *where it lives*, not of which kind of source found it — and it describes the photo's original entry in the cache, since every rendering is a real file with nothing to point at.
-- **The queue asks each source for one picture at a time, until it is full.** One request yields one picture, bytes and all — there is no batch size and no separate prefetcher. A source runs a few of those at once (four by default, because fetching is nearly all latency), each lane asking again as soon as its answer lands. **Serving is what notices the queue has run short**, and therefore what starts a round; a round already in progress absorbs the next request rather than stacking with it, and that is the entire flow control. No clock is involved in any of it.
-- **A photo is dealable if its bytes are local, whatever its source's state.** An unmounted drive removes referenced photos immediately; a vanished Photos library does not, since those were materialized into our cache. Orphans then shuffle out gradually as FIFO evicts them — the cache's ordinary behavior is the garbage collector.
+- **Dealing writes a card and fetches nothing; serving is what asks for bytes.** The queue holds cards dealt from one shuffle over the whole library, and a request that finds a card's bytes missing hands it to the queue of pictures to cache and moves on — a skip, never a wait. Serving also reads the next `lookAheadDepth` cards and asks for any bytes it does not hold, drained four fetches at a time across all sources (`downloadConcurrency` is one global number). **Serving is what notices the queue has run short**, and therefore what deals; a round already in progress absorbs the next request rather than stacking with it, and the heartbeat only seeds an empty queue. See *Deal over everything, and try at the moment of need*.
+- **Every photo is dealt; whether it is *shown* turns on its bytes being local when its turn comes.** An unmounted drive stops referenced photos being shown immediately; a vanished Photos library does not, since those were materialized into our cache. Orphans then shuffle out gradually as FIFO evicts them — the cache's ordinary behavior is the garbage collector.
 - **The cache is clearable on demand, and guarded against a full disk.** `pgr_ctl cache clear`, optionally per source or restricted to unavailable ones, never touching deck history. Separately, free space is checked before every chunk, because a photo count cannot bound bytes.
 - **Unavailable sources are shown as unavailable, in red, with the reason.** A source that has silently stopped contributing to the shuffle is indistinguishable from a bug.
-- **The cache is bounded by bytes, FIFO, and holds renderings alongside originals.** Materialization follows deck order, so oldest-added is also longest-since-dealt — the cache is a sliding window over the deck, expiring off the front and filling at the back. A photo count stopped meaning anything once one photo is an original plus several renderings, and it was always a poor proxy for the disk it exists to protect. Configurable; the shipping default gets set by measurement, not by guess.
+- **The cache is bounded by bytes, FIFO by write time, and holds renderings alongside originals.** Bytes arrive in fetch-completion order and cards sit at random queue positions, so nothing connects write order to display order any more — FIFO is kept because a shuffle has no hot set for anything cleverer to protect; see *Eviction*. A photo count stopped meaning anything once one photo is an original plus several renderings, and it was always a poor proxy for the disk it exists to protect. Configurable; the shipping default gets set by measurement, not by guess.
 
 *Display*
 
@@ -467,13 +467,17 @@ A source list in the database alone breaks both at once. Deleting the database w
 
 ### The doorbell rings back at you
 
-The agent posts `.sourcesChanged` so other processes know something moved, and it also *observes* that topic so a terminal adding a source is picked up within a tick. Darwin notifications carry no sender, so those are the same notification and there is no way to tell one from the other.
+**Settled 2026-08-24 by the refresh announcing nothing at all.** The history is kept below because the fix it replaces looked correct, shipped, and was found racing only by watching a live agent.
+
+The agent *observes* `.sourcesChanged` so a terminal adding a source is picked up within a tick, and writes made through `Preferences` post it — `pgr_ctl`'s, and the service's own on a client's behalf, which is how a `POST /v1/sources` gets scanned promptly. The agent also used to post it after any refresh that *found* changes, and Darwin notifications carry no sender, so its own announcement and a terminal's were indistinguishable.
 
 Left alone that is a cycle: a refresh that finds a change announces it, the announcement schedules a refresh, and around it goes. It surfaced twice. A source that was merely *still* unavailable counted as news, so a missing folder drove the loop at the tick rate for ever — the visible symptom being the same alert printed every few seconds. And a folder being copied into changes truthfully on every pass, so even with that fixed the agent walked the directory continuously for as long as the copy ran.
 
-Two rules settle it. **Announce transitions, not states** — a source that is unavailable now and was unavailable before is not news. And **after any refresh, drop a pending ring**, since the work it would ask for has just been done. A terminal that rang mid-refresh loses its promptness and waits for the next scheduled scan, which is much the cheaper of the two mistakes.
+Two rules were meant to settle it — **announce transitions, not states**, and **after any refresh, drop a pending ring** — and the second turned out to be a race. The drop ran microseconds after the post, but delivery arrives asynchronously on another queue, so the flag was usually raised *after* it was dropped and the next tick refreshed again. Measured live on 2026-08-24 against a folder mid-copy: sixty-eight refreshes of that source in twenty-one minutes — one every ~19 seconds against a 300-second scan interval — for as long as the copy ran.
 
-The general form is worth keeping: *a component that both posts and observes a payload-free notification must make its own announcements idempotent, because it cannot recognise them.*
+**So the refresh-completion announce is deleted rather than guarded.** Nothing listened to it: clients ask over HTTP, the panel polls, and the only observer of `.sourcesChanged` was the agent itself — a service announcing its own scan results also ran against the direction rule that Darwin notifications flow from the outside world to the service, never back. *The doorbell, and the batching it still demands* had already declared the agent's publishing-back gone; this is the deletion that made it true of the refresh as well. The drop went with the announce: every ring on the topic is now somebody else changing the durable list, so one that lands mid-refresh keeps its promptness and is honoured on the next tick — re-walking a change the refresh already saw is cheaper than costing a terminal its promptness, the opposite trade from the one the drop made. The transition rule survives in what is *printed*: an unavailable source alerts when it goes, not on every pass.
+
+The general form the first attempt taught, sharpened by how it ended: *a component that both posts and observes a payload-free notification cannot recognise its own announcements — so it must not announce its own work.* Idempotence was the patch; not ringing your own doorbell is the fix.
 
 ### This is also the control channel
 
@@ -495,7 +499,7 @@ Three moving parts, and the point of naming them separately is that none of them
 
 **The refreshers put things in and take things out.** One task per source, running concurrently, each against its own database connection. A source is enumerated, diffed against what the pool holds for it, and the difference applied. A refresher touches the queue never, and knows about other sources not at all.
 
-**The queue maintainer always runs.** It pulls from the pool whenever the queue runs short, fetches the bytes, and serves the head to whoever asks. It does not know what a provider is. It does not know a refresh is happening.
+**The queue maintainer always runs.** It deals cards from the pool as pictures are served — the bytes are fetched by a separate queue that serving fills — and serves the head to whoever asks. It does not know what a provider is. It does not know a refresh is happening.
 
 That separation is what makes the concurrency safe to have. A folder on a dead network share takes its timeout inside its own task; a provider that hangs hangs alone; and the queue goes on dealing throughout, because a refresh is a series of short write transactions against a database that permits readers continuously. It is also why the earlier measurement holds: the queue's latency was unchanged with a full twenty-thousand-photo scan running beside it.
 
@@ -546,7 +550,7 @@ Consumers do not block on any of this. The exchange is:
 3. It answers with the bytes, or with *there are no photos available*.
 4. On the first the client displays what it was handed. On the second it shows its empty state.
 
-**The client never touches the database or the cache**, which is what lets a screensaver inside someone else's sandbox and an Apple TV on the far side of the Wi-Fi be the same kind of thing. The exchange needs no callback, because the queue has already done the waiting: producing a picture and fetching its bytes are the same operation, so nothing is queued until it is ready to show. What remains at request time is a subsampled decode, which is tens of milliseconds. See *The service is the interface*.
+**The client never touches the database or the cache**, which is what lets a screensaver inside someone else's sandbox and an Apple TV on the far side of the Wi-Fi be the same kind of thing. The exchange needs no callback, because a card whose bytes are not local costs the request a skip rather than a wait — the fetch runs behind the walk, and look-ahead keeps the next cards' bytes arriving before their turn. What remains at request time is a subsampled decode, which is tens of milliseconds. See *The service is the interface* and *Deal over everything, and try at the moment of need*.
 
 It also means **"no photos" is an ordinary reply rather than an error**. A fresh install has an empty queue and an empty cache, so the first few requests answer *nothing available* and photos begin arriving as downloads succeed. Every surface has a defined empty state already; this just gives it something to be triggered by.
 
@@ -556,7 +560,7 @@ The single most important thing to keep straight in this design is that there ar
 
 **Rows are complete and cheap.** Every photo in every enabled source gets a row in `photo` — identifier, source, shuffle key, deal ordinal, a few timestamps. Call it 200 bytes. A 50,000-photo Favorites album is a 10 MB table, and SQLite does not care. Enumeration is cheap on both providers: `PHFetchResult` is lazy and returns identifiers without touching pixels, and a directory walk is I/O-bound but trivial next to reading the files.
 
-**Bytes are windowed and expensive.** The cache holds actual image files for a bounded number of photos — 1000 by default.
+**Bytes are windowed and expensive.** The cache holds actual image files for a bounded number of bytes — `cacheByteCeiling`, 50 GB by default.
 
 Keeping these separate is what makes the shuffle honest. If the database only held the 1000 photos that happen to be cached, the shuffle would be a shuffle of 1000 photos, and the other 49,000 would surface only through whatever refill policy pulled them in. With complete rows, the deck shuffles the entire library and the cache is purely a performance layer — a prediction about which photos are needed soon, wrong at worst, never a constraint on what can appear.
 
@@ -580,11 +584,11 @@ Once cached, the entry is an ordinary materialized photo and the original is fre
 
 The naive shuffle — one random column, re-rolled when consumed — repeats photos almost immediately, because a fresh random value can land right back at the front. The fix is to make recency a filter rather than trusting the ordering alone.
 
-**In normal operation the deck is a circular queue that never runs dry.** A photo is eligible once *w* deals have gone by since it was last dealt, so at any moment exactly `N − w` of the library's `N` photos are available to choose from — a rotating window of candidates that refills itself as fast as it is consumed. Nothing ever ends; there is no boundary and no reshuffle.
+**In normal operation the deck is a circular queue that never runs dry.** A photo is eligible once more than *w* deals have gone by since it was last dealt, so at any moment `N − w − 1` of the library's `N` photos are available to choose from — a rotating window of candidates that refills itself as fast as it is consumed. Nothing ever ends; there is no boundary and no reshuffle.
 
-That holds for every fraction below 1.0 on a library of any real size. The **pass** is the floor underneath it, for the two cases where the window has no answer: at fraction 1.0, where `w` is the whole pool by construction, and on a library small enough that `N − w` rounds to nothing. Then, and only then, the deck reshuffles and a new pass begins.
+That holds for every fraction below 1.0 on a library of any real size. The **pass** is the floor underneath it, for the two cases where the window has no answer: at fraction 1.0, where `w` is the whole pool by construction, and on a library whose dealable population is within `w + 1`. Then, and only then, the deck reshuffles and a new pass begins.
 
-**So: a photo is eligible when *w* deals have gone by since it was dealt, or when it has not been dealt in the current pass.** That is the whole algorithm, and the second clause is the one that almost never fires.
+**So: a photo is eligible when more than *w* deals have gone by since it was dealt, or when it has not been dealt in the current pass.** That is the whole algorithm, and the second clause is the one that almost never fires.
 
 ```sql
 CREATE TABLE photo (
@@ -630,7 +634,7 @@ A single monotonic counter — the deal ordinal — advances on every card dealt
 The two rules collapse into a single comparison, which is why there is no branch anywhere in the deal:
 
 ```
-eligible  ⟺  last_dealt_seq IS NULL OR last_dealt_seq <= max(pass_start_seq, deal_seq - w)
+eligible  ⟺  last_dealt_seq IS NULL OR last_dealt_seq <= max(pass_start_seq, deal_seq - w - 1)
 ```
 
 Photos never dealt are eligible by definition, so a newly added photo joins the pass already in progress rather than waiting for the next one — no placement, no special case.
@@ -641,7 +645,7 @@ Photos never dealt are eligible by definition, so a newly added photo joins the 
 
 At **fraction 1.0** the window is the whole pool and is therefore never satisfiable on its own, so the pass is the only rule: exactly one showing per pass, in a fresh random order every time through, which is the classic shuffle. At **0.5** or **0.33** photos recur sooner, which matters most on large libraries — with fifty thousand photos, fraction 1.0 means a picture you loved is effectively never coming back, and that is a strange thing for a system whose purpose is showing you your photos.
 
-The two rules hand off cleanly rather than fighting, and the handoff is lopsided. The eligible set has exactly `N − w` members, so below 1.0 the window always has an answer on any library where `(1 − fraction) × N ≥ 1`: the deck never runs down to nothing, `pass_start_seq` never moves, and the minimum-gap guarantee is exactly *w*. At 1.0 the window contributes nothing and the pass does all the work. Nothing in between needs describing, because the `max()` picks whichever is looser at each deal.
+The two rules hand off cleanly rather than fighting, and the handoff is lopsided. The eligible set has `N − w − 1` members, so below 1.0 the window always has an answer on any library where `N − w − 1 ≥ 1`: the deck never runs down to nothing, `pass_start_seq` never moves, and the minimum-gap guarantee is `w + 1`. At 1.0 the window contributes nothing and the pass does all the work. Nothing in between needs describing, because the `max()` picks whichever is looser at each deal.
 
 The practical shape of that: at the default 0.5 with four thousand photos, two thousand cards are eligible at every single deal and the pass machinery is dead code that never executes. It earns its place only at the extremes — the slider pushed fully right, or a library of a handful of photos where `w` swallows the pool. Both are real, so the floor stays; neither is the common case, so the circular queue is what the code should read as.
 
@@ -658,6 +662,8 @@ An earlier version of this plan used an epoch counter — order by `(epoch, shuf
 A pure sliding window with no pass would have no boundary at all, which is why an earlier draft of this section preferred one. It does not survive contact with fraction 1.0. A window of `pool` cards leaves exactly one photo eligible at every deal after the first pass, so the shuffle key never gets a say and every pass replays the first pass's order forever — exact fairness bought with a fixed rotation. Reshuffling at a pass boundary is what makes 1.0 an actual shuffle, and the boundary is the price.
 
 **The degradation rule is unchanged and still essential: the deal must never fail.** But running out of eligible cards is no longer a failure to degrade around — it is the end of a pass, which is ordinary business, and the reshuffle is strictly more permissive than any window could be. So the progressive halving is gone with the rest of the epoch machinery. And there is nothing left below that: a source with nothing to offer simply offers nothing, the queue stays short, and a client asking gets *no photos available*. That is the whole degradation story now — fewer pictures, never an error.
+
+**Refined 2026-08-24: zero eligible is three states, and only one of them ends a pass.** Queued and claimed cards are staged, not used up, so a count that excludes them can reach zero while the pass has plenty left — and treating that as a pass end reshuffled on every picture served and nullified the window on any library small enough for the queue to hold its eligible set. Now: everything dealable already in play deals nothing; a population the window can free waits, since serving keeps advancing the ordinal and the window opens on its own; and only a population within `w + 1` — the two cases above, with retired photographs excluded because they can never cycle — reshuffles. Found by audit rather than by running it, and reproduced as failing tests before the fix.
 
 `times_shown` survives purely as a statistic, for the deck inspector and for `pgr_ctl deck stats`. Nothing orders by it.
 
@@ -676,14 +682,16 @@ Fraction 1.0 hides the flaw, because a pass guarantees every photo a turn whatev
 Selection and showing are two statements rather than one, and the atomic guarantee sits in a third place entirely.
 
 ```sql
--- Pick a candidate from one source. :threshold is max(pass_start_seq, deal_seq - w),
--- and :offset is a uniform draw over the count of eligible pictures.
+-- Pick a candidate from the one shuffle over everything. :threshold is
+-- max(pass_start_seq, deal_seq - w - 1), and :offset is a uniform draw over the
+-- count of eligible pictures, taken in the same transaction.
 SELECT id, uuid, source_id, external_id, storage
   FROM photo p
- WHERE p.source_id = :source
-   AND p.source_enabled = 1
+ WHERE p.source_enabled = 1
    AND p.media_type = 'image'
    AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold)
+   AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry)
+   AND p.render_failures < 3
    AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.photo_id = p.id)
  ORDER BY p.shuffle_key
  LIMIT 1 OFFSET :offset;
@@ -742,7 +750,7 @@ Every surface draws from the same queue, so no photo appears on two of them at o
 
 **Atomicity lives in the queue pop, not in the deal.** This moved, and it is worth being precise about because the guarantee is unchanged while the mechanism is not. Selecting a candidate and marking it shown are now two statements rather than one fused `UPDATE … RETURNING`, so two producers *can* briefly pick the same picture. Nothing breaks, because appending to the queue ignores a photo already queued and serving removes the entry under `BEGIN IMMEDIATE`. So the cost of a race is a duplicated download, not a duplicated showing.
 
-Worth knowing where that leaves us: today only the agent produces, and a source ignores a request while it is still working on one, so the race cannot happen in practice. That is a property of the deployment rather than of the code. The moment a second process produces — `pgr_ctl`, or the Phase 3 app — duplicated downloads become possible, and the fix is to make selection-and-claim one statement again.
+Worth knowing where that leaves us: selection now claims the photo in the same `BEGIN IMMEDIATE` — see the done list under *Known shortcomings* — so two producers cannot pick the same picture in the first place, and the claim expires so a producer that dies mid-fetch sidelines nothing. The duplicated download is closed by the claim; the duplicated showing was never possible.
 
 **A fast consumer no longer sets the pace for the cache.** Under hands, the screensaver's ten-second tick determined how deep the prefetch window had to be, and the cache cap had a hard floor at the sum of all hand sizes. Now the queue is filled at whatever rate providers can manage, drained at whatever rate consumers ask, and its size floats. A screensaver that outruns the producers gets *fewer photos*, which is the correct degradation and needs no capacity planning to arrive at.
 
@@ -753,7 +761,7 @@ It remains true that a long screensaver session can roll the entire library over
 Two kinds of entry:
 
 - **Referenced.** A file on the internal boot volume. The database stores its path; no bytes are copied. It does not count against the cache cap and eviction is a no-op.
-- **Materialized.** Everything else, copied into `~/Library/Application Support/Photo-Go-Round/cache/`. These are what the cap governs.
+- **Materialized.** Everything else, copied into the cache root — `~/Library/Caches/com.sydpolk.photogoround` with `--prod`, `<repo>/.build/pgr-cache` in development. These are what the cap governs.
 
 **The dividing line is whether the bytes can go away, not which provider found them.** A Photos asset or a Google item is obviously materialized — there is no file to point at. But a plain file gets the same treatment whenever it lives somewhere that can disappear:
 
@@ -797,7 +805,7 @@ An earlier draft of this plan justified stored derivatives by claiming a large d
 
 **This document argued at length against caching the results, and that argument was wrong at one end of its range.** It ran: in a shuffle deck each photo is displayed once and not again for at least a window's worth of deals, so a cached rendering serves about one read before the deck moves on — a one-to-one write-to-read ratio, which is write amplification rather than a cache. That is a claim about *large* libraries stated as though it were universal. It is a function of pool size: a photo recurs after roughly `pool` deals, so at four thousand photos a rendering is indeed dead before its second read, and at a hundred photos it is re-read every seventeen minutes at a ten-second dwell. The small end is exactly where a person notices, because a small library is one where everything comes round often. Renderings are therefore cached, bounded by bytes and evicted as peers of the originals.
 
-**A rendering can outlive the original it came from, and half of that is not yet true.** Eviction takes originals and renderings as peers, and letting the original go first is deliberate — a rendering is a fraction of the bytes, and a client asking again at a size already held should not need the original back. Serving now honours it: the requested box is named up front, and a photograph whose original has gone is still served from a rendering held at exactly that size. What does not honour it is *queueing*, because three rules keep the original present for anything queued — producing materializes it first, eviction never touches a queued photograph's bytes, and the launch rebuild drops any queued card whose original is missing. Making the promise real means letting a photograph be queued backed only by renderings, which weakens *a picture is never queued unless it is ready to show* to *ready at the sizes we happen to hold*. **Not decided.** The serve side is built and tested either way, and the cost of leaving it is a re-download of an original to produce a size already on disk.
+**A rendering can outlive the original it came from, and serving honours it while warming does not.** Eviction takes originals and renderings as peers, and letting the original go first is deliberate — a rendering is a fraction of the bytes, and a client asking again at a size already held should not need the original back. Serving honours it: the requested box is named up front, and a photograph whose original has gone is still served from a rendering held at exactly that size. Since *Deal over everything* a card is queued with no bytes at all, so the old obstacle — three rules keeping an original present for anything queued — went with the rules themselves. What remains is look-ahead, which asks for the bytes of any card whose *original* is not held, because it cannot know what size the next client will ask at — so an original is re-fetched even when the rendering that will actually be served is already on disk. That is the cost of leaving it: a re-download to produce a size already held. **Not decided.**
 
 What the design does keep is a small **in-memory** decoded-image cache — the card being displayed and the next one or two, held as ready `CGImage`s. That is where the latency actually needs to be zero, it costs no disk, and it evicts itself when the process dies.
 
@@ -1054,7 +1062,7 @@ The same policy with much smaller numbers and a different filling schedule. A ph
 
 **Warm start** — queue populated, pool present. Serving a picture is one indexed read and one delete. Sub-millisecond. Every launch after the first should be this.
 
-**Cold start** — nothing in the pool, nothing queued, nothing cached. The agent enumerates each source's identifiers first (fast: a directory walk is I/O-bound but cheap, and `PHAsset.fetchAssets` is lazy) and inserts all rows, so the *pool* is complete within seconds even though no bytes have moved. Then every source is below the queue's nominal size, so every source is asked, and pictures become servable one at a time as fetches land.
+**Cold start** — nothing in the pool, nothing queued, nothing cached. The agent enumerates each source's identifiers first (fast: a directory walk is I/O-bound but cheap, and `PHAsset.fetchAssets` is lazy) and inserts all rows, so the *pool* is complete within seconds even though no bytes have moved. Then the heartbeat seeds the empty queue with cards, and pictures become servable one at a time as the fetches serving asks for land.
 
 **Until the first one lands, a client asking gets "no photos available".** That is an ordinary answer rather than an error state, and every surface has a defined empty state for it already — the screensaver bounces its label, the wallpaper leaves the desktop alone, a widget shows a static one. There is no separate warm-up path, no readiness signal to design, and no "not ready yet" flag for anything to check: an empty queue answers the question by itself.
 
@@ -1084,7 +1092,7 @@ What we owe the user is a clear explanation rather than cleverness: the source i
 
 **Offline: nothing happens, and that is the design.** Unavailability is a state rather than an event, so a source that is merely unreachable needs no special handling — it decays on its own.
 
-**A photo is dealable if its bytes are local, regardless of its source's state.** Because materialization is keyed to volume, this mostly resolves in the user's favour. An unplugged external drive, a disconnected share, a switched Photos library — all of those sources were materialized, so their cached photos keep being dealt from what we hold. Nothing blanks.
+**A photo keeps being shown if its bytes are local, regardless of its source's state.** Because materialization is keyed to volume, this mostly resolves in the user's favour. An unplugged external drive, a disconnected share, a switched Photos library — all of those sources were materialized, so their cached photos keep being served from what we hold. Nothing blanks.
 
 The exception is a same-volume file that is genuinely deleted. Those were referenced, so they *are* their bytes and they leave rotation at once. That is the correct behavior: deleting a photo should remove it, not start a countdown.
 
@@ -1357,7 +1365,7 @@ The UUID is a column beside the row id, not a replacement for it: `id INTEGER PR
 
 - **`verifyResidency` goes entirely.** It exists because the database's claim about resident bytes can go stale against the disk. An index built *from* the disk cannot disagree with it.
 - **`sweepOrphans` collapses into the startup rule** above, plus an unlink at removal time.
-- **One cheap startup step arrives** in their place: prune queue entries whose bytes the walk did not find. The queue is durable and the index is not, so they are reconciled once at launch, in the direction of the disk.
+- ~~**One cheap startup step arrives** in their place: prune queue entries whose bytes the walk did not find.~~ Built, and removed 2026-08-24: once cards are dealt before their bytes exist, that prune deletes exactly the cards that would warm the cache — the launch purge under *What running it found*. A queued card without bytes is now the ordinary state a fetch resolves, so the queue and the index are not reconciled at launch at all.
 
 **One invariant the scheme rests on, and it needs writing down: render to a temporary name and rename atomically.** With no database to cross-check, a truncated file left by a crash mid-write would be indexed as real and served as garbage. Atomic rename is what makes *present* mean *complete*.
 
@@ -1373,7 +1381,7 @@ On a library large enough that renderings genuinely are 1:1, caching every one o
 
 The render joins the loop `serve` already runs. Today it pops, checks the photo is still in its source, and skips to the next queue entry when it is gone, answering *nothing* only when the queue is exhausted. **Rendering becomes the third step in that same loop**, so a photo that will not decode is skipped and the client gets the next one, rather than a `204` while the queue still holds two hundred good pictures.
 
-**A photo that fails to render is blacklisted after three attempts.** Removing it from the pool does not work, and the reason is worth recording because it is not obvious: the file is still sitting on disk, so the next refresh finds it and adds it straight back. It would cycle for ever, burning a card each time round. Contrast a download that fails from a source that is demonstrably online, where removal is right precisely because the file is gone.
+**A photo that fails to render is blacklisted after three attempts.** Removing it from the pool does not work, and the reason is worth recording because it is not obvious: the file is still sitting on disk, so the next refresh finds it and adds it straight back. It would cycle for ever, burning a card each time round. Contrast a download whose provider confirms the file absent, where removal is right precisely because the file is gone — a failed read alone proves nothing, and only the confirmed absence deletes (settled 2026-08-24).
 
 Four properties the blacklist needs:
 
@@ -1700,12 +1708,9 @@ A bundle rather than a bare executable matters for TCC: the Photos permission pr
 
 ## Talking to the subsystems we do control
 
-The ladder above exists only because `legacyScreenSaver` is someone else's sandbox. Every other Mac component — the agent, the config app, the widget extension — is ours, signed by us, entitled by us. For those, the answer is settled and needs no server of any kind:
+**Superseded by *The service is the interface* and *The database is private to the service*; corrected 2026-08-24, having survived both revision lists.** The pairing below was the design until Phase 1.5 — shared state in SQLite that every one of our processes opened directly, a Darwin notification as the doorbell — and what survives of it is exactly the control channel: preferences remain the durable store that `defaults write` and `pgr_ctl` reach with nothing running, a payload-free notification still says *go look*, and both flow one direction — from the outside world to the service, never back. `pgr_ctl` keeps its direct database access because it is the rig, not a client.
 
-- **The database is the transport.** Shared state lives in SQLite in the App Group container, and every process reads and writes it directly. There is no message format to design, no serialization, no versioned protocol between components, and no process that has to be running for another to make progress.
-- **A Darwin notification is the doorbell.** Because SQLite gives no cross-process change notification and a payload-free signal is all that is needed — "settings changed", "deck advanced", "sources rescanned" — the receiver re-reads whatever it cares about. Each notification name is a topic, and there are perhaps half a dozen.
-
-That pairing covers every case, and it is the reason the plan has no local HTTP server, no sockets, and no XPC between our own components. It also degrades well: if the agent is not running, the config app still reads and writes the database, and the agent picks up the changes when it starts.
+Everything else moved to HTTP. The config app, the widgets, and every other surface ask the service for pictures and for facts, and never open the database or the cache; there is a local HTTP server precisely because of it, and XPC never arrived. What degrades well degrades the same way it did: with the agent stopped, `pgr_ctl` and `defaults write` still configure the library and the agent picks the changes up when it starts — and a *client* with no agent has nothing to do anyway, which is argued under *Requiring the agent is not a cost*.
 
 Worth noting the fallback if all three fail: ship the screensaver as a full-screen borderless window from an ordinary app, triggered by an idle timer, rather than as a `.saver` bundle. That loses integration with System Settings and with the lock screen, and I would treat it as a last resort.
 
@@ -2004,7 +2009,7 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 - **A refresh blocked the agent for eighty-five minutes**, and nothing said so. It asked the provider about every photograph it already held, one round trip each; on a network volume that is most of a second apiece. Because the main loop awaits the refresh, everything else stopped with it — preferences unread, doorbells unanswered, a source added at 00:13 still unscanned at 00:20. The symptom was "the agent is not doing anything", diagnosed by ringing the preferences doorbell and getting no answer at all. Departures now fall out of the walk that just ran, via a `walk_seen` temp table. Same source, 1.1 seconds.
 - **The launch purge deleted exactly the cards that would warm the cache.** Two network sources of 5,899 photographs had never once been shown. Written up under *What running it found*, along with the ordering fix, the walk budget, look-ahead, and `QueueFiller`'s reduction from 150 lines to 94.
 - **The look-ahead backlog was unbounded**, so a night of serving would have queued a fetch for every photograph in the library. Capped at fifty waiting; a refused request is not blacklisted.
-- **Two live-agent hazards, both found by tripping over them.** A second agent started with `--container` and `--cache-root` is *not* isolated: the port lives in preferences, so it publishes over the running agent's and the app silently follows it to the wrong library. And `--add-folder` on such a run writes into the real source list. Standing up a scratch agent needs an isolated preference suite as well as isolated storage; there is currently no flag for that, and the safer route is a test.
+- **Two live-agent hazards, both found by tripping over them.** A second agent started with `--container` and `--cache-root` is *not* isolated: the port lives in preferences, so it publishes over the running agent's and the app silently follows it to the wrong library. And `--add-folder` on such a run writes into the real source list. Standing up a scratch agent needs an isolated preference suite as well as isolated storage — `PGR_PREFS_SUITE` is the environment form, and there is still no flag — and notification topics are global regardless, so even an isolated scratch agent's rings reach the real one. Since 2026-08-24 a `--once` run is safe on its own: it never starts the listener, so the published port is left exactly as it was found.
 - **The endpoint had no test that served a picture.** `PictureEndpoint` was
   covered by one file, and every test in it ran against an empty library — so
   nothing exercised rendering, the cache, or the headers, and the

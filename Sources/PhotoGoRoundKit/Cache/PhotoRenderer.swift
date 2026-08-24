@@ -32,13 +32,31 @@ public enum PhotoRenderer {
         public var mimeType: String { self == .heic ? "image/heic" : "image/jpeg" }
 
         /// Picks a format from an `Accept` header, preferring HEIC when the
-        /// client will take either and falling back when it says nothing.
-        public static func negotiated(accept: String?) -> Format {
+        /// client will take either and when it says nothing.
+        ///
+        /// Nil when the header admits neither format — the honest answer there
+        /// is a refusal, not a fallback the client never asked for.
+        public static func negotiated(accept: String?) -> Format? {
             guard let accept = accept?.lowercased() else { return .heic }
             if accept.contains("image/heic") || accept.contains("image/*") { return .heic }
             if accept.contains("*/*") { return .heic }
             if accept.contains("image/jpeg") || accept.contains("image/jpg") { return .jpeg }
-            return .heic
+            return nil
+        }
+
+        /// Whether an `Accept` header admits this format.
+        ///
+        /// Broader than `negotiated` on purpose: negotiation picks what to
+        /// *produce*, while this asks whether bytes already held may be served
+        /// as they are — a rendering in any acceptable format is a hit, and
+        /// only a client that genuinely excludes it forces a re-render.
+        public func admitted(by accept: String?) -> Bool {
+            guard let accept = accept?.lowercased() else { return true }
+            if accept.contains("image/*") || accept.contains("*/*") { return true }
+            switch self {
+            case .heic: return accept.contains("image/heic")
+            case .jpeg: return accept.contains("image/jpeg") || accept.contains("image/jpg")
+            }
         }
     }
 

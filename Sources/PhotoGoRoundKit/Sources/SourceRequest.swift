@@ -31,10 +31,15 @@ public struct SourceRequest: Sendable, Equatable {
 
 extension SourceRequest {
 
-    /// What a batch resolved to: every source, or every path that was not there.
+    /// What a batch resolved to: every source, or every path that was wrong.
     public enum Resolution: Sendable, Equatable {
         case resolved([SourceSpec])
         case missing([String])
+        /// Paths that exist but are not the kind they were asked for as — a
+        /// file named as a folder, a directory named as a file. Accepted, such
+        /// a source would sit in the library producing nothing, reading as
+        /// broken, when the mistake was cheap to name at the door.
+        case mismatched([String])
     }
 
     /// Resolves a batch, **all of it or none of it**.
@@ -57,12 +62,18 @@ extension SourceRequest {
     ) -> Resolution {
         var specs: [SourceSpec] = []
         var missing: [String] = []
+        var mismatched: [String] = []
 
         for request in requests {
             var resolved = URL(filePath: request.path).standardizedFileURL
                 .path(percentEncoded: false)
-            guard fileManager.fileExists(atPath: resolved) else {
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: resolved, isDirectory: &isDirectory) else {
                 missing.append(resolved)
+                continue
+            }
+            guard isDirectory.boolValue == (request.kind != .file) else {
+                mismatched.append(resolved)
                 continue
             }
             // **A folder ends in a slash, always.** `NSOpenPanel` hands back a
@@ -80,6 +91,11 @@ extension SourceRequest {
             )
         }
 
-        return missing.isEmpty ? .resolved(specs) : .missing(missing)
+        // Missing outranks mismatched when a batch has both: a path that is
+        // not there at all is the likelier typo, and either way the whole
+        // batch is refused.
+        guard missing.isEmpty else { return .missing(missing) }
+        guard mismatched.isEmpty else { return .mismatched(mismatched) }
+        return .resolved(specs)
     }
 }

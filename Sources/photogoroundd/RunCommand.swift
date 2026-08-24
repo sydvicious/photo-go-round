@@ -134,15 +134,31 @@ struct RunCommand {
             advertising: PictureEndpoint.path,
             onReady: { environment.preferences.publishServicePort($0) }
         ) { await router.route($0) }
-        try listener.start()
-        defer { listener.stop() }
+        // A one-pass run configures and fills; it does not serve. Its listener
+        // would publish a port that only a signal withdraws, so `--once` would
+        // leave a stale address behind — or overwrite a running agent's, since
+        // both write the same preference domain.
+        if !once { try listener.start() }
+        defer {
+            listener.stop()
+            // The unwind for a thrown error, which no signal covers. Withdraw
+            // only an address this run published: another agent may own the
+            // key by now.
+            if environment.preferences.servicePort == listener.boundPort {
+                environment.preferences.withdrawServicePort()
+            }
+        }
 
-        // **This process only ever ends by signal** — launchd sends `SIGTERM`,
+        // **A serving run only ever ends by signal** — launchd sends `SIGTERM`,
         // a person types Ctrl-C — so a `defer` is not where the published port
         // can be withdrawn. Without this, every ordinary stop leaves an address
         // behind and `pgr_ctl status` names a port nothing is answering on.
-        let shutdown = Self.withdrawPortOnTermination(environment.preferences)
-        _ = shutdown
+        let shutdown = once ? [] : Self.withdrawPortOnTermination(environment.preferences)
+        // A resumed `DispatchSourceSignal` stops delivering when released, and
+        // ARC may release a local after its last use — which without this is
+        // the line above, in an optimized build, leaving SIGTERM and SIGINT
+        // ignored outright once the handler installed `SIG_IGN`.
+        defer { withExtendedLifetime(shutdown) {} }
 
         Console.banner(
             """
@@ -238,20 +254,12 @@ struct RunCommand {
             if asked || now.timeIntervalSince(lastScan) >= scanInterval.totalSeconds || once {
                 try await runRefresh(environment: environment, sources: sources)
                 lastScan = now
-
-                // A refresh that changed something announces it, and we observe
-                // our own announcements — Darwin notifications carry no sender,
-                // so there is no way to tell ours from a terminal's. Left alone
-                // that is a self-sustaining cycle: refresh, ring, refresh. It
-                // only shows up while a source is genuinely churning, such as a
-                // folder mid-copy, where every pass truthfully finds new files
-                // and the agent walks the directory continuously.
-                //
-                // We have just done the work the ring would ask for, so drop it.
-                // A terminal that rang during the refresh loses its promptness
-                // and waits for the next scheduled scan, which is the cheaper
-                // of the two mistakes.
-                _ = sourcesChanged.lower()
+                // A ring that lands mid-refresh stays raised and is honoured on
+                // the next tick. Every ring on this topic is now somebody else
+                // changing the durable list — a refresh announces nothing, so
+                // there is no self-ring to guard against, and re-walking a
+                // change the refresh already saw is cheaper than costing a
+                // client its promptness.
             }
 
             // Topping up and sweeping answer to different pressures, so they
@@ -362,35 +370,19 @@ struct RunCommand {
             for _ in 0..<cap { schedule() }
             while await group.next() != nil { schedule() }
         }
-
-        if reported.sawAnything() { environment.announce(.sourcesChanged) }
+        // What a refresh found is *not* announced. Nothing listens — clients
+        // ask over HTTP, and the panel polls — while the agent itself does
+        // listen, so announcing here was the agent ringing its own doorbell:
+        // a churning source, such as a folder mid-copy, drove a refresh loop
+        // at the tick rate for as long as the copy ran. Notifications flow
+        // from the outside world to the service, never back.
     }
 
     static let maximumConcurrentRefreshes = 4
 
 
-    /// The queue maintainer, which always runs.
-    ///
-    /// Its whole job is: if the queue is below nominal, ask every source for a
-    /// picture. Sources still working on the previous request ignore it, so
-    /// there is nothing to track and nothing to reconcile — and because each can
-    /// contribute at most one entry per round, the queue overshoots nominal by
-    /// at most the number of sources.
-    /// The queue maintainer, which always runs.
-    ///
-    /// Asks every source for a picture whenever the queue is below nominal, and
-    /// **keeps asking as each answer lands** rather than firing a fixed number
-    /// and waiting for the next tick. That distinction is the difference between
-    /// filling at the rate providers can manage and filling at whatever rate the
-    /// timer happens to have: a folder of referenced photos costs nothing to
-    /// produce from, so it should fill a thousand-entry queue in about a second,
-    /// not in twenty minutes.
-    ///
-    /// A source still at its concurrency limit ignores the request, so this
-    /// cannot outrun what the providers are willing to do. A source that answers
-    /// "nothing" is left alone until the next round, which is what stops an
-    /// exhausted library spinning.
-    /// The queue maintainer, which always runs.
+    /// The queue maintainer, which always runs — and since dealing moved to
+    /// serving, all it does is seed.
     private func maintainQueue(
         sources: SourceStore,
         preferences: Preferences,
@@ -459,20 +451,6 @@ struct RunCommand {
     }
 }
 
-/// Keeps asking sources for pictures while the queue is short.
-///
-/// The distinction that matters is **asking again as each answer lands**, rather
-/// than firing a fixed number per timer tick and waiting for the next one. That
-/// is the difference between filling at the rate the providers can manage and
-/// filling at whatever rate the timer happens to have — a folder of referenced
-/// photos costs nothing to produce from, so it should fill a thousand-entry
-/// queue in about a second rather than in twenty minutes.
-///
-/// Two things stop it running away, and neither needs a counter here. A source
-/// already at its concurrency limit ignores the request, so this cannot outrun
-/// what a provider is willing to do. And a source that answers "nothing" is
-/// dropped for the rest of the round, which is what keeps an exhausted library
-/// from spinning.
 /// What the agent is actually pointed at, printed once at startup.
 ///
 /// A count of sources is the one number that is never enough: the whole class
@@ -553,7 +531,7 @@ final class FillerBox: @unchecked Sendable {
     /// looks like: a row read and a row written, with no provider involved and
     /// nothing to be slow about. Bytes are fetched by the queue of pictures to
     /// cache, which serving fills as it discovers what it does not hold.
-    private func makeFiller(nominalSize: Int) -> QueueFiller {
+    private func makeFiller() -> QueueFiller {
         lock.lock()
         if let filler {
             lock.unlock()
@@ -665,7 +643,7 @@ final class FillerBox: @unchecked Sendable {
     /// fine.
     @discardableResult
     func servedOne(preferences: Preferences) async -> QueueFiller.Round {
-        let filler = makeFiller(nominalSize: preferences.queueSize)
+        let filler = makeFiller()
         sizes?.update(preferences)
         return await filler.fill()
     }
@@ -673,7 +651,7 @@ final class FillerBox: @unchecked Sendable {
     /// Fills an empty queue and leaves a short one alone. See the call site.
     @discardableResult
     func seedIfEmpty(preferences: Preferences) async -> QueueFiller.Round {
-        let filler = makeFiller(nominalSize: preferences.queueSize)
+        let filler = makeFiller()
         sizes?.update(preferences)
 
         let (path, _) = paths()
@@ -687,11 +665,8 @@ final class FillerBox: @unchecked Sendable {
     }
 }
 
-/// Collects what the concurrent refresh tasks have to say, so their output does
-/// not interleave into nonsense.
+/// Narrates the concurrent refresh tasks.
 final class Reporter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var anything = false
 
     /// Said before the walk rather than after it.
     ///
@@ -706,9 +681,6 @@ final class Reporter: @unchecked Sendable {
     }
 
     func change(_ change: ScanChange, source: Int64) {
-        lock.lock()
-        anything = true
-        lock.unlock()
         switch change {
         // **Cyan rather than green, and across the whole name.**
         //
@@ -731,21 +703,12 @@ final class Reporter: @unchecked Sendable {
     /// Reports the *transition*, not the state.
     ///
     /// Unavailability persists — a folder that is gone is gone at every refresh
-    /// — so printing it each time turns one fact into a line every few seconds,
-    /// and announcing it each time was worse than noisy: the agent observes its
-    /// own `.sourcesChanged`, so a source that stayed unavailable rang a
-    /// doorbell that scheduled the refresh that rang it again. That is the loop
-    /// behind two identical lines three seconds apart.
-    ///
-    /// `wasAvailable` is the row as it stood before this refresh, which is all
-    /// the edge detection needs.
+    /// — so printing it each time turns one fact into an alert every few
+    /// seconds. `wasAvailable` is the row as it stood before this refresh,
+    /// which is all the edge detection needs.
     func finish(_ result: ScanResult, wasAvailable: Bool, took: Duration = .zero) {
         let lost = result.sourceUnavailable && wasAvailable
         let returned = !result.sourceUnavailable && !wasAvailable
-
-        lock.lock()
-        if !result.isEmpty || lost || returned { anything = true }
-        lock.unlock()
 
         if lost {
             Console.alert("source \(result.sourceID) unavailable: \(result.reason ?? "unknown")")
@@ -770,11 +733,6 @@ final class Reporter: @unchecked Sendable {
         duration.totalSeconds.formatted(.number.precision(.fractionLength(1))) + "s"
     }
 
-    func sawAnything() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return anything
-    }
 }
 
 /// Takes the published address back down on the way out.

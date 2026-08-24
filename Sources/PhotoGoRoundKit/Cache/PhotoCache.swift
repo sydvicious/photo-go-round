@@ -107,8 +107,17 @@ public struct PhotoCache {
         values.isExcludedFromBackup = true
         var mutableRoot = root
         try? mutableRoot.setResourceValues(values)
+        // A crash mid-download leaves its temporary in `.staging`, and the
+        // index walk never looks inside — the name is neither `.original` nor
+        // a size — so launch is the only place it can be reclaimed.
+        try? FileManager.default.removeItem(at: root.appending(path: Self.stagingDirectory))
         try indexCache()
     }
+
+    /// Where a fetch writes before adopting into the store. Beside the source
+    /// directories but never indexed: a name that is neither `.original` nor a
+    /// size is skipped by the rebuild walk.
+    static let stagingDirectory = ".staging"
 
     /// Rebuilds the byte index from the disk, discarding anything the database
     /// does not claim.
@@ -301,14 +310,27 @@ public struct PhotoCache {
         else { return false }
 
         let extension_ = (card.externalID as NSString).pathExtension
-        let staging = root.appending(path: ".staging")
+        let staging = root.appending(path: Self.stagingDirectory)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         let temporary = staging.appending(
             path: extension_.isEmpty ? card.uuid : "\(card.uuid).\(extension_)")
 
+        // Two catches, because the failures mean opposite things. The provider
+        // failing is a question about the photograph, answered below by asking
+        // its source. Anything after that — adopting into the store, the
+        // bookkeeping write — is a failure on *our* side that says nothing
+        // about the photograph, and must never delete it.
+        let file: MaterializedFile
         do {
-            let file = try await provider.materialize(
+            file = try await provider.materialize(
                 externalID: card.externalID, from: source, to: temporary)
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            log(.cacheFailed(photo: card.externalID, source: card.sourceID, because: "\(error)", pending: pendingCaches()))
+            try await handleFailedDownload(card, source: source, provider: provider)
+            return false
+        }
+        do {
             try store.adopt(
                 fileAt: temporary, for: originalKey,
                 sourceUUID: card.sourceUUID, pathExtension: extension_, now: now)
@@ -319,7 +341,9 @@ public struct PhotoCache {
         } catch {
             try? FileManager.default.removeItem(at: temporary)
             log(.cacheFailed(photo: card.externalID, source: card.sourceID, because: "\(error)", pending: pendingCaches()))
-            try handleFailedDownload(card, source: source, error: error)
+            Log.cache.error(
+                "photo \(card.id, privacy: .public) was fetched and could not be kept: \(String(describing: error), privacy: .public)"
+            )
             return false
         }
 
@@ -355,22 +379,33 @@ public struct PhotoCache {
         return true
     }
 
-    /// A fetch that failed, and what it means about the photograph.
+    /// A fetch the provider failed, and what it means about the photograph.
     ///
-    /// **Online and offline are opposite conclusions.** A source that is right
-    /// there and still cannot produce a photograph no longer has it, so the row
-    /// goes and the bytes with it. A source that cannot be reached says nothing
-    /// about its photographs, so everything stays and the question is asked
-    /// again next time it comes round.
-    private func handleFailedDownload(_ card: DeckCard, source: Source, error: any Error) throws {
-        if sources.isOnline(source) {
+    /// **Only a confirmed absence deletes.** The provider is asked the same
+    /// three-valued question that guards serving, and the third value is the
+    /// point: a failed read proves nothing on its own. `absent` is the
+    /// established rule — gone from a source that is right there — and the row
+    /// and bytes go. `present` is a file that exists and could not be fetched;
+    /// it keeps its row and is retried when its card comes round, and the
+    /// retry churn of a permanently unreadable file is accepted over deleting
+    /// a photograph that is demonstrably still there (settled 2026-08-24).
+    /// `unknown` says nothing, so nothing moves.
+    private func handleFailedDownload(
+        _ card: DeckCard, source: Source, provider: any SourceProvider
+    ) async throws {
+        switch await provider.existence(of: card.externalID, in: source) {
+        case .absent:
             Log.cache.notice(
-                "photo \(card.id, privacy: .public) could not be downloaded from an online source; removing it from the pool"
+                "photo \(card.id, privacy: .public) failed to fetch and its source confirms it absent; removing it from the pool"
             )
             try self.remove(card.id)
-        } else {
+        case .present:
             Log.cache.info(
-                "photo \(card.id, privacy: .public) is on an offline source; leaving it in the pool"
+                "photo \(card.id, privacy: .public) is present and could not be fetched; keeping it"
+            )
+        case .unknown:
+            Log.cache.info(
+                "photo \(card.id, privacy: .public) could not be confirmed either way; keeping it"
             )
         }
     }

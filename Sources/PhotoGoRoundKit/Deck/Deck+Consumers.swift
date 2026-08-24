@@ -135,8 +135,31 @@ extension Deck {
             var eligible = try countCandidates(
                 threshold: threshold, claimedBefore: claimedBefore)
             if eligible == 0 {
-                // This source has nothing left unused in the current pass. Starting
-                // a new pass is ordinary business, not a concession.
+                // Nothing eligible is three states, and only one of them ends
+                // the pass. Queued and claimed photographs are staged, not used
+                // up — so when everything dealable is already in play there is
+                // nothing to deal and no pass to end. And when the population
+                // that can cycle is large enough for the window ever to free
+                // someone, waiting is the answer: serving keeps advancing the
+                // ordinal and the window opens on its own, where declaring a
+                // pass would nullify the window — the photograph just served
+                // becomes eligible again at once, with a reshuffle event
+                // recorded for every picture.
+                //
+                // The pass therefore fires only where it was designed to: a
+                // population the window can never leave a candidate in, which
+                // is fraction 1.0 and the too-small library. A photograph is
+                // freed `window + 1` deals after it was dealt, so at most
+                // `window + 1` photographs can be blocked at once — a larger
+                // population always frees one as serving advances, and a
+                // population at or under it never would. Retired photographs
+                // are not part of that population: they cannot cycle, and a
+                // mostly-blacklisted library must reshuffle rather than wait
+                // for a release that cannot come.
+                let unconstrained = try countCandidates(
+                    threshold: state.dealSeq, claimedBefore: claimedBefore)
+                guard unconstrained > 0 else { return nil }
+                guard try dealablePopulation() <= window + 1 else { return nil }
                 threshold = state.dealSeq
                 if threshold != state.passStartSeq {
                     try database.run(
@@ -259,6 +282,15 @@ extension Deck {
         ) ?? 0
     }
 
+    /// The photographs that can actually cycle: dealable, and not retired.
+    ///
+    /// Distinct from `poolSize()`, which counts retired photographs too — the
+    /// window is measured against this number, because a photograph that can
+    /// never be dealt again can never be freed by waiting either.
+    func dealablePopulation() throws -> Int {
+        try database.scalarInt(Self.dealablePopulationSQL) ?? 0
+    }
+
     /// Marks a photo as shown. **This is the deal**: the ordinal advances,
     /// `times_shown` goes up, the shuffle key is re-rolled, and the repeat
     /// window starts counting.
@@ -330,6 +362,12 @@ extension Deck {
 
     static let candidateCountSQL = """
         SELECT COUNT(*) FROM photo p WHERE \(candidatePredicate);
+        """
+
+    static let dealablePopulationSQL = """
+        SELECT COUNT(*) FROM photo p
+         WHERE p.source_enabled = 1 AND p.media_type = 'image'
+           AND p.render_failures < \(Deck.renderFailureLimit);
         """
 
     static let candidateSQL = """

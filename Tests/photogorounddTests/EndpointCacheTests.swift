@@ -460,7 +460,7 @@ struct EndpointCacheTests {
         #expect(library.log.all.count == 4)
     }
 
-    @Test("`Accept` decides the format, and the cache keeps them apart")
+    @Test("`Accept` decides the format when a rendering is produced")
     func acceptChoosesTheFormat() async throws {
         let library = try Library()
         try await library.fill()
@@ -472,6 +472,193 @@ struct EndpointCacheTests {
 
         let response = await library.endpoint.route(jpeg)
         #expect(headers(response)["Content-Type"] == "image/jpeg")
+    }
+
+    @Test("A held rendering the client cannot accept is re-rendered, and the replacement takes its place")
+    func unacceptableHeldFormatIsReplaced() async throws {
+        let library = try Library()
+        try await library.fill()
+
+        // A HEIC rendering is held at this size.
+        let first = try await library.get("w=100&h=100")
+        #expect(headers(first)["Content-Type"] == "image/heic")
+
+        let uuid = try #require(
+            try library.sources.database.scalarString("SELECT uuid FROM photo LIMIT 1;"))
+        let key = PhotoStore.Key(photoUUID: uuid, size: .init(width: 100, height: 100))
+        let heic = try #require(library.cache.store.url(for: key))
+        #expect(heic.pathExtension == "heic")
+
+        // A client that accepts only JPEG must not be handed those bytes: the
+        // contract is that the format comes from `Accept`, and before this test
+        // it held only on the miss path.
+        let second = try await library.get("w=100&h=100", accept: "image/jpeg")
+        #expect(second.status == 200)
+        #expect(headers(second)["Content-Type"] == "image/jpeg")
+
+        // One rendering per (photo, size): the JPEG replaced the HEIC, and the
+        // old file is gone rather than stranded on disk where no index entry
+        // can ever name it again.
+        let replaced = try #require(library.cache.store.url(for: key))
+        #expect(replaced.pathExtension == "jpeg")
+        #expect(!FileManager.default.fileExists(atPath: heic.path(percentEncoded: false)))
+
+        // A permissive client then hits the JPEG — acceptable is the test, not
+        // identical to what negotiation would have picked fresh.
+        let third = try await library.get("w=100&h=100", accept: "image/heic, image/jpeg")
+        #expect(headers(third)["Content-Type"] == "image/jpeg")
+        #expect(headers(third)["X-PGR-Cache"] == "hit")
+    }
+
+    @Test("An Accept admitting neither format is refused with 406, and costs no card")
+    func unproducibleAcceptIsRefused() async throws {
+        let library = try Library()
+        try await library.fill()
+        try await library.topUp()
+        let queued = try library.cache.queue.size()
+
+        let response = try await library.get(
+            "w=100&h=100", accept: "image/png", toppingUp: false)
+        #expect(response.status == 406)
+        // Refused before the pop: a request that cannot be answered in any
+        // format must not spend a card finding that out.
+        #expect(try library.cache.queue.size() == queued)
+    }
+
+    @Test("With the original evicted, an unacceptable held rendering goes out rather than nothing")
+    func heldRenderingServesWhenOriginalIsGone() async throws {
+        let library = try Library()
+        try await library.fill(materialized: true)
+
+        _ = try await library.get("w=100&h=100")  // HEIC rendering kept
+        try await library.topUp()
+        try library.evictTheOriginal()
+
+        // Nothing to re-render from, so the bytes we hold go out with the
+        // reason logged — a format preference is not worth answering a client
+        // with nothing.
+        let response = try await library.get(
+            "w=100&h=100", accept: "image/jpeg", toppingUp: false)
+        #expect(response.status == 200)
+        #expect(headers(response)["Content-Type"] == "image/heic")
+    }
+
+    // MARK: - What a 200 carries
+
+    @Test("A 200 names the photograph's source and storage, rendered or original")
+    func headersCarrySourceAndStorage() async throws {
+        // Two folders can hold `Image_001.jpg`; when something is wrong with
+        // one source, which one is serving is the first question. These two
+        // headers are the answer, and nothing daemon-side pinned them before —
+        // dropping either from `PictureEndpoint.headers(for:)` passed the
+        // whole suite.
+        let library = try Library()
+        try await library.fill()
+
+        let rendered = try await library.get("consumer=test&w=100&h=100")
+        #expect(headers(rendered)["X-PGR-Source"] == String(library.sourceIdentifier))
+        #expect(headers(rendered)["X-PGR-Storage"] == "referenced")
+
+        let original = try await library.getOriginal()
+        #expect(headers(original)["X-PGR-Source"] == String(library.sourceIdentifier))
+        #expect(headers(original)["X-PGR-Storage"] == "referenced")
+        #expect(headers(original)["X-PGR-Card"] != nil)
+        #expect(headers(original)["X-PGR-Deal"] != nil)
+        // The original was not decoded, so there is no size to report.
+        #expect(headers(original)["X-PGR-Pixels"] == nil)
+    }
+
+    @Test("A 200's bytes survive the file being deleted after the answer is decided")
+    func servedBytesSurviveDeletion() async throws {
+        // Serving pops the card, which removes the photograph's eviction
+        // protection at the moment it goes out. The body is an open handle for
+        // exactly this reason: whatever deletes the file afterwards —
+        // maintenance, a removal, a source delete — the promised bytes are
+        // already safe.
+        let library = try Library()
+        try await library.fill()
+
+        let response = try await library.getOriginal()
+        #expect(response.status == 200)
+        guard case .file(let stream) = response.body else {
+            Issue.record("expected a streaming body")
+            return
+        }
+
+        let source = library.directory.appending(path: "photos/photo-0.png")
+        let expected = try Data(contentsOf: source)
+        try FileManager.default.removeItem(at: source)
+
+        let delivered = try stream.handle.readToEnd() ?? Data()
+        #expect(Int64(delivered.count) == stream.byteCount)
+        #expect(delivered == expected)
+    }
+
+    // MARK: - Photographs that will not render
+
+    @Test("A photograph that will not render costs the request a skip, then retires")
+    func unrenderablePhotographIsSkippedAndRetired() async throws {
+        let library = try Library()
+        // A file the scanner accepts and the decoder cannot open, beside a
+        // good one. The deck half of retirement is pinned in `DeckTests`; this
+        // is the endpoint half — the catch-skip-continue loop that hands the
+        // client the next photograph rather than an error.
+        FileManager.default.createFile(
+            atPath: library.directory.appending(path: "photos/broken.png")
+                .path(percentEncoded: false),
+            contents: Data(repeating: 0x00, count: 128))
+        try await library.fill()
+
+        func failures() throws -> Int {
+            try library.sources.database.scalarInt(
+                "SELECT render_failures FROM photo WHERE external_id = 'broken.png';") ?? 0
+        }
+
+        // Serve until the bad file has burned its three attempts. Every answer
+        // along the way is a 200 with the good photograph — the client never
+        // sees the failure.
+        for _ in 0..<20 {
+            if try failures() >= Deck.renderFailureLimit { break }
+            let response = try await library.get("w=100&h=100")
+            #expect(response.status == 200)
+        }
+        #expect(try failures() >= Deck.renderFailureLimit, "the bad file was never retired")
+
+        // Retired means never offered again: the deck's candidates exclude it,
+        // so a fresh fill queues only the good photograph.
+        let deck = Deck(database: library.sources.database)
+        #expect(try deck.blacklisted().map(\.externalID) == ["broken.png"])
+        // And nothing the client was handed was ever the broken file.
+        #expect(library.log.all.filter { $0.status == 200 }.allSatisfy { $0.detail != "broken.png" })
+    }
+
+    // MARK: - A library that cannot be opened
+
+    @Test("An unopenable library answers 503 on both endpoints, not a crash")
+    func unopenableLibraryIs503() async throws {
+        // A directory where the database file should be: `sqlite3_open` cannot
+        // open it, and the refusal has to be the endpoint's answer rather than
+        // an unwound task.
+        let directory = URL.temporaryDirectory.appending(path: "pgr-503-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bogus = directory.path(percentEncoded: false)
+
+        let pictures = PictureEndpoint(
+            databasePath: bogus, cacheRoot: directory,
+            preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.503.\(UUID())")!),
+            store: PhotoStore(root: directory), queueRanShort: {}, log: { _ in })
+        let picture = await pictures.route(
+            try #require(HTTPListener.parse("GET /v1/next HTTP/1.1")))
+        #expect(picture.status == 503)
+
+        let sources = SourceEndpoint(
+            databasePath: bogus,
+            preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.503.\(UUID())")!),
+            bytes: PhotoStore(root: directory), log: { _ in })
+        let list = await sources.route(
+            try #require(HTTPListener.parse("GET /v1/sources HTTP/1.1")))
+        #expect(list.status == 503)
     }
 }
 

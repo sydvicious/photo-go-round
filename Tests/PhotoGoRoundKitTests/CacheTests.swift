@@ -242,9 +242,11 @@ struct CacheTests {
 
     // MARK: - Eviction
 
-    /// Entries are written in deck order, so oldest-written is longest-since-
-    /// dealt. The test ages them by hand because a produce loop finishes in
-    /// microseconds and every file would otherwise share a timestamp.
+    /// Eviction is FIFO by write time — nothing connects write order to
+    /// display order any more, and the policy is kept because a shuffle has no
+    /// hot set for anything cleverer to protect. The test ages the files by
+    /// hand because a produce loop finishes in microseconds and every one
+    /// would otherwise share a timestamp.
     private func age(_ fixture: Fixture, oldestFirst uuids: [String]) throws {
         for (index, uuid) in uuids.enumerated() {
             guard let url = fixture.cache.store.url(for: PhotoStore.Key(photoUUID: uuid))
@@ -351,6 +353,23 @@ struct CacheTests {
         // And it left the queue by cascade.
         #expect(try fixture.cache.queue.size() == 1)
         #expect(try fixture.cache.indexCache().discarded == 0)
+    }
+
+    @Test("A crashed download's staging leftovers are reclaimed at the next launch")
+    func stagingLeftoversAreReclaimedAtPrepare() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+
+        // A crash mid-download leaves its temporary behind, and the index walk
+        // never looks inside `.staging` — its name is neither `.original` nor a
+        // size — so nothing else can ever reclaim it: it is invisible to byte
+        // accounting and to eviction alike.
+        let staging = fixture.cache.root.appending(path: ".staging")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let leftover = staging.appending(path: "\(UUID().uuidString.lowercased()).jpg")
+        try Data(repeating: 0xFF, count: 64).write(to: leftover)
+
+        try fixture.cache.prepare()  // the next launch
+        #expect(!FileManager.default.fileExists(atPath: leftover.path(percentEncoded: false)))
     }
 
     @Test("A file nothing claims is deleted when the index is rebuilt")

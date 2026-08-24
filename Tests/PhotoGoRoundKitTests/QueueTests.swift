@@ -75,11 +75,14 @@ struct QueueTests {
         // arrangement.
         #expect(order != ids, "cards were appended in order, so nothing was randomised")
 
-        // And not merely reversed or otherwise fixed: the last card inserted is
-        // somewhere in the middle far more often than not.
+        // And not merely reversed or otherwise fixed. A key is drawn strictly
+        // inside the existing span — a tie with the head sorts after it by
+        // position, and the draw never reaches the tail — so the last card
+        // inserted is at best second and never last, deterministically.
         let lastInserted = try #require(ids.last)
         let where_ = try #require(order.firstIndex(of: lastInserted))
-        #expect(where_ != order.count - 1 || where_ == order.count - 1)
+        #expect(where_ != 0)
+        #expect(where_ != order.count - 1)
     }
 
     @Test("Placement is spread across the queue rather than clustered at one end")

@@ -232,6 +232,61 @@ struct RequestBodyTests {
         #expect(answer.hasSuffix("GET /v1/next 0 "))
     }
 
+    // MARK: - What is promised is delivered
+
+    @Test("A file body decided on is delivered whole, even deleted before it streams")
+    func aDeletedFileStillStreams() async throws {
+        // The eviction race, reified: serving pops the card, which removes its
+        // photograph's eviction protection at the moment it is being sent. The
+        // route below decides its answer and then loses the file — exactly
+        // what maintenance, a removal, or a source delete can do in that
+        // window — and the client must still receive every byte it was
+        // promised, because a 200 that lies about its body is worse than any
+        // failed transfer.
+        let directory = URL.temporaryDirectory.appending(path: "pgr-stream-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "picture.bin")
+        // ASCII, so the byte-for-byte comparison survives the UTF-8 decode the
+        // test client does; several chunks' worth, so the pump loops.
+        let payload = String(repeating: "0123456789", count: 60_000)
+        try Data(payload.utf8).write(to: file)
+
+        final class Ready: @unchecked Sendable {
+            private let lock = NSLock()
+            private var port: UInt16?
+            func set(_ new: UInt16) { lock.lock(); port = new; lock.unlock() }
+            var value: UInt16? { lock.lock(); defer { lock.unlock() }; return port }
+        }
+        let ready = Ready()
+        let listener = HTTPListener(
+            port: nil, advertising: "/file", onReady: { [ready] in ready.set($0) }
+        ) { _ in
+            guard let body = HTTPListener.Response.Body.streaming(contentsOf: file) else {
+                return .text("could not open\n", status: 500, reason: "Internal Server Error")
+            }
+            // Decided, then deleted. The bytes must already be safe.
+            try? FileManager.default.removeItem(at: file)
+            return HTTPListener.Response(status: 200, reason: "OK", body: body)
+        }
+        try listener.start()
+        defer { listener.stop() }
+
+        var port: UInt16?
+        for _ in 0..<100 {
+            if let bound = ready.value { port = bound; break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let bound = try #require(port)
+
+        let answer = try await speak(["GET /file HTTP/1.1\r\n\r\n"], to: bound)
+        #expect(answer.contains("200 OK"))
+        #expect(answer.contains("Content-Length: \(payload.utf8.count)"))
+        #expect(answer.hasSuffix(String(payload.suffix(100))), "the body was cut short")
+        let body = answer.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n")
+        #expect(body.utf8.count == payload.utf8.count)
+    }
+
     // MARK: - What is refused
 
     @Test("A body larger than the cap is refused before any of it is read")
@@ -244,6 +299,30 @@ struct RequestBodyTests {
             to: try await echo.port())
 
         #expect(answer.contains("413 Payload Too Large"))
+    }
+
+    @Test("A client that hangs up mid-head gets 400, not a complaint about header size")
+    func aTruncatedHeadIsBadRequest() async throws {
+        let echo = try Echo()
+        // A FIN before the blank line ever arrives. The request is truncated,
+        // not oversized, and the refusal should say which.
+        let answer = try await speak(
+            ["GET /v1/nex"], to: try await echo.port(), thenHangUp: true)
+
+        #expect(answer.contains("400 Bad Request"))
+        #expect(!answer.contains("431"))
+    }
+
+    @Test("A header block past the cap is refused as too large")
+    func anEnormousHeadIsRefused() async throws {
+        let echo = try Echo()
+        // Well past the 64 KB cap, with no terminating blank line — the genuine
+        // case the 431 exists for.
+        let filler = "X-Filler: " + String(repeating: "a", count: 70 * 1024) + "\r\n"
+        let answer = try await speak(
+            ["GET /echo HTTP/1.1\r\n" + filler], to: try await echo.port())
+
+        #expect(answer.contains("431"))
     }
 
     @Test("A client that hangs up mid-body gets a refusal, not half a request")

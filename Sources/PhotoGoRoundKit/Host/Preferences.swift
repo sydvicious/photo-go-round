@@ -165,11 +165,13 @@ public struct Preferences: @unchecked Sendable {
         .seconds(number(.maintenanceIntervalSeconds, default: 30, in: 1...3600))
     }
 
-    /// How many pictures each source fetches at once.
+    /// How many fetches run at once, across every source.
     ///
-    /// Fetching is nearly all latency, so one at a time leaves a provider idle
-    /// for the duration of its own I/O. Per source rather than global, so a slow
-    /// provider saturates its own connection without crowding out a fast one.
+    /// Fetching is nearly all latency, so one at a time leaves the queue of
+    /// pictures to cache idle for the duration of its own I/O. One number for
+    /// the whole queue rather than one per source — fine while every source is
+    /// a folder, and a politeness limit to revisit when the Photos and Google
+    /// providers make it a request against somebody else's service.
     public var downloadConcurrency: Int {
         integer(.downloadConcurrency, default: CacheQueue.defaultConcurrency, in: 1...32)
     }

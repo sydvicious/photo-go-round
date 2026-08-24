@@ -161,6 +161,24 @@ struct RendererTests {
         #expect(PhotoRenderer.Format.negotiated(accept: "image/heic, image/jpeg") == .heic)
         #expect(PhotoRenderer.Format.negotiated(accept: "image/jpeg") == .jpeg)
         #expect(PhotoRenderer.Format.negotiated(accept: "IMAGE/JPEG") == .jpeg)
+        // Neither format is a refusal, not a fallback the client never asked
+        // for — the endpoint turns nil into a 406.
+        #expect(PhotoRenderer.Format.negotiated(accept: "image/png") == nil)
+        #expect(PhotoRenderer.Format.negotiated(accept: "text/html") == nil)
+    }
+
+    @Test("Admission is broader than negotiation: held bytes serve if the client accepts them")
+    func admissionIsBroaderThanNegotiation() {
+        // Negotiation picks what to produce; admission asks whether bytes
+        // already held may go out as they are. A permissive client admits a
+        // held JPEG even though negotiation would have produced HEIC.
+        #expect(PhotoRenderer.Format.jpeg.admitted(by: "image/heic, image/jpeg"))
+        #expect(PhotoRenderer.Format.jpeg.admitted(by: nil))
+        #expect(PhotoRenderer.Format.jpeg.admitted(by: "*/*"))
+        #expect(PhotoRenderer.Format.heic.admitted(by: "image/*"))
+        #expect(!PhotoRenderer.Format.heic.admitted(by: "image/jpeg"))
+        #expect(!PhotoRenderer.Format.jpeg.admitted(by: "image/heic"))
+        #expect(!PhotoRenderer.Format.heic.admitted(by: "image/png"))
     }
 
     @Test("The format asked for is the format returned")

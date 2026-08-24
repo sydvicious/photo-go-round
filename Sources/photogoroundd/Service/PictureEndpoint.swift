@@ -228,7 +228,15 @@ struct PictureEndpoint {
         ).id
 
         let box = Self.requestedSize(request)
-        let format = PhotoRenderer.Format.negotiated(accept: request.header("Accept"))
+        let accept = request.header("Accept")
+        // Refused before the pop: a request that cannot be answered in any
+        // format must not spend a card finding that out.
+        guard let format = PhotoRenderer.Format.negotiated(accept: accept) else {
+            report(request, status: 406, detail: "no acceptable format")
+            return .text(
+                "neither image/heic nor image/jpeg is acceptable\n",
+                status: 406, reason: "Not Acceptable")
+        }
 
         do {
             // A photograph that will not render is skipped to the next entry
@@ -243,14 +251,52 @@ struct PictureEndpoint {
             while let served = try await context.cache.serve(to: consumerID, fitting: size) {
                 queueRanShort()
 
+                // What a re-render would decode from. The served URL, except
+                // for a held rendering the client cannot accept, where it
+                // becomes the original.
+                var renderSource = served.url
+
                 // Already rendered at this size: hand over the file rather than
-                // decoding again. On a small library this is the common case,
-                // because a photograph comes round every few minutes — and it is
-                // the *only* case when the original is no longer held.
+                // decoding again — when the client accepts its format. On a
+                // small library this is the common case, because a photograph
+                // comes round every few minutes — and it is the *only* case
+                // when the original is no longer held.
+                var serveHeld = served.isRendering
                 if served.isRendering {
-                    let bytes =
-                        (try? served.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
-                        .map(Int64.init) ?? 0
+                    let held = PhotoRenderer.Format(
+                        rawValue: served.url.pathExtension.lowercased())
+                    let acceptable = held?.admitted(by: accept) ?? false
+                    if !acceptable {
+                        if let original = (try? context.cache.residentURL(
+                            forPhoto: served.card.id)) ?? nil
+                        {
+                            // Re-render in the format the client asked for; the
+                            // replacement takes the held file's place at this
+                            // size — see `PhotoStore.store`.
+                            serveHeld = false
+                            renderSource = original
+                        } else {
+                            // Nothing to re-render from. The bytes we hold go
+                            // out rather than nothing — a format preference is
+                            // not worth answering a client with no picture.
+                            Console.event(
+                                "\(served.card.externalID) held as \(served.url.pathExtension) which the client does not accept; original gone, serving it anyway")
+                            Log.deck.notice(
+                                "photo \(served.card.id, privacy: .public) served in an unaccepted format; the original is no longer held")
+                        }
+                    }
+                }
+                if serveHeld {
+                    // Opened before anything is promised. The pop removed this
+                    // photograph's eviction protection, so the file can vanish
+                    // between here and the pump; an open handle keeps the bytes
+                    // whatever happens to the name, and a failed open is the
+                    // race caught before any header is written — skipped like
+                    // any other card whose bytes are not here.
+                    guard let stream = HTTPListener.Response.StreamedFile(url: served.url) else {
+                        vanished(served, context: context)
+                        continue
+                    }
                     var headers = Self.headers(
                         for: served.card, contentType: Self.contentType(of: served.url))
                     // Read from the file rather than echoing the box that was
@@ -263,32 +309,34 @@ struct PictureEndpoint {
                     try? context.deck.markDelivered(photoID: served.card.id)
                     report(
                         request, status: 200, detail: served.card.externalID,
-                        card: served.card, bytes: bytes, cache: .hit, cacheBytes: store.totals.byteCount,
+                        card: served.card, bytes: stream.byteCount, cache: .hit,
+                        cacheBytes: store.totals.byteCount,
                         queued: try? context.cache.queue.size())
                     return HTTPListener.Response(
-                        status: 200, reason: "OK", headers: headers,
-                        body: .file(served.url, byteCount: bytes))
+                        status: 200, reason: "OK", headers: headers, body: .file(stream))
                 }
 
                 guard let box, let size else {
-                    // No size asked for: the original, untouched.
-                    let bytes =
-                        (try? served.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
-                        .map(Int64.init) ?? 0
+                    // No size asked for: the original, untouched — opened now,
+                    // for the same reason as above.
+                    guard let stream = HTTPListener.Response.StreamedFile(url: served.url) else {
+                        vanished(served, context: context)
+                        continue
+                    }
                     try? context.deck.markDelivered(photoID: served.card.id)
                     report(
                         request, status: 200, detail: served.card.externalID,
-                        card: served.card, bytes: bytes)
+                        card: served.card, bytes: stream.byteCount)
                     return HTTPListener.Response(
                         status: 200, reason: "OK",
                         headers: Self.headers(
                             for: served.card, contentType: Self.contentType(of: served.url)),
-                        body: .file(served.url, byteCount: bytes))
+                        body: .file(stream))
                 }
 
                 do {
                     let rendered = try PhotoRenderer.render(
-                        contentsOf: served.url, fitting: box.width, by: box.height, as: format)
+                        contentsOf: renderSource, fitting: box.width, by: box.height, as: format)
                     // Keep it. A failure to write is not a failure to serve.
                     _ = try? context.cache.keep(
                         rendered.bytes, of: served.card, at: size,
@@ -346,6 +394,18 @@ struct PictureEndpoint {
             Log.deck.error("serving failed: \(String(describing: error), privacy: .public)")
             return .text("could not serve a picture\n", status: 500, reason: "Internal Server Error")
         }
+    }
+
+    /// A card whose bytes disappeared between the index saying held and the
+    /// open — the eviction race's one remaining door. The card is skipped
+    /// exactly as one whose bytes were never there, and a materialized
+    /// photograph is asked for again so the bytes come back.
+    private func vanished(_ served: PhotoCache.ServedPhoto, context: (cache: PhotoCache, deck: Deck)) {
+        Console.event(
+            "\(served.card.externalID) vanished between the index and the open; skipping it")
+        Log.deck.notice(
+            "photo \(served.card.id, privacy: .public) vanished before its bytes could be opened")
+        if served.card.storage == .materialized { wantsCaching(served.card.id) }
     }
 
     /// The box the client asked to fill, or nil when it asked for the original.

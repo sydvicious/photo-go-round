@@ -224,6 +224,192 @@ slash); the mass-disappearance guard; the all-or-none POST with 400/413/201/200
 semantics; PATCH/DELETE rules; atomic rename in the store; and the walk budget's
 pop-before-check ordering.
 
+## Addressed later on 2026-08-24
+
+Each fix landed behind a failing test written first, except where noted. Full
+suite green afterwards: 425 tests across all four targets.
+
+- **Bug 1 (small-library pass logic) — fixed.** `nextCandidate` now treats
+  `eligible == 0` as three states: everything in play → deal nothing; a
+  population the window can free → wait (serving advances the ordinal and the
+  window opens on its own); only a population the window can never leave a
+  candidate in (`dealablePopulation ≤ window + 1`, which is fraction 1.0 and
+  the too-small library) reshuffles. Retired photographs are excluded from that
+  population so a mostly-blacklisted library still reshuffles. The `window + 1`
+  comes from the eligibility comparison (`seq - w - 1`): at most `w + 1`
+  photographs can be window-blocked at once, so any larger population frees one
+  per serve and waiting cannot deadlock. Three new tests in `DeckTests`
+  ("The pass fires only when the window has no answer").
+- **Bug 2 (`--once` port clobber) — fixed.** A one-pass run never starts the
+  listener and never installs the withdraw-on-signal handlers, so the published
+  `servicePort` — a running agent's included — is left untouched. An
+  ownership-checked withdraw on the error unwind covers a serving run that dies
+  by thrown error. Pinned by `AgentLifecycleTests`.
+- **Bug 3 (signal-handler lifetime) — fixed.** The `DispatchSourceSignal`s are
+  held by a `withExtendedLifetime` defer for the life of `run()`. A
+  process-level test spawns the built agent, waits for the published port,
+  sends SIGTERM, and asserts exit 0 with the port withdrawn — pinning the
+  publish wiring and withdraw-on-signal (previously untested); the lifetime fix
+  itself is optimizer-dependent and not observable from a debug test.
+- **Bug 6 (gauge undercount) — fixed.** `CacheQueue.Pending` now counts
+  waiting *plus* executing, so a photograph mid-download still counts as the
+  queue's. Pinned by "A photograph being fetched still counts as pending".
+- **Coverage: `FillerBox`/`Gauge`/`seedIfEmpty`** — new `FillerBoxTests` drive
+  the daemon's actual pacing closures against a real database: seed fills only
+  an empty queue, `servedOne` deals exactly the served card back, the gauge
+  counts in-flight cards.
+- **Man page corrected** (`Documentation/photogoroundd.md`), sections OPTIONS
+  (`--once` now states it does not serve; `-d` added to `--database`), SERVICE
+  (`X-PGR-Pixels` present only when a box was asked for), PREFERENCES
+  (`queueSize` 20; `downloadConcurrency` global; `maintenanceIntervalSeconds`
+  evicts only; `queueRefreshIntervalSeconds` seeds only), EXIT STATUS (a
+  missing folder at launch is not fatal). The `--help` text no longer names the
+  retired `pgr_ctl serve`.
+- **Housekeeping.** `PhotoStore.heldOriginals` deleted (zero callers; PLAN
+  already listed it as removed) and the stray `@discardableResult` restored to
+  `removeSource`, which now also prunes its `sourceOfPhoto` mappings. The
+  `QueueTests` tautology replaced with a deterministic assertion (a card lands
+  strictly inside the span — never head, never tail). Stale narration corrected
+  in `ServeWalkTests`, `CacheTests`, `PhotoQueue`'s header,
+  `Preferences.downloadConcurrency`, and `RunCommand` (triplicated doc comment,
+  orphaned comment, unused `makeFiller` parameter).
+
+**Addressed in the second pass, same evening** (after the agent was restarted
+on the fixed build; the client app confirmed working):
+
+- **`.staging` crash leak — fixed.** `PhotoCache.prepare` reclaims the staging
+  directory at launch, the one place it can be: the index walk never looks
+  inside. Pinned by "A crashed download's staging leftovers are reclaimed at
+  the next launch".
+- **431-vs-400 — fixed.** A FIN before the blank line is now `400 truncated
+  request`; only a header block past the 64 KB cap gets 431. Both refusals
+  pinned over a real socket in `RequestBodyTests`.
+- **Source-add validation — fixed.** `SourceRequest.resolve` checks
+  directory-ness: a file named as a folder (or the reverse) refuses the whole
+  batch with 400, naming each path under a new `mismatched` field; missing
+  outranks mismatched. `recursive` on a `file` source is refused at POST with
+  exactly PATCH's wording instead of being silently dropped. `pgr_ctl sources
+  add` reports both refusals. Pinned at the resolve seam
+  (`SourceRequestTests`), the kit (`SourceStore.add`), and over HTTP
+  (`SourceEndpointTests`); man page POST paragraph updated.
+- **Coverage closed:** `X-PGR-Source`/`X-PGR-Storage` asserted against the
+  daemon's own 200s (rendered and original), plus `X-PGR-Pixels` absent on
+  originals; the endpoint's render-failure skip-and-retire loop tested end to
+  end (client sees only 200s, the bad file burns three attempts and is
+  blacklisted); both endpoints answer 503 for an unopenable library.
+
+**Third pass, same evening — the self-ring, and PLAN.md brought current (both
+at Syd's direction):**
+
+- **Doorbell self-ring — fixed by deletion, not by a guard.** The
+  refresh-completion `.sourcesChanged` announce is gone: nothing listened
+  (clients ask over HTTP, the panel polls; the only observer was the agent
+  itself), and a service announcing its own scan results ran against the
+  outside-world→service direction rule. The post-refresh ring-drop went with
+  it, so a client's ring landing mid-refresh now keeps its promptness.
+  `Reporter` lost the `sawAnything` machinery that existed only to decide the
+  announce. No red-green test: the assertable behavior is the absence of a
+  machine-global notification, which any concurrent agent can make flaky —
+  verified instead by the full suite and to be confirmed by cadence at the
+  next restart (refreshes on the 300-second schedule during a copy, not every
+  ~20 seconds).
+- **PLAN.md made accurate** — twenty-two corrections, at Syd's request, as
+  part of this audit. The load-bearing ones: the eligibility arithmetic is
+  `deal_seq − w − 1` (minimum gap `w + 1`, `N − w − 1` candidates) everywhere
+  the formula appears; the pass condition is "dealable population within
+  `w + 1`", with a dated *Refined 2026-08-24* paragraph recording the
+  three-states fix; the candidate SQL sketch matches the code (one shuffle
+  over everything, claim expiry, render-failure clause); *Talking to the
+  subsystems we do control* is marked superseded and rewritten to what
+  survives (the control channel, and `pgr_ctl` as the rig); the Design
+  Decisions bullets for the queue target, the per-source pump,
+  dealable-vs-shown, and FIFO now describe the deal-over-everything shape;
+  the 1000-photo cache cap became the byte ceiling; the launch queue-prune is
+  struck through as removed; selection-claims-atomically replaced the stale
+  "fix is to make it one statement again"; the scratch-agent hazard names
+  `PGR_PREFS_SUITE`, the global-topic caveat, and `--once` now being safe;
+  and *The doorbell rings back at you* carries the full self-ring reversal
+  with the live measurement.
+
+**Fourth pass — Accept on cache hits, design settled with Syd, fixed:**
+
+- The cache key stays `(photo, size)` — one rendering per size. A hit now
+  checks *admission*, not equality: a held rendering in any format the
+  client's `Accept` allows is served as it is, and only a client that
+  genuinely excludes it forces a re-render, in the negotiated format, from the
+  original. The replacement takes the held file's place and deletes it, which
+  also closes the stranding leak (two extensions sharing one key's identity,
+  one invisible to the index forever).
+- Negotiation can now fail: an `Accept` admitting neither HEIC nor JPEG is
+  refused with `406 Not Acceptable`, decided before any card is popped. It
+  used to fall through to HEIC silently.
+- The one corner, decided deliberately: held format unacceptable *and*
+  original evicted → the held bytes go out with the reason logged, rather
+  than answering a client nothing over a format preference.
+- Checked and untouched: the Mac app sends no `Accept` header, which admits
+  everything — no app change is necessary, so no FEATURES.md TODO is due.
+  Nothing under `app/mac/` or `Sources/PhotoGoRoundDisplay/` was modified.
+- Pinned by failing-first endpoint tests (unacceptable hit → JPEG replaces
+  HEIC on disk, permissive client then hits the JPEG; `image/png` → 406 with
+  the queue depth unchanged; evicted-original corner) plus unit tests on
+  `negotiated`/`admitted`; the test titled "Accept decides the format" now
+  claims only what is true. Man page SERVICE paragraph updated. Full suite:
+  439 tests, all passing.
+
+**Fifth pass — the fetch-failure catch split, design settled with Syd, fixed:**
+
+- **Only a provider-confirmed absence deletes.** `PhotoCache.cache` now has
+  two catches: the provider failing asks `existence()` — the same three-valued
+  question that guards serving — and only `.absent` removes the row and bytes;
+  `.present` and `.unknown` keep everything, logged, retried when the card
+  comes round. A failure on our side (adopt into the store, the `byte_size`
+  UPDATE) cleans the temp file, logs, and deletes nothing — previously a
+  read-only cache root deleted a photograph per fetch attempt, in a
+  delete → rescan → re-add loop.
+- **Decided deliberately:** a present-but-unreadable file keeps its row and
+  retries forever — the churn is accepted over deleting a photograph that is
+  demonstrably there. No strike counter for 0.1.
+- `SourceStore.isOnline` lost its last caller and is deleted. The SQL-failure
+  sub-case is covered by the restructure's scope, not by a test — forcing
+  `SQLITE_BUSY` at that exact statement is timing-flaky and was left alone.
+- Pinned by failing-first tests: an adopt failure (read-only cache root, with
+  staging writable so the download itself succeeds) keeps the photograph; a
+  present-but-unreadable file keeps it; the existing confirmed-absence test
+  passes unchanged, pinning the one case that still removes. PLAN's *A photo
+  that will not render* contrast sentence updated to the confirmed-absence
+  rule. Full suite: 441 tests, all passing.
+
+**Sixth pass — the eviction race, design settled with Syd, fixed:**
+
+- **A file body is opened when the answer is decided, and streamed from the
+  handle.** Serving pops the card, which removes the photograph's eviction
+  protection at the moment its bytes go out; the endpoint used to visit the
+  file three separate times (index check, `stat` for `Content-Length`, the
+  pump's open after headers were on the wire), and anything deleting the file
+  between visits — maintenance, a removal, a source delete — produced a 200
+  with an empty or truncated body. Now `Response.Body.file` carries an open
+  `FileHandle` plus a size measured through that same handle, so the promise
+  and the delivery cannot disagree, and POSIX keeps the bytes alive however
+  the name goes. The one remaining door — the open itself failing — closes
+  before any header is written: the card is skipped like any other whose
+  bytes are not here, with a re-fetch requested for materialized photographs.
+- Pinned failing-first by a wire test whose route decides its answer, deletes
+  the file, and returns — the client must receive every byte with a matching
+  `Content-Length` (it got a truncated body before) — plus an endpoint test
+  reading a 200's handle in full after the underlying file is deleted. The
+  open-failure skip branch mirrors the established skip path and is covered
+  by structure; the window cannot be forced deterministically from outside.
+- One observation recorded honestly: a single kit-suite run failed with five
+  issues during this pass and never reproduced — six consecutive clean runs
+  since, test names not captured. Worth watching; not attributed.
+- Full suite: 443 tests, all passing.
+
+**Still open from this audit:** FEATURES.md's `advanceIntervalSeconds`
+(unbuilt, deferred to the app audit); the remaining coverage gaps (consumer
+registry, cache clearing scopes, critical-free-space eviction branch, EXIF
+orientation, `PGR_DATABASE`/`PGR_PREFS_SUITE` effects); and the unattributed
+one-off kit-suite flake above.
+
 ## Suggested fix order
 
 1. The `--once` port clobber and the signal-handler lifetime — small, contained,

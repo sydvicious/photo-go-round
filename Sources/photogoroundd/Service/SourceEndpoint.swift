@@ -118,6 +118,9 @@ struct SourceEndpoint {
         var error: String
         /// The paths that were not there, when that is what was wrong.
         var missing: [String]?
+        /// The paths that exist but are not the kind they were asked for as —
+        /// a file named as a folder, a directory named as a file.
+        var mismatched: [String]?
     }
 
     // MARK: - Routing
@@ -256,6 +259,20 @@ struct SourceEndpoint {
                     Failure(error: "not found", missing: paths), status: 400,
                     reason: "Bad Request"),
                 detail: "missing: \(paths.joined(separator: ", "))")
+        } catch SourceStore.EditFailure.pathsNotOfKind(let paths) {
+            return answer(
+                request,
+                json(
+                    Failure(error: "not the requested kind", mismatched: paths), status: 400,
+                    reason: "Bad Request"),
+                detail: "wrong kind: \(paths.joined(separator: ", "))")
+        } catch SourceStore.EditFailure.optionNotAvailable(let option, let kind) {
+            return answer(
+                request,
+                json(
+                    Failure(error: "a \(kind.rawValue) source has no \(option) option"),
+                    status: 400, reason: "Bad Request"),
+                detail: "\(kind.rawValue) has no \(option) option")
         } catch {
             return answer(request, failed(error), detail: "could not add the sources")
         }

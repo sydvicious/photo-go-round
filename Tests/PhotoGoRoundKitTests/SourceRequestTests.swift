@@ -106,6 +106,36 @@ struct SourceRequestTests {
         #expect(specs.count == 2)
     }
 
+    @Test("A path of the wrong kind refuses the batch, distinctly from a missing one")
+    func wrongKindIsItsOwnRefusal() throws {
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "photo.png")
+        FileManager.default.createFile(
+            atPath: file.path(percentEncoded: false), contents: Data([0xAB]))
+
+        // A file asked for as a folder, and a folder asked for as a file. Both
+        // exist, so "missing" would be a lie; both are the wrong shape, so
+        // accepting either stores a source that can never produce.
+        #expect(
+            SourceRequest.resolve([.folder(file.path(percentEncoded: false))])
+                == .mismatched([file.standardizedFileURL.path(percentEncoded: false)]))
+        guard case .mismatched(let paths) = SourceRequest.resolve([
+            .file(folder.path(percentEncoded: false))
+        ]) else {
+            Issue.record("expected a mismatch")
+            return
+        }
+        #expect(paths.count == 1)
+
+        // Missing outranks mismatched: the batch with both is refused as
+        // missing, naming the likelier typo.
+        #expect(
+            SourceRequest.resolve([
+                .folder(file.path(percentEncoded: false)), .folder("/nowhere/at/all"),
+            ]) == .missing(["/nowhere/at/all"]))
+    }
+
     @Test("An empty batch resolves to nothing rather than failing")
     func emptyBatch() {
         #expect(SourceRequest.resolve([]) == .resolved([]))

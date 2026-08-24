@@ -460,6 +460,54 @@ struct ServeWalkTests {
         #expect(fixture.pooled == 1)
     }
 
+    @Test("A fetch that cannot land in the cache keeps the photograph")
+    func aFailedAdoptKeepsThePhotograph() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        try fixture.dealAll()
+        let card = try #require(try fixture.cache.queue.peek().first)
+
+        // The cache root refuses writes — a condition entirely on our side that
+        // says nothing about the photograph. The staging directory pre-exists
+        // and stays writable, so the download itself succeeds and it is the
+        // adoption into the store that fails. Only a provider-confirmed
+        // absence may delete; a local failure logs, keeps the row, and the
+        // fetch retries when the card comes round again.
+        let root = fixture.cache.root
+        try FileManager.default.createDirectory(
+            at: root.appending(path: ".staging"), withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555], ofItemAtPath: root.path(percentEncoded: false))
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: root.path(percentEncoded: false))
+        }
+
+        #expect(try await fixture.cache.cache(photoID: card.id) == false)
+        #expect(fixture.pooled == 1, "a failure on our side deleted the photograph")
+    }
+
+    @Test("A fetch that fails while the file is confirmed present keeps the photograph")
+    func aFailedFetchOfAPresentFileKeepsIt() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        try fixture.dealAll()
+        let card = try #require(try fixture.cache.queue.peek().first)
+
+        // Unreadable is not absent: the provider can see the file and cannot
+        // read it. Removal is earned only by a confirmed absence, so the row
+        // stays and the fetch retries when the card comes round — the retry
+        // churn is accepted over the deletion (settled 2026-08-24).
+        let file = fixture.folder.url.appending(path: "a.png")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0], ofItemAtPath: file.path(percentEncoded: false))
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o644], ofItemAtPath: file.path(percentEncoded: false))
+        }
+
+        #expect(try await fixture.cache.cache(photoID: card.id) == false)
+        #expect(fixture.pooled == 1, "an unreadable-but-present file was deleted")
+    }
+
     // MARK: - 4. Fetched, and back on the queue
 
     @Test("A fetched photograph goes back on the queue, so the fetch is not wasted")
@@ -565,7 +613,8 @@ struct ServeWalkTests {
         _ = try await fixture.cache.serve()
         let card = try #require(fixture.asked.all.first)
         _ = try await fixture.cache.cache(photoID: card)
-        // Dealt again the ordinary way — a fetch does not put it back.
+        // The fetch put the card back on the queue, so this deal finds
+        // nothing new to add — the card is already there.
         try fixture.dealAll()
         _ = try await fixture.cache.serve()
 

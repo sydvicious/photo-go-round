@@ -149,8 +149,8 @@ struct Options {
 
         One consequence worth stating: the agent has no consumers of its own, so
         it fills the queue and then waits. That is correct, and it looks like
-        nothing happening. To watch it do something, run `pgr_ctl serve` in
-        another terminal.
+        nothing happening. To watch it do something, `curl` the picture endpoint
+        from another terminal — the address is printed at startup.
 
         OPTIONS
               --add-folder [--recursive] <path>

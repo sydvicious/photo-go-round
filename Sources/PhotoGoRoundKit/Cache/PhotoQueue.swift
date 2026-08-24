@@ -11,22 +11,16 @@ import Foundation
 ///
 /// - A client asks for a picture. The head of the queue is returned immediately.
 /// - **Serving is the only thing that shortens the queue**, and therefore the
-///   only thing that can notice it has run low.
-/// - If serving leaves it below nominal, a request goes out to every provider
-///   with capacity to take it, and the client is not made to wait for any of
-///   them.
-/// - Providers answer whenever they answer, each appending one entry. Nothing is
-///   evicted when an entry arrives.
+///   only thing that can notice it has run low. Dealing is paced to pictures
+///   served, so the top-up rides serving; the heartbeat only seeds an empty
+///   queue.
+/// - A card returning from a completed fetch is appended too, at a random
+///   position like any other. Nothing is evicted when an entry arrives.
 ///
-/// **The size is nominal, not a ceiling.** Four providers with wildly different
-/// latency will answer at four different times, so a queue of 1000 becomes 1001,
-/// then 1002, and drains back through 1001 and 1000 as clients ask. Trying to
-/// hold it at exactly 1000 would mean either blocking a provider that is only
-/// being helpful or throwing away work already done. Both are worse than a
-/// number that floats by the number of providers.
-///
-/// The overshoot is bounded by exactly that: one entry per provider, because a
-/// provider with a request in flight is not asked again.
+/// **The size is nominal, not a ceiling.** Nothing is evicted to shorten the
+/// queue and a returning card is never refused, so the depth floats around the
+/// target rather than being held at it — blocking an append, or throwing away
+/// work already done, would both be worse than a number that floats.
 public struct PhotoQueue {
     public let database: Database
     /// The size to top up toward. Not a maximum.

@@ -33,6 +33,11 @@ extension SourceStore {
         /// misspelled adds none of them, rather than leaving the library in a
         /// state that depends on the order they were given in.
         case pathsNotFound([String])
+        /// Paths that exist but are not the kind they were asked for as — a
+        /// file named as a folder, a directory named as a file. Refused with
+        /// the same all-or-none rule, because such a source would be accepted,
+        /// produce nothing, and read as broken.
+        case pathsNotOfKind([String])
         /// An option this kind of source does not have — recursion on a single
         /// file. Refused rather than stored, because a source table that holds
         /// answers to questions its kind cannot be asked is a table nobody can
@@ -72,11 +77,19 @@ extension SourceStore {
         if let unsupported = requests.first(where: { !$0.kind.isFileBacked })?.kind {
             throw EditFailure.unsupportedKind(unsupported)
         }
+        // The same refusal `setRecursive` gives, so the two verbs agree that a
+        // file has no such option — dropping it silently here would store a
+        // source that PATCH then claims cannot be configured that way.
+        if let optioned = requests.first(where: { $0.kind != .folder && $0.recursive }) {
+            throw EditFailure.optionNotAvailable(option: "recursive", kind: optioned.kind)
+        }
 
         let specs: [SourceSpec]
         switch SourceRequest.resolve(requests, fileManager: fileManager) {
         case .missing(let paths):
             throw EditFailure.pathsNotFound(paths)
+        case .mismatched(let paths):
+            throw EditFailure.pathsNotOfKind(paths)
         case .resolved(let resolved):
             specs = resolved
         }

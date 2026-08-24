@@ -62,8 +62,10 @@ public final class PhotoStore: @unchecked Sendable {
     public struct Entry: Sendable, Equatable {
         public let url: URL
         public let byteCount: Int64
-        /// Ordering for eviction. Creation time, since entries are written in
-        /// deck order and never rewritten.
+        /// Ordering for eviction: FIFO by write time, never updated on a
+        /// hit. Write order stopped tracking display order when fetches began
+        /// landing in completion order — kept because a shuffle has no hot set
+        /// for anything cleverer to protect.
         public let createdAt: Date
     }
 
@@ -237,9 +239,16 @@ public final class PhotoStore: @unchecked Sendable {
         _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
 
         lock.lock()
+        let previous = entries[key]
         entries[key] = Entry(url: destination, byteCount: Int64(data.count), createdAt: now)
         sourceOfPhoto[key.photoUUID] = sourceUUID
         lock.unlock()
+        // One entry per key means one file: a rendering re-made in another
+        // format lands under another extension, and the file it replaces would
+        // otherwise sit on disk where no index entry can ever name it again.
+        if let previous, previous.url != destination {
+            try? FileManager.default.removeItem(at: previous.url)
+        }
         return destination
     }
 
@@ -283,26 +292,11 @@ public final class PhotoStore: @unchecked Sendable {
 
     /// One source's whole directory, which is why the layout has that level.
     @discardableResult
-    /// The photographs of one source whose **original** is held right now.
-    ///
-    /// Asked when a source cannot supply bytes, so that producing can pick from
-    /// what we have rather than picking blind and failing. Read from the index
-    /// rather than the disk: it is a set intersection, on the path that decides
-    /// what to show next.
-    public func heldOriginals(ofSource sourceUUID: String) -> Set<String> {
-        lock.lock()
-        defer { lock.unlock() }
-        var held: Set<String> = []
-        for (key, _) in entries where key.size == nil {
-            if sourceOfPhoto[key.photoUUID] == sourceUUID { held.insert(key.photoUUID) }
-        }
-        return held
-    }
-
     public func removeSource(_ sourceUUID: String) -> Int64 {
         lock.lock()
         let mine = entries.filter { sourceOfPhoto[$0.key.photoUUID] == sourceUUID }
         for key in mine.keys { entries.removeValue(forKey: key) }
+        for uuid in Set(mine.keys.map(\.photoUUID)) { sourceOfPhoto.removeValue(forKey: uuid) }
         lock.unlock()
 
         try? FileManager.default.removeItem(at: root.appending(path: sourceUUID))

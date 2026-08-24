@@ -215,6 +215,30 @@ struct CacheQueueTests {
         #expect(Set(fetches.all) == Set(Int64(1)...Int64(10)))
     }
 
+    @Test("A photograph being fetched still counts as pending")
+    func inFlightFetchesCountAsPending() async throws {
+        // `Pending` is the gauge's window onto this queue, and the gauge treats
+        // a card out for fetching as still the queue's — deal to cover the dip
+        // and the fetch lands on a card nobody held a place for, which is the
+        // churn pacing-by-serving exists to remove. The long phase of a fetch
+        // is the download itself, so the count must cover a photograph from
+        // the moment it is asked for until its fetch finishes, not merely
+        // while it waits for a lane.
+        let release = Gate()
+        let fetches = Fetches(waitingOn: { await release.wait() })
+        let queue = CacheQueue(concurrency: 1, fetch: fetches.work, log: { _ in })
+
+        await queue.request(5)
+        try await eventually("the fetch to start") { fetches.all.count == 1 }
+        #expect(await queue.depth == 0, "the lane took it, so it is no longer waiting")
+        #expect(queue.pending.count == 1, "a photograph mid-download vanished from the gauge")
+
+        await release.open()
+        try await eventually("the fetch to finish and the count to fall") {
+            queue.pending.count == 0
+        }
+    }
+
     // MARK: - What it says
 
     @Test("It says what it was asked for and what it is fetching, under CACHE:")

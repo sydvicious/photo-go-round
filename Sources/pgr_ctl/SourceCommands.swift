@@ -58,6 +58,14 @@ enum SourceCommands {
                 Console.failure("not found: \(path)")
             }
             throw ExitCode(1)
+        } catch SourceStore.EditFailure.pathsNotOfKind(let paths) {
+            for path in paths {
+                Console.failure("not the requested kind: \(path)")
+            }
+            throw ExitCode(1)
+        } catch SourceStore.EditFailure.optionNotAvailable(let option, let kind) {
+            Console.failure("a \(kind) source has no \(option) option")
+            throw ExitCode(1)
         } catch SourceStore.EditFailure.unsupportedKind(let kind) {
             Console.failure("\(kind) sources cannot be added")
             throw ExitCode(1)

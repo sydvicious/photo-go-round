@@ -185,6 +185,72 @@ struct DeckTests {
         #expect(count == Deck.eventsKept)
     }
 
+    // MARK: - The pass fires only when the window has no answer
+
+    /// The floor beneath the window exists for two cases and no others: fraction
+    /// 1.0, and a library too small for the window to leave anyone eligible.
+    /// Queued cards are staged, not used up — so a library whose unqueued
+    /// photos are merely inside the window is a deck that should wait, not a
+    /// pass that has ended. Declaring a pass there nullifies the repeat window
+    /// and writes a bogus reshuffle event per picture served.
+    @Test("Window-blocked photos beside a full queue do not end the pass")
+    func windowBlockedPhotosDoNotEndThePass() throws {
+        let (library, ids) = try TestLibrary.withPhotos(6)
+        let settings = DeckSettings(repeatWindowFraction: 0.5)  // window = 3
+        let source = try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;"))
+
+        // Four cards staged in the queue, and the other two dealt so recently
+        // the window still holds them: nothing is eligible, and nothing has
+        // run out.
+        for id in ids.prefix(4) { try library.enqueue(id, sourceID: Int64(source)) }
+        try library.setDealSeq(10)
+        try library.setLastDealt(ids[4], seq: 9)
+        try library.setLastDealt(ids[5], seq: 10)
+
+        #expect(try library.deck.nextCandidate(settings: settings) == nil)
+        let state = try library.deck.state()
+        #expect(state.passStartSeq == 0, "a wait was declared a pass")
+        #expect(try library.deck.recentEvents().isEmpty, "no reshuffle happened, so no event should say one did")
+
+        // Waiting is what resolves it: once the ordinal moves past the window,
+        // the older photo is offered without any pass machinery.
+        try library.setDealSeq(13)
+        let card = try #require(try library.deck.nextCandidate(settings: settings))
+        #expect(card.id == ids[4])
+    }
+
+    @Test("A fully queued library deals nothing and declares no pass")
+    func fullyQueuedLibraryDeclaresNoPass() throws {
+        let (library, ids) = try TestLibrary.withPhotos(3)
+        let source = try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;"))
+        for id in ids { try library.enqueue(id, sourceID: Int64(source)) }
+        try library.setDealSeq(5)
+
+        #expect(try library.deck.nextCandidate(settings: .default) == nil)
+        #expect(try library.deck.state().passStartSeq == 0)
+        #expect(try library.deck.recentEvents().isEmpty)
+    }
+
+    /// The corner that keeps the comparison honest: retired photos shrink the
+    /// population that can actually cycle, and the window must be measured
+    /// against what is left — or a mostly-blacklisted library waits for a
+    /// release that can never come.
+    @Test("Retired photos do not count toward the population the window is measured against")
+    func blacklistedPhotosShrinkTheEffectivePool() throws {
+        let (library, ids) = try TestLibrary.withPhotos(3)
+        let settings = DeckSettings(repeatWindowFraction: 0.8)  // window = 2 of pool 3
+        for id in ids.dropLast() {
+            try library.database.run(
+                "UPDATE photo SET render_failures = :n WHERE id = :id;",
+                ["n": .int(Int64(Deck.renderFailureLimit)), "id": .int(id)]
+            )
+        }
+        // One photo can cycle and the window exceeds that population, so the
+        // pass is the only rule — exactly the one-photo-library case.
+        let dealt = try library.drawSequence(count: 4, settings: settings)
+        #expect(dealt == Array(repeating: ids[2], count: 4))
+    }
+
     // MARK: - The statistical assertions
 
     /// The plan's own test: at fraction 1.0, a thousand deals across a hundred

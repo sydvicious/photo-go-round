@@ -90,7 +90,7 @@ Storage root, holding `photogoround.sqlite` and its WAL sidecars. Defaults to
 `<repo>/.build/pgr-container`, or with `--prod` to
 `~/Library/Containers/com.sydpolk.photogoround`.
 
-`--database` *file*
+`-d`, `--database` *file*
 The database file, overriding its default position inside the storage root.
 Defaults to `<container>/photogoround.sqlite` in both deployments.
 
@@ -124,7 +124,9 @@ of photographs nobody meant to add.
 
 `--once`
 Do one pass — refresh, top up, maintain — and exit. For scripts and for
-checking a configuration without leaving something running.
+checking a configuration without leaving something running. It does not serve:
+the listener is never started, so the published `servicePort` — a running
+agent's included — is left exactly as it was found.
 
 `-i`, `--interval` *seconds*
 How often the main loop wakes. Default 2. This is not how often anything is
@@ -177,7 +179,9 @@ The agent listens on localhost, on the port `pgr_ctl status` prints — see
     GET /v1/next?consumer=<name>&display=<id>&w=<pixels>&h=<pixels>
 
 `200` returns the picture, with `Content-Type` describing the format,
-`X-PGR-Pixels` its size, and `X-PGR-Card`, `X-PGR-Deal`, `X-PGR-Source` and
+`X-PGR-Pixels` the size produced when a box was asked for — original bytes
+carry no such header, since nothing was decoded to measure — and `X-PGR-Card`,
+`X-PGR-Deal`, `X-PGR-Source` and
 `X-PGR-Storage` describing the photograph and its place in the shuffle. `204 No Content` means the queue is empty,
 which is an ordinary answer rather than an error — a fresh library replies this
 way until the agent has produced something.
@@ -198,7 +202,13 @@ Today that is the only fit: shrink or grow, aspect ratio preserved. More options
 will be added to the endpoint later.
 
 The format comes from `Accept`: HEIC unless the client will take only JPEG, since
-everything here decodes HEIC and it is roughly half the bytes.
+everything here decodes HEIC and it is roughly half the bytes. A rendering
+already held is served as it is when the client accepts its format, whichever
+format that is; a client whose `Accept` excludes it gets a re-render that
+replaces the held file at that size. An `Accept` admitting neither HEIC nor
+JPEG is refused with `406`, before any card is spent on it. The one exception:
+when the held format is unacceptable and the original is no longer held, the
+rendering goes out anyway rather than nothing.
 
 **A photograph that will not render is skipped**, and the next entry is tried, so
 a bad file costs a client the picture it would have had and nothing else. After
@@ -245,9 +255,12 @@ put in the pool.
 `POST` takes an array of `{kind, path, recursive}`; `kind` defaults to `folder`,
 and `folder` and `file` are the two that can be added. **All of them or none of
 them** — one path that does not resolve refuses the whole batch with `400`, names
-every path that was missing, and writes nothing. A path already listed is not
-added twice, and a request that creates nothing answers `200` with an empty array
-rather than `201`. A body over 1 MB is refused with `413`.
+every path that was missing, and writes nothing. A path that exists but is not
+the kind it was asked for as — a file named as a folder, or the reverse — refuses
+the batch the same way, naming each under `mismatched`; and `recursive` on a
+`file` source is refused exactly as `PATCH` refuses it. A path already listed is
+not added twice, and a request that creates nothing answers `200` with an empty
+array rather than `201`. A body over 1 MB is refused with `413`.
 
 **Changes go through preferences, exactly as `pgr_ctl`'s do**: the service writes
 the durable list on the client's behalf and reconciles the table from it before
@@ -295,11 +308,11 @@ without restarting it and without any cooperation:
 | --- | --- | --- |
 | `sources` | array of `{kind, locator, recursive, enabled}`; `recursive` is per source and defaults off | none |
 | `repeatWindowFraction` | how much of the library must pass before a photo repeats | 0.5 |
-| `queueSize` | cards to keep queued. A target, not a ceiling | 250 |
-| `queueRefreshIntervalSeconds` | how often to top the queue up | 5 |
+| `queueSize` | cards to keep queued. A target, not a ceiling | 20 |
+| `queueRefreshIntervalSeconds` | how often to seed an empty queue; a merely short one is topped up by serving | 5 |
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
-| `maintenanceIntervalSeconds` | how often to verify, sweep, and evict | 30 |
-| `downloadConcurrency` | fetches in flight per source | 4 |
+| `maintenanceIntervalSeconds` | how often to evict at the byte ceiling | 30 |
+| `downloadConcurrency` | fetches in flight, across all sources | 4 |
 | `cacheByteCeiling` | bytes of cached photographs and renderings to keep | 50 GB |
 | `cacheMinimumFreeBytes` | stop fetching below this much free space | 5 GB |
 | `cacheCriticalFreeBytes` | evict ahead of the ceiling below this much | 2 GB |
@@ -344,7 +357,9 @@ In normal operation this is an agent that never exits. It runs until something
 stops it — a signal, launchd, or the terminal it was started from going away.
 
 It exits with a non-zero return code for a fatal operational error: an unreadable
-option, a folder that does not exist, a storage root that cannot be created.
+option, a storage root that cannot be created. A folder named at launch that does
+not exist is not fatal — it is written through to preferences and marked
+unavailable by the scan, exactly as a folder that disappears later would be.
 
 When run with `--help` or `--once`, it exits with a return code of 0, assuming no
 fatal operational error.

@@ -630,20 +630,6 @@ public struct SourceStore {
         }
     }
 
-    /// Whether a source is reachable right now, asked at the moment it matters
-    /// rather than remembered from the last refresh.
-    ///
-    /// This is what decides the two very different meanings of a failed
-    /// download: a file missing from a source that is *there* is a file that is
-    /// gone, and a file missing from a source that is *not* there says nothing
-    /// about the file at all.
-    public func isOnline(_ source: Source) -> Bool {
-        guard source.kind.isFileBacked else { return source.available }
-        return (try? fileAccess.withSourceURL(source) { url in
-            FileManager.default.fileExists(atPath: url.path(percentEncoded: false))
-        }) ?? false
-    }
-
     private static let selectSourceSQL = """
         SELECT id, uuid, kind, locator, bookmark, stamp_uuid, enabled, recursive,
                available, unavailable_reason, unavailable_at, added_at, scanned_at

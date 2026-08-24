@@ -39,10 +39,9 @@ final class HTTPListener: @unchecked Sendable {
         func header(_ name: String) -> String? { headers[name.lowercased()] }
     }
 
-    /// What a route hands back. `body` is a closure rather than `Data` so a
-    /// picture is streamed from disk in bounded chunks rather than read whole
-    /// into memory — a 48-megapixel original is 25 MB and there is no reason
-    /// for it ever to be resident.
+    /// What a route hands back. A file body is streamed from disk in bounded
+    /// chunks rather than read whole into memory — a 48-megapixel original is
+    /// 25 MB and there is no reason for it ever to be resident.
     struct Response {
         var status: Int
         var reason: String
@@ -52,7 +51,44 @@ final class HTTPListener: @unchecked Sendable {
         enum Body {
             case empty
             case data(Data)
-            case file(URL, byteCount: Int64)
+            case file(StreamedFile)
+
+            /// Opens the file *now*, so what is promised is what is sent.
+            ///
+            /// Serving pops the queue, which removes the photograph's eviction
+            /// protection at the moment its bytes go out — so the file can be
+            /// deleted between the answer being decided and the pump reading
+            /// it, and a `Content-Length` measured by a separate `stat` could
+            /// promise bytes a later open cannot deliver. An open handle keeps
+            /// the bytes alive whatever happens to the name, and the size is
+            /// measured through the same handle, so the two cannot disagree.
+            /// Nil is the race caught before any header is written: the caller
+            /// skips, exactly as it would a card whose bytes were never there.
+            static func streaming(contentsOf url: URL) -> Body? {
+                StreamedFile(url: url).map { .file($0) }
+            }
+        }
+
+        /// An open file and its size, ready to stream.
+        ///
+        /// `@unchecked Sendable` because the handle has exactly one consumer:
+        /// the pump that streams it after the response crosses to the
+        /// listener's queue. Nothing reads it twice and nothing reads it
+        /// concurrently.
+        final class StreamedFile: @unchecked Sendable {
+            let handle: FileHandle
+            let byteCount: Int64
+
+            init?(url: URL) {
+                guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+                let end = (try? handle.seekToEnd()) ?? 0
+                guard (try? handle.seek(toOffset: 0)) != nil else {
+                    try? handle.close()
+                    return nil
+                }
+                self.handle = handle
+                self.byteCount = Int64(end)
+            }
         }
 
         static func status(_ code: Int, _ reason: String) -> Response {
@@ -178,8 +214,17 @@ final class HTTPListener: @unchecked Sendable {
                     buffer: Data(buffer[terminator.upperBound...]))
                 return
             }
+            // A FIN before the blank line is a truncated request, not a large
+            // one — the two refusals must not share a status, or a hung-up
+            // client reads as a header-size problem in everyone's notes.
+            guard !isComplete else {
+                self.write(
+                    .text("truncated request\n", status: 400, reason: "Bad Request"),
+                    to: connection)
+                return
+            }
             // A header block this large is not a request we are interested in.
-            guard !isComplete, buffer.count < 64 * 1024 else {
+            guard buffer.count < 64 * 1024 else {
                 self.write(.status(431, "Request Header Fields Too Large"), to: connection)
                 return
             }
@@ -284,8 +329,8 @@ final class HTTPListener: @unchecked Sendable {
             headers["Content-Length"] = "0"
         case .data(let data):
             headers["Content-Length"] = String(data.count)
-        case .file(_, let byteCount):
-            headers["Content-Length"] = String(byteCount)
+        case .file(let file):
+            headers["Content-Length"] = String(file.byteCount)
         }
 
         var head = "HTTP/1.1 \(response.status) \(response.reason)\r\n"
@@ -296,8 +341,12 @@ final class HTTPListener: @unchecked Sendable {
 
         connection.send(
             content: Data(head.utf8),
-            completion: .contentProcessed { [weak self] error in
-                guard error == nil else { connection.cancel(); return }
+            completion: .contentProcessed { error in
+                guard error == nil else {
+                    if case .file(let file) = response.body { try? file.handle.close() }
+                    connection.cancel()
+                    return
+                }
                 switch response.body {
                 case .empty:
                     connection.cancel()
@@ -305,29 +354,22 @@ final class HTTPListener: @unchecked Sendable {
                     connection.send(
                         content: data,
                         completion: .contentProcessed { _ in connection.cancel() })
-                case .file(let url, _):
-                    self?.sendFile(at: url, on: connection)
+                case .file(let file):
+                    // Streams from the handle opened when the answer was
+                    // decided — the file's name may be gone by now, and the
+                    // bytes are not.
+                    FilePump(file: file, connection: connection).resume()
                 }
             })
-    }
-
-    /// Streams a file in bounded chunks.
-    ///
-    /// The point is that memory does not scale with the picture: a ProRAW
-    /// original is tens of megabytes and the agent's whole resident size is
-    /// supposed to be less than that.
-    private func sendFile(at url: URL, on connection: NWConnection) {
-        guard let pump = FilePump(url: url, connection: connection) else {
-            connection.cancel()
-            return
-        }
-        pump.resume()
     }
 
     static let chunkSize = 256 * 1024
 }
 
-/// Reads a file and writes it to a connection, one chunk at a time.
+/// Reads an open file and writes it to a connection, one chunk at a time, so
+/// memory does not scale with the picture: a ProRAW original is tens of
+/// megabytes and the agent's whole resident size is supposed to be less than
+/// that.
 ///
 /// A type rather than a recursive local function, because the recursion crosses
 /// a `@Sendable` completion handler — which is exactly the boundary Swift 6 is
@@ -337,9 +379,8 @@ private final class FilePump: @unchecked Sendable {
     private let handle: FileHandle
     private let connection: NWConnection
 
-    init?(url: URL, connection: NWConnection) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        self.handle = handle
+    init(file: HTTPListener.Response.StreamedFile, connection: NWConnection) {
+        self.handle = file.handle
         self.connection = connection
     }
 

@@ -22,6 +22,12 @@ public actor CacheQueue {
     /// thousand uncached cards from leaving a thousand duplicates behind it.
     private var known: Set<Int64> = []
     private var running = 0
+    /// Photographs a lane has taken and not finished — the download itself,
+    /// which is the long phase. Counted so `pending` covers a photograph from
+    /// request to landing: the gauge treats a card out for fetching as still
+    /// the queue's, and one that vanished from the count mid-download would be
+    /// dealt a cold replacement.
+    private var executing = 0
 
     /// How many fetches run at once when nothing says otherwise.
     ///
@@ -64,12 +70,14 @@ public actor CacheQueue {
     /// How many are waiting to be fetched, for a status line to report.
     public var depth: Int { waiting.count }
 
-    /// The same number, readable without awaiting.
+    /// Photographs asked for and not yet landed — waiting for a lane *plus*
+    /// mid-download — readable without awaiting.
     ///
-    /// Every `CACHE:` line says how deep this queue is, and the ones written
-    /// while a photograph is being fetched come from `PhotoCache`, which is not
-    /// an actor and cannot await one. A counter it can read is cheaper than
-    /// threading the number through every call.
+    /// Wider than `depth` on purpose: the gauge reads this, and a card counts
+    /// as the queue's until its fetch finishes, not merely until a lane takes
+    /// it. It is a bare counter because the lines written while a photograph
+    /// is being fetched come from `PhotoCache`, which is not an actor and
+    /// cannot await one.
     public final class Pending: @unchecked Sendable {
         private let lock = NSLock()
         private var value = 0
@@ -118,7 +126,7 @@ public actor CacheQueue {
         }
         guard known.insert(photoID).inserted else { return }
         waiting.append(photoID)
-        pending.set(waiting.count)
+        pending.set(waiting.count + executing)
         let it = describe(photoID)
         log(.cacheRequested(photo: it.photo, source: it.source, pending: waiting.count))
         start()
@@ -147,11 +155,14 @@ public actor CacheQueue {
     private func next() -> Int64? {
         guard !waiting.isEmpty else { return nil }
         let photoID = waiting.removeFirst()
-        pending.set(waiting.count)
+        executing += 1
+        pending.set(waiting.count + executing)
         return photoID
     }
 
     private func finished(_ photoID: Int64) {
         known.remove(photoID)
+        executing -= 1
+        pending.set(waiting.count + executing)
     }
 }
