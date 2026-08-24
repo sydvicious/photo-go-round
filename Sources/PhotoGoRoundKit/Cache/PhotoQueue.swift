@@ -110,8 +110,50 @@ public struct PhotoQueue {
                     "r": .double(Double.random(in: 0..<1)),
                 ]
             )
+            try respaceIfCollapsing()
             return true
         }
+    }
+
+    /// The smallest key interval worth working in.
+    ///
+    /// Anything above zero would do for correctness; one is chosen because it
+    /// leaves gaps of `1 / count` between neighbours, which is a colossal margin
+    /// against the ~1e-16 relative spacing of a `Double` and needs no thought.
+    private static let minimumSpan = 1.0
+
+    /// Spreads the keys back out to `1…n`, keeping the order exactly.
+    ///
+    /// **The interval only ever shrinks, and fast.** A new key is drawn between
+    /// the lowest and highest currently queued, so the highest never rises,
+    /// while the lowest rises every time a card is served. Modelled over a queue
+    /// of twenty, the span reaches *exactly zero* in about a thousand cycles —
+    /// under three hours at ten seconds a picture. Keys then tie, ordering falls
+    /// back to `position`, and the queue is quietly a FIFO again with random
+    /// placement gone and nothing announcing it. That silent reversion is the
+    /// reason this exists rather than the arithmetic.
+    ///
+    /// Renumbering rather than rescaling, because it is the same one statement
+    /// either way and integers are what a person reading the table wants to see.
+    /// Costs one `UPDATE` over a queue's worth of rows, roughly once every sixty
+    /// cards dealt.
+    private func respaceIfCollapsing() throws {
+        let span =
+            try database.first("SELECT MAX(sort_key) - MIN(sort_key) AS span FROM queue;") {
+                try $0.double("span")
+            } ?? 0
+        guard span < Self.minimumSpan else { return }
+
+        try database.run(
+            """
+            WITH ordered AS (
+              SELECT position, ROW_NUMBER() OVER (ORDER BY sort_key, position) AS rank
+                FROM queue
+            )
+            UPDATE queue
+               SET sort_key = (SELECT rank * 1.0 FROM ordered WHERE ordered.position = queue.position);
+            """
+        )
     }
 
     /// Removes and returns the head.

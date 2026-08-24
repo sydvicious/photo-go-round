@@ -901,6 +901,8 @@ Putting either at the head is worse, and was tried: the order pictures appear in
 
 So placement is random, and `sort_key` (migration 6) is what makes it cheap — a card gets a key drawn uniformly between the smallest and largest currently queued, which is a uniform position among the cards present without moving any of them. No gap-finding, no shifting, no explicit-position inserts; that machinery existed for the head-and-tail experiments and does not come back. A card lands strictly inside the existing span, so it can never become the very next picture — at best second.
 
+**The keys have to be respaced, and that is not a nicety.** A new key is drawn between the lowest and highest currently queued, so the highest never rises while the lowest rises with every card served — the interval only ever shrinks. Modelled over a queue of twenty it reaches *exactly zero* in about a thousand cycles, which at ten seconds a picture is under three hours; a live queue was measured at a span of 0.009 after eight. Once keys tie, ordering falls back to `position` and the queue is silently a FIFO again, with random placement gone and nothing announcing it. `PhotoQueue.respaceIfCollapsing` renumbers to `1…n` whenever the span drops below one — one `UPDATE` over a queue's worth of rows, roughly once an hour. **The silent reversion is the reason it exists**, not the arithmetic.
+
 **Measured, on the same library and the same source.** First photograph from a newly added network folder, from the moment its card was dealt to the moment it was displayed:
 
 | | deal → display |

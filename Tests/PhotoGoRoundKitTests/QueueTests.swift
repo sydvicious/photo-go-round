@@ -15,6 +15,40 @@ struct QueueTests {
 
     // MARK: - Serving
 
+    @Test("Running for a long time does not collapse the keys into a FIFO")
+    func keysDoNotCollapse() throws {
+        // **The bug this pins, and it is not a slow one.** A card is placed at a
+        // key drawn between the lowest and the highest currently queued. The
+        // highest therefore never rises, and the lowest rises every time a card
+        // is served — so the interval only ever shrinks. Modelled, a queue of
+        // twenty reaches a span of *exactly zero* in about a thousand cycles,
+        // which at ten seconds a picture is under three hours. Once keys tie,
+        // ordering falls back to `position` and the queue is silently a FIFO
+        // again, with random placement gone and nothing saying so.
+        let library = try TestLibrary()
+        let source = try library.addSource()
+        let ids = try library.addPhotos(25, to: source)
+        let queue = PhotoQueue(database: library.database, nominalSize: 20)
+        for id in ids.prefix(20) { try queue.append(photoID: id, sourceID: source) }
+
+        // Serve the head and put it straight back, which is what a fetched card
+        // does — a thousand times.
+        for _ in 0..<1000 {
+            let card = try #require(try queue.serve())
+            try queue.append(photoID: card.id, sourceID: source)
+        }
+
+        let span = try #require(
+            try library.database.first("SELECT MAX(sort_key) - MIN(sort_key) AS span FROM queue;") {
+                try $0.double("span")
+            })
+        let distinct =
+            try library.database.scalarInt("SELECT COUNT(DISTINCT sort_key) FROM queue;") ?? 0
+
+        #expect(span >= 1.0, "the key interval collapsed to \(span)")
+        #expect(distinct == 20, "keys have tied, so ordering has fallen back to insertion order")
+    }
+
     @Test("A card is inserted at a random position, not at the end")
     func appendingIsRandomlyPlaced() async throws {
         // **Every insertion is random, dealt and returned alike.** At the tail, a
