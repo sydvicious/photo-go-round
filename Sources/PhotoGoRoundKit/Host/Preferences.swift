@@ -187,12 +187,30 @@ public struct Preferences: @unchecked Sendable {
     /// library**, and that is what settles the number. A full queue only turns
     /// over as pictures are served, so cards dealt before a source arrived —
     /// or before a drive came back — persist for a whole queue's worth of
-    /// pictures. At one every ten seconds, a thousand is about three hours; two
-    /// hundred and fifty is under one.
+    /// pictures.
     ///
-    /// Deeper is otherwise harmless: a skip is a lookup in an index held in
-    /// memory, and however many fetches a walk asks for, `downloadConcurrency`
-    /// caps how many run.
+    /// **Twenty, measured rather than guessed (2026-08-24).** It was a thousand,
+    /// then 250, then 100, on the reasoning that deeper is harmless because a
+    /// skip is only an index lookup. Deeper is harmless; it is also useless, and
+    /// the sweep that settled it is in `PLAN.md` under *The queue-size sweep*.
+    /// Across 10, 20, 30 and 50, against a live library of 9,002 photographs,
+    /// **nothing was ever skipped at any size** — so the number decides nothing
+    /// about whether a picture is ready, only how long a newly dealt card waits
+    /// and how faithfully the queue samples the library at any instant.
+    ///
+    /// Twenty because it equals `PhotoCache.lookAheadDepth`. At that depth every
+    /// card is inside the look-ahead window from the moment it is dealt, which
+    /// makes arriving at the head without bytes structurally impossible rather
+    /// than merely unobserved. Below it, a source holding a few per cent of the
+    /// library is absent from the queue most of the time — at ten, a source with
+    /// 7.9% of the photographs held none at all when sampled.
+    ///
+    /// **This number does not survive a slow provider**, and the arithmetic that
+    /// breaks it is written up beside the caps: the lead a cold photograph gets
+    /// is `lookAheadDepth × dwell`, and it has to exceed the time the fetch
+    /// backlog takes to drain. Against an SMB share at a second a fetch there is
+    /// forty times the headroom. Against Photos or Google Photos there will not
+    /// be, and both this and `lookAheadDepth` will have to rise together.
     ///
     /// Read afresh every time the queue is topped up, so changing it takes
     /// effect at the next refresh rather than at the next launch. Raising it
@@ -200,7 +218,7 @@ public struct Preferences: @unchecked Sendable {
     /// asked until serving brings the queue back under the new number, since
     /// nothing is ever evicted from the queue to make it shorter.
     public var queueSize: Int {
-        integer(.queueSize, default: 250, in: 1...100_000)
+        integer(.queueSize, default: 20, in: 1...100_000)
     }
 
     /// How often the queue is topped up.
@@ -262,7 +280,7 @@ public struct Preferences: @unchecked Sendable {
     /// starts again when the list moved, which turns a silent loss into a retry.
     private func mutateSources(_ edit: (inout [SourceSpec]) -> Bool) -> Bool {
         for _ in 0..<Self.writeAttempts {
-            let (before, unreadable) = readSources()
+            let (before, _) = readSources()
             var edited = before
             guard edit(&edited) else { return false }
 

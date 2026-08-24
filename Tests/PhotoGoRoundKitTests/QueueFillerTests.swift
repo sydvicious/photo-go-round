@@ -41,9 +41,20 @@ struct QueueFillerTests {
             return (try? queue.append(photoID: photoID, sourceID: sourceID)) ?? false
         }
 
+        /// Overrides the queue's own nominal, so a test can raise the target the
+        /// way changing the preference does.
+        private var target: Int?
+
+        func aimFor(_ size: Int) {
+            lock.lock()
+            target = size
+            lock.unlock()
+        }
+
         func isShort() -> Bool {
             lock.lock()
             defer { lock.unlock() }
+            if let target { return ((try? queue.size()) ?? 0) < target }
             return (try? queue.needsTopUp()) == true
         }
 

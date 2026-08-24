@@ -14,6 +14,8 @@ public enum Migrator {
         Migration(version: 2, name: "claim at selection", sql: SchemaV2.sql),
         Migration(version: 3, name: "render blacklist", sql: SchemaV3.sql),
         Migration(version: 4, name: "cache leaves the database", sql: SchemaV4.sql),
+        Migration(version: 5, name: "count what reached a client", sql: SchemaV5.sql),
+        Migration(version: 6, name: "the queue is not a queue", sql: SchemaV6.sql),
     ]
 
     /// The version a fully migrated database reports.

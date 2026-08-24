@@ -68,10 +68,18 @@ public enum QueueEvent: Sendable, Equatable {
     /// stops two requests fetching the same photograph twice.
     case cacheUnnecessary(photo: String, source: Int64?, pending: Int)
     case caching(photo: String, source: Int64?, pending: Int)
-    /// Fetched. It does not rejoin the queue — the deck decides what is
-    /// queued, and this photograph is simply ready the next time it is dealt.
+    /// Fetched, and back on the queue at a random place.
+    ///
+    /// It used to stay off and wait to be dealt again. That is a uniform draw
+    /// from the whole library, so the photograph just paid for was almost never
+    /// the next one — see `PLAN.md`, *Why a fetched picture rejoins the queue
+    /// after all*.
     case cached(photo: String, source: Int64?, bytes: Int64, pending: Int)
     case cacheFailed(photo: String, source: Int64?, because: String, pending: Int)
+    /// Turned away because the backlog is full. Not a failure and not a
+    /// blacklisting — the photograph is simply not asked for this time, and the
+    /// next look-ahead that reaches it will ask again.
+    case cacheRefused(photo: String, source: Int64?, pending: Int)
     /// A resize was made and written to the cache.
     ///
     /// **The other half of what the cache holds, and the half that was silent.**
@@ -126,9 +134,11 @@ public enum QueueEvent: Sendable, Equatable {
         case .caching(let photo, let source, let pending):
             "CACHE: fetching \(Self.name(photo, source)) — \(pending) waiting"
         case .cached(let photo, let source, let bytes, let pending):
-            "CACHE: \(Self.name(photo, source)) fetched, \(bytes) bytes, ready when next dealt — \(pending) waiting"
+            "CACHE: \(Self.name(photo, source)) fetched, \(bytes) bytes, back on the queue — \(pending) waiting"
         case .cacheFailed(let photo, let source, let because, let pending):
             "CACHE: \(Self.name(photo, source)) failed — \(because), \(pending) waiting"
+        case .cacheRefused(let photo, let source, let pending):
+            "CACHE: \(Self.name(photo, source)) not asked for — backlog full at \(pending) waiting"
         case .rendered(let photo, let source, let at, let bytes, let from):
             "CACHE: resized \(Self.name(photo, source)) to \(at) from \(from), kept \(bytes) bytes"
         case .lookedAhead(let cards, let asked, let pending):

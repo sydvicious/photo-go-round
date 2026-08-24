@@ -194,6 +194,47 @@ struct EndpointCacheTests {
             "the endpoint rendered again instead of reading what it had just written")
     }
 
+    @Test("A delivered picture is counted, and counted once per request")
+    func deliveryIsCounted() async throws {
+        let library = try Library()
+        try await library.fill()
+
+        func delivered() throws -> Int {
+            try library.sources.database.scalarInt(
+                "SELECT IFNULL(SUM(times_delivered), 0) FROM photo;") ?? 0
+        }
+        #expect(try delivered() == 0)
+
+        #expect(try await library.get("w=100&h=100").status == 200)
+        #expect(try delivered() == 1)
+
+        // A hit counts too — the question this column answers is how many
+        // photographs reached a client, not how many were rendered for one.
+        #expect(try await library.get("w=100&h=100").status == 200)
+        #expect(try delivered() == 2)
+    }
+
+    @Test("Being chosen is counted separately from being delivered")
+    func shownAndDeliveredAreDifferentNumbers() async throws {
+        let library = try Library()
+        try await library.fill()
+        #expect(try await library.get("w=100&h=100").status == 200)
+
+        // Equal here because nothing failed, and that is the point: the two
+        // columns are only allowed to diverge when a photograph was chosen and
+        // then could not be handed over. `times_shown` is incremented by the
+        // deck when serving picks a card — before any rendering has been
+        // attempted — so a file that will not decode raises it and delivers
+        // nothing. Somewhere to look when a library shows fewer pictures than
+        // the deck says it is showing.
+        let shown =
+            try library.sources.database.scalarInt("SELECT SUM(times_shown) FROM photo;") ?? 0
+        let handed =
+            try library.sources.database.scalarInt("SELECT SUM(times_delivered) FROM photo;") ?? 0
+        #expect(shown == 1)
+        #expect(handed == 1)
+    }
+
     @Test("Two sizes are held at once, and alternating between them hits both")
     func twoSizesAlternate() async throws {
         let library = try Library()

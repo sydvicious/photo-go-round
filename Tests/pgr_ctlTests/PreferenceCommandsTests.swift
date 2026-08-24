@@ -35,7 +35,7 @@ struct PreferenceCommandsTests {
     @Test("By default an unset preference reports the value the agent would use")
     func unsetReportsTheDefault() {
         let scratch = Scratch()
-        #expect(value(.queueSize, scratch, showDefaults: true) == "250")
+        #expect(value(.queueSize, scratch, showDefaults: true) == "20")
         #expect(value(.downloadConcurrency, scratch, showDefaults: true) == "4")
         #expect(value(.repeatWindowFraction, scratch, showDefaults: true) == "0.5")
     }

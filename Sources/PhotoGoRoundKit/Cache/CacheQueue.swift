@@ -91,8 +91,31 @@ public actor CacheQueue {
 
     public nonisolated let pending: Pending
 
+    /// How long the backlog of pictures to fetch may get.
+    ///
+    /// **A lead, not a work list.** Serving asks for the cards ahead of the one
+    /// it showed, every time it shows one, so left unbounded the requests
+    /// accumulate until they name the entire library — thousands of fetches
+    /// queued behind four lanes, most of them for cards that will be served
+    /// hours from now or never. What is actually wanted is enough depth that the
+    /// next few cards are ready when their turn comes.
+    ///
+    /// Fifty against a look-ahead of twenty: two rounds of lead plus room for
+    /// what a walk skipped past, and small enough that the backlog turns over
+    /// fast rather than going stale.
+    public static let maximumWaiting = 50
+
     /// Asks for a photograph's bytes. Returns at once, whatever happens next.
     public func request(_ photoID: Int64) {
+        // **Checked before it is remembered.** Marking a refused photograph as
+        // known would retire it: `known` is what stops two requests fetching the
+        // same picture twice, and an id that goes in without ever coming out
+        // could never be asked for again.
+        guard waiting.count < Self.maximumWaiting else {
+            let it = describe(photoID)
+            log(.cacheRefused(photo: it.photo, source: it.source, pending: waiting.count))
+            return
+        }
         guard known.insert(photoID).inserted else { return }
         waiting.append(photoID)
         pending.set(waiting.count)

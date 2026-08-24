@@ -113,6 +113,24 @@ What the status code does buy, which publication never could, is the immediate h
 
 What stays silent is narrower but not nothing: an empty folder and a folder still being scanned look alike until the number lands, and a denied TCC grant shows as unavailable only once the agent has tried. With no agent, nothing can be added at all — and nothing could be shown either, so the panel says the same thing the window does.
 
+## The longer beat: a source is added long before it is *seen*
+
+Distinct from the one above, and worth separating because a user hits it as one experience. The count arriving late is seconds. **A photograph from that source actually appearing in the window can be many minutes**, and on 2026-08-24 it was measured at hours for a network folder — with nothing anywhere saying why.
+
+Three delays compose, and only the first is the scan:
+
+1. **The scan.** Seconds. The panel shows this honestly as no count yet.
+2. **Reaching the queue.** Cards are dealt from one shuffled order over the whole library, so a new source takes its proportional share — but only of *new* deals, and the queue only turns over as pictures are served. A source that is a third of the library reaches a third of a 250-card queue after roughly 250 pictures have been shown.
+3. **Having bytes.** A photograph on a network volume or in Photos is not shown until its original has been fetched. Until then its card is skipped when its turn comes.
+
+Step 3 is the one that surprises, because it is invisible: the source is present, available, correctly counted, and shows nothing. Two agent-side changes cut it down — serving now asks in advance for the bytes of the cards ahead of the one it showed, and the launch purge that was deleting exactly those cards is gone — but the shape remains. **A large network source warms over hours, not minutes**, and its share of what is *shown* rises with its share of what is *cached*, not with its share of the library.
+
+**Nothing in the panel says any of this**, and something probably should. The honest number is not a percentage of the library cached — that would read as a progress bar for something that never completes, since the cache is a bounded window and not a copy. Whatever it becomes, the fact to convey is "reachable and warming" as a state distinct from "reachable", so a folder added an hour ago that has shown nothing does not look broken. Unresolved; recorded so the next person to notice it does not have to re-derive it from a log.
+
+**Step 3 shrank a great deal on 2026-08-24, and the reason is worth knowing here rather than only in `PLAN.md`.** Three agent-side changes — a fetched photograph returns to the queue instead of waiting to be dealt again, the deck advances at the rate pictures are shown rather than at the rate cards are consumed, and cards are placed at random positions instead of at the back. Measured end to end on a real network folder, from a card being dealt to its photograph being displayed: **8m 38s** before, **4m 46s** after. Of that original figure, one second was the network and the rest was queue traversal.
+
+So the delay a user experiences is set almost entirely by `queueSize`, which is a preference and not a property of their storage. That matters for what the panel could eventually say: "warming" is a state with a knowable duration, not an indefinite one.
+
 ## TCC, the pickers, and whose grant is whose
 
 Two processes are involved and only one is looking at a window, which is what makes this confusing later.
@@ -173,7 +191,9 @@ Added with the Settings panel, because the model is where the panel's behaviour 
 
 ## What the panel could get without the agent
 
-**Captured, not acted on. The app does not write preferences, and is not to start yet.** Everything it changes still goes over HTTP; the one preference it reads is `servicePort`, which is how it finds the agent at all. This is written down because it matters when the next source kind arrives, and because it is the sort of thing that gets rediscovered expensively.
+**Captured, not acted on. The app does not write preferences, and is not to start yet.** Everything it changes still goes over HTTP; the one preference it reads is `servicePort`, which is how it finds the agent at all.
+
+**That one preference is a single point of confusion, and it bit on 2026-08-24.** The port is published by whichever agent started most recently, and the app follows it without asking whose it is. A second agent — started for a scratch run with `--container` and `--cache-root`, which isolate storage but *not* the preference domain — published over the running one, and the app began serving from an empty scratch library: real photographs, but a deck starting at ordinal 1 and every request a cold miss. When that scratch agent exited, the published port pointed at nothing and the window said "No agent" while a perfectly healthy agent was listening on the port it used to own. Neither state is distinguishable from a real fault by looking at the app. This is written down because it matters when the next source kind arrives, and because it is the sort of thing that gets rediscovered expensively.
 
 **For a file or folder source, the panel needs the agent for one fact.** This app is unsandboxed and links the kit, so it can read the durable list itself and look at the filesystem:
 

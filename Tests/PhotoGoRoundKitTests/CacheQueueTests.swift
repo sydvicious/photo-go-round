@@ -140,6 +140,48 @@ struct CacheQueueTests {
         #expect(fetches.all == [3, 3])
     }
 
+    // MARK: - How much backlog
+
+    @Test("The queue is bounded, so a warm-up cannot enqueue the whole library")
+    func itIsBounded() async throws {
+        // Held open, so nothing drains and the backlog is whatever `request`
+        // allowed.
+        let release = Gate()
+        let fetches = Fetches(waitingOn: { await release.wait() })
+        let queue = CacheQueue(concurrency: 1, fetch: fetches.work, log: { _ in })
+
+        for id in Int64(1)...Int64(500) { await queue.request(id) }
+
+        // **Not five hundred.** Serving asks for the cards ahead of the one it
+        // showed, every time it shows one, so over a night the requests add up
+        // to the entire library. What is wanted is a short lead — enough that
+        // the next few cards are ready — and not a work list that grows without
+        // limit and pins the fetch lanes to a queue nobody is waiting on.
+        #expect(await queue.depth == CacheQueue.maximumWaiting)
+
+        await release.open()
+        try await eventually("the backlog to drain") { await queue.depth == 0 }
+        // One in flight plus the cap: everything else was refused, not stored.
+        #expect(fetches.all.count == CacheQueue.maximumWaiting + 1)
+    }
+
+    @Test("A refused photograph can be asked for again once there is room")
+    func refusingDoesNotBlacklist() async throws {
+        let release = Gate()
+        let fetches = Fetches(waitingOn: { await release.wait() })
+        let queue = CacheQueue(concurrency: 1, fetch: fetches.work, log: { _ in })
+
+        for id in Int64(1)...Int64(500) { await queue.request(id) }
+        // 999 was refused. If refusal left it remembered as "already waiting",
+        // it could never be asked for again — a photograph the cap happened to
+        // turn away once would be turned away for the life of the process.
+        await release.open()
+        try await eventually("the backlog to drain") { await queue.depth == 0 }
+
+        await queue.request(999)
+        try await eventually("the late arrival to be fetched") { fetches.all.contains(999) }
+    }
+
     // MARK: - How many at once
 
     @Test("No more than the concurrency runs at once, however many are asked for")

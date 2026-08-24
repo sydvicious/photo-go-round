@@ -323,12 +323,28 @@ public struct PhotoCache {
             return false
         }
 
-        // **It does not go back on the queue.** What is queued is the deck's
-        // business alone: one shuffled order gives every source a share matching
-        // its share of the library, and putting fetched photographs back would
-        // top that up in the order fetches *complete* — so the fastest source
-        // would drift to owning the queue whatever its size. The bytes are here
-        // now, so when the deck next deals this photograph it is shown at once.
+        // **It goes back on the queue.** Reinstated 2026-08-24 after a night of
+        // running without it.
+        //
+        // The argument for leaving it out was that the queue's composition
+        // should be the deck's alone, and that topping it up in the order
+        // fetches *complete* lets the fastest source drift into owning it. That
+        // reasoning was sound and the conclusion was still wrong, because it
+        // assumed the photograph would come round again soon enough. It does
+        // not: dealing draws uniformly from the whole library, so a photograph
+        // whose bytes were just paid for has a one-in-the-library-size chance of
+        // being the next card. **The cache never catches up** — every fetch
+        // improves the next draw by one over fourteen thousand, and the cards
+        // actually dealt are almost all cold. Measured overnight: two sources of
+        // 5,899 photographs went from 123 pictures shown in an hour to zero for
+        // five hours straight, while a source needing no fetch took every turn.
+        //
+        // The drift the old reasoning feared is handled at the other end
+        // instead: dealing is now tied to pictures actually *served* rather than
+        // to cards consumed, so the deck advances at the rate photographs reach
+        // a screen and a skip no longer buys a fresh card. What returns here is
+        // the same card that left, not an extra one.
+        _ = try? queue.append(photoID: card.id, sourceID: card.sourceID, at: now)
         log(
             .cached(
                 photo: card.externalID, source: card.sourceID,
@@ -628,11 +644,26 @@ public struct PhotoCache {
     /// FIFO by creation time, bounded by bytes, over `(photo, resolution)`
     /// entries rather than over photographs.
     ///
-    /// Plain FIFO is correct rather than something cleverer because entries are
-    /// written *in deck order*: the order bytes enter the cache is the order
-    /// they will be shown, so oldest-written is also longest-since-dealt. The
-    /// cache is a sliding window over the deck — expiring off the front, filling
-    /// at the back.
+    /// **The original justification for plain FIFO no longer holds, and the
+    /// policy is kept for a weaker reason.** It used to be that entries were
+    /// written in deck order — bytes entered the cache in the order they would
+    /// be shown, so oldest-written was also longest-since-dealt, and the cache
+    /// was a sliding window over the deck. Neither half is true now: bytes
+    /// arrive from the queue of pictures to cache in the order fetches
+    /// *complete*, and cards are placed at random positions rather than at the
+    /// back, so nothing connects write order to display order.
+    ///
+    /// What is left is that it does not matter much. A shuffle shows every
+    /// photograph about equally often, so there is no hot set for an LRU to
+    /// protect — and `createdAt` is never updated on a hit, so this is FIFO by
+    /// *write* time rather than by use either way. Anything queued is skipped
+    /// regardless of age, which covers the only entries with a known imminent
+    /// reader.
+    ///
+    /// **Where it would start to matter** is a library whose working set exceeds
+    /// the ceiling, so photographs are evicted before their turn comes round.
+    /// That needs a library several times the size of any tested here, and it is
+    /// the point at which this wants measuring rather than reasoning about.
     @discardableResult
     public func evictIfNeeded() throws -> EvictionResult {
         // The disk-space guard evicts ahead of the ceiling, folded in as a lower

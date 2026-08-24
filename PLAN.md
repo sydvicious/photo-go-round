@@ -807,6 +807,8 @@ What the design does keep is a small **in-memory** decoded-image cache — the c
 
 ### Filling: there is no prefetcher
 
+**Superseded twice.** By *Deal over everything, and try at the moment of need* on 2026-08-23, and then by look-ahead on 2026-08-24 — so the heading is now false as well as historical: there *is* a prefetcher, it just prefetches something else. The one described below fetched bytes before anything was queued; the one that exists reads cards already queued and asks for theirs. See *What running it found*.
+
 **Superseded 2026-08-23 by *Deal over everything, and try at the moment of need*.** Everything below describes producing as it was when it *was* fetching — the per-source pump, its lanes, its exhausted-for-the-round rule, and an overshoot bounded by `sources × concurrency`. None of it exists now: dealing writes a row and fetches nothing, and bytes arrive because serving asked for them. Kept because the reasoning about re-asking rates is what the new shape inherited, and because the mistake it records is one worth not making twice.
 
 There used to be one — chunks of ten, an elevated first burst, then background chunks walking a work list until the cap. All of it is gone, and what replaced it is one sentence: **producing a picture and fetching its bytes are the same operation.**
@@ -832,9 +834,9 @@ So each answer re-asks its own source, and the tick is only what gets it started
 
 **Adding a source is still two phases**, and that part was always right: enumerate identifiers and insert rows first — seconds even for a large album, batched about five hundred rows to a transaction — and only then start fetching bytes. Rows are cheap and complete; bytes are expensive and windowed.
 
-### Proposed: deal over everything, and try at the moment of need
+### Deal over everything, and try at the moment of need
 
-**Not built.** Syd's design, stated below in his terms. Claude's objections are in *Costs Claude raised* at the end, kept separate so they cannot be mistaken for part of it.
+**Built 2026-08-23, and run against the real library overnight.** Syd's design, stated below in his terms. Claude's objections are in *Costs Claude raised* at the end, kept separate so they cannot be mistaken for part of it. What the first night of running it changed is in *What running it found*, below — the design held; six things around it did not.
 
 Shuffle all the photographs we know about, whether or not their sources are available. Count on trying to get a photo to take care of serving from the cache, or filling the cache and serving, or skipping to the next.
 
@@ -845,7 +847,7 @@ Rather than keeping a count of a combination of what is cached and what is mount
 1. See if the pic in the queue is in the cache, and if it is, serve it.
 2. Otherwise, fire off a separate process to cache the picture if possible, but the queue moves on and tries until it finds one.
 3. If it cycles the entire queue, return no picture. It will populate soon enough. Returning "no photo" for taking too long is also fine — though cycling a cold library should not take very long, since each step is a cache lookup rather than a fetch.
-4. ~~When the caching for a pic is finished, add it back to the queue.~~ **Reversed the same evening**: it does not go back. Let those files come back naturally — the deck deals them again in its own time, and the bytes are there when it does. See *Why a fetched picture does not rejoin the queue*.
+4. When the caching for a pic is finished, add it back to the queue. **Reversed the same evening, and reinstated the next morning** — the round trip is worth reading, because the argument against it was correct and the conclusion was still wrong. See *Why a fetched picture rejoins the queue after all*.
 
 #### The queue of pictures to cache
 
@@ -861,12 +863,105 @@ The queue of pictures to cache absorbs it rather than passing it on: it drops a 
 
 Two consequences, both settled deliberately.
 
-- **`queueSize` bounds the flood as well as the walk.** It decides how many cards a request may skip, therefore how many fetches it may ask for, therefore how quickly the queue reflects a change in the library — a full queue only turns over as pictures are served. Two hundred and fifty is the number for all three at once: a few hundred pictures to remix rather than a few thousand, at one every ten seconds.
+- ~~**`queueSize` bounds the flood as well as the walk.**~~ **No longer true, 2026-08-24.** It was, when a walk asked for a fetch per card it skipped and the queue's depth was therefore the bound on both. Three things now do that job separately and better: `lookAheadDepth` decides how many cards one request may ask about, `CacheQueue.maximumWaiting` decides how long the backlog may get, and dealing is paced to pictures served rather than to cards consumed. `queueSize` is left deciding only how finely the queue samples the library — see *The caps, and the arithmetic that will break them*.
 - **The queue is never emptied to remix it**, which was proposed after a source added to a full queue took hours to appear. Emptying is cheap in cards and expensive in requests: the next walk would meet a queue of entirely uncached photographs and ask for one fetch per card, which against a metered provider is exactly the wrong thing to do for a cosmetic gain. A new or returning source mixes in at serving rate instead.
 
 **Before the Photos and Google providers ship**, this wants one more lever: a cap on how many misses a single walk will ask for, separate from how deep the queue is. Nothing needs it while every source is a folder.
 
-#### Why a fetched picture does not rejoin the queue
+**Built 2026-08-24, and needed sooner than that.** Two caps, and they bound different things. `PhotoCache.lookAheadDepth` (20) is how many cards one request may ask about; `CacheQueue.maximumWaiting` (50) is how long the backlog of pictures to fetch may get, past which a request is turned away rather than remembered. The second is what stops a night of running from queueing the entire library: serving asks for the cards ahead of the one it showed *every time it shows one*, so an unbounded backlog accumulates until it names every photograph there is. A refused request is not blacklisted — the next look-ahead that reaches that card asks again.
+
+#### Why a fetched picture rejoins the queue after all
+
+**Reversed 2026-08-24 after a night of running.** The section below is the case for taking it out, left standing because the reasoning in it is sound and is still what governs *where* a card goes back. What it got wrong was an assumption it never stated: that a photograph left out of the queue would come round again soon enough.
+
+It does not. Dealing draws uniformly from the whole library, so a photograph whose bytes were just paid for has a one-in-the-library-size chance of being the next card. **Every fetch improves the next draw by one part in fourteen thousand**, which means a cache built this way never catches up — the cards actually dealt are almost all cold, whatever is in the cache. Overnight, with two sources of 5,899 photographs on a network volume: 123 pictures shown from them in the 00h hour, 18 in the 01h hour, and **zero** from 02h through 06h, while a source needing no fetch served 327–341 an hour. Not a slowdown; a stop.
+
+Capping the fetch backlog at fifty did nothing, and could not have: it bounds how much work is queued, not the odds that a dealt card's bytes are local.
+
+**The drift the original argument feared is real, and is handled at the other end.** Dealing is now tied to pictures actually *served* rather than to cards consumed — see *Dealing is paced by serving* — so a card returning from a fetch is the same card that left rather than an extra one, and the deck advances only as fast as photographs reach a screen. That removes the mechanism by which fetch-completion order could come to govern the queue.
+
+#### Dealing is paced by serving
+
+A walk consumes every card it skips as well as the one it shows. Dealing to replace all of them means a skipped photograph is swapped for a fresh cold one *while its bytes are still being fetched*, so the fetch lands on a card nobody is holding a place for. One picture served, one card dealt — that is the whole rule, and it makes the queue's population stable and gives a returning card somewhere to return to.
+
+The heartbeat that used to fill to nominal now only **seeds an empty queue**. Filling a merely short one would put the churn straight back. The seed exists because deal-on-serve deadlocks a cold start: with nothing dealt, nothing can be served; with nothing served, nothing is dealt.
+
+**Dealing exactly one card per picture was the first attempt and it was wrong.** One per picture can hold a depth but never raise one, so raising `queueSize` left the queue stuck at its old size indefinitely — while lowering it worked, because draining needs no dealing at all. Found by setting the preference to 20 and watching the live queue sit at 10 with a `DEAL:` line after every serve. What keeps the distinction now is the gauge rather than a fixed count: **a card out being fetched still counts as the queue's**, so topping up to the target deals exactly the card that was served in the steady state, and deals more only when the target has genuinely moved.
+
+**Reading a console, a burst of deals is not a batch size.** It is what the previous request consumed — one picture shown plus every card it skipped past.
+
+#### The queue is not a queue
+
+`position` was an autoincrementing key, so every card landed at the tail and the thing was a strict FIFO. Both arrivals want otherwise, and they want opposite ends:
+
+- A card **returned after its fetch** is warm and ready. At the tail it waits a whole traversal — its bytes paid for and then left sitting.
+- A card **freshly dealt** from a new source is invisible for the same span, so a folder added now cannot appear until the queue has turned over once.
+
+Putting either at the head is worse, and was tried: the order pictures appear in becomes the order they were *fetched* in, and the fastest source owns the front whatever its share of the library.
+
+So placement is random, and `sort_key` (migration 6) is what makes it cheap — a card gets a key drawn uniformly between the smallest and largest currently queued, which is a uniform position among the cards present without moving any of them. No gap-finding, no shifting, no explicit-position inserts; that machinery existed for the head-and-tail experiments and does not come back. A card lands strictly inside the existing span, so it can never become the very next picture — at best second.
+
+**Measured, on the same library and the same source.** First photograph from a newly added network folder, from the moment its card was dealt to the moment it was displayed:
+
+| | deal → display |
+| --- | --- |
+| FIFO, queue 50 | 8m 38s |
+| random, queue 50 | 4m 46s and 5m 17s |
+
+The decomposition is the part worth keeping. Under FIFO the card spent **5m 17s** travelling from the tail to the look-ahead window, **1 second** being fetched, and 3m 20s waiting its turn. Under random placement it was asked for **11 seconds** after being dealt, because it landed inside the window rather than having to reach it. **99.8% of the latency was queue traversal**; the network was never the bottleneck.
+
+#### The queue-size sweep
+
+Run 2026-08-24 against the live agent without restarting it, on a library of 9,002 photographs: 8,287 referenced on the boot volume and 714 materialized on an SMB share. Each size set as a preference, the queue left to drain to it one card per picture served, then nine minutes sampled — about 57 pictures.
+
+| queue | pictures | skips | src 9 shown | median deal→display | median lead |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 50 (FIFO) | — | — | 1 | 8m 38s | 5m 17s |
+| 50 | — | — | 2 | 4m 46s | 11s |
+| 30 | 57 | **0** | 1 | 0m 52s | 10s |
+| 20 | 57 | **0** | 4 | 1m 13s | 10s |
+| 10 | 57 | **0** | 1 | 1m 13s | 11s |
+
+**The result is that the number decides nothing about correctness.** Not one card at any size arrived at the head without its bytes, and the *lead* — deal to `asked for` — is ten seconds at every depth, meaning random placement drops a card inside the look-ahead window within a picture of it being dealt. The reinsertion path built the same morning stayed idle throughout.
+
+**The latency column is too thin to rank the sizes and should not be read as though it ranks them.** One, four, and one sample; and because placement is random the latency is inherently uniform from near-zero to `depth × dwell`, so single samples carry almost no information. The 5m 15s outlier at queue 20 exceeds that depth's own maximum traversal, which makes it an artifact of the convergence window rather than a measurement.
+
+**What the sweep does settle is the mix.** At queue 10 the sampled queue held **no** source 9 cards at all — expected, since a source with 7.9% of the library has an expected holding of 0.79 at that depth. At 20 it held three.
+
+So the choice is between sampling the library faithfully at every instant and turning over quickly, and **20** is where those meet: it equals `lookAheadDepth`, so every card is inside the window from the moment it is dealt, which makes arriving without bytes structurally impossible rather than merely unobserved.
+
+**None of this survives a slow provider**, and it is worth being explicit that the sweep measured one storage medium. Every number above rests on a one-second fetch. See *The caps, and the arithmetic that will break them*.
+
+#### Later: tuning the queue by measurement rather than by hand
+
+**Not built.** The sweep above is a thing a person ran for forty minutes, and it is exactly the shape of thing the agent could run for itself — every input it needs is already logged. A pass every couple of days, binary-searching the depth against the library as it currently stands, would keep the number right as sources are added and removed rather than fixing it at whatever suited the library on the day it was chosen.
+
+What makes it tractable is that the objective is not the latency, which is noisy and needs many samples, but the **skip count**, which is binary, counted across every card rather than one source's, and available from the log without instrumenting anything. Search downward while skips stay at zero; stop one step above where they start. The mix constraint is arithmetic rather than measurement — the depth at which the smallest source's expected holding drops below one is `1 ÷ its share` — so it needs no experiment at all.
+
+The reason to want it is not tidiness. It is that the right answer moves: adding a Photos or Google Photos source changes the fetch time by an order of magnitude, and the value that was comfortably right becomes the value that skips every network photograph. A number chosen once is a number that will be wrong later without anything announcing it.
+
+#### Counting what actually reached a client
+
+`times_shown` counts a photograph being *chosen* — incremented inside `Deck.markShown` when serving picks a card, before anything is rendered, because the shuffle key and the repeat window are re-rolled in the same statement. A file that will not decode raises it and shows nobody anything.
+
+`times_delivered` (migration 5) counts bytes leaving the process with a 200 on them. **Where the two disagree is exactly the set of photographs the deck believes it is showing and the user has never seen**, and nothing else in the system can report that. Not backfilled, because a copy of `times_shown` would assert something untrue about every row that ever failed to render.
+
+#### The caps, and the arithmetic that will break them
+
+`lookAheadDepth` (20) is the lead-time knob, not `queueSize`: the warning a cold photograph gets is `lookAheadDepth × dwell`. `queueSize` need only be at least that for the window to cover the queue; beyond it, extra depth buys a finer-grained source mix and nothing else.
+
+The constraint that decides whether a photograph is ever skipped:
+
+```
+drain = maximumWaiting ÷ downloadConcurrency × fetchTime
+lead  = lookAheadDepth × dwell
+```
+
+Against an SMB share today: 50 ÷ 4 × 1s = **12.5s** of drain against **200s** of lead, which is why nothing is ever skipped and the reinsertion path is idle. Against a provider where a fetch takes thirty seconds — which Photos and Google Photos will be — 50 ÷ 4 × 30s = **375s** against the same 200s, and it inverts: cards arrive at the head before their bytes, every time.
+
+Three ways out and they are not equivalent. Raising `downloadConcurrency` is free against your own disk and rude against somebody's quota. Raising `lookAheadDepth` and `queueSize` together buys warning at the cost of staleness. Lowering `maximumWaiting` is the one that scales, because it is the only one that costs nobody anything — which argues for it being derived from the other three rather than being a constant.
+
+#### The case for leaving it out, which was right about where and wrong about whether
 
 Raised and settled 2026-08-23, after two wrong answers about *where* to put it.
 
@@ -878,7 +973,7 @@ So step 4 is gone. The queue's composition is purely the deck's, and caching is 
 
 **Two wrong answers preceded it**, both about *where* to put it rather than whether to. At the **tail** it sat behind everything the walk already knew it could not show — and the walk stops after one cycle, so the one card known to be servable was reliably just past the bound. That was "stuck on the same picture for minutes". At the **head**, the order pictures appeared in became the order they were *fetched* in, so a local folder filled the front and a network share never got a look in. That was "not seeing enough mixing of the sources", and it was caused by fixing the first. A random position spread the second fault around without removing it; removing the step removes both.
 
-`PhotoQueue.insertRandomly` and the position machinery it needed — gap-finding, spacing, explicit-position inserts — existed only for this and are deleted.
+`PhotoQueue.insertRandomly` and the position machinery it needed — gap-finding, spacing, explicit-position inserts — existed only for this and were deleted. **Random placement came back on 2026-08-24 and none of that machinery did**, which is the part worth noticing: a `sort_key` column places a card among the others without moving any of them, so the whole apparatus was a consequence of insisting that `position` be both the identity and the order.
 
 #### What this replaces
 
@@ -896,6 +991,24 @@ Two of the three faults found on 2026-08-23 were artifacts of the shape above ra
 
 Both were fixed in place, and both fixes were then deleted by this: `Deck.poolSize(forSource:)`, the per-source repeat window, `PhotoStore.heldOriginals(ofSource:)`, and the `usable` filter on candidate selection are all gone.
 
+#### What running it found
+
+Six changes, 2026-08-23 into 2026-08-24, all found by watching a real library rather than by reading the code. Each is recorded with the measurement that motivated it, because the numbers are the part that would not be guessed the same way twice.
+
+**The launch purge, which was the big one.** `indexCache` walked the queue at startup and dropped every materialized card whose bytes were not local. That was right under the old shape, where a card only reached the queue once its bytes were there — under this one it deletes precisely the cards that would warm the cache, and leaves the referenced cards that never needed bytes. Two sources of 5,899 photographs on a network volume had, across a week, been shown **zero** times and held 33 cached originals; every restart emptied them out of the deck. Removing it made the queue proportional to the library within one refill. `PhotoQueue.remove(photoID:)` had no callers left and went with it.
+
+**Serving asked the source before it asked the cache.** Measured per card: the cache check is 0.012 ms — an in-memory index and a stat on the local SSD — and `provider.existence` against `/Volumes/home` is 843 ms warm, 3348 ms cold. The expensive one ran first, so a walk paid a second per card to confirm photographs it was about to skip anyway. Reversing it makes a skip free and leaves exactly one network round trip per request, for the card actually going out. **The deleted-photo guarantee is unchanged** — it is a promise about what is *displayed*, so it belongs to the card being displayed and to no other.
+
+**A time budget on the walk.** One cycle of the queue was the only bound, so a cold 250-card queue on a network volume produced requests of 45 s, 67 s, and 125 s. `PhotoCache.walkBudget` is two seconds, checked before taking each card so a card is never popped and abandoned, with the first card exempt so a slow moment never becomes a blank screen. After the reordering above it should essentially never fire; if `out of time` appears in a log now, something pathological is happening.
+
+**Look-ahead, which was the counterintuitive one.** Warming happened only as a side effect of stepping *past* an uncached card, so how much warming a request did was however far it happened to travel before finding something servable. Add back a source whose photographs are always servable — anything referenced — and the walk stops on the first card and warms nothing. Measured live: cache requests fell from ~130 per five minutes to **19** the moment such a source returned. A healthy source was starving the sick ones. So serving now reads the next `lookAheadDepth` cards without consuming them and asks for the bytes of any it does not hold. Cards keep their places and their turn; a fetch that has not finished when a card's turn comes is skipped exactly as before.
+
+**Refreshing asked the provider about every photograph it held.** No diff and no set of what was seen, one round trip per row — which is a stat on a folder and most of a second on a network volume, so a source of 5,093 photographs took **eighty-five minutes**, and because the agent awaits its refresh, the main loop stopped for the duration: preferences unread, doorbells unanswered, a newly added source never scanned. The walk already knows what is there, so departures are now the difference. What the enumeration produces goes into a `walk_seen` temp table and anything the pool holds that is not in it is gone — one `NOT EXISTS`, paged. **This does not break "never build a collection of a whole source"**: the rule is about the heap, and what goes here is one short string per photograph in a table SQLite spills to disk. Same source, after: **1.1 seconds**.
+
+**`QueueFiller` still had the shape of the model it replaced** — a `sources:` list, a `concurrency:`, a task group with lanes per source, and a `Tally` of which source had gone quiet — while the agent called it with one fake source and one lane, because dealing picks from one shuffle and writes a row. 150 lines to 94. Two assertions got stronger rather than being deleted: filling now lands on *exactly* nominal, where lanes in flight used to overshoot by up to the concurrency.
+
+**A note on burst sizes**, since the log reads oddly at first: a fill deals until the queue is back at nominal, so a burst of nineteen `DEAL:` lines means the previous request consumed nineteen cards — one shown plus every card it skipped past. It is not a batch size.
+
 #### Costs Claude raised
 
 Recorded as objections to answer, not as part of the design.
@@ -910,7 +1023,9 @@ Recorded as objections to answer, not as part of the design.
 
 FIFO by creation time, bounded by bytes, ranging over `(photo, resolution)` entries rather than over photos — so a photo can outlive its own original while a rendering of it survives, which is a feature rather than a defect. See *Entries compete individually*.
 
-The reason plain FIFO is correct here rather than something cleverer is that pictures are fetched in the order the deck offers them, so the order they enter the cache is roughly the order they will be shown. Oldest-added is therefore also longest-since-shown, and evicting from the front is evicting the picture the deck is furthest from reaching again. The cache is a sliding window over the deck: expire off the front, fill at the back.
+~~The reason plain FIFO is correct here rather than something cleverer is that pictures are fetched in the order the deck offers them, so the order they enter the cache is roughly the order they will be shown.~~ **That argument died on 2026-08-24 and the policy outlived it.** Both halves stopped being true: bytes arrive from the queue of pictures to cache in the order fetches *complete*, and cards are placed at random positions rather than at the back, so nothing connects write order to display order. The cache is no longer a sliding window over the deck.
+
+What justifies keeping FIFO is weaker and worth stating as such: **it does not matter much yet.** A shuffle shows every photograph about equally often, so there is no hot set for an LRU to protect — and `createdAt` is never updated on a hit, so this is FIFO by *write* time rather than by use in any case. Where it would start to matter is a library whose working set exceeds the ceiling, so photographs are evicted before their turn comes round. That needs a library several times the size of any tested here, and it is the point at which this wants measuring rather than reasoning about. **Nothing measured so far has evicted anything at all** — 166 MB against a 50 GB ceiling.
 
 Two guards on top of it:
 
@@ -1546,6 +1661,9 @@ Details that decide whether the logs are useful a week later:
 - **Structured means fields, not prose.** Consistent event names with consistent keys, so `log show --predicate` can filter on them. "Materialized 10 photos in 4.2s for source 3" is a sentence; the same thing with stable keys is queryable.
 - **`OSSignposter` for intervals**, not log lines: decode-to-display time, fetch duration, refresh duration, serve latency. These are the numbers the Phase 2 measurements need, and signposts make them readable in Instruments without building a benchmark harness.
 - **`pgr_ctl log`** wraps `log show --predicate 'subsystem == "com.sydpolk.photogoround"'` with sensible defaults and a `--follow` mode, because nobody should have to remember predicate syntax to see what the server is doing.
+- **The two queues narrate themselves, under four prefixes**, so a console with everything interleaved stays readable and any one stream can be filtered out: `DEAL:` for a card going onto the queue of pictures to show, `SERVE:` for what that queue then decided about one, `CACHE:` for anything written to the cache, `CONFIG:` for a setting that changed underneath them. Dealing earns its own prefix because it happens in bursts of twenty while serving happens one at a time, and a burst is noise in the middle of reading a decision.
+- **Every line about a queue carries that queue's depth**, so a size cannot change without saying so. This was added after an evening of inferring queue depth from the gaps between other lines, and it is worth the width: both queues move on almost every request — a card taken, another skipped, a fetch asked for, one landed — and a depth printed only when something is *added* leaves the reader doing arithmetic. The exceptions are the lines that touch neither queue: a resize being kept, and a photograph turned away because the backlog is full.
+- **Say which bytes went out.** A served line distinguishes the original from a kept resize, because otherwise there is no way to tell from a console whether the renderings are earning their disk — a `kept` with no matching `reused` is half a story. It also carries the reason when a source could not confirm a photograph and the copy we hold went out anyway, which is the one moment the deleted-photo guarantee is knowingly relaxed.
 
 Because the logs are never collected, they have to be self-sufficient on the machine. That argues for logging the *reason* alongside every state change rather than logging that it happened and hoping the cause is inferable from what came before.
 
@@ -1879,6 +1997,12 @@ Recorded rather than remembered. Everything here is a real gap in what is built,
 
 **Done since this list was written**
 
+- **The cache was a lottery, and a night of running proved it.** Photographs were fetched and then not shown, because a fetched card left the queue and had to be dealt again — a uniform draw from fourteen thousand. Two network sources went from 123 pictures an hour to zero for five hours. Reversed under *Why a fetched picture rejoins the queue after all*, together with pacing the deal to pictures served and placing every card at a random position.
+- **`times_shown` was never the number it sounded like.** It counts a photograph being chosen, not shown: a render failure raises it and displays nothing. `times_delivered` is the honest one, and the gap between them is the only report of photographs the deck thinks you have seen and you have not.
+- **A refresh blocked the agent for eighty-five minutes**, and nothing said so. It asked the provider about every photograph it already held, one round trip each; on a network volume that is most of a second apiece. Because the main loop awaits the refresh, everything else stopped with it — preferences unread, doorbells unanswered, a source added at 00:13 still unscanned at 00:20. The symptom was "the agent is not doing anything", diagnosed by ringing the preferences doorbell and getting no answer at all. Departures now fall out of the walk that just ran, via a `walk_seen` temp table. Same source, 1.1 seconds.
+- **The launch purge deleted exactly the cards that would warm the cache.** Two network sources of 5,899 photographs had never once been shown. Written up under *What running it found*, along with the ordering fix, the walk budget, look-ahead, and `QueueFiller`'s reduction from 150 lines to 94.
+- **The look-ahead backlog was unbounded**, so a night of serving would have queued a fetch for every photograph in the library. Capped at fifty waiting; a refused request is not blacklisted.
+- **Two live-agent hazards, both found by tripping over them.** A second agent started with `--container` and `--cache-root` is *not* isolated: the port lives in preferences, so it publishes over the running agent's and the app silently follows it to the wrong library. And `--add-folder` on such a run writes into the real source list. Standing up a scratch agent needs an isolated preference suite as well as isolated storage; there is currently no flag for that, and the safer route is a test.
 - **The endpoint had no test that served a picture.** `PictureEndpoint` was
   covered by one file, and every test in it ran against an empty library — so
   nothing exercised rendering, the cache, or the headers, and the

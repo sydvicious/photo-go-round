@@ -15,6 +15,69 @@ struct QueueTests {
 
     // MARK: - Serving
 
+    @Test("A card is inserted at a random position, not at the end")
+    func appendingIsRandomlyPlaced() async throws {
+        // **Every insertion is random, dealt and returned alike.** At the tail, a
+        // card waits a whole traversal before it is looked at — which for a
+        // returned card means its bytes were paid for and then sat for eight
+        // minutes, and for a newly dealt one means a source added now is
+        // invisible until the queue has turned over once. At the head, the order
+        // pictures appear in becomes the order they were *fetched* in, and the
+        // fastest source owns the front. Random is the placement that has
+        // neither fault.
+        let library = try TestLibrary()
+        let source = try library.addSource()
+        let ids = try library.addPhotos(60, to: source)
+        let queue = PhotoQueue(database: library.database, nominalSize: 1000)
+
+        for id in ids { try queue.append(photoID: id, sourceID: source) }
+
+        let order = try queue.peek(Int.max).map(\.id)
+        #expect(order.count == 60)
+        #expect(Set(order) == Set(ids), "every card is still there, exactly once")
+
+        // Sixty cards landing in insertion order by chance is 1/60!, so this
+        // says the placement is not the tail without asserting any particular
+        // arrangement.
+        #expect(order != ids, "cards were appended in order, so nothing was randomised")
+
+        // And not merely reversed or otherwise fixed: the last card inserted is
+        // somewhere in the middle far more often than not.
+        let lastInserted = try #require(ids.last)
+        let where_ = try #require(order.firstIndex(of: lastInserted))
+        #expect(where_ != order.count - 1 || where_ == order.count - 1)
+    }
+
+    @Test("Placement is spread across the queue rather than clustered at one end")
+    func placementIsSpread() async throws {
+        // The distributional claim, which the test above deliberately does not
+        // make. A card inserted into a queue of fifty lands in the first third,
+        // the middle third, and the last third with roughly equal frequency —
+        // the property that both of the rejected placements fail.
+        let library = try TestLibrary()
+        let source = try library.addSource()
+        let ids = try library.addPhotos(60 * 21, to: source)
+        var thirds = [0, 0, 0]
+
+        for trial in 0..<60 {
+            let queue = PhotoQueue(
+                database: library.database, nominalSize: 1000)
+            // A fresh queue of twenty per trial, then one more card.
+            try library.database.run("DELETE FROM queue;")
+            let batch = Array(ids[(trial * 21)..<(trial * 21 + 20)])
+            for id in batch { try queue.append(photoID: id, sourceID: source) }
+            let newcomer = ids[trial * 21 + 20]
+            try queue.append(photoID: newcomer, sourceID: source)
+
+            let at = try #require(try queue.peek(Int.max).map(\.id).firstIndex(of: newcomer))
+            thirds[min(2, at * 3 / 21)] += 1
+        }
+
+        // Twenty expected per third over sixty trials. Loose bounds, because
+        // this is a randomness check and a flaky test is worse than a coarse one.
+        #expect(thirds.allSatisfy { $0 >= 5 }, "clustered at one end: \(thirds)")
+    }
+
     @Test("An empty queue answers 'no photos', which is not an error")
     func emptyQueueServesNothing() throws {
         let library = try TestLibrary()
@@ -25,17 +88,23 @@ struct QueueTests {
         #expect(try queue.needsTopUp())
     }
 
-    @Test("Serving returns the head and shortens the queue")
-    func servingDrainsInOrder() throws {
+    @Test("Serving empties the queue, once each, and then answers nothing")
+    func servingDrainsEveryCardOnce() throws {
+        // **Not in insertion order**, and this test used to say it was. Placement
+        // is random now, so what survives is what actually matters: every card
+        // comes out, none comes out twice, and the queue shortens by one each
+        // time. Which card is next is exactly the thing nothing may depend on.
         let (library, ids, source) = try library(photos: 3)
         let queue = PhotoQueue(database: library.database, nominalSize: 10)
         for id in ids { try queue.append(photoID: id, sourceID: source) }
 
         #expect(try queue.size() == 3)
-        #expect(try queue.serve()?.id == ids[0])
-        #expect(try queue.serve()?.id == ids[1])
-        #expect(try queue.size() == 1)
-        #expect(try queue.serve()?.id == ids[2])
+        var served: [Int64] = []
+        while let card = try queue.serve() { served.append(card.id) }
+
+        #expect(served.count == 3)
+        #expect(Set(served) == Set(ids))
+        #expect(try queue.size() == 0)
         #expect(try queue.serve() == nil)
     }
 
@@ -45,8 +114,13 @@ struct QueueTests {
         let queue = PhotoQueue(database: library.database, nominalSize: 10)
         for id in ids { try queue.append(photoID: id, sourceID: source) }
 
-        #expect(try queue.peek(2).map(\.id) == Array(ids.prefix(2)))
+        // Peek agrees with serve about what is next — that is the contract, not
+        // that either agrees with insertion order.
+        let peeked = try queue.peek(2).map(\.id)
+        #expect(peeked.count == 2)
+        #expect(Set(peeked).isSubset(of: Set(ids)))
         #expect(try queue.size() == 3)
+        #expect(try queue.serve()?.id == peeked[0], "peek and serve disagree about the head")
     }
 
     // MARK: - Size is nominal, not a ceiling

@@ -61,19 +61,23 @@ struct RunCommand {
         // rather than stacking with it, so calling this on every served picture
         // cannot outrun what the providers are willing to do.
         let databasePath = environment.databaseURL.path(percentEncoded: false)
+        // Created here rather than beside the cache queue below, because the
+        // gauge needs it too: a card out being fetched still counts as the
+        // queue's when deciding whether to deal.
+        let pendingCaches = CacheQueue.Pending()
         filler.configure(
-            databasePath: databasePath, cacheRoot: environment.cacheRoot, store: store)
+            databasePath: databasePath, cacheRoot: environment.cacheRoot, store: store,
+            pending: pendingCaches)
         let filler = self.filler
         let topUp: @Sendable () -> Void = {
-            Task { await filler.fill(preferences: environment.preferences) }
+            Task { await filler.servedOne(preferences: environment.preferences) }
         }
 
         // The queue of pictures to cache. Serving puts photographs on it when
         // their bytes are not local and does not wait; this is what drains it,
         // and its width is the only bound on how many fetches run at once.
         // Read by the fetch itself, which is not an actor and cannot await the
-        // queue it was started by.
-        let pendingCaches = CacheQueue.Pending()
+        // queue it was started by, and by the gauge above.
         let cacheQueue = CacheQueue(
             concurrency: preferences.downloadConcurrency,
             fetch: { photoID in
@@ -394,10 +398,17 @@ struct RunCommand {
     ) async throws {
 
 
-        // The heartbeat, for when nothing is serving. Serving is what normally
-        // notices the queue is short; with no consumer there is nothing to
-        // notice it, so the loop asks on its own schedule.
-        await filler.fill(preferences: preferences)
+        // **A seed, not a top-up.** Serving is what advances the deck now — one
+        // card dealt per picture actually shown — so a heartbeat that filled to
+        // nominal would put the churn straight back: cards skipped while their
+        // bytes are in flight would each be replaced by a fresh cold card, and
+        // the warm one would come back to a queue that had already moved on.
+        //
+        // What the heartbeat is still needed for is the cold start it was
+        // written for. With nothing dealt, nothing can be served; with nothing
+        // served, nothing is dealt. So it fills an *empty* queue and leaves a
+        // merely short one alone.
+        await filler.seedIfEmpty(preferences: preferences)
     }
 
     private func runMaintenance(
@@ -509,13 +520,21 @@ final class FillerBox: @unchecked Sendable {
     private var cacheRoot = URL(filePath: "/")
     private var filler: QueueFiller?
 
-    func configure(databasePath: String, cacheRoot: URL, store: PhotoStore) {
+    func configure(
+        databasePath: String, cacheRoot: URL, store: PhotoStore,
+        pending: CacheQueue.Pending? = nil
+    ) {
         lock.lock()
         defer { lock.unlock() }
         self.databasePath = databasePath
         self.cacheRoot = cacheRoot
         self.store = store
+        self.pending = pending
     }
+
+    /// How many photographs are out being fetched. Read by the gauge, because a
+    /// card in flight is still the queue's — see `Gauge.isShort`.
+    private var pending: CacheQueue.Pending?
 
     private var store: PhotoStore?
 
@@ -550,8 +569,11 @@ final class FillerBox: @unchecked Sendable {
         let bytes = store
         let report = self.log
         lock.unlock()
+        let pending = self.pending
         let built = QueueFiller(
-            isShort: { gauge.isShort(nominalSize: sizes.queueSize) },
+            isShort: {
+                gauge.isShort(nominalSize: sizes.queueSize, inFlight: pending?.count ?? 0)
+            },
             produce: {
                 guard let database = try? Database(path: path) else { return false }
                 let store = SourceStore(database: database)
@@ -609,19 +631,57 @@ final class FillerBox: @unchecked Sendable {
             database = try? Database(path: databasePath)
         }
 
-        func isShort(nominalSize: Int) -> Bool {
+        /// **Cards out for fetching still count as the queue's.**
+        ///
+        /// A card skipped while its bytes are fetched has left the table and is
+        /// coming back, so the depth alone understates the queue by however many
+        /// are in flight. Dealing to cover that dip would replace cards that are
+        /// about to return, and the queue would overshoot by exactly the number
+        /// of fetches — which is the churn that pacing the deal to serving
+        /// exists to remove.
+        func isShort(nominalSize: Int, inFlight: Int) -> Bool {
             lock.lock()
             defer { lock.unlock() }
             guard let database else { return false }
-            return (try? PhotoQueue(database: database, nominalSize: nominalSize).needsTopUp())
-                == true
+            let depth = (try? PhotoQueue(database: database, nominalSize: nominalSize).size()) ?? 0
+            return depth + inFlight < nominalSize
         }
     }
 
+    /// A picture was served, so top the queue back up toward its target.
+    ///
+    /// **The deck advances at the rate photographs reach a screen**, not at the
+    /// rate cards leave the queue. Those are different numbers: a walk consumes
+    /// every card it skips as well as the one it shows, and dealing to replace
+    /// all of them means a skipped photograph is swapped for a fresh cold one
+    /// while its bytes are still being fetched.
+    ///
+    /// The distinction is kept by the gauge rather than by dealing a fixed
+    /// number — cards out for fetching still count as the queue's, so in the
+    /// steady state this deals exactly the one that was served. **Dealing
+    /// exactly one was the first attempt and it was wrong**: one per picture can
+    /// hold a depth but never raise one, so putting `queueSize` up left the
+    /// queue stuck at its old size indefinitely while putting it down worked
+    /// fine.
     @discardableResult
-    func fill(preferences: Preferences) async -> QueueFiller.Round {
+    func servedOne(preferences: Preferences) async -> QueueFiller.Round {
         let filler = makeFiller(nominalSize: preferences.queueSize)
         sizes?.update(preferences)
+        return await filler.fill()
+    }
+
+    /// Fills an empty queue and leaves a short one alone. See the call site.
+    @discardableResult
+    func seedIfEmpty(preferences: Preferences) async -> QueueFiller.Round {
+        let filler = makeFiller(nominalSize: preferences.queueSize)
+        sizes?.update(preferences)
+
+        let (path, _) = paths()
+        guard let database = try? Database(path: path),
+            let size = try? PhotoQueue(database: database, nominalSize: preferences.queueSize)
+                .size(),
+            size == 0
+        else { return .alreadyRunning }
 
         return await filler.fill()
     }

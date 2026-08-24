@@ -178,7 +178,7 @@ struct HostTests {
 
         // Nothing stored: the answer is the default rather than a blank,
         // because the question is what the agent would use.
-        #expect(suite.preferences.effectiveValue(for: .queueSize) == "250")
+        #expect(suite.preferences.effectiveValue(for: .queueSize) == "20")
         #expect(suite.preferences.effectiveValue(for: .downloadConcurrency) == "4")
         #expect(suite.preferences.effectiveValue(for: .repeatWindowFraction) == "0.5")
 

@@ -410,29 +410,16 @@ struct ServeWalkTests {
 
     // MARK: - 4. Fetched, and back on the queue
 
-    @Test("A finished fetch leaves the queue alone, and the photograph serves when next dealt")
-    func cachingDoesNotRequeue() async throws {
-        let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-
-        // Serving passes it over and asks for it.
-        #expect(try await fixture.cache.serve() == nil)
-        #expect(fixture.queued == 0)
-        let wanted = try #require(fixture.asked.all.first)
-
-        #expect(try await fixture.cache.cache(photoID: wanted))
-
-        // **What is queued is the deck's business alone.** Putting fetched
-        // photographs back would top the queue up in the order fetches finish,
-        // so the fastest source would drift to owning it whatever its size.
-        #expect(fixture.queued == 0, "the fetch put the photograph back in the queue")
-        #expect(fixture.resident == 1, "but its bytes are here")
-
-        // It comes back the ordinary way, and serves at once when it does.
-        #expect(try fixture.cache.deal())
-        let served = try #require(try await fixture.cache.serve())
-        #expect(served.card.id == wanted)
-    }
+    /// **Reversed 2026-08-24.** This suite used to assert the opposite — that a
+    /// finished fetch left the queue alone and the photograph waited to be dealt
+    /// again — on the reasoning that the queue's composition is the deck's
+    /// business and reinstating fetched cards lets the fastest source drift into
+    /// owning it. A night of running showed the reasoning was answering the
+    /// wrong question: a photograph waiting to be dealt again is waiting on a
+    /// uniform draw from the whole library, which for fourteen thousand
+    /// photographs never comes. The drift is handled by pacing the deal to
+    /// pictures actually served instead. The old assertion is gone rather than
+    /// disabled; `fetchingReturnsTheCardToTheQueue` above is its replacement.
 
     @Test("Asking for a photograph already cached costs a skip, not a second fetch")
     func cachingSomethingAlreadyHeldDoesNothing() async throws {
@@ -471,6 +458,48 @@ struct ServeWalkTests {
         // Unreachable says nothing about the photograph: it keeps its row and
         // its deal history, and comes round again when the drive is back.
         #expect(fixture.pooled == 1)
+    }
+
+    // MARK: - 4. Fetched, and back on the queue
+
+    @Test("A fetched photograph goes back on the queue, so the fetch is not wasted")
+    func fetchingReturnsTheCardToTheQueue() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        try fixture.dealAll()
+
+        // Cold: the walk skips it, asks for it, and the card leaves the queue.
+        #expect(try await fixture.cache.serve() == nil)
+        #expect(fixture.queued == 0)
+        let wanted = try #require(fixture.asked.all.first)
+
+        _ = try await fixture.cache.cache(photoID: wanted)
+
+        // **Back, and now servable.** Without this the bytes are paid for and
+        // the photograph is not shown — it has to be dealt again, which is a
+        // uniform draw from the whole library. Fetching one picture improves the
+        // odds of the next draw by one over the library size, so a cache built
+        // that way never catches up: measured overnight as two sources of 5,899
+        // photographs going from 123 pictures shown in an hour to zero for five
+        // hours, while a source needing no fetch took every turn.
+        #expect(fixture.queued == 1)
+        let served = try #require(try await fixture.cache.serve())
+        #expect(served.card.externalID == "a.png")
+    }
+
+    @Test("A fetch that fails does not put the card back")
+    func aFailedFetchDoesNotReturnTheCard() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        try fixture.dealAll()
+        #expect(try await fixture.cache.serve() == nil)
+        let wanted = try #require(fixture.asked.all.first)
+
+        // The source is gone by the time the fetch runs.
+        try fixture.goOffline()
+        _ = try await fixture.cache.cache(photoID: wanted)
+
+        // Nothing was gained, so nothing goes back — otherwise a photograph that
+        // cannot be fetched circulates for ever, being skipped and re-requested.
+        #expect(fixture.queued == 0)
     }
 
     // MARK: - The states a source can be in, seen through the walk

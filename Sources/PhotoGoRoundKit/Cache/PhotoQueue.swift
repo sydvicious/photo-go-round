@@ -1,6 +1,11 @@
 import Foundation
 
-/// Pictures that are ready to be served, in order.
+/// Pictures that are ready to be served, in an order nothing chose.
+///
+/// **Not first-in-first-out.** Every card is placed at a random point among the
+/// cards already here — see `append` for why both of the orderly alternatives
+/// are worse. "The head" below means the card with the smallest `sort_key`,
+/// which is a position no caller can predict or rely on.
 ///
 /// The whole design is demand-driven and non-blocking:
 ///
@@ -52,7 +57,7 @@ public struct PhotoQueue {
               FROM queue q
               JOIN photo p ON p.id = q.photo_id
               JOIN source s ON s.id = p.source_id
-             ORDER BY q.position
+             ORDER BY q.sort_key, q.position
              LIMIT :limit;
             """,
             ["limit": .int(Int64(count))]
@@ -61,7 +66,21 @@ public struct PhotoQueue {
 
     // MARK: - Filling
 
-    /// Appends one entry. This is what a provider's answer amounts to.
+    /// Adds one entry, **at a random place in the queue**.
+    ///
+    /// Not a queue in the first-in-first-out sense, and deliberately so. The two
+    /// things that arrive here want opposite ends of a FIFO and neither should
+    /// get one: a card returning from a completed fetch is warm and would wait a
+    /// whole traversal at the tail, and a card freshly dealt from a new source
+    /// would be invisible for the same span. Putting either at the head instead
+    /// makes the order pictures appear in the order they were *fetched* in, so
+    /// the fastest source owns the front whatever its share of the library.
+    ///
+    /// The key is drawn uniformly between the smallest and largest currently
+    /// queued, which places the card uniformly among the cards present without
+    /// moving any of them. An empty queue spans nothing, so it gets `[0, 1)`;
+    /// a queue of one has no interval either, so the new card is offset past it
+    /// rather than tying.
     ///
     /// Nothing is evicted, nothing is capped, and an entry already queued is not
     /// added twice — a provider re-offering a picture we are already holding is
@@ -77,10 +96,19 @@ public struct PhotoQueue {
 
             try database.run(
                 """
-                INSERT INTO queue (photo_id, source_id, queued_at)
-                VALUES (:photo, :source, :now);
+                INSERT INTO queue (photo_id, source_id, queued_at, sort_key)
+                SELECT :photo, :source, :now,
+                       CASE
+                         WHEN lo IS NULL THEN :r
+                         WHEN hi > lo    THEN lo + :r * (hi - lo)
+                         ELSE lo + :r
+                       END
+                  FROM (SELECT MIN(sort_key) AS lo, MAX(sort_key) AS hi FROM queue);
                 """,
-                ["photo": .int(photoID), "source": .int(sourceID), "now": SQLValue(now)]
+                [
+                    "photo": .int(photoID), "source": .int(sourceID), "now": SQLValue(now),
+                    "r": .double(Double.random(in: 0..<1)),
+                ]
             )
             return true
         }
@@ -101,7 +129,7 @@ public struct PhotoQueue {
                   FROM queue q
                   JOIN photo p ON p.id = q.photo_id
                   JOIN source s ON s.id = p.source_id
-                 ORDER BY q.position
+                 ORDER BY q.sort_key, q.position
                  LIMIT 1;
                 """
             ) { row in

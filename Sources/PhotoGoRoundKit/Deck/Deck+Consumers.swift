@@ -265,7 +265,10 @@ extension Deck {
     ///
     /// Called when a picture is served from the queue, not when it is added —
     /// so a picture prepared but never shown costs the rotation nothing.
-    @discardableResult
+    ///
+    /// **Not the same as `markDelivered`, below**, which counts what actually
+    /// reached a client. This one fires when serving *chooses* a card, before
+    /// any rendering has been attempted.
     public func markShown(photoID: Int64, now: Date = Date()) throws -> Int64 {
         try database.transaction(.immediate) {
             let seq = try currentDealSeq() + 1
@@ -289,6 +292,31 @@ extension Deck {
             )
             return seq
         }
+    }
+
+    /// Records that a photograph's bytes actually left the process.
+    ///
+    /// **Separate from `markShown`, and deliberately not folded into it.** That
+    /// one fires when serving *chooses* a card, which has to happen there
+    /// because the shuffle key and the repeat window are re-rolled in the same
+    /// statement. This one fires when the endpoint has a 200 in its hand. The
+    /// gap between them is every photograph the deck believes it showed and
+    /// nobody saw: a file that would not decode, a rendering that failed, a
+    /// source that went away between selection and read.
+    ///
+    /// Touches nothing the deck orders by — no shuffle key, no ordinal, no
+    /// claim. It is a statistic, and it is safe to call from the endpoint after
+    /// the fact for exactly that reason.
+    public func markDelivered(photoID: Int64, now: Date = Date()) throws {
+        try database.run(
+            """
+            UPDATE photo
+               SET times_delivered   = times_delivered + 1,
+                   last_delivered_at = :now
+             WHERE id = :id;
+            """,
+            ["now": SQLValue(now), "id": .int(photoID)]
+        )
     }
 
     private static let candidatePredicate = """

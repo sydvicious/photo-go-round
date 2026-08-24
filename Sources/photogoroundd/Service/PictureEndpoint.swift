@@ -260,6 +260,7 @@ struct PictureEndpoint {
                         headers["X-PGR-Pixels"] = "\(pixels.width)x\(pixels.height)"
                     }
                     headers["X-PGR-Cache"] = "hit"
+                    try? context.deck.markDelivered(photoID: served.card.id)
                     report(
                         request, status: 200, detail: served.card.externalID,
                         card: served.card, bytes: bytes, cache: .hit, cacheBytes: store.totals.byteCount,
@@ -274,6 +275,7 @@ struct PictureEndpoint {
                     let bytes =
                         (try? served.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
                         .map(Int64.init) ?? 0
+                    try? context.deck.markDelivered(photoID: served.card.id)
                     report(
                         request, status: 200, detail: served.card.externalID,
                         card: served.card, bytes: bytes)
@@ -296,6 +298,7 @@ struct PictureEndpoint {
                         for: served.card, contentType: rendered.format.mimeType)
                     headers["X-PGR-Pixels"] = "\(rendered.width)x\(rendered.height)"
                     headers["X-PGR-Cache"] = "miss"
+                    try? context.deck.markDelivered(photoID: served.card.id)
                     report(
                         request, status: 200, detail: served.card.externalID,
                         card: served.card, bytes: Int64(rendered.bytes.count), cache: .miss, cacheBytes: store.totals.byteCount,
@@ -328,9 +331,14 @@ struct PictureEndpoint {
 
             // Ordinary, not an error. A fresh install answers this way until
             // downloads land, and every surface has an empty state already.
-            // Still ask for more: empty is the loudest possible signal that the
-            // queue has run short.
-            queueRanShort()
+            //
+            // **And it does not ask for more.** It used to, on the reasoning
+            // that an empty answer is the loudest signal the queue has run
+            // short. That is true and it is the wrong response: the cards this
+            // walk passed over are all out being fetched and will come back, so
+            // dealing here buys a fresh cold card in place of a warm one that is
+            // already paid for. Dealing is tied to pictures actually served
+            // instead — see `FillerBox.fill`.
             report(request, status: 204, detail: "no photos available")
             return .noContent()
         } catch {
