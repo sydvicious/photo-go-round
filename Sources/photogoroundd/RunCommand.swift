@@ -710,8 +710,21 @@ final class Reporter: @unchecked Sendable {
         anything = true
         lock.unlock()
         switch change {
-        case .added(let id): Console.change("+", id, .green, suffix: "source \(source)")
-        case .removed(let id): Console.change("-", id, .red, suffix: "source \(source)")
+        // **Cyan rather than green, and across the whole name.**
+        //
+        // Green against the yellow of a served picture is the one pair that
+        // red-green colour blindness cannot separate, and it was invisible to
+        // the person these lines are for. Blue against yellow is the axis that
+        // survives every common form of it, so that is the axis these use.
+        //
+        // Hue is the second cue regardless. The first is width: a scan line is
+        // coloured end to end and a served picture is not, which reads the same
+        // whether or not colour arrives at all — piped to a file, on a monochrome
+        // terminal, or by anyone who sees hue differently.
+        case .added(let id):
+            Console.change("+", id, .cyan, suffix: "source \(source)", whole: true)
+        case .removed(let id):
+            Console.change("-", id, .red, suffix: "source \(source)", whole: true)
         }
     }
 

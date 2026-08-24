@@ -53,9 +53,25 @@ public enum Console {
         print("\(timestamp)  \(paint(text, .grey))")
     }
 
-    public static func change(_ mark: String, _ name: String, _ colour: Colour, suffix: String? = nil) {
+    /// A line about one named thing.
+    ///
+    /// **`whole` decides how loud it is, and the choice is about frequency.** A
+    /// picture being served is the line a person watching this sees every ten
+    /// seconds for hours; colouring it end to end would make a wall of it, so it
+    /// gets a coloured mark and a plain name. A photograph appearing or leaving
+    /// a source happens in occasional bursts and is worth looking up for, so it
+    /// takes the colour across the name as well.
+    ///
+    /// Painting only the mark for both was the original, and it did not work: a
+    /// single green glyph against a single yellow one, with the rest of each
+    /// line identical, is not a difference you can see while scrolling.
+    public static func change(
+        _ mark: String, _ name: String, _ colour: Colour, suffix: String? = nil,
+        whole: Bool = false
+    ) {
         let tail = suffix.map { "  " + paint($0, .grey) } ?? ""
-        print("\(timestamp)  \(paint(mark, colour)) \(name)\(tail)")
+        let body = whole ? paint(name, colour) : name
+        print("\(timestamp)  \(paint(mark, colour)) \(body)\(tail)")
     }
 
     public static func alert(_ text: String) {
