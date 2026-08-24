@@ -59,12 +59,20 @@ extension SourceRequest {
         var missing: [String] = []
 
         for request in requests {
-            let resolved = URL(filePath: request.path).standardizedFileURL
+            var resolved = URL(filePath: request.path).standardizedFileURL
                 .path(percentEncoded: false)
             guard fileManager.fileExists(atPath: resolved) else {
                 missing.append(resolved)
                 continue
             }
+            // **A folder ends in a slash, always.** `NSOpenPanel` hands back a
+            // directory URL and produces one; a path typed on a command line
+            // usually does not — and the two spellings are different strings, so
+            // the same folder can be listed twice and removing it by one
+            // spelling leaves the other behind. The locator is the key that
+            // preferences and the source table are matched on, so it has to have
+            // exactly one form.
+            if request.kind != .file, !resolved.hasSuffix("/") { resolved += "/" }
             specs.append(
                 request.kind == .file
                     ? SourceSpec(kind: .file, locator: resolved)

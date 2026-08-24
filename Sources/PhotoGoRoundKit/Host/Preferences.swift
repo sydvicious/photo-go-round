@@ -19,19 +19,31 @@ import Foundation
 /// to go stale and no init-order dependency to reason about.
 public struct Preferences: @unchecked Sendable {
     private let defaults: UserDefaults
+    /// The domain the values live in, remembered because forcing a re-read
+    /// requires naming it — see `reload`.
+    private let domain: String?
+    /// Called after the source list is read and before it is written back, so a
+    /// test can do what another process would: change the list in the window a
+    /// read-modify-write leaves open.
+    private let onReadingSources: (@Sendable () -> Void)?
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.domain = nil
+        self.onReadingSources = nil
     }
 
     /// The App Group suite, which is the authoritative one. Falls back to
     /// standard defaults when the suite cannot be opened — which happens
     /// whenever the App Group entitlement is absent, i.e. every unsigned
     /// development build.
-    public init(suiteName: String?) {
+    public init(suiteName: String?, onReadingSources: (@Sendable () -> Void)? = nil) {
+        self.onReadingSources = onReadingSources
         if let suiteName, let suite = UserDefaults(suiteName: suiteName) {
             self.defaults = suite
+            self.domain = suiteName
         } else {
+            self.domain = nil
             if suiteName != nil {
                 Log.prefs.notice(
                     "app group suite unavailable; using standard defaults for this run"
@@ -159,10 +171,28 @@ public struct Preferences: @unchecked Sendable {
     /// for the duration of its own I/O. Per source rather than global, so a slow
     /// provider saturates its own connection without crowding out a fast one.
     public var downloadConcurrency: Int {
-        integer(.downloadConcurrency, default: QueueFiller.defaultConcurrency, in: 1...32)
+        integer(.downloadConcurrency, default: CacheQueue.defaultConcurrency, in: 1...32)
     }
 
-    /// How many ready pictures to keep queued. A target, not a ceiling.
+    /// How many cards to keep queued. A target, not a ceiling.
+    ///
+    /// **The meaning changed underneath the name.** It used to count *ready
+    /// pictures* — photographs whose bytes were already fetched. The queue now
+    /// holds cards, and serving walks it until it finds one it can show, asking
+    /// for a fetch for each one it cannot. So the number bounds two things at
+    /// once: how many cards a single request may skip, and how many fetches it
+    /// may ask for on the way past.
+    ///
+    /// It also decides **how quickly the queue reflects a change in the
+    /// library**, and that is what settles the number. A full queue only turns
+    /// over as pictures are served, so cards dealt before a source arrived —
+    /// or before a drive came back — persist for a whole queue's worth of
+    /// pictures. At one every ten seconds, a thousand is about three hours; two
+    /// hundred and fifty is under one.
+    ///
+    /// Deeper is otherwise harmless: a skip is a lookup in an index held in
+    /// memory, and however many fetches a walk asks for, `downloadConcurrency`
+    /// caps how many run.
     ///
     /// Read afresh every time the queue is topped up, so changing it takes
     /// effect at the next refresh rather than at the next launch. Raising it
@@ -170,7 +200,7 @@ public struct Preferences: @unchecked Sendable {
     /// asked until serving brings the queue back under the new number, since
     /// nothing is ever evicted from the queue to make it shorter.
     public var queueSize: Int {
-        integer(.queueSize, default: 1000, in: 1...100_000)
+        integer(.queueSize, default: 250, in: 1...100_000)
     }
 
     /// How often the queue is topped up.
@@ -190,31 +220,77 @@ public struct Preferences: @unchecked Sendable {
     /// Entries that cannot be parsed are dropped rather than failing the read —
     /// a hand-edited plist should cost you the bad entry, not the library.
     public var sources: [SourceSpec] {
+        readSources().specs
+    }
+
+    /// The list as specs, **and the entries that could not be read**.
+    ///
+    /// Both halves are needed by anything that writes: an entry this build
+    /// cannot parse is somebody's source, and dropping it on the way past would
+    /// delete it. It is carried through untouched and written back.
+    private func readSources() -> (specs: [SourceSpec], unreadable: [Any]) {
         let stored = defaults.array(forKey: Key.sources.rawValue) ?? []
-        return stored.compactMap { entry in
-            guard let spec = SourceSpec(propertyList: entry) else {
-                Log.prefs.error("ignoring an unreadable entry in the source list")
-                return nil
+        var specs: [SourceSpec] = []
+        var unreadable: [Any] = []
+        for entry in stored {
+            if let spec = SourceSpec(propertyList: entry) {
+                specs.append(spec)
+            } else {
+                Log.prefs.error("keeping an unreadable entry in the source list, untouched")
+                unreadable.append(entry)
             }
-            return spec
         }
+        return (specs, unreadable)
     }
 
     public func setSources(_ specs: [SourceSpec]) {
-        defaults.set(specs.map(\.propertyList), forKey: Key.sources.rawValue)
+        write(specs, keeping: readSources().unreadable)
+    }
+
+    private func write(_ specs: [SourceSpec], keeping unreadable: [Any]) {
+        defaults.set(specs.map(\.propertyList) + unreadable, forKey: Key.sources.rawValue)
         DarwinNotification.post(.sourcesChanged)
     }
+
+    /// Reads the list, lets `edit` change it, and writes it back — **checking
+    /// that nothing else changed it in between**.
+    ///
+    /// `UserDefaults` has no compare-and-swap and the whole array is rewritten
+    /// on every change, so two writers — the agent on a client's behalf and
+    /// `pgr_ctl` — can each read the same list and write over each other. The
+    /// loser's source simply never appears. This re-reads before writing and
+    /// starts again when the list moved, which turns a silent loss into a retry.
+    private func mutateSources(_ edit: (inout [SourceSpec]) -> Bool) -> Bool {
+        for _ in 0..<Self.writeAttempts {
+            let (before, unreadable) = readSources()
+            var edited = before
+            guard edit(&edited) else { return false }
+
+            onReadingSources?()
+
+            let (now, unreadableNow) = readSources()
+            guard now == before else {
+                // Somebody wrote while we were deciding. Their list is the one
+                // to edit, so go round again rather than overwriting it.
+                continue
+            }
+            write(edited, keeping: unreadableNow)
+            return true
+        }
+        Log.prefs.error("gave up rewriting the source list; something else keeps changing it")
+        return false
+    }
+
+    /// How many times a change will start over when another writer beats it.
+    /// Small: contention here is two people, not a thundering herd.
+    static let writeAttempts = 5
 
     /// Adds a source if its locator is not already listed. Returns false when it
     /// was already there, which makes re-asserting the same list at every launch
     /// a no-op rather than a duplicate.
     @discardableResult
     public func addSource(_ spec: SourceSpec) -> Bool {
-        var current = sources
-        guard !current.contains(where: { $0.locator == spec.locator }) else { return false }
-        current.append(spec)
-        setSources(current)
-        return true
+        !addSources([spec]).isEmpty
     }
 
     /// Adds several sources in one write, ringing the doorbell once.
@@ -230,17 +306,31 @@ public struct Preferences: @unchecked Sendable {
     /// nothing, which keeps re-asserting a list at launch free.
     @discardableResult
     public func addSources(_ specs: [SourceSpec]) -> [SourceSpec] {
-        var current = sources
-        var known = Set(current.map(\.locator))
         var added: [SourceSpec] = []
-        for spec in specs {
-            guard !known.contains(spec.locator) else { continue }
-            known.insert(spec.locator)
-            current.append(spec)
-            added.append(spec)
+        var changed = false
+        _ = mutateSources { current in
+            added = []
+            changed = false
+            for spec in specs {
+                guard let existing = current.firstIndex(where: { $0.locator == spec.locator })
+                else {
+                    current.append(spec)
+                    added.append(spec)
+                    changed = true
+                    continue
+                }
+                // **Already listed is not nothing to do.** Adding a folder again
+                // with different options used to discard them silently and
+                // report "nothing new" — so there was no way to ask for
+                // recursion on a folder already there, and no sign it had been
+                // ignored.
+                if current[existing] != spec {
+                    current[existing] = spec
+                    changed = true
+                }
+            }
+            return changed
         }
-        guard !added.isEmpty else { return [] }
-        setSources(current)
         return added
     }
 
@@ -252,20 +342,38 @@ public struct Preferences: @unchecked Sendable {
     /// the agent's next reconcile.
     @discardableResult
     public func removeSource(locator: String) -> Bool {
-        let current = sources
-        let remaining = current.filter { $0.locator != locator }
-        guard remaining.count != current.count else { return false }
-        setSources(remaining)
-        return true
+        mutateSources { current in
+            let remaining = current.filter { $0.locator != locator }
+            guard remaining.count != current.count else { return false }
+            current = remaining
+            return true
+        }
+    }
+
+    /// Changes a folder source's recursion. Returns false when it is not
+    /// listed, which is the same answer `setSourceEnabled` gives and for the
+    /// same reason: the durable list is what a change has to land in, and a
+    /// source missing from it is a repair rather than an edit.
+    @discardableResult
+    public func setSourceRecursive(_ recursive: Bool, locator: String) -> Bool {
+        mutateSources { current in
+            guard let index = current.firstIndex(where: { $0.locator == locator }) else {
+                return false
+            }
+            current[index].recursive = recursive
+            return true
+        }
     }
 
     @discardableResult
     public func setSourceEnabled(_ enabled: Bool, locator: String) -> Bool {
-        var current = sources
-        guard let index = current.firstIndex(where: { $0.locator == locator }) else { return false }
-        current[index].enabled = enabled
-        setSources(current)
-        return true
+        mutateSources { current in
+            guard let index = current.firstIndex(where: { $0.locator == locator }) else {
+                return false
+            }
+            current[index].enabled = enabled
+            return true
+        }
     }
 
     // MARK: - Where the service is
@@ -327,8 +435,16 @@ public struct Preferences: @unchecked Sendable {
     /// `cfprefsd` caches aggressively, and a stale value in our process is the
     /// default outcome — so noticing a change and then faithfully reading the
     /// old number is the failure mode this exists to prevent.
+    /// Which domain `reload` names.
+    ///
+    /// Exposed because getting it wrong is invisible: synchronising the wrong
+    /// domain succeeds and does nothing, and the values keep coming back stale.
+    public var synchronisedDomain: String {
+        domain ?? (kCFPreferencesCurrentApplication as String)
+    }
+
     public func reload() {
-        CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
+        CFPreferencesAppSynchronize(synchronisedDomain as CFString)
     }
 
     /// The value the agent would actually use for a key: whatever is stored,

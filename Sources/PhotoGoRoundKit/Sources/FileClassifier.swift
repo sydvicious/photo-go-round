@@ -96,6 +96,31 @@ struct FileClassifier {
         return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
     }
 
+    /// Where a path stands: there, unreachable, or gone.
+    ///
+    /// **Public because two very different processes need the same answer.** The
+    /// agent asks it about a source it is about to walk; the app asks it about a
+    /// row it is about to draw, because it is unsandboxed, it knows the path, and
+    /// a round trip to be told what a `stat` would say is a round trip for
+    /// nothing.
+    ///
+    /// The conservative step is the third case. A folder the caller has not been
+    /// granted access to is indistinguishable from one that is not there — the
+    /// `stat` fails either way — so the parent has to be readable before an
+    /// absence is allowed to mean *gone*. Getting that wrong deletes a library
+    /// over a permission prompt.
+    static func availability(of url: URL) -> SourceAvailability {
+        if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
+            return .available
+        }
+        guard volumeIsMounted(for: url) else { return .offline(reason: "volume not mounted") }
+        let parent = url.deletingLastPathComponent().path(percentEncoded: false)
+        guard FileManager.default.isReadableFile(atPath: parent) else {
+            return .offline(reason: "not readable")
+        }
+        return .gone(reason: "no longer at this path")
+    }
+
     /// Why a path could not be reached, phrased for a person reading
     /// `pgr source list` in red.
     ///

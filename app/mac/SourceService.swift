@@ -1,0 +1,193 @@
+import Foundation
+import PhotoGoRoundKit
+
+/// The agent's source endpoints, over HTTP and nothing else.
+///
+/// **The app is a client.** It does not open the database, it does not read the
+/// source list out of preferences, and it does not link anything the agent
+/// links to do this work — it asks, and it decodes the answer. The one thing it
+/// takes from preferences is where the agent is listening, because a port cannot
+/// be discovered from an endpoint you need the port to reach.
+///
+/// The types below are this app's reading of the wire, declared here rather than
+/// shared with the service. That is the point of there being a wire at all: the
+/// two ends agree on a shape, not on a module.
+struct SourceService {
+    /// Read fresh on every request rather than resolved once, for the same
+    /// reason `PictureClient` does it: the agent may have restarted onto a
+    /// different port, and a client holding the old one fails for ever against a
+    /// service that is running perfectly well.
+    private let preferences: Preferences
+    /// The one seam. `URLSession` in the app, a stub in a test — so the panel's
+    /// behaviour can be exercised without an agent to talk to.
+    private let transport: @Sendable (URLRequest) async throws -> (Data, URLResponse)
+
+    init(
+        preferences: Preferences,
+        transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse) = {
+            try await URLSession.shared.data(for: $0)
+        }
+    ) {
+        self.preferences = preferences
+        self.transport = transport
+    }
+
+    // MARK: - What comes back
+
+    /// A source as the agent describes it. Extra fields it may grow are ignored
+    /// rather than fatal, which is what keeps a newer agent from breaking an
+    /// older panel.
+    struct Source: Decodable, Equatable, Identifiable, Sendable {
+        var uuid: String
+        var kind: String
+        var locator: String
+        /// Folders only. Absent for a file, which has no such option — and the
+        /// absence is what the panel reads to decide that Configure is not
+        /// available.
+        var recursive: Bool?
+        var enabled: Bool
+        var available: Bool
+        var unavailableReason: String?
+        var photos: Int
+        var scannedAt: Date?
+
+        var id: String { uuid }
+
+        /// What to call it in a list: the last path component, which is the part
+        /// a person recognises. The full path is shown underneath and in
+        /// Configure.
+        var name: String {
+            let leaf = URL(filePath: locator).lastPathComponent
+            return leaf.isEmpty ? locator : leaf
+        }
+
+        var isFolder: Bool { kind == "folder" }
+    }
+
+    /// Why an ask did not work, in the terms the panel has something to say
+    /// about.
+    enum Failure: Error, Equatable {
+        /// Nothing has published a port: the agent is not running. The panel
+        /// says so rather than showing an empty list, which would read as
+        /// "you have no sources".
+        case noAgent
+        /// A port is published and nothing answered there.
+        case unreachable(String)
+        /// The service refused, and said why. The string is its `error` field,
+        /// which is written to be shown.
+        case refused(status: Int, reason: String)
+        /// Paths the service could not find. Named, because the whole point of
+        /// asking synchronously is being told which one was wrong.
+        case notFound([String])
+        /// The answer did not decode. A newer agent, or something else on the
+        /// port.
+        case unreadable
+    }
+
+    // MARK: - Asking
+
+    func list() async throws -> [Source] {
+        try await send(decoding: [Source].self, "GET", "/v1/sources")
+    }
+
+    /// Adds every path in one request, so a selection of two hundred files is
+    /// one write and one doorbell rather than two hundred of each.
+    ///
+    /// **All of them or none of them**, which is the service's rule rather than
+    /// this one: a path that stopped resolving between the dialog and the
+    /// request refuses the batch and names itself.
+    @discardableResult
+    func add(files: [URL]) async throws -> [Source] {
+        try await add(files.map { ["kind": "file", "path": $0.path(percentEncoded: false)] })
+    }
+
+    @discardableResult
+    func add(folder: URL, recursive: Bool) async throws -> [Source] {
+        try await add([
+            [
+                "kind": "folder", "path": folder.path(percentEncoded: false),
+                "recursive": recursive,
+            ]
+        ])
+    }
+
+    private func add(_ entries: [[String: Any]]) async throws -> [Source] {
+        guard let body = try? JSONSerialization.data(withJSONObject: entries) else {
+            throw Failure.unreadable
+        }
+        return try await send(decoding: [Source].self, "POST", "/v1/sources", body: body)
+    }
+
+    @discardableResult
+    func setRecursive(_ recursive: Bool, of uuid: String) async throws -> Source {
+        let body = try JSONEncoder().encode(["recursive": recursive])
+        return try await send(
+            decoding: Source.self, "PATCH", "/v1/sources/\(uuid)", body: body)
+    }
+
+    /// Answers `204`, so there is nothing to decode — the absence of a refusal
+    /// is the whole answer.
+    func remove(_ uuid: String) async throws {
+        _ = try await send("DELETE", "/v1/sources/\(uuid)", body: nil)
+    }
+
+    // MARK: - The one request shape
+
+    @discardableResult
+    private func send<T: Decodable>(
+        decoding type: T.Type, _ method: String, _ path: String, body: Data? = nil
+    ) async throws -> T {
+        let data = try await send(method, path, body: body)
+        guard let decoded = try? Self.decoder().decode(T.self, from: data) else {
+            throw Failure.unreadable
+        }
+        return decoded
+    }
+
+    private func send(_ method: String, _ path: String, body: Data?) async throws -> Data {
+        guard let port = preferences.servicePort,
+            let url = URL(string: "http://localhost:\(port)\(path)")
+        else { throw Failure.noAgent }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await transport(request)
+        } catch let error as URLError {
+            throw Failure.unreachable(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else { throw Failure.unreadable }
+        guard (200...299).contains(http.statusCode) else {
+            throw Self.refusal(status: http.statusCode, body: data)
+        }
+        return data
+    }
+
+    /// The service answers every refusal in one shape, so this reads one field
+    /// rather than parsing prose.
+    private static func refusal(status: Int, body: Data) -> Failure {
+        struct Refusal: Decodable {
+            var error: String
+            var missing: [String]?
+        }
+        guard let refusal = try? JSONDecoder().decode(Refusal.self, from: body) else {
+            return .refused(status: status, reason: "the service answered \(status)")
+        }
+        if let missing = refusal.missing, !missing.isEmpty { return .notFound(missing) }
+        return .refused(status: status, reason: refusal.error)
+    }
+
+    private static func decoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+}

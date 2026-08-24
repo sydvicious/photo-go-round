@@ -356,6 +356,38 @@ struct SourceTests {
         #expect(entry.seq == nil)
     }
 
+    @Test("A refresh never asks the source about the photographs it already holds")
+    func refreshFindsDeparturesFromTheWalkAlone() async throws {
+        let folder = TemporaryFolder()
+        for name in ["a.png", "b.png", "c.png"] { folder.write(name) }
+
+        let library = try TestLibrary()
+        let access = UnsandboxedFileAccess()
+        let counting = CountingProvider(wrapping: FolderSourceProvider(fileAccess: access))
+        let store = SourceStore(
+            database: library.database, fileAccess: access,
+            providers: [counting, FileSourceProvider(fileAccess: access)])
+        let source = try store.add(kind: .folder, locator: folder.path)
+        await store.refresh(source)
+        counting.reset()
+
+        folder.remove("b.png")
+        let result = await store.refresh(try #require(try store.source(id: source.id)))
+
+        // The departure is still found — that is the behaviour, and it is
+        // unchanged.
+        #expect(result.removed == 1)
+        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 2)
+
+        // **But not by asking.** The sweep used to walk the pool a page at a
+        // time and ask the provider about every entry, which is one round trip
+        // per photograph. On a folder that is a stat; on a network volume it is
+        // most of a second, so a source of five thousand photographs took over
+        // an hour to refresh and blocked everything else the agent does. The
+        // walk already knows what is there, so what is gone is the difference.
+        #expect(counting.checks == 0)
+    }
+
     @Test("Removing from the pool takes its queue entries with it")
     func poolRemovalCascadesToTheQueue() async throws {
         let folder = TemporaryFolder()
@@ -555,7 +587,7 @@ struct SourceTests {
 
         // A claim taken at selection is visible, which is what makes a stuck
         // producer something you can see rather than something you infer.
-        _ = try library.deck.nextCandidate(forSource: source)
+        _ = try library.deck.nextCandidate()
         stats = try pool.stats(forSource: source)
         #expect(stats.claimed == 1)
 

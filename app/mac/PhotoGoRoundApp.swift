@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// The Mac app, which is deliberately almost nothing: a window, a photograph in
-/// it sized to fit, and standard full-screen support.
+/// The Mac app: a window, a photograph in it sized to fit, standard full-screen
+/// support — and one panel for saying where the photographs come from.
 ///
-/// It manages no sources and exposes no settings, because `pgr_ctl` shipped a
-/// phase earlier and already does both. What it is, is a *consumer* — it asks
-/// the agent for a picture and draws what it is handed, opening neither the
-/// database nor the cache.
+/// It is a *consumer* first: it asks the agent for a picture and draws what it
+/// is handed, opening neither the database nor the cache. **Settings is the one
+/// place it asks for something other than a picture**, and it asks over the same
+/// HTTP the pictures come over. `pgr_ctl` does all of this and more from a
+/// terminal, but `pgr_ctl` never ships — so without this panel there is no way
+/// for anybody else to add a photograph to their own library.
 @main
 struct PhotoGoRoundApp: App {
     @Environment(\.openWindow) private var openWindow
@@ -41,5 +43,13 @@ struct PhotoGoRoundApp: App {
         // It is exactly as big as its text, and nothing about it is resizable.
         .windowResizability(.contentSize)
         .defaultPosition(.center)
+
+        // The standard scene, which puts "Settings…" in the application menu
+        // under About and takes ⌘, — rather than a window of our own that would
+        // have to reimplement both and would sit in the wrong menu.
+        Settings {
+            SourcesSettingsView()
+        }
+        .windowResizability(.contentSize)
     }
 }

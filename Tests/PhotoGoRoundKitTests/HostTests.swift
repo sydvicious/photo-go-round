@@ -178,7 +178,7 @@ struct HostTests {
 
         // Nothing stored: the answer is the default rather than a blank,
         // because the question is what the agent would use.
-        #expect(suite.preferences.effectiveValue(for: .queueSize) == "1000")
+        #expect(suite.preferences.effectiveValue(for: .queueSize) == "250")
         #expect(suite.preferences.effectiveValue(for: .downloadConcurrency) == "4")
         #expect(suite.preferences.effectiveValue(for: .repeatWindowFraction) == "0.5")
 
@@ -300,7 +300,9 @@ struct HostTests {
             .folder("/tmp/a"), .folder("/tmp/b"), .folder("/tmp/c"),
         ])
         #expect(added.count == 3)
-        #expect(suite.preferences.sources.map(\.locator) == ["/tmp/a", "/tmp/b", "/tmp/c"])
+        // Folders carry a trailing slash, decided once at construction so that
+        // every path agrees on one spelling of the identity.
+        #expect(suite.preferences.sources.map(\.locator) == ["/tmp/a/", "/tmp/b/", "/tmp/c/"])
     }
 
     @Test("A batch skips what is already listed and keeps the rest")
@@ -309,7 +311,7 @@ struct HostTests {
         suite.preferences.addSources([.folder("/tmp/a")])
 
         let added = suite.preferences.addSources([.folder("/tmp/a"), .folder("/tmp/b")])
-        #expect(added.map(\.locator) == ["/tmp/b"])
+        #expect(added.map(\.locator) == ["/tmp/b/"])
         #expect(suite.preferences.sources.count == 2)
     }
 
@@ -336,16 +338,33 @@ struct HostTests {
     /// property is verified against a live agent instead, by watching a
     /// multi-file add produce one refresh in `pgr_ctl log` rather than one per
     /// file.
-    @Test("A batch of entirely known sources writes nothing at all")
-    func batchOfDuplicatesIsSilent() {
+    @Test("A batch of sources already listed, asked for as they already are, adds nothing")
+    func batchOfIdenticalDuplicatesIsSilent() {
         let suite = Suite()
         suite.preferences.addSources([.folder("/tmp/a", recursive: true)])
 
-        let added = suite.preferences.addSources([.folder("/tmp/a"), .folder("/tmp/a")])
+        let added = suite.preferences.addSources([
+            .folder("/tmp/a", recursive: true), .folder("/tmp/a", recursive: true),
+        ])
         #expect(added.isEmpty)
+        #expect(suite.preferences.sources.count == 1)
+        #expect(suite.preferences.sources[0].recursive)
+    }
 
-        // Unchanged, recursion included — a rewrite would have taken the second
-        // batch's answer, which says otherwise.
+    /// **Already listed is not nothing to do.** Adding a folder again with
+    /// different options used to discard them and report "nothing new", so there
+    /// was no way to ask for recursion on a folder already there and no sign it
+    /// had been ignored.
+    @Test("Adding a listed source with different options applies them")
+    func reAddingAppliesNewOptions() {
+        let suite = Suite()
+        suite.preferences.addSources([.folder("/tmp/a", recursive: false)])
+
+        let added = suite.preferences.addSources([.folder("/tmp/a", recursive: true)])
+
+        // Nothing was *added* — there is still one source — but what it was
+        // asked to be is what it now is.
+        #expect(added.isEmpty)
         #expect(suite.preferences.sources.count == 1)
         #expect(suite.preferences.sources[0].recursive)
     }

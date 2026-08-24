@@ -24,6 +24,57 @@ public struct PhotoCache {
     /// what is cached.
     public let store: PhotoStore
 
+    /// Where the two queues say what they did. Injected for the same reason the
+    /// served-request log is: `os_log` lands in a store no test can read back
+    /// while the assertion is still interesting, and a person standing the agent
+    /// up needs the decisions on the console as they happen.
+    public var log: @Sendable (QueueEvent) -> Void = { $0.report() }
+
+    /// Puts a photograph on the queue of pictures to cache.
+    ///
+    /// Serving calls this and does not wait for it. The host owns the queue and
+    /// whatever drains it, because how many fetches run at once is scheduling
+    /// and scheduling is not the kit's business.
+    public var wantsCaching: @Sendable (Int64) -> Void = { _ in }
+
+    /// How many photographs are waiting to be fetched, so a `CACHE:` line
+    /// written from here says the same thing as one written by the queue.
+    public var pendingCaches: @Sendable () -> Int = { 0 }
+
+    /// How long one request may spend walking the queue before it answers
+    /// nothing.
+    ///
+    /// **A budget for the request, not for the work.** Walking is nearly all
+    /// existence checks against sources, and against a network volume a queue of
+    /// a few hundred mostly-uncached cards takes a minute — by which time the
+    /// client has given up and the window is still showing the last photograph.
+    /// Two seconds is past what a person notices as instant and well short of
+    /// what any client waits for, and nothing is lost by stopping: every card
+    /// walked has been handed to the cache queue, so the next request begins
+    /// warmer than this one did.
+    public static let walkBudget = Duration.seconds(2)
+
+    /// How many cards past the one being served are asked for in advance.
+    ///
+    /// **Warming and serving used to share one walk, and that was the bug.** A
+    /// card's bytes were only ever asked for when the walk *stepped over* it, so
+    /// the amount of warming a request did was however far it happened to travel
+    /// before finding something servable. Add a source whose photographs are
+    /// always servable — anything referenced — and the walk stops on the first
+    /// card, warming falls to nothing, and the sources that actually need
+    /// fetching never fill. Measured on a real library: cache requests dropped
+    /// from about 130 per five minutes to 19 the moment such a source came back.
+    ///
+    /// So looking ahead is deliberate rather than opportunistic. It reads the
+    /// queue without consuming it, costs one in-memory lookup per card, and asks
+    /// for nothing it already holds.
+    ///
+    /// Bounded, and the bound is not about this machine: against a folder the
+    /// cost of asking is a fetch from a disk you own, but the Photos and Google
+    /// providers will make it a request against somebody else's service, where a
+    /// request that asks for a queue's worth of originals at once is rude.
+    public static let lookAheadDepth = 20
+
     private let sources: SourceStore
     private let deck: Deck
 
@@ -77,23 +128,16 @@ public struct PhotoCache {
         ) { row in
             owners[try row.string("photo_uuid")] = try row.string("source_uuid")
         }
-        let result = store.rebuild(photos: owners)
-
-        // The queue is durable and the index is not, so they are reconciled once
-        // at launch, in the direction of the disk.
-        var stale = 0
-        for card in try queue.peek(Int.max) where card.storage == .materialized {
-            if store.url(for: PhotoStore.Key(photoUUID: card.uuid)) == nil {
-                try queue.remove(photoID: card.id)
-                stale += 1
-            }
-        }
-        if stale > 0 {
-            Log.cache.notice(
-                "dropped \(stale, privacy: .public) queued pictures whose bytes are not here"
-            )
-        }
-        return result
+        // **The queue is not reconciled against the disk, deliberately.** It
+        // used to be: a card only reached the queue once its bytes were local,
+        // so one without bytes after a restart was a card that could never be
+        // served. That is no longer true — a card is dealt *before* anything is
+        // fetched, and finding it uncached at the head is the event that asks
+        // for its bytes. Dropping those cards at launch removed every
+        // materialized one and left the referenced cards that never needed
+        // bytes, so a source reached only through the cache queue was emptied
+        // out of the deck at every launch and never got a turn.
+        return store.rebuild(photos: owners)
     }
 
     // MARK: - Where bytes are
@@ -177,91 +221,131 @@ public struct PhotoCache {
         return values?.volumeAvailableCapacityForImportantUsage ?? .max
     }
 
-    // MARK: - Producing one picture
+    // MARK: - Dealing one card
 
-    /// Asks this source for one picture, makes sure its bytes are there, and
-    /// appends it to the queue.
+    /// Deals the next card onto the queue. **It fetches nothing.**
     ///
-    /// This is what a provider *answering a request* amounts to, and it is where
-    /// downloading happens. There is no separate fetch stage walking a work
-    /// list: producing a picture and fetching its bytes are the same operation,
-    /// so a picture is never queued unless it is ready to show.
+    /// The queue holds cards, not bytes: it is a shuffled order over every
+    /// photograph we know about, whatever state its source is in, and it costs
+    /// nothing to fill. Whether a card can actually be shown is found out by
+    /// trying to show it — see `serve`.
     ///
-    /// Returns false when this source had nothing to offer, which is an ordinary
-    /// answer — an empty source, everything already queued, or a download that
-    /// failed.
+    /// This used to be the expensive operation, and the inversion is the point.
+    /// Producing *was* fetching, so nothing reached the queue until its bytes
+    /// were local — which meant deciding in advance which photographs were
+    /// fetchable, which meant keeping track of which sources were mounted and
+    /// which photographs were cached. That bookkeeping is what this removes.
+    ///
+    /// Returns false when there was nothing left to deal, which is ordinary: an
+    /// empty library, or everything already queued.
     @discardableResult
-    public func produce(
-        forSource sourceID: Int64,
-        settings: DeckSettings = .default,
-        now: Date = Date()
-    ) async throws -> Bool {
+    public func deal(settings: DeckSettings = .default, now: Date = Date()) throws -> Bool {
+        guard let candidate = try deck.nextCandidate(settings: settings, now: now) else {
+            return false
+        }
+        // The claim exists so two fillers do not pick the same card. It ends
+        // here whatever the outcome, because a card left claimed by a path
+        // nobody thought about waits out the timeout for no reason at all.
+        defer { try? deck.releaseClaim(photoID: candidate.id) }
+
+        // The byte store is keyed by source, so it has to be told which source a
+        // photograph belongs to before anything is written for it — including a
+        // rendering of a referenced photograph, which is the only thing we ever
+        // hold for one.
+        store.note(photoUUID: candidate.uuid, sourceUUID: candidate.sourceUUID)
+        guard try queue.append(photoID: candidate.id, sourceID: candidate.sourceID, at: now) else {
+            return false
+        }
+        log(.dealt(photo: candidate.externalID, source: candidate.sourceID, queued: (try? queue.size()) ?? 0))
+        return true
+    }
+
+    // MARK: - Caching one picture, off the serving path
+
+    /// Fetches one photograph's bytes into the cache.
+    ///
+    /// **Called by whatever drains the queue of pictures to cache, never by
+    /// serving.** A picture that is not cached costs a request a skip; the fetch
+    /// happens behind it, and the photograph goes back on the queue when it
+    /// lands.
+    ///
+    /// Answers false when there was nothing to do or nothing could be done: it
+    /// is already held, its source is unreachable, its provider is missing, or
+    /// the download failed.
+    @discardableResult
+    public func cache(photoID: Int64, now: Date = Date()) async throws -> Bool {
         // Free space is checked before fetching, so running out of disk degrades
-        // into "the queue stops growing" rather than a full volume.
+        // into "the cache stops growing" rather than a full volume.
         let free = freeBytesOnVolume()
         guard free >= self.settings.minimumFreeBytes else {
             Log.cache.notice(
-                "not producing: \(free, privacy: .public) bytes free, floor is \(self.settings.minimumFreeBytes, privacy: .public)"
+                "not caching: \(free, privacy: .public) bytes free, floor is \(self.settings.minimumFreeBytes, privacy: .public)"
             )
             return false
         }
 
-        guard let source = try sources.source(id: sourceID),
-            source.enabled,
-            let provider = sources.provider(for: source.kind),
-            let candidate = try deck.nextCandidate(forSource: sourceID, settings: settings, now: now)
-        else { return false }
-
-        // Selection claimed it so that a concurrent producer against this same
-        // source picks something else. The claim is ours until we are done with
-        // it, and it ends here whatever the outcome — queued, failed, or thrown
-        // past. A photo left claimed by a path nobody thought about waits out
-        // the timeout for no reason at all.
-        defer { try? deck.releaseClaim(photoID: candidate.id) }
-
-        let originalKey = PhotoStore.Key(photoUUID: candidate.uuid)
-        if candidate.storage == .materialized, !store.contains(originalKey) {
-            let extension_ = (candidate.externalID as NSString).pathExtension
-            let staging = root.appending(path: ".staging")
-            try? FileManager.default.createDirectory(
-                at: staging, withIntermediateDirectories: true)
-            let temporary = staging.appending(
-                path: extension_.isEmpty ? candidate.uuid : "\(candidate.uuid).\(extension_)")
-
-            do {
-                let file = try await provider.materialize(
-                    externalID: candidate.externalID, from: source, to: temporary)
-                try store.adopt(
-                    fileAt: temporary, for: originalKey,
-                    sourceUUID: candidate.sourceUUID, pathExtension: extension_, now: now)
-                try database.run(
-                    "UPDATE photo SET byte_size = :size WHERE id = :id;",
-                    ["size": .int(file.byteSize), "id": .int(candidate.id)]
-                )
-            } catch {
-                try? FileManager.default.removeItem(at: temporary)
-                try handleFailedDownload(candidate, source: source, error: error)
-                return false
-            }
-        } else if candidate.storage == .referenced {
-            // Referenced photographs are never copied, but the store still has
-            // to know which source they belong to, so a rendering of one lands
-            // in the right directory.
-            store.note(photoUUID: candidate.uuid, sourceUUID: candidate.sourceUUID)
+        guard let card = try deck.card(photoID: photoID) else { return false }
+        // Already there. This is how asking for the same picture more than once
+        // costs a skip rather than a second fetch — the check is here, when the
+        // request comes off the queue, rather than in whatever put it on.
+        let originalKey = PhotoStore.Key(photoUUID: card.uuid)
+        guard card.storage == .materialized else { return false }
+        guard !store.contains(originalKey) else {
+            log(.cacheUnnecessary(photo: card.externalID, source: card.sourceID, pending: pendingCaches()))
+            return false
         }
 
-        return try queue.append(photoID: candidate.id, sourceID: sourceID, at: now)
+        guard let source = try sources.source(id: card.sourceID),
+            source.enabled,
+            let provider = sources.provider(for: source.kind)
+        else { return false }
+
+        let extension_ = (card.externalID as NSString).pathExtension
+        let staging = root.appending(path: ".staging")
+        try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let temporary = staging.appending(
+            path: extension_.isEmpty ? card.uuid : "\(card.uuid).\(extension_)")
+
+        do {
+            let file = try await provider.materialize(
+                externalID: card.externalID, from: source, to: temporary)
+            try store.adopt(
+                fileAt: temporary, for: originalKey,
+                sourceUUID: card.sourceUUID, pathExtension: extension_, now: now)
+            try database.run(
+                "UPDATE photo SET byte_size = :size WHERE id = :id;",
+                ["size": .int(file.byteSize), "id": .int(card.id)]
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            log(.cacheFailed(photo: card.externalID, source: card.sourceID, because: "\(error)", pending: pendingCaches()))
+            try handleFailedDownload(card, source: source, error: error)
+            return false
+        }
+
+        // **It does not go back on the queue.** What is queued is the deck's
+        // business alone: one shuffled order gives every source a share matching
+        // its share of the library, and putting fetched photographs back would
+        // top that up in the order fetches *complete* — so the fastest source
+        // would drift to owning the queue whatever its size. The bytes are here
+        // now, so when the deck next deals this photograph it is shown at once.
+        log(
+            .cached(
+                photo: card.externalID, source: card.sourceID,
+                bytes: store.url(for: originalKey).flatMap {
+                    (try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+                } ?? 0,
+                pending: pendingCaches()))
+        return true
     }
 
-    /// A download that failed means two completely different things depending on
-    /// whether the source is there.
+    /// A fetch that failed, and what it means about the photograph.
     ///
-    /// **Source online:** the file is genuinely gone, so the entry leaves the
-    /// pool and our copy goes with it. **Source offline:** the failure says
-    /// nothing about the file, so the entry stays and only its queue place is
-    /// cleared. This is the whole answer to the offline volume problem, and the
-    /// check happens here rather than at refresh time because a drive can go
-    /// away in between.
+    /// **Online and offline are opposite conclusions.** A source that is right
+    /// there and still cannot produce a photograph no longer has it, so the row
+    /// goes and the bytes with it. A source that cannot be reached says nothing
+    /// about its photographs, so everything stays and the question is asked
+    /// again next time it comes round.
     private func handleFailedDownload(_ card: DeckCard, source: Source, error: any Error) throws {
         if sources.isOnline(source) {
             Log.cache.notice(
@@ -272,7 +356,6 @@ public struct PhotoCache {
             Log.cache.info(
                 "photo \(card.id, privacy: .public) is on an offline source; leaving it in the pool"
             )
-            try queue.remove(photoID: card.id)
         }
     }
 
@@ -287,59 +370,226 @@ public struct PhotoCache {
     public func keep(
         _ bytes: Data, of card: DeckCard, at size: PhotoStore.Size, pathExtension: String
     ) throws -> URL {
-        try store.store(
+        let url = try store.store(
             bytes, for: PhotoStore.Key(photoUUID: card.uuid, size: size),
             sourceUUID: card.sourceUUID, pathExtension: pathExtension)
+        // Logged here rather than at the caller, so a second thing that renders
+        // cannot do it silently. Where the pixels were read from is worth
+        // saying: a referenced photograph is resized straight off the disk it
+        // lives on, and this is the only thing the cache ever holds for one.
+        log(
+            .rendered(
+                photo: card.externalID, source: card.sourceID,
+                at: "\(size.width)x\(size.height)", bytes: bytes.count,
+                from: card.storage == .referenced ? "its file on disk" : "the cached original"))
+        return url
     }
 
     // MARK: - Serving one picture
 
-    /// Takes the head of the queue and gives it to a consumer.
+    /// One picture, ready to hand over.
+    public struct ServedPhoto: Sendable {
+        public let card: DeckCard
+        /// The bytes to send: either the photograph's original, or a rendering
+        /// of it we were already holding at exactly the size that was asked for.
+        public let url: URL
+        /// True when `url` is that rendering — already the right pixels, so
+        /// there is nothing left to decode and nothing to keep.
+        public let isRendering: Bool
+    }
+
+    /// Walks the queue until it finds a picture it can hand over now.
+    ///
+    /// **A picture that is not cached costs a skip, never a wait.** For each
+    /// card: if the bytes are here, that is the picture. If they are not, ask for
+    /// them to be fetched, drop the card, and try the next one. If the whole
+    /// queue goes by, answer nothing — it will populate soon enough.
     ///
     /// **Every picture is checked against its source in the moment before it is
     /// returned**, including one we hold our own copy of. That is the guarantee:
     /// a photo the user deleted is never shown again, not even in the minutes
     /// before a refresh would have noticed.
     ///
-    /// Returns nil when there is nothing to show, which is an ordinary answer.
-    /// A fresh install has an empty queue and an empty cache, so the first
-    /// requests are answered this way and pictures begin arriving as providers
-    /// deliver.
+    /// `fitting` is the box the caller is about to draw into, and naming it is
+    /// what lets an **evicted original with a surviving rendering** still be
+    /// served — a client asking again at a size already held never needs the
+    /// original back. Nil asks for the original, which is what `curl` with no `w`
+    /// and `h` wants.
     public func serve(
         to consumerID: Int64? = nil,
-        now: Date = Date()
-    ) async throws -> (card: DeckCard, url: URL)? {
-        while let card = try queue.serve(at: now) {
+        fitting box: PhotoStore.Size? = nil,
+        now: Date = Date(),
+        within budget: Duration = PhotoCache.walkBudget
+    ) async throws -> ServedPhoto? {
+        // Two bounds, and both are needed.
+        //
+        // **Cards**: one cycle of the queue and no more. Every card taken is
+        // either served, dropped, or handed to the cache queue, so the walk
+        // cannot see the same one twice — but the queue is also being appended
+        // to behind us, and without a bound a request could chase its own tail.
+        //
+        // **Time**: a cycle is cheap when the cards are local and is not when
+        // they are not. Every uncached card costs an existence check against its
+        // source, so a queue of a few hundred on a network volume can take a
+        // minute to walk — and a minute-long GET is a client that has given up
+        // and a window sitting on a stale photograph. Answering nothing is the
+        // better answer: the cards walked so far have all been asked for, so the
+        // work is banked and the next request starts warmer.
+        var walked = 0
+        let cycle = try queue.size()
+        let started = ContinuousClock.now
+
+        while walked < cycle {
+            // **Before taking a card, not after.** Serving pops the card off the
+            // queue, so a walk that took one and then abandoned it on the
+            // deadline would consume a card for nothing.
+            //
+            // The first card is exempt, so a walk always tries at least one.
+            // Answering "no photo" without looking at a single card would turn a
+            // slow moment into a blank screen.
+            if walked > 0, ContinuousClock.now - started >= budget {
+                log(.nothingToShow(walked: walked, because: "out of time"))
+                return nil
+            }
+            guard let card = try queue.serve(at: now) else { break }
+            walked += 1
+
+            // Neither guard below is a photograph that has *gone*, so neither
+            // deletes anything. A missing source row is only reachable as a race
+            // — foreign keys are on, so removing a source has already taken its
+            // photographs and their queue entries — and a missing provider is a
+            // Photos album in a build that cannot enumerate one, where deleting
+            // the rows would destroy a library on a downgrade.
             guard let source = try sources.source(id: card.sourceID),
                 let provider = sources.provider(for: source.kind)
-            else { continue }
+            else {
+                log(.skipped(photo: card.externalID, source: card.sourceID, because: "no provider for its source", queued: depth()))
+                continue
+            }
 
+            // **Do we hold bytes? — asked first, because it is nearly free.**
+            //
+            // The rendering is looked at before the original because it is the
+            // cheaper answer *and* because it may be the only one left: an
+            // original can be evicted while a rendering of it survives, and
+            // skipping the photograph then would be refusing to send bytes we
+            // are holding in exactly the shape the client asked for.
+            let held = box.flatMap {
+                store.url(for: PhotoStore.Key(photoUUID: card.uuid, size: $0))
+            }
+            guard let url = try held ?? residentURL(forPhoto: card.id) else {
+                // Not here. Somebody else fetches it; this request moves on. The
+                // card leaves the queue and comes back when the bytes do.
+                //
+                // **And the source is never asked about it.** Confirming a
+                // photograph costs a stat against wherever its source lives —
+                // most of a second on a network volume — and buys nothing here,
+                // because the card is being skipped whatever the answer.
+                wantCached(card)
+                continue
+            }
+
+            // **Is it still there? — asked last, and only about the one card
+            // that is going out.** This is the guarantee: a photograph the user
+            // deleted is never shown again, not even one we hold our own copy
+            // of. It is a promise about what is *displayed*, so it belongs to
+            // the card being displayed and to no other.
+            var unconfirmed: String?
             switch await provider.existence(of: card.externalID, in: source) {
             case .absent:
-                Log.cache.notice(
-                    "photo \(card.id, privacy: .public) is gone from a reachable source; removing it rather than showing it"
-                )
+                log(.dropped(photo: card.externalID, source: card.sourceID, because: "gone from a source that is right there", queued: depth()))
                 try self.remove(card.id)
+                continue
 
-            case .unknown, .present:
-                guard let url = try residentURL(forPhoto: card.id) else { continue }
-                let seq = try deck.markShown(photoID: card.id, now: now)
-                if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
-                // The deck moved, so anything mirroring its position — a
-                // diagnostic panel, another surface's idea of what is next —
-                // should go and look.
-                DarwinNotification.post(.deckAdvanced)
-                return (
-                    DeckCard(
-                        id: card.id, uuid: card.uuid, sourceID: card.sourceID,
-                        sourceUUID: card.sourceUUID, externalID: card.externalID,
-                        storage: card.storage, dealSeq: seq
-                    ),
-                    url
-                )
+            case .unknown(let reason):
+                // The photograph could not be confirmed, so the question moves
+                // up to the source. **Offline and gone are opposite answers**:
+                // one keeps everything and serves the copy we hold, the other
+                // means these photographs are never coming back, and their rows
+                // and cached bytes are worth nothing.
+                if case .gone(let why) = await provider.availability(of: source) {
+                    log(.dropped(photo: card.externalID, source: card.sourceID, because: "its source is \(why)", queued: depth()))
+                    try self.remove(card.id)
+                    continue
+                }
+                // Merely offline, and we are holding a copy — which is the
+                // situation the copy exists for. It goes out, with the doubt
+                // recorded on the line rather than left unsaid.
+                unconfirmed = reason
+
+            case .present:
+                break
             }
+
+            // Says which bytes are going out. Without it a kept resize has no
+            // matching line for the moment it is *used*, and whether the
+            // renderings are earning their disk is unanswerable from a console.
+            log(
+                .serving(
+                    photo: card.externalID, source: card.sourceID,
+                    rendering: held != nil, unconfirmed: unconfirmed, queued: depth()))
+            lookAhead()
+            let seq = try deck.markShown(photoID: card.id, now: now)
+            if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
+            // The deck moved, so anything mirroring its position — a diagnostic
+            // panel, another surface's idea of what is next — should go and look.
+            DarwinNotification.post(.deckAdvanced)
+            return ServedPhoto(
+                card: DeckCard(
+                    id: card.id, uuid: card.uuid, sourceID: card.sourceID,
+                    sourceUUID: card.sourceUUID, externalID: card.externalID,
+                    storage: card.storage, dealSeq: seq
+                ),
+                url: url,
+                isRendering: held != nil
+            )
         }
+
+        log(.nothingToShow(walked: walked, because: "out of cards"))
         return nil
+    }
+
+    /// How many cards are queued right now.
+    ///
+    /// Asked at every point either queue changes size, because a depth that
+    /// moves without saying so leaves the reader inferring it — and both queues
+    /// move on almost every request. A `COUNT` against an indexed table of a few
+    /// hundred rows, on a path that already opened a database connection.
+    private func depth() -> Int { (try? queue.size()) ?? 0 }
+
+    /// Asks for the bytes of the cards sitting behind the one just served.
+    ///
+    /// **Reads the queue, never consumes it.** These cards keep their places and
+    /// their turn; all that happens is that their bytes are requested now rather
+    /// than whenever a walk happens to step over them. A card whose fetch has
+    /// not finished by the time its turn comes is skipped exactly as before —
+    /// looking ahead makes that less likely, and promises nothing.
+    private func lookAhead() {
+        guard let cards = try? queue.peek(Self.lookAheadDepth), !cards.isEmpty else { return }
+        var asked = 0
+        for card in cards where card.storage == .materialized {
+            // The same in-memory lookup serving does, and the same reason it is
+            // safe to do in bulk: it costs a local stat, not a word to a source.
+            guard store.url(for: PhotoStore.Key(photoUUID: card.uuid)) == nil else { continue }
+            wantsCaching(card.id)
+            asked += 1
+        }
+        log(.lookedAhead(cards: cards.count, asked: asked, pending: pendingCaches()))
+    }
+
+    /// Asks for a photograph's bytes, if asking can achieve anything.
+    ///
+    /// A referenced photograph is never copied — it *is* the file on its source —
+    /// so there is nothing to fetch and nothing to ask for. Everything else goes
+    /// on the queue of pictures to cache, which decides when it comes off
+    /// whether it is still worth doing.
+    private func wantCached(_ card: DeckCard) {
+        guard card.storage == .materialized else {
+            log(.skipped(photo: card.externalID, source: card.sourceID, because: "its file cannot be reached", queued: depth()))
+            return
+        }
+        log(.skipped(photo: card.externalID, source: card.sourceID, because: "not cached yet", queued: depth()))
+        wantsCaching(card.id)
     }
 
     // MARK: - Keeping the bytes honest

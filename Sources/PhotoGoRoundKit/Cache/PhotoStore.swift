@@ -107,6 +107,23 @@ public final class PhotoStore: @unchecked Sendable {
     /// correctly, so it goes.
     @discardableResult
     public func rebuild(photos: [String: String]) -> (kept: Int, discarded: Int, bytes: Int64) {
+        index(photos: photos, discardingUnclaimed: true)
+    }
+
+    /// Reads the disk into the index and **deletes nothing**.
+    ///
+    /// For anything that wants to *report* what is cached rather than take
+    /// ownership of it. `pgr_ctl status` is the case that forced it: it opens a
+    /// library the agent is using, and a read-only question must not delete a
+    /// file because this process happens to disagree about what is claimed.
+    @discardableResult
+    public func index(photos: [String: String]) -> (kept: Int, discarded: Int, bytes: Int64) {
+        index(photos: photos, discardingUnclaimed: false)
+    }
+
+    private func index(
+        photos: [String: String], discardingUnclaimed: Bool
+    ) -> (kept: Int, discarded: Int, bytes: Int64) {
         var found: [Key: Entry] = [:]
         var discarded = 0
         var bytes: Int64 = 0
@@ -128,8 +145,10 @@ public final class PhotoStore: @unchecked Sendable {
                 {
                     let uuid = file.deletingPathExtension().lastPathComponent
                     guard photos[uuid] != nil else {
-                        try? manager.removeItem(at: file)
-                        discarded += 1
+                        if discardingUnclaimed {
+                            try? manager.removeItem(at: file)
+                            discarded += 1
+                        }
                         continue
                     }
                     let values = try? file.resourceValues(
@@ -264,6 +283,22 @@ public final class PhotoStore: @unchecked Sendable {
 
     /// One source's whole directory, which is why the layout has that level.
     @discardableResult
+    /// The photographs of one source whose **original** is held right now.
+    ///
+    /// Asked when a source cannot supply bytes, so that producing can pick from
+    /// what we have rather than picking blind and failing. Read from the index
+    /// rather than the disk: it is a set intersection, on the path that decides
+    /// what to show next.
+    public func heldOriginals(ofSource sourceUUID: String) -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        var held: Set<String> = []
+        for (key, _) in entries where key.size == nil {
+            if sourceOfPhoto[key.photoUUID] == sourceUUID { held.insert(key.photoUUID) }
+        }
+        return held
+    }
+
     public func removeSource(_ sourceUUID: String) -> Int64 {
         lock.lock()
         let mine = entries.filter { sourceOfPhoto[$0.key.photoUUID] == sourceUUID }

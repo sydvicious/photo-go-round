@@ -21,7 +21,12 @@ public struct SourceSpec: Sendable, Equatable, Hashable {
 
     public init(kind: SourceKind, locator: String, recursive: Bool = false, enabled: Bool = true) {
         self.kind = kind
-        self.locator = locator
+        // **One spelling, decided here.** The locator is the identity — removal,
+        // reconciliation, and duplicate detection all match it as a bare string
+        // — so a folder written one way and read another is two sources that
+        // are really one. Normalising at construction means every path agrees
+        // without any of them having to remember.
+        self.locator = kind == .file || locator.hasSuffix("/") ? locator : locator + "/"
         self.recursive = recursive
         self.enabled = enabled
     }
@@ -47,8 +52,12 @@ public struct SourceSpec: Sendable, Equatable, Hashable {
         else { return nil }
         // Everything but the locator has a sensible answer when absent, because
         // a hand-written `defaults write` will leave things out.
+        // Entries written before folders were normalised are stored without the
+        // trailing slash; the initialiser puts it back, so an old plist and a
+        // new one describe the same source rather than two.
+        let kind = SourceKind((dictionary["kind"] as? String) ?? SourceKind.folder.rawValue)
         self.init(
-            kind: SourceKind((dictionary["kind"] as? String) ?? SourceKind.folder.rawValue),
+            kind: kind,
             locator: locator,
             recursive: (dictionary["recursive"] as? Bool) ?? false,
             enabled: (dictionary["enabled"] as? Bool) ?? true

@@ -33,6 +33,12 @@ struct PictureEndpoint {
     /// that shortens the queue and therefore the only thing that can notice it
     /// has run low. The host decides what to do about it; this just says so.
     let queueRanShort: @Sendable () -> Void
+    /// Where a picture whose bytes are not local goes. Serving asks for it and
+    /// moves on, so a miss costs this request a skip rather than a wait.
+    var wantsCaching: @Sendable (Int64) -> Void = { _ in }
+    /// Where the queue's decisions are said. Separate from the served-request
+    /// log above it, which records what a *client* was handed.
+    var speak: @Sendable (QueueEvent) -> Void = { $0.report() }
     /// The one route this serves.
     static let path = "/v1/next"
 
@@ -52,15 +58,58 @@ struct PictureEndpoint {
         var height: String?
         var card: Int64?
         var deal: Int64?
+        /// Which source the photograph came from. **The name alone does not say**
+        /// — two folders can hold `Image_001.jpg`, and when something is wrong
+        /// with one source the first question is which one is being served from.
+        ///
+        /// The row id rather than the `uuid`, because this line is read by a
+        /// person: `source 6` is what `pgr_ctl sources list` prints beside the
+        /// path, and a uuid is thirty-six characters of nothing to hold on to.
+        /// A client naming a source still uses the `uuid` — that identity is
+        /// stable and this one is not.
+        var sourceID: Int64?
         var bytes: Int64
         var milliseconds: Double
+        /// Whether the pixels came from a rendering we already had.
+        ///
+        /// Nil when no size was asked for, because the original is neither: it
+        /// is the file itself, and nothing was decoded to produce it.
+        var cache: Cache?
+
+        /// A miss is the interesting one, and the milliseconds beside it are
+        /// what it cost — a decode and a re-encode of a full-resolution
+        /// photograph, which is the number the whole render-on-demand design is
+        /// judged on.
+        enum Cache: String, Sendable {
+            case hit
+            case miss
+        }
+
+        /// What the cache holds, at the moment this request was answered.
+        ///
+        /// Beside the hit or miss because the two are read together: a miss is
+        /// ordinary while the cache is filling and worth a second look once it
+        /// is not, and the size is how you tell which.
+        var cacheBytes: Int64?
+        /// How many cards were still queued after this one was taken.
+        ///
+        /// The queue is the thing being drained and topped up continuously, so a
+        /// depth that is falling says the walk is outrunning the deck, and one
+        /// pinned at its target says it is not.
+        var queued: Int?
 
         /// Everything after the name, and the only place that wording lives.
         var summary: String {
             var parts = [consumer]
+            if let sourceID { parts.append("source \(sourceID)") }
             if let width, let height { parts.append("\(width)x\(height)") }
             if let deal { parts.append("deal #\(deal)") }
             if bytes > 0 { parts.append(RunCommand.bytes(bytes)) }
+            if let cache {
+                parts.append(
+                    cache.rawValue + (cacheBytes.map { " of \(RunCommand.bytes($0))" } ?? ""))
+            }
+            if let queued { parts.append("\(queued) queued") }
             parts.append(milliseconds.formatted(.number.precision(.fractionLength(1))) + "ms")
             return parts.joined(separator: " · ")
         }
@@ -79,7 +128,10 @@ struct PictureEndpoint {
                 """
                 served status=\(status, privacy: .public) consumer=\(consumer, privacy: .public) \
                 card=\(card ?? 0, privacy: .public) deal=\(deal ?? 0, privacy: .public) \
-                bytes=\(bytes, privacy: .public) ms=\(milliseconds, privacy: .public)
+                bytes=\(bytes, privacy: .public) cache=\(cache?.rawValue ?? "n/a", privacy: .public) \
+                source=\(sourceID ?? 0, privacy: .public) \
+                cacheBytes=\(cacheBytes ?? -1, privacy: .public) \
+                queued=\(queued ?? -1, privacy: .public) ms=\(milliseconds, privacy: .public)
                 """
             )
         }
@@ -94,10 +146,9 @@ struct PictureEndpoint {
     private func context() throws -> (cache: PhotoCache, deck: Deck) {
         let database = try Database(path: databasePath)
         try Migrator.migrate(database)
-        let sources = SourceStore(database: database)
+        let sources = SourceStore(database: database, bytes: store)
         let deck = Deck(database: database)
-        return (
-            PhotoCache(
+        var cache = PhotoCache(
                 database: database,
                 root: cacheRoot,
                 settings: preferences.cacheSettings,
@@ -105,9 +156,10 @@ struct PictureEndpoint {
                 deck: deck,
                 queueSize: preferences.queueSize,
                 store: store
-            ),
-            deck
         )
+        cache.log = speak
+        cache.wantsCaching = wantsCaching
+        return (cache, deck)
     }
 
     func route(_ request: HTTPListener.Request) async -> HTTPListener.Response {
@@ -134,7 +186,10 @@ struct PictureEndpoint {
         status: Int,
         detail: String,
         card: DeckCard? = nil,
-        bytes: Int64 = 0
+        bytes: Int64 = 0,
+        cache: Served.Cache? = nil,
+        cacheBytes: Int64? = nil,
+        queued: Int? = nil
     ) {
         log(
             Served(
@@ -145,8 +200,12 @@ struct PictureEndpoint {
                 height: request.query("h"),
                 card: card?.id,
                 deal: card?.dealSeq,
+                sourceID: card?.sourceID,
                 bytes: bytes,
-                milliseconds: (ContinuousClock.now - request.receivedAt).totalSeconds * 1000
+                milliseconds: (ContinuousClock.now - request.receivedAt).totalSeconds * 1000,
+                cache: cache,
+                cacheBytes: cacheBytes,
+                queued: queued
             )
         )
     }
@@ -175,10 +234,42 @@ struct PictureEndpoint {
             // A photograph that will not render is skipped to the next entry
             // rather than answered with an error: the client asked for a picture
             // and there are others. Only an exhausted queue is *no photos*.
-            while let served = try await context.cache.serve(to: consumerID) {
+            // The box is named up front, because the cache needs it to answer
+            // at all: a photograph whose original has been evicted can still be
+            // served from a rendering held at exactly this size, and only the
+            // caller knows what size that is.
+            let size = box.map { PhotoStore.Size(width: $0.width, height: $0.height) }
+
+            while let served = try await context.cache.serve(to: consumerID, fitting: size) {
                 queueRanShort()
 
-                guard let box else {
+                // Already rendered at this size: hand over the file rather than
+                // decoding again. On a small library this is the common case,
+                // because a photograph comes round every few minutes — and it is
+                // the *only* case when the original is no longer held.
+                if served.isRendering {
+                    let bytes =
+                        (try? served.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+                        .map(Int64.init) ?? 0
+                    var headers = Self.headers(
+                        for: served.card, contentType: Self.contentType(of: served.url))
+                    // Read from the file rather than echoing the box that was
+                    // asked for: the header describes what the client is handed,
+                    // and that has to mean the same thing hit or miss.
+                    if let pixels = PhotoRenderer.pixelSize(of: served.url) {
+                        headers["X-PGR-Pixels"] = "\(pixels.width)x\(pixels.height)"
+                    }
+                    headers["X-PGR-Cache"] = "hit"
+                    report(
+                        request, status: 200, detail: served.card.externalID,
+                        card: served.card, bytes: bytes, cache: .hit, cacheBytes: store.totals.byteCount,
+                        queued: try? context.cache.queue.size())
+                    return HTTPListener.Response(
+                        status: 200, reason: "OK", headers: headers,
+                        body: .file(served.url, byteCount: bytes))
+                }
+
+                guard let box, let size else {
                     // No size asked for: the original, untouched.
                     let bytes =
                         (try? served.url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
@@ -191,32 +282,6 @@ struct PictureEndpoint {
                         headers: Self.headers(
                             for: served.card, contentType: Self.contentType(of: served.url)),
                         body: .file(served.url, byteCount: bytes))
-                }
-
-                let size = PhotoStore.Size(width: box.width, height: box.height)
-
-                // Already rendered at this size: hand over the file rather than
-                // decoding again. On a small library this is the common case,
-                // because a photograph comes round every few minutes.
-                if let held = context.cache.rendering(of: served.card, at: size) {
-                    let bytes =
-                        (try? held.resourceValues(forKeys: [.fileSizeKey]).fileSize)
-                        .map(Int64.init) ?? 0
-                    var headers = Self.headers(
-                        for: served.card, contentType: Self.contentType(of: held))
-                    // Read from the file rather than echoing the box that was
-                    // asked for: the header describes what the client is handed,
-                    // and that has to mean the same thing hit or miss.
-                    if let pixels = PhotoRenderer.pixelSize(of: held) {
-                        headers["X-PGR-Pixels"] = "\(pixels.width)x\(pixels.height)"
-                    }
-                    headers["X-PGR-Cache"] = "hit"
-                    report(
-                        request, status: 200, detail: served.card.externalID,
-                        card: served.card, bytes: bytes)
-                    return HTTPListener.Response(
-                        status: 200, reason: "OK", headers: headers,
-                        body: .file(held, byteCount: bytes))
                 }
 
                 do {
@@ -233,7 +298,8 @@ struct PictureEndpoint {
                     headers["X-PGR-Cache"] = "miss"
                     report(
                         request, status: 200, detail: served.card.externalID,
-                        card: served.card, bytes: Int64(rendered.bytes.count))
+                        card: served.card, bytes: Int64(rendered.bytes.count), cache: .miss, cacheBytes: store.totals.byteCount,
+                        queued: try? context.cache.queue.size())
                     return HTTPListener.Response(
                         status: 200, reason: "OK", headers: headers,
                         body: .data(rendered.bytes))

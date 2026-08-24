@@ -44,6 +44,9 @@ struct SourceEndpointTests {
         let directory: URL
         let endpoint: SourceEndpoint
         let store: SourceStore
+        /// The endpoint's record of what is on disk, so a test can ask what a
+        /// removal actually freed rather than trusting that it did.
+        let bytes: PhotoStore
         let preferences: Preferences
         let log = Collector()
         private let suite = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
@@ -56,12 +59,14 @@ struct SourceEndpointTests {
                 .path(percentEncoded: false)
             let database = try Database(path: path)
             try Migrator.migrate(database)
-            store = SourceStore(database: database)
+            store = SourceStore(database: database, bytes: PhotoStore(
+                root: directory.appending(path: "cache")))
 
             preferences = Preferences(defaults: UserDefaults(suiteName: suite)!)
+            bytes = PhotoStore(root: directory.appending(path: "cache"))
             let collector = log
             endpoint = SourceEndpoint(
-                databasePath: path, preferences: preferences,
+                databasePath: path, preferences: preferences, bytes: bytes,
                 log: { collector.record($0) })
         }
 
@@ -84,7 +89,17 @@ struct SourceEndpointTests {
             await endpoint.route(try #require(HTTPListener.parse("DELETE \(target) HTTP/1.1")))
         }
 
+        func patch(_ json: String, to target: String) async throws -> HTTPListener.Response {
+            try await send("PATCH", json, to: target)
+        }
+
         func post(_ json: String, to target: String = SourceEndpoint.path) async throws
+            -> HTTPListener.Response
+        {
+            try await send("POST", json, to: target)
+        }
+
+        private func send(_ method: String, _ json: String, to target: String) async throws
             -> HTTPListener.Response
         {
             let body = Data(json.utf8)
@@ -92,7 +107,7 @@ struct SourceEndpointTests {
                 try #require(
                     HTTPListener.parse(
                         """
-                        POST \(target) HTTP/1.1\r
+                        \(method) \(target) HTTP/1.1\r
                         Content-Type: application/json\r
                         Content-Length: \(body.count)
                         """, body: body)))
@@ -200,19 +215,38 @@ struct SourceEndpointTests {
         #expect(entry.scannedAt == nil)
     }
 
-    @Test("An unavailable source says so, and says why")
+    @Test("An unavailable source says so, and says why the last scan thought so")
     func unavailabilityIsReported() async throws {
         let library = try Library()
         let folder = library.folder("unplugged")
         _ = try await library.post(#"[{"path": "\#(library.path(of: folder))"}]"#)
         let source = try #require(try library.store.all().first)
-        try library.store.markUnavailable(sourceID: source.id, reason: "the volume is not mounted")
+        try library.store.markUnavailable(sourceID: source.id, reason: "volume not mounted")
 
         let entry = try #require(try sources(try await library.get(SourceEndpoint.path)).first)
         #expect(!entry.available)
-        #expect(entry.unavailableReason == "the volume is not mounted")
+        #expect(entry.unavailableReason == "volume not mounted")
         // Still listed and still enabled: unavailable is a state, not a removal.
         #expect(entry.enabled)
+    }
+
+    /// **This endpoint does not stop to look**, and that is deliberate. It
+    /// reports what the agent knows. A client that can see the path checks it
+    /// itself and gets a fresher answer than a round trip could carry — the Mac
+    /// app is unsandboxed and does exactly that — and a client that cannot see
+    /// the path is not helped by this one looking either.
+    @Test("It reports what the scan concluded rather than stopping to check")
+    func availabilityIsReportedNotRechecked() async throws {
+        let library = try Library()
+        let folder = library.folder("present")
+        _ = try await library.post(#"[{"path": "\#(library.path(of: folder))"}]"#)
+        let source = try #require(try library.store.all().first)
+
+        // The folder is right there, and the row says otherwise. The row wins,
+        // because reading it is all this does.
+        try library.store.markUnavailable(sourceID: source.id, reason: "volume not mounted")
+        let entry = try #require(try sources(try await library.get(SourceEndpoint.path)).first)
+        #expect(!entry.available)
     }
 
     // MARK: - One source, and the options it was added with
@@ -379,6 +413,102 @@ struct SourceEndpointTests {
         #expect(response.status == 200)
         #expect(try sources(response).isEmpty)
         #expect(library.preferences.sources.isEmpty)
+    }
+
+    // MARK: - Changing the options it was added with
+
+    @Test("Recursion is switched off through the uuid, and the answer says so")
+    func recursionIsChanged() async throws {
+        let library = try Library()
+        let folder = library.folder("nested", photographs: 1)
+        let created = try sources(
+            try await library.post(
+                """
+                [{"path": "\(library.path(of: folder))", "recursive": true}]
+                """))
+        let uuid = try #require(created.first?.uuid)
+
+        let response = try await library.patch(
+            #"{"recursive": false}"#, to: "\(SourceEndpoint.path)/\(uuid)")
+
+        #expect(response.status == 200)
+        let updated = try source(response)
+        #expect(updated.uuid == uuid, "the source kept its identity rather than being replaced")
+        #expect(updated.recursive == false)
+        // The durable list is what a change has to land in; the row is the
+        // projection of it.
+        #expect(library.preferences.sources.first?.recursive == false)
+        #expect(try library.store.source(uuid: uuid)?.recursive == false)
+    }
+
+    @Test("And back on again, without the source losing anything")
+    func recursionGoesBothWays() async throws {
+        let library = try Library()
+        let folder = library.folder("flat")
+        let uuid = try #require(
+            try sources(try await library.post(#"[{"path": "\#(library.path(of: folder))"}]"#))
+                .first?.uuid)
+
+        _ = try await library.patch(
+            #"{"recursive": true}"#, to: "\(SourceEndpoint.path)/\(uuid)")
+        #expect(try library.store.source(uuid: uuid)?.recursive == true)
+
+        let off = try await library.patch(
+            #"{"recursive": false}"#, to: "\(SourceEndpoint.path)/\(uuid)")
+        #expect(try source(off).recursive == false)
+        #expect(try library.store.all().count == 1)
+    }
+
+    @Test("A file source has no recursion to change, and is told so")
+    func aFileCannotBeMadeRecursive() async throws {
+        let library = try Library()
+        let folder = library.folder("pinned", photographs: 1)
+        let file = folder.appending(path: "photo-0.png").path(percentEncoded: false)
+        let uuid = try #require(
+            try sources(try await library.post(#"[{"kind": "file", "path": "\#(file)"}]"#))
+                .first?.uuid)
+
+        let response = try await library.patch(
+            #"{"recursive": true}"#, to: "\(SourceEndpoint.path)/\(uuid)")
+        #expect(response.status == 400)
+        #expect(try failure(response).error == "a file source has no recursive option")
+    }
+
+    @Test("A change that asks for nothing is refused rather than answered with a lie")
+    func anEmptyChangeIsRefused() async throws {
+        let library = try Library()
+        let folder = library.folder("unchanged")
+        let uuid = try #require(
+            try sources(try await library.post(#"[{"path": "\#(library.path(of: folder))"}]"#))
+                .first?.uuid)
+
+        let response = try await library.patch("{}", to: "\(SourceEndpoint.path)/\(uuid)")
+        #expect(response.status == 400)
+        #expect(try failure(response).error == "no change was asked for")
+    }
+
+    @Test("Changing something that is not there is 404, and a bad body is 400")
+    func changingWhatIsNotThere() async throws {
+        let library = try Library()
+        let missing = try await library.patch(
+            #"{"recursive": true}"#,
+            to: "\(SourceEndpoint.path)/\(UUID().uuidString.lowercased())")
+        #expect(missing.status == 404)
+
+        let folder = library.folder("real")
+        let uuid = try #require(
+            try sources(try await library.post(#"[{"path": "\#(library.path(of: folder))"}]"#))
+                .first?.uuid)
+        let garbage = try await library.patch("not json", to: "\(SourceEndpoint.path)/\(uuid)")
+        #expect(garbage.status == 400)
+        #expect(try failure(garbage).error.hasPrefix("expected a JSON object"))
+    }
+
+    @Test("A change is a member verb, and the collection refuses it")
+    func patchingTheCollectionIsRefused() async throws {
+        let library = try Library()
+        let response = try await library.patch(#"{"recursive": true}"#, to: SourceEndpoint.path)
+        #expect(response.status == 405)
     }
 
     // MARK: - Removing

@@ -12,6 +12,13 @@
 		AA0000000000000000000003 /* PhotoGoRoundApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000022 /* PhotoGoRoundApp.swift */; };
 		AA0000000000000000000005 /* Shuffle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000023 /* Shuffle.swift */; };
 		AA0000000000000000000007 /* PictureLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000024 /* PictureLayerView.swift */; };
+		AA0000000000000000000041 /* SourceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000051 /* SourceService.swift */; };
+		AA0000000000000000000042 /* SourcesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000052 /* SourcesModel.swift */; };
+		AA0000000000000000000043 /* SourcesSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000053 /* SourcesSettingsView.swift */; };
+		AA0000000000000000000044 /* SourcesModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000054 /* SourcesModelTests.swift */; };
+		AA0000000000000000000045 /* SourceServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000055 /* SourceServiceTests.swift */; };
+		AA0000000000000000000046 /* SourceStandingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000056 /* SourceStandingTests.swift */; };
+		AA0000000000000000000047 /* SelectionFollowsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000057 /* SelectionFollowsTests.swift */; };
 		AA0000000000000000000013 /* PhotoGoRoundKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000011 /* PhotoGoRoundKit */; };
 		AA0000000000000000000014 /* PhotoGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000012 /* PhotoGoRoundDisplay */; };
 /* End PBXBuildFile section */
@@ -24,6 +31,14 @@
 		AA0000000000000000000022 /* PhotoGoRoundApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGoRoundApp.swift; sourceTree = "<group>"; };
 		AA0000000000000000000023 /* Shuffle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shuffle.swift; sourceTree = "<group>"; };
 		AA0000000000000000000024 /* PictureLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PictureLayerView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000051 /* SourceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceService.swift; sourceTree = "<group>"; };
+		AA0000000000000000000052 /* SourcesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesModel.swift; sourceTree = "<group>"; };
+		AA0000000000000000000053 /* SourcesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesSettingsView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000054 /* SourcesModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesModelTests.swift; sourceTree = "<group>"; };
+		AA0000000000000000000055 /* SourceServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceServiceTests.swift; sourceTree = "<group>"; };
+		AA0000000000000000000056 /* SourceStandingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceStandingTests.swift; sourceTree = "<group>"; };
+		AA0000000000000000000057 /* SelectionFollowsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionFollowsTests.swift; sourceTree = "<group>"; };
+		AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-RoundTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -42,6 +57,7 @@
 			children = (
 				AA0000000000000000000031 /* Config */,
 				62C4AE00303557B800A88363 /* mac */,
+				AA0000000000000000000061 /* tests */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -50,6 +66,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000120 /* Photo-Go-Round.app */,
+				AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -62,8 +79,22 @@
 				AA0000000000000000000022 /* PhotoGoRoundApp.swift */,
 				AA0000000000000000000023 /* Shuffle.swift */,
 				AA0000000000000000000024 /* PictureLayerView.swift */,
+				AA0000000000000000000051 /* SourceService.swift */,
+				AA0000000000000000000052 /* SourcesModel.swift */,
+				AA0000000000000000000053 /* SourcesSettingsView.swift */,
 			);
 			path = mac;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000061 /* tests */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000054 /* SourcesModelTests.swift */,
+				AA0000000000000000000055 /* SourceServiceTests.swift */,
+				AA0000000000000000000056 /* SourceStandingTests.swift */,
+				AA0000000000000000000057 /* SelectionFollowsTests.swift */,
+			);
+			path = tests;
 			sourceTree = "<group>";
 		};
 		AA0000000000000000000031 /* Config */ = {
@@ -95,6 +126,22 @@
 			);
 			productReference = 000000000000000000000120 /* Photo-Go-Round.app */;
 			productType = "com.apple.product-type.application";
+		};
+		AA0000000000000000000063 /* Photo-Go-RoundTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000064 /* Build configuration list for PBXNativeTarget "Photo-Go-RoundTests" */;
+			buildPhases = (
+				AA0000000000000000000062 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA0000000000000000000066 /* PBXTargetDependency */,
+			);
+			name = "Photo-Go-RoundTests";
+			productName = "Photo-Go-RoundTests";
+			productReference = AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -129,9 +176,28 @@
 			projectRoot = "";
 			targets = (
 				000000000000000100000000 /* Photo-Go-Round */,
+				AA0000000000000000000063 /* Photo-Go-RoundTests */,
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXContainerItemProxy section */
+		AA0000000000000000000067 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000100000000;
+			remoteInfo = "Photo-Go-Round";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		AA0000000000000000000066 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000100000000 /* Photo-Go-Round */;
+			targetProxy = AA0000000000000000000067 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
 		000000000000000140000000 /* Resources */ = {
@@ -150,6 +216,18 @@
 				AA0000000000000000000003 /* PhotoGoRoundApp.swift in Sources */,
 				AA0000000000000000000005 /* Shuffle.swift in Sources */,
 				AA0000000000000000000007 /* PictureLayerView.swift in Sources */,
+				AA0000000000000000000041 /* SourceService.swift in Sources */,
+				AA0000000000000000000042 /* SourcesModel.swift in Sources */,
+				AA0000000000000000000043 /* SourcesSettingsView.swift in Sources */,
+			);
+		};
+		AA0000000000000000000062 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+				AA0000000000000000000044 /* SourcesModelTests.swift in Sources */,
+				AA0000000000000000000045 /* SourceServiceTests.swift in Sources */,
+				AA0000000000000000000046 /* SourceStandingTests.swift in Sources */,
+				AA0000000000000000000047 /* SelectionFollowsTests.swift in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
@@ -381,6 +459,46 @@
 			};
 			name = Release;
 		};
+		AA0000000000000000000068 /* Debug configuration for PBXNativeTarget "Photo-Go-RoundTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Photo-Go-Round.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Photo-Go-Round";
+			};
+			name = Debug;
+		};
+		AA0000000000000000000069 /* Release configuration for PBXNativeTarget "Photo-Go-RoundTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Photo-Go-Round.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Photo-Go-Round";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -397,6 +515,14 @@
 			buildConfigurations = (
 				000000000000000111000000 /* Debug configuration for PBXNativeTarget "Photo-Go-Round" */,
 				000000000000000112000000 /* Release configuration for PBXNativeTarget "Photo-Go-Round" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000000064 /* Build configuration list for PBXNativeTarget "Photo-Go-RoundTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000068 /* Debug configuration for PBXNativeTarget "Photo-Go-RoundTests" */,
+				AA0000000000000000000069 /* Release configuration for PBXNativeTarget "Photo-Go-RoundTests" */,
 			);
 			defaultConfigurationName = Release;
 		};

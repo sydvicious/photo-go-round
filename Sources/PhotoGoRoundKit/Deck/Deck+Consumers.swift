@@ -112,8 +112,11 @@ extension Deck {
     /// whatever the outcome; `PhotoCache.produce` does it in a `defer`. A caller
     /// that dies first releases nothing, which is why the claim expires — see
     /// `claimTimeout`.
+    /// **One order over every photograph we know about**, whatever state its
+    /// source is in. Whether a card can actually be shown is not asked here and
+    /// is not knowable here: it is found out by trying to show it, which is what
+    /// serving does.
     public func nextCandidate(
-        forSource sourceID: Int64,
         settings: DeckSettings = .default,
         now: Date = Date()
     ) throws -> DeckCard? {
@@ -130,7 +133,7 @@ extension Deck {
             )
 
             var eligible = try countCandidates(
-                sourceID: sourceID, threshold: threshold, claimedBefore: claimedBefore)
+                threshold: threshold, claimedBefore: claimedBefore)
             if eligible == 0 {
                 // This source has nothing left unused in the current pass. Starting
                 // a new pass is ordinary business, not a concession.
@@ -146,14 +149,13 @@ extension Deck {
                     try recordEvent(kind: "pass", detail: "reshuffled at ordinal \(threshold)", at: now)
                 }
                 eligible = try countCandidates(
-                    sourceID: sourceID, threshold: threshold, claimedBefore: claimedBefore)
+                    threshold: threshold, claimedBefore: claimedBefore)
             }
             guard eligible > 0 else { return nil }
 
             let card = try database.first(
                 Self.candidateSQL,
                 [
-                    "source": .int(sourceID),
                     "threshold": .int(threshold),
                     "claimExpiry": SQLValue(claimedBefore),
                     "offset": .int(Int64(randomOffset(eligible))),
@@ -250,13 +252,10 @@ extension Deck {
         )
     }
 
-    func countCandidates(sourceID: Int64, threshold: Int64, claimedBefore: Date) throws -> Int {
+    func countCandidates(threshold: Int64, claimedBefore: Date) throws -> Int {
         try database.scalarInt(
             Self.candidateCountSQL,
-            [
-                "source": .int(sourceID), "threshold": .int(threshold),
-                "claimExpiry": SQLValue(claimedBefore),
-            ]
+            ["threshold": .int(threshold), "claimExpiry": SQLValue(claimedBefore)]
         ) ?? 0
     }
 
@@ -293,8 +292,7 @@ extension Deck {
     }
 
     private static let candidatePredicate = """
-        p.source_id = :source
-          AND p.source_enabled = 1
+        p.source_enabled = 1
           AND p.media_type = 'image'
           AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold)
           AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry)

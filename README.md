@@ -120,8 +120,16 @@ curl -sS "http://localhost:9000/v1/sources/<uuid>"
 curl -sS -X DELETE -D - "http://localhost:9000/v1/sources/<uuid>"
 ```
 
-`DELETE` answers `204` and takes the source's photographs with it. Removal is not
-deletion: nothing on disk is touched.
+`DELETE` answers `204` and takes the source's photographs — and their cached
+bytes — with it. Removal is not deletion: nothing on the source itself is
+touched.
+
+Change what a folder was added with, keeping its identity and its shuffle
+position:
+
+```
+curl -sS -X PATCH "http://localhost:9000/v1/sources/<uuid>" -H 'Content-Type: application/json' -d '{"recursive": false}'
+```
 
 ## Documentation
 

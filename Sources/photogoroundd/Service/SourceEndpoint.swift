@@ -8,6 +8,7 @@ import PhotoGoRoundKit
 /// GET    /v1/sources           the list, with counts and availability
 /// POST   /v1/sources           add an array, all or none
 /// GET    /v1/sources/<uuid>    one source, and the options it was added with
+/// PATCH  /v1/sources/<uuid>    change one of those options
 /// DELETE /v1/sources/<uuid>    remove one
 /// ```
 ///
@@ -31,6 +32,10 @@ import PhotoGoRoundKit
 struct SourceEndpoint {
     let databasePath: String
     let preferences: Preferences
+    /// The process's record of what is on disk. Removing a source removes its
+    /// photographs, and their cached bytes go with them rather than waiting for
+    /// the next launch to notice nothing claims them.
+    let bytes: PhotoStore
     /// The collection route. The member routes are this plus a `uuid`.
     static let path = "/v1/sources"
 
@@ -98,6 +103,15 @@ struct SourceEndpoint {
         var recursive: Bool?
     }
 
+    /// A change to a source that already exists. Every field is optional, and
+    /// one that is absent is *not being changed* rather than being cleared —
+    /// which is the whole difference between `PATCH` and `PUT`, and the reason
+    /// this is a `PATCH`: recursion is the only option a folder has today, and
+    /// a Photos album will have several that this client knows nothing about.
+    struct Change: Codable, Equatable {
+        var recursive: Bool?
+    }
+
     /// What went wrong, in the same shape every time so a client can read one
     /// field rather than parse prose.
     struct Failure: Codable, Equatable {
@@ -128,7 +142,7 @@ struct SourceEndpoint {
         do {
             let database = try Database(path: databasePath)
             try Migrator.migrate(database)
-            store = SourceStore(database: database)
+            store = SourceStore(database: database, bytes: bytes)
         } catch {
             Log.sources.error(
                 "could not open the library: \(String(describing: error), privacy: .public)")
@@ -144,6 +158,8 @@ struct SourceEndpoint {
             return add(request, store: store)
         case ("GET", .some(let uuid)):
             return one(request, uuid: uuid, store: store)
+        case ("PATCH", .some(let uuid)):
+            return change(request, uuid: uuid, store: store)
         case ("DELETE", .some(let uuid)):
             return remove(request, uuid: uuid, store: store)
         default:
@@ -245,6 +261,59 @@ struct SourceEndpoint {
         }
     }
 
+    // MARK: - Changing
+
+    /// Changes the options a source was added with, and answers with it as it
+    /// now stands.
+    ///
+    /// The same kit call `pgr_ctl` would make, for the same reason as adding:
+    /// the durable list is written and the table reconciled from it, so the
+    /// answer describes a library that already agrees with what was asked. What
+    /// it does not do is rescan — turning recursion on finds nested photographs
+    /// at the agent's next refresh, and turning it off drops them there too.
+    private func change(
+        _ request: HTTPListener.Request, uuid: String, store: SourceStore
+    ) -> HTTPListener.Response {
+        let wanted: Change
+        do {
+            wanted = try JSONDecoder().decode(Change.self, from: request.body)
+        } catch {
+            return answer(
+                request,
+                json(
+                    Failure(error: "expected a JSON object of {recursive}"), status: 400,
+                    reason: "Bad Request"),
+                detail: "unreadable body")
+        }
+        // Nothing to change is a request that cannot be answered honestly: a
+        // `200` would say a change was made and a `204` would say there was
+        // nothing to do, and neither is what happened.
+        guard let recursive = wanted.recursive else {
+            return answer(
+                request,
+                json(
+                    Failure(error: "no change was asked for"), status: 400, reason: "Bad Request"),
+                detail: "empty change")
+        }
+
+        do {
+            guard let source = try store.source(uuid: uuid) else { return missing(request, uuid) }
+            let updated = try store.setRecursive(recursive, for: source, in: preferences)
+            return answer(
+                request, json(wire(updated, store: store)),
+                detail: "\(source.locator) recursive=\(recursive)")
+        } catch SourceStore.EditFailure.optionNotAvailable(let option, let kind) {
+            return answer(
+                request,
+                json(
+                    Failure(error: "a \(kind.rawValue) source has no \(option) option"),
+                    status: 400, reason: "Bad Request"),
+                detail: "\(kind.rawValue) has no \(option) option")
+        } catch {
+            return answer(request, failed(error), detail: "could not change the source")
+        }
+    }
+
     // MARK: - Removing
 
     private func remove(
@@ -261,6 +330,15 @@ struct SourceEndpoint {
 
     // MARK: - Answering
 
+    /// **The row as it stands, not a fresh look at the source.**
+    ///
+    /// This reports what the agent knows — the availability its last scan
+    /// concluded — rather than stopping to `stat` every source on every read. A
+    /// client that can see the path checks it itself and gets a better answer
+    /// than a round trip could carry: the Mac app is unsandboxed and does
+    /// exactly that. A client that cannot see it is not helped by this endpoint
+    /// looking either, because for a Photos or Google album the scan is the only
+    /// thing that can look.
     private func wire(_ source: Source, store: SourceStore) -> Wire {
         Wire(
             uuid: source.uuid,

@@ -225,6 +225,7 @@ the service**: a client asks for what it needs and never opens the store.
     GET    /v1/sources           the list, with counts and availability
     POST   /v1/sources           add an array, all or none
     GET    /v1/sources/<uuid>    one source, with the options it was added with
+    PATCH  /v1/sources/<uuid>    change one of those options
     DELETE /v1/sources/<uuid>    remove one
 
 **A source is named by its `uuid`**, which is minted when the row is inserted and
@@ -254,9 +255,24 @@ answering, so one request is one write and one doorbell. **Adding does not wait
 for the scan** — the answer carries the new source's `uuid` and a count of zero,
 and the count arrives on a later `GET`.
 
+`PATCH` takes `{recursive}` — the only option a folder has today — and answers
+with the source as it now stands. A field left out is one that is not being
+changed, which is why this is a `PATCH` and not a `PUT`; a body that asks for
+nothing is refused, and so is recursion on a `file` source, which has no such
+option. The source keeps its `uuid`, its cached bytes, and its place in the
+shuffle: changing a checkbox is not remove-and-re-add.
+
+**Switching recursion off removes the nested photographs**, which is the same
+rule as any other departure — a photograph that is no longer in its source is
+dropped whether it was deleted, or the folder stopped reaching that far. They go
+at the next refresh, and any that is asked for before then is dropped at that
+moment rather than served. Switching it back on finds them again at the next
+refresh.
+
 `DELETE` answers `204`, and takes the source's photographs and queue entries with
-it. Removal is not deletion: nothing on disk is touched. Cached bytes are
-reclaimed on the next maintenance pass, once nothing points at them.
+it. Removal is not deletion: nothing on the source is touched. **The cached bytes
+go at once** — the originals we copied and every rendering made from them — rather
+than waiting for a restart to notice nothing claims them.
 
 Enabling, disabling, and refreshing are not here. They stay in `pgr_ctl`, which
 keeps the database and preferences and never makes a web request.
@@ -279,7 +295,7 @@ without restarting it and without any cooperation:
 | --- | --- | --- |
 | `sources` | array of `{kind, locator, recursive, enabled}`; `recursive` is per source and defaults off | none |
 | `repeatWindowFraction` | how much of the library must pass before a photo repeats | 0.5 |
-| `queueSize` | pictures to keep ready. A target, not a ceiling | 1000 |
+| `queueSize` | cards to keep queued. A target, not a ceiling | 250 |
 | `queueRefreshIntervalSeconds` | how often to top the queue up | 5 |
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
 | `maintenanceIntervalSeconds` | how often to verify, sweep, and evict | 30 |

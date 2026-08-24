@@ -24,15 +24,21 @@ public struct ScanResult: Sendable, Equatable {
     /// was removed from the pool at all.
     public let sourceUnavailable: Bool
     public let reason: String?
-    /// Cache-relative paths whose photos are gone. The store has no idea where
-    /// the cache root is, so it reports them and whoever owns the root deletes
-    /// them. Bounded by how many photos actually disappeared, not by library
-    /// size — a scan that removes nothing carries nothing.
-    public let orphaned: [String]
+    /// Cached bytes deleted along with the rows, because a photograph that has
+    /// left its source is not coming back and its bytes are not worth keeping.
+    ///
+    /// This used to be a list of orphaned paths handed to *whoever owned the
+    /// cache root*, on the reasoning that the store did not know where that was.
+    /// Nothing ever consumed it, so every photograph that left a source kept its
+    /// bytes until the next launch rebuilt the index. The store now holds the
+    /// byte index itself and deletes them here, and this number is what it
+    /// freed — visible rather than assumed, so a caller that forgot to hand one
+    /// over reports zero instead of quietly leaking.
+    public let bytesFreed: Int64
 
     public init(
         sourceID: Int64, added: Int, removed: Int, unchanged: Int,
-        sourceUnavailable: Bool, reason: String?, orphaned: [String] = []
+        sourceUnavailable: Bool, reason: String?, bytesFreed: Int64 = 0
     ) {
         self.sourceID = sourceID
         self.added = added
@@ -40,7 +46,7 @@ public struct ScanResult: Sendable, Equatable {
         self.unchanged = unchanged
         self.sourceUnavailable = sourceUnavailable
         self.reason = reason
-        self.orphaned = orphaned
+        self.bytesFreed = bytesFreed
     }
 
     public var isEmpty: Bool { added == 0 && removed == 0 }
@@ -61,29 +67,52 @@ public struct SourceStore {
     /// Add and remove entries. The queue pulls from this and does not care who
     /// filled it.
     public let pool: PhotoPool
+    /// What is on disk, so that removing a photograph's row can remove its bytes
+    /// in the same breath.
+    ///
+    /// **A row without its bytes is a leak.** Whenever a photograph leaves a
+    /// source — the source removed, recursion switched off, the file deleted
+    /// under us — the pool loses the row and nothing was left pointing at the
+    /// cached original and its renderings. They used to survive until the next
+    /// launch rebuilt the index from the filesystem and discarded what nothing
+    /// claimed, which is a long time to hold a library's worth of bytes.
+    ///
+    /// Optional because plenty of callers only ever *read* sources — the picture
+    /// endpoint, the statistical rig — and a byte index they never use should
+    /// not be a construction cost. Every path that removes reports what it
+    /// freed, so a caller that removes without one is visible rather than
+    /// silent.
+    public let bytes: PhotoStore?
 
     private let providers: [SourceKind: any SourceProvider]
 
     public init(
         database: Database,
         fileAccess: any FileAccess = UnsandboxedFileAccess(),
-        providers: [any SourceProvider]
+        providers: [any SourceProvider],
+        bytes: PhotoStore? = nil
     ) {
         self.database = database
         self.fileAccess = fileAccess
         self.pool = PhotoPool(database: database)
+        self.bytes = bytes
         self.providers = Dictionary(uniqueKeysWithValues: providers.map { ($0.kind, $0) })
     }
 
     /// The providers Phase 1 ships with: files on disk, and nothing else.
-    public init(database: Database, fileAccess: any FileAccess = UnsandboxedFileAccess()) {
+    public init(
+        database: Database,
+        fileAccess: any FileAccess = UnsandboxedFileAccess(),
+        bytes: PhotoStore? = nil
+    ) {
         self.init(
             database: database,
             fileAccess: fileAccess,
             providers: [
                 FolderSourceProvider(fileAccess: fileAccess),
                 FileSourceProvider(fileAccess: fileAccess),
-            ]
+            ],
+            bytes: bytes
         )
     }
 
@@ -186,19 +215,55 @@ public struct SourceStore {
         )
     }
 
-    /// Removes a source and everything that came from it.
-    public func remove(id: Int64) throws {
+    /// Removes a source and everything that came from it: the row, its
+    /// photographs and their queue entries by cascade, and **its cached bytes**.
+    ///
+    /// The bytes go by source rather than photo by photo, because the cache is
+    /// already laid out by source `uuid` — one directory, one removal, and no
+    /// walk proportional to how many photographs were in it.
+    ///
+    /// Returns the bytes freed, which is zero when there was nothing cached and
+    /// also zero when no byte index was handed to this store. Nothing on the
+    /// *source* is touched: removal is not deletion.
+    @discardableResult
+    public func remove(id: Int64) throws -> Int64 {
+        let uuid = try database.scalarString(
+            "SELECT uuid FROM source WHERE id = :id;", ["id": .int(id)])
         try database.run("DELETE FROM source WHERE id = :id;", ["id": .int(id)])
-        Log.sources.notice("removed source \(id, privacy: .public)")
+        let freed = uuid.map { bytes?.removeSource($0) ?? 0 } ?? 0
+        Log.sources.notice(
+            "removed source \(id, privacy: .public), freeing \(freed, privacy: .public) bytes")
+        return freed
     }
 
     // MARK: - Reconciling with preferences
 
+    /// Held across a preferences write and the reconcile that projects it.
+    ///
+    /// Recursive because the editing calls take it and then reconcile, which
+    /// takes it again. Static because the two writers that matter are in one
+    /// process — the agent's loop and the endpoint answering a client — and a
+    /// `SourceStore` is per connection rather than per library.
+
     /// What reconciling changed.
+    static let editing = NSRecursiveLock()
+
     public struct Reconciliation: Sendable, Equatable {
         public let added: Int
         public let removed: Int
         public let changed: Int
+        /// Cached bytes freed by the sources that went. A person removing a
+        /// folder of eight thousand photographs should be told what came back,
+        /// and a zero here after a real removal is how a missing byte index
+        /// announces itself.
+        public let bytesFreed: Int64
+
+        public init(added: Int, removed: Int, changed: Int, bytesFreed: Int64 = 0) {
+            self.added = added
+            self.removed = removed
+            self.changed = changed
+            self.bytesFreed = bytesFreed
+        }
 
         public var isEmpty: Bool { added == 0 && removed == 0 && changed == 0 }
     }
@@ -213,8 +278,34 @@ public struct SourceStore {
     /// Run at launch and whenever the source list changes. A fresh database
     /// rebuilds itself from preferences and rescans; the user notices only that
     /// it took a moment.
+    /// Makes the table match the durable list **as it stands now**.
+    ///
+    /// It reads the list itself rather than being handed one, and that is the
+    /// whole point of the signature. The table is rebuilt from whatever it is
+    /// given, so a caller holding a copy from a moment ago re-creates anything
+    /// removed since — the agent's loop reads the list, walks its sources for as
+    /// long as that takes, and a source deleted in the meantime comes back with
+    /// its photographs and starts being shown again. Nobody can hold a stale
+    /// copy of something they never receive.
     @discardableResult
-    public func reconcile(with specs: [SourceSpec], now: Date = Date()) throws -> Reconciliation {
+    public func reconcile(with preferences: Preferences, now: Date = Date()) throws
+        -> Reconciliation
+    {
+        Self.editing.lock()
+        defer { Self.editing.unlock() }
+        return try reconcile(specs: preferences.sources, now: now)
+    }
+
+    /// The projection itself, against an explicit list.
+    ///
+    /// Internal, and deliberately not public: an explicit list is exactly the
+    /// thing that goes stale. Tests that want to assert the projection rules
+    /// with a list they wrote are the reason it exists at all.
+    @discardableResult
+    func reconcile(specs: [SourceSpec], now: Date = Date()) throws -> Reconciliation {
+        Self.editing.lock()
+        defer { Self.editing.unlock() }
+
         let existing = try all()
         var added = 0
         var changed = 0
@@ -245,12 +336,14 @@ public struct SourceStore {
         // with it, because they were only ever a cache of it.
         let wanted = Set(specs.map(\.locator))
         var removed = 0
+        var freed: Int64 = 0
         for source in existing where !wanted.contains(source.locator) {
-            try remove(id: source.id)
+            freed += try remove(id: source.id)
             removed += 1
         }
 
-        let result = Reconciliation(added: added, removed: removed, changed: changed)
+        let result = Reconciliation(
+            added: added, removed: removed, changed: changed, bytesFreed: freed)
         if !result.isEmpty {
             Log.sources.notice(
                 "reconciled sources with preferences: +\(added, privacy: .public) -\(removed, privacy: .public) ~\(changed, privacy: .public)"
@@ -340,10 +433,46 @@ public struct SourceStore {
         var pending: [DiscoveredPhoto] = []
         pending.reserveCapacity(PhotoPool.batchSize)
 
+        // What this walk saw, held in SQLite rather than in memory.
+        //
+        // **The provider contract forbids building a collection of a whole
+        // source, and this does not break it.** The rule is about the process's
+        // heap — a hundred-thousand-photo library is about 7 KB per photo as
+        // values — and what goes here is one short string per photograph, in a
+        // temporary table the database spills to disk as it sees fit. Nothing
+        // accumulates in memory beyond the batch already being written.
+        //
+        // Temporary, because it is *this walk's observation*. The durable
+        // snapshot of the filesystem is the `photo` table itself; this is the
+        // new reading being compared against it, and it is worthless the moment
+        // the comparison is done.
+        try database.run(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS walk_seen (
+              source_id   INTEGER NOT NULL,
+              external_id TEXT    NOT NULL,
+              PRIMARY KEY (source_id, external_id)
+            );
+            """
+        )
+        // Scoped and cleared, so a connection that refreshes several sources in
+        // turn cannot let one walk's findings condemn another's photographs.
+        try database.run(
+            "DELETE FROM walk_seen WHERE source_id = :id;", ["id": .int(source.id)])
+
         func flush() throws {
             guard !pending.isEmpty else { return }
             let counts = try pool.upsert(pending, to: source, at: now) { photo in
                 onChange?(.added(externalID: photo.externalID))
+            }
+            for photo in pending {
+                try database.run(
+                    """
+                    INSERT OR IGNORE INTO walk_seen (source_id, external_id)
+                    VALUES (:source, :external);
+                    """,
+                    ["source": .int(source.id), "external": .text(photo.externalID)]
+                )
             }
             added += counts.added
             updated += counts.updated
@@ -391,52 +520,66 @@ public struct SourceStore {
             }
         }
 
-        // ── Removals: asked one photo at a time ──
+        // ── Removals: the difference between what is held and what was seen ──
         //
-        // There is no diff and no set of what was seen. The pool is walked a
-        // page at a time and each entry's provider is asked whether that photo
-        // is still there, which is the same three-valued check that guarantees a
-        // deleted photo is never shown.
+        // **One walk, not one question per photograph.** This used to page
+        // through the pool asking the provider about every entry it held, which
+        // is a round trip each. On a folder that is a stat and invisible; on a
+        // network volume it is most of a second, so a source of five thousand
+        // photographs took over an hour — and because the agent awaits its
+        // refresh, everything else it does stopped for the duration.
         //
+        // The walk that just ran already knows what is there. Anything the pool
+        // holds that the walk did not produce is gone, and that is one query.
+        //
+        // The three-valued existence check is not lost, only moved to where it
+        // is worth its cost: serving still asks it about the single photograph
+        // it is about to display, which is where the deleted-photo guarantee
+        // actually lives.
         var removed = 0
-        // Photos the walk found still in place. The walk runs after the inserts,
-        // so it sees this pass's additions too — they are discounted at the end
-        // rather than tracked here, which would mean knowing which rows were new.
-        var survived = 0
-        var cursor: Int64 = 0
-        var orphaned: [String] = []
+        var freed: Int64 = 0
 
         while true {
-            let batch = try pool.page(ofSource: source.id, after: cursor)
-            guard let last = batch.last else { break }
-            cursor = last.id
+            let departed = try database.all(
+                """
+                SELECT p.id AS id, p.external_id AS external_id
+                  FROM photo p
+                 WHERE p.source_id = :id
+                   AND NOT EXISTS (
+                         SELECT 1 FROM walk_seen w
+                          WHERE w.source_id = p.source_id
+                            AND w.external_id = p.external_id)
+                 LIMIT :limit;
+                """,
+                ["id": .int(source.id), "limit": .int(Int64(PhotoPool.batchSize))]
+            ) { (id: try $0.int64("id"), externalID: try $0.string("external_id")) }
+            guard !departed.isEmpty else { break }
 
-            var departed: [Int64] = []
-            for entry in batch {
-                switch await provider.existence(of: entry.externalID, in: source) {
-                case .absent:
-                    departed.append(entry.id)
-                    onChange?(.removed(externalID: entry.externalID))
-                case .present, .unknown:
-                    // `.unknown` is not `.absent`. The photo keeps its row and
-                    // its history, and the question gets asked again next pass.
-                    survived += 1
-                }
-            }
-
-            if !departed.isEmpty {
-                let removal = try pool.remove(departed)
-                removed += removal.count
-                orphaned += removal.orphaned
+            for entry in departed { onChange?(.removed(externalID: entry.externalID)) }
+            let removal = try pool.remove(departed.map(\.id))
+            removed += removal.count
+            // The bytes go with the rows, here rather than at the next launch. A
+            // photograph that has left its source — deleted from the folder, or
+            // nested in one that is no longer recursive — is not coming back,
+            // and the cached original and its renderings were the only things
+            // still holding that space.
+            for uuid in removal.orphaned {
+                freed += bytes?.remove(photoUUID: uuid) ?? 0
             }
         }
+
+        // Done with, and dropped rather than left for the connection's lifetime:
+        // an agent refreshing every five minutes would otherwise carry the last
+        // walk's findings around between passes for no reason.
+        try database.run(
+            "DELETE FROM walk_seen WHERE source_id = :id;", ["id": .int(source.id)])
 
         try markAvailable(sourceID: source.id, scannedAt: now)
 
         let result = ScanResult(
             sourceID: source.id, added: added, removed: removed,
-            unchanged: max(0, survived - added), sourceUnavailable: false, reason: nil,
-            orphaned: orphaned
+            unchanged: max(0, seen - added), sourceUnavailable: false, reason: nil,
+            bytesFreed: freed
         )
         if !result.isEmpty {
             Log.sources.notice(

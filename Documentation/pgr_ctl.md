@@ -9,7 +9,7 @@
 ```
 pgr_ctl status
 pgr_ctl sources {add [--folder [--recursive] <path>] [--file <path>] … | list | remove <id> | enable <id> | disable <id>}
-pgr_ctl refresh [--source <id>]
+pgr_ctl refresh
 pgr_ctl pool stats
 pgr_ctl queue {peek [-n <count>] | fill [-n <rounds>]}
 pgr_ctl deck stats
@@ -88,8 +88,8 @@ is the expensive one: walking a home directory by accident costs minutes and
 thousands of photographs nobody meant to add.
 
 `--source <id>`
-Scope `refresh` or `cache clear` to the one source with that id, instead of
-acting on all of them. The id is the number `sources list` prints; note that it
+Scope `cache clear` to the one source with that id, instead of acting on all of
+them. The id is the number `sources list` prints; note that it
 is a row id in a disposable database, so deleting the library renumbers sources
 from 1 and `--source 3` means "whichever is third now" rather than a particular
 folder.
@@ -166,8 +166,16 @@ photos leave the deck and the queue immediately, but keep their deal history, so
 re-enabling brings them straight back where they were (_primarily for internal testing_).
 
 `refresh`
-Re-enumerate sources into the pool. Reports `+added -removed =unchanged` per
-source, or the reason a source is unavailable.
+Ask the agent to re-enumerate its sources, and return at once. **It does no
+scanning itself**: the walk belongs to the agent, which reports what it is
+refreshing and what each source took on its own console. Rescanning a network
+share with thousands of photographs is minutes of work, and doing it here meant
+enumerating it twice and blocking a terminal for the privilege.
+
+Every enabled source, because the doorbell is a Darwin notification and those
+carry no payload — `--source` is refused rather than quietly ignored. With no
+agent running it says so: nothing will act on it, which is not an error but is
+worth knowing.
 
 `pool stats`
 Rows per source, split by what explains everything else — referenced against

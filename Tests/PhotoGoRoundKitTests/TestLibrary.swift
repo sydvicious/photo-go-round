@@ -155,27 +155,16 @@ struct TestLibrary {
 /// promises.
 extension TestLibrary {
     func drawSequence(count: Int, settings: DeckSettings) throws -> [Int64] {
-        let sourceIDs = try database.all("SELECT id FROM source WHERE enabled = 1 ORDER BY id;") {
-            try $0.int64("id")
-        }
-        guard !sourceIDs.isEmpty else { return [] }
-
         var drawn: [Int64] = []
         drawn.reserveCapacity(count)
-        var next = 0
+        // One order over the whole library, which is what the deck deals now.
+        // Visiting sources in turn was the caller's job while candidates were
+        // chosen per source; there is no such choice to make any more.
         while drawn.count < count {
-            var madeProgress = false
-            for _ in sourceIDs.indices {
-                let sourceID = sourceIDs[next % sourceIDs.count]
-                next += 1
-                if let card = try deck.nextCandidate(forSource: sourceID, settings: settings) {
-                    _ = try deck.markShown(photoID: card.id)
-                    drawn.append(card.id)
-                    madeProgress = true
-                    break
-                }
-            }
-            if !madeProgress { break }
+            guard let card = try deck.nextCandidate(settings: settings) else { break }
+            _ = try deck.markShown(photoID: card.id)
+            try deck.releaseClaim(photoID: card.id)
+            drawn.append(card.id)
         }
         return drawn
     }
@@ -206,5 +195,26 @@ final class Mutex<Value>: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return body(&value)
+    }
+}
+
+/// Filling a queue the way the agent does, in the two steps it now takes.
+///
+/// Dealing and fetching used to be one operation — `produce` picked a card *and*
+/// downloaded it, so nothing reached the queue until its bytes were local. They
+/// are separate now: the queue holds cards, and bytes arrive because serving
+/// asked for them. A test that wants "a full queue with the bytes to match"
+/// therefore does both, and this is that.
+extension PhotoCache {
+    /// Deals until the deck offers nothing, then fetches the bytes for
+    /// everything dealt. Answers how many cards are queued.
+    @discardableResult
+    func fillCompletely(limit: Int = 500) async throws -> Int {
+        var dealt = 0
+        while dealt < limit, try deal() { dealt += 1 }
+        for card in try queue.peek(Int.max) {
+            _ = try await cache(photoID: card.id)
+        }
+        return try queue.size()
     }
 }

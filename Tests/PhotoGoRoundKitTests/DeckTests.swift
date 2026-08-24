@@ -385,15 +385,15 @@ struct DeckTests {
         let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
         let deck = library.deck
 
-        let first = try #require(try deck.nextCandidate(forSource: source))
-        let second = try #require(try deck.nextCandidate(forSource: source))
+        let first = try #require(try deck.nextCandidate())
+        let second = try #require(try deck.nextCandidate())
         #expect(first.id != second.id)
         #expect(Set([first.id, second.id]) == Set(ids))
 
         // Both are claimed and neither is queued or shown, so there is nothing
         // left to offer. Without the claim this would hand out a third card
         // that another producer was already downloading.
-        #expect(try deck.nextCandidate(forSource: source) == nil)
+        #expect(try deck.nextCandidate() == nil)
     }
 
     @Test("Releasing a claim puts the photo straight back in contention")
@@ -402,11 +402,11 @@ struct DeckTests {
         let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
         let deck = library.deck
 
-        let card = try #require(try deck.nextCandidate(forSource: source))
-        #expect(try deck.nextCandidate(forSource: source) == nil)
+        let card = try #require(try deck.nextCandidate())
+        #expect(try deck.nextCandidate() == nil)
 
         try deck.releaseClaim(photoID: card.id)
-        #expect(try deck.nextCandidate(forSource: source)?.id == card.id)
+        #expect(try deck.nextCandidate()?.id == card.id)
     }
 
     @Test("A claim expires, so a producer that died mid-fetch sidelines nothing")
@@ -416,12 +416,11 @@ struct DeckTests {
         let deck = library.deck
 
         let start = Date(timeIntervalSince1970: 1_000_000)
-        let card = try #require(try deck.nextCandidate(forSource: source, now: start))
+        let card = try #require(try deck.nextCandidate(now: start))
         // Still inside the window: the claim holds.
-        #expect(try deck.nextCandidate(forSource: source, now: start.addingTimeInterval(Deck.claimTimeout - 1)) == nil)
+        #expect(try deck.nextCandidate(now: start.addingTimeInterval(Deck.claimTimeout - 1)) == nil)
         // Past it: nobody is coming back for this one, so it competes again.
-        let again = try deck.nextCandidate(
-            forSource: source, now: start.addingTimeInterval(Deck.claimTimeout + 1))
+        let again = try deck.nextCandidate(now: start.addingTimeInterval(Deck.claimTimeout + 1))
         #expect(again?.id == card.id)
     }
 
@@ -431,7 +430,7 @@ struct DeckTests {
         let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
         let deck = library.deck
 
-        let card = try #require(try deck.nextCandidate(forSource: source))
+        let card = try #require(try deck.nextCandidate())
         _ = try deck.markShown(photoID: card.id)
         let claimed = try library.database.first(
             "SELECT claimed_at FROM photo WHERE id = :id;", ["id": .int(card.id)]
@@ -459,7 +458,7 @@ struct DeckTests {
             let deck = Deck(database: database)
             var mine: [Int64] = []
             for _ in 0..<100 {
-                guard let card = (try? deck.nextCandidate(forSource: source)) ?? nil else { break }
+                guard let card = (try? deck.nextCandidate()) ?? nil else { break }
                 mine.append(card.id)
             }
             collected.withLock { $0.append(contentsOf: mine) }
@@ -503,7 +502,7 @@ struct DeckTests {
         // times it is asked for.
         var offered: Set<Int64> = []
         for _ in 0..<6 {
-            guard let card = try deck.nextCandidate(forSource: source) else { break }
+            guard let card = try deck.nextCandidate() else { break }
             offered.insert(card.id)
             _ = try deck.markShown(photoID: card.id)
         }
@@ -529,11 +528,11 @@ struct DeckTests {
         let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
         let deck = library.deck
         for _ in 0..<Deck.renderFailureLimit { try deck.recordRenderFailure(photoID: ids[0]) }
-        #expect(try deck.nextCandidate(forSource: source) == nil)
+        #expect(try deck.nextCandidate() == nil)
 
         #expect(try deck.clearRenderFailures() == 1)
         #expect(try deck.blacklisted().isEmpty)
-        #expect(try deck.nextCandidate(forSource: source)?.id == ids[0])
+        #expect(try deck.nextCandidate()?.id == ids[0])
     }
 
     // MARK: - Two processes, one deck

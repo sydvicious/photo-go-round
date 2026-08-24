@@ -10,28 +10,68 @@ Building the first of them forced a decision that is **not** app-specific: the d
 
 # Phases
 
-- *Web services for managing sources* — the agent answers, so a client never opens the store.
+- *Web services for managing sources* — **done.** The agent answers, so a client never opens the store.
   - `GET /v1/sources` — the list, with photo count, availability, reason, and the source's `uuid`.
   - `POST /v1/sources` — add an array, all or none; returns what was created.
+  - `GET /v1/sources/<uuid>` — one source, with the options it was added with.
+  - `PATCH /v1/sources/<uuid>` — change one of those options; today that is `recursive`.
   - `DELETE /v1/sources/<uuid>` — remove one.
   - `pgr_ctl` is unchanged: it keeps preferences and the database, and never makes a web request. Command-line HTTP is `curl`.
-- *Sources in Settings* — one panel that shows what is configured and changes it.
+- *Sources in Settings* — **done**, and superseded in shape by *Sources by kind, in sections* below. One panel that shows what is configured and changes it.
   - A list with icon, name, count, and state; path secondary.
-  - `Add Files…` — files only, multiple selection, one source per file.
-  - `Add Folder…` — one at a time, with an "Also use nested folders" checkbox.
+  - `Add Picture Files…` — files only, multiple selection, one source per file.
+  - `Add Picture Folder…` — one at a time, with an "Add contents of contained folders" checkbox.
+  - `Add from Photos Library…` — present and disabled, because the provider does not exist yet.
   - Remove a selected source.
+  - Configure a selected folder — the button, the context menu, or a double-click — showing the full path and the one option it has.
+  - The list is re-read at launch, when the panel appears, and every few seconds while it is open.
 - *Navigation in the picture window* — say "next" by hand.
   - Chevron on hover at the right edge; keys: space, →, ↓, page down.
   - One rule: no request sooner than `advanceIntervalSeconds` after the current picture was drawn.
-- *Later, in the same places* — collapse per-file sources into one row; the Display tab for timer duration and fit; going backwards through history.
+- *Sources by kind, in sections* — replaces the single list, and settles what to do about a two-hundred-file selection.
+  - A "Files" section and a "Folders" section, each with its own `+` and `−` beneath it, each showing five rows before it scrolls.
+  - `+` is that kind's picker, so the menu that chooses a kind goes away with it.
+  - Multiple selection inside a section, ⌘A included, so `−` removes everything selected in one act.
+  - Photos and Google Photos get their own sections when those providers arrive; each kind's section carries whatever that kind needs.
+  - **Supersedes collapsing per-file sources into one row.** Sections do the same job — keeping two hundred pinned photographs from being two hundred undifferentiated rows — without inventing the batch identifier the data does not have.
+  - Removing several at once wants a batch `DELETE`, or the panel makes a request, a preference write, and a doorbell *per row*. `POST` takes an array for exactly this reason and `DELETE` does not yet.
+- *Saying the agent is not there* — **done.** The window title becomes `Photo-Go-Round - No agent`, and the photograph dims behind a flat grey at three-tenths.
+  - Nothing is written on the picture: a badge would have to stay legible against whatever is behind it, and `PLAN.md`'s *Showing unavailability* forbids annotating a photograph to report a problem elsewhere. A title has its own background.
+  - The picture stays visible rather than being taken down, so what is on screen is still a photograph — veiled, and unmistakably not being replaced.
+  - Only for an agent that cannot be reached. An empty queue resolves itself as the agent produces, and a dimmed window every time it ran briefly dry would be noise.
+- *The empty state moves* — when there is nothing to show, say so without leaving a still frame on the glass.
+  - The words drift around the window and bounce off the edges.
+  - Slow. The motion is there to keep the pixels from sitting still, not to be looked at.
+  - The motion is the same for every empty state; **the words are not.** "No photos" for an empty queue, and "No agent" when nothing is listening. The reason stays underneath as secondary text.
+  - **One exception, and it is narrow**: when registering the agent was *refused*, the window says "Problem launching the agent. Contact support@sydpolk.com." — see *The app brings its own agent*. Anything else with no agent, including one that registered and later stopped, is "No agent".
+  - Built here so Phase 6 inherits it: `PLAN.md`'s *The Mac app as instrument panel* parks the bouncing empty state in the app precisely so the screensaver does not invent a second one.
+- *The app brings its own agent* — installing Photo-Go-Round should be the whole of installing Photo-Go-Round.
+  - `photogoroundd` ships inside the app bundle, with its launchd plist in `Contents/Library/LaunchAgents/`.
+  - The app registers and starts it at launch, and does nothing when it is already registered. Mechanism settled in `PLAN.md`, *An installer is probably unnecessary*.
+  - Decide which deployment the embedded agent runs in — the app asks for `.development` today, and a shipped one must not.
+  - Leave a development agent alone if one is already serving on the same preference domain; two agents on one library is the failure this must not cause.
+  - Say what happened when registration is refused. It is the one failure that leaves the window with nothing to show and no way for the user to fix it, which is why it is the one that names somewhere to write to: "Problem launching the agent. Contact support@sydpolk.com."
+  - `Scripts/make-agent-bundle.sh` and `pgr_ctl register` stay the rig's way in; decide whether the script is subsumed by a copy phase.
+- *A menu bar app* — the picture window becomes something the app can show rather than the app itself.
+  - A status item, and an item that brings the window up.
+  - **Deliberately unfinished.** What else belongs in that menu, whether the Dock icon goes with it, and what closing the last window means are all open.
+- *Later, in the same places* — the Display tab for timer duration and fit; going backwards through history.
 
 # Design Decisions
 
 - **The architecture is `PLAN.md`'s, not this document's.** The database is private to the service; a client asks over HTTP and never opens the store; preferences stay the durable source list, the discovery channel, and `pgr_ctl`'s business; a source is named by its `Source.uuid`. See *The database is private to the service*.
 - **Settings, not the File menu.** Adding and removing act on one list, and only one of them has a picker shape.
 - **One source per file, collapsed in the UI later.** The deck already treats a pinned photograph and a folder of ten thousand alike; changing that to tidy a list would be a schema change.
-- **"Also use nested folders", not "Recursive."** Read by people who have never heard the word. Per folder, default off, not sticky.
+- **"Add contents of contained folders", not "Recursive."** Read by people who have never heard the word. Per folder, default off, not sticky.
 - **One request, one write, one doorbell.** `POST` takes an array rather than one source, because adding two hundred one at a time would ask the agent to refresh two hundred times.
+- **Configure is a `PATCH`, not a remove-and-re-add.** A source keeps its `uuid`, its cache directory, and its deal history when a checkbox changes; recreating it would throw all three away for a tick box. It is a sheet rather than an inline control because a Photos album will have several options and this is the shape that grows.
+- **The panel does not need the endpoint for file and folder sources at all.** It is unsandboxed, so preferences and the filesystem give it everything about one except the photo count. The endpoint stays because other kinds will need it: a Photos or Google album is not a path, and only the agent can answer for it. See *What the panel could get without the agent*.
+- **Where a source stands, the app just looks.** `SourceAvailability.of(path:)` is the kit's own rule, run here on the path the app already has. **The endpoint deliberately does not check** — it reports what the last scan concluded — because an answer that came over HTTP is a round trip old before it is drawn, and making the agent `stat` every source on every read would buy a worse answer at a higher price.
+- **The panel polls, because nothing rings a doorbell it can hear.** `pgr_ctl` removes a source, a drive is unplugged, a freshly added folder finishes scanning — none of those reach this process. Opening Settings re-reads, and after that it is **every few minutes**, not every few seconds; a failed read tries again in fifteen seconds, because noticing the agent is back should not take three of them.
+- **A control sizes its label, never itself.** A borderless button hit-tests its *content*, so putting the frame on the button reserves space that looks clickable and is not — the glyph is a few points across and every click beside it lands nowhere. `−` was dead for exactly this reason, with the model in a perfectly good state.
+- **The panel says what it is doing, and the logging stays in.** `panel:` on every line, so the Xcode console filters to it in one word: what was pressed, what the selection is, what the flags gating the buttons were, what a read returned. Info is cheap; the hit-testing fault was found in a single click by a log line saying the button was enabled and no press had arrived.
+- **A spinner, and everything disabled until the change lands.** Any action that goes to the agent locks the `+`, `−`, and Configure controls *and* the list, so nothing can be pressed twice and the selection cannot move under the buttons. Without it a working panel and a broken one look identical — which is what "I hit `−` and nothing happened" turned out to be.
+- **The selection follows its source by locator.** A source can keep its place in the list and change identity, because anything that takes it out of the durable list and puts it back mints a new `uuid`. Dropping the selection then leaves a row that still looks chosen while every control reads *nothing selected*.
 - **Advancing is gated from the draw, not the request.** A slow fetch is then harmless, and coalescing needs no separate mechanism.
 - **The photograph window acknowledges nothing.** New pictures simply appear; the panel is where a change is confirmed, because that is where it was made.
 
@@ -103,7 +143,7 @@ The cost is presentational: `pgr_ctl sources list` becomes a wall of one-photo s
 
 One thing to remember when building that: these sources have **no group identity in the data.** They are individually chosen photographs that happen to have been picked in one dialog. Grouping by anything but kind would mean inventing a batch identifier — a schema change deferred rather than avoided.
 
-## "Also use nested folders"
+## "Add contents of contained folders"
 
 The preference is `recursive`, the flag is `--recursive`, and the checkbox says neither, because it is read by somebody who would not guess that means "and everything inside it."
 
@@ -111,9 +151,50 @@ The preference is `recursive`, the flag is `--recursive`, and the checkbox says 
 - **Default off.** The surprising direction is the expensive one — walking a home directory by accident costs minutes and thousands of photographs nobody meant to add.
 - **Not sticky.** Remembering the last answer applies a previous decision to a different folder unattended, and the expensive direction is the one that would be inherited.
 
+**Unticking it later is a removal**, and the sheet says so before you do it. The photographs inside contained folders leave the pool and take their cached copies and their deal history with them — the same rule as any other departure, since a photograph nested inside a source that no longer reaches that far is not in that source, however healthily it sits on disk. Ticking it again finds them at the next scan, as new photographs with no history.
+
+## Finding a dead button
+
+Worth writing down because every plausible explanation was wrong, and the way through was not reasoning.
+
+`−` did nothing. The candidates were all about state — the selection binding not updating, the row's identity changing underneath it, a change still in flight blocking the next one — and each had been a real bug at some point that evening, which made all of them credible. Two were fixed on the strength of it. Neither was this.
+
+One line logging the press, and one logging the selection with the flags that gate the button, settled it in a single click: `can remove true, working false`, and no press. The button was enabled and the click never reached it. That leaves hit-testing, and nothing else.
+
+**The general lesson is the cheap one.** A control that does nothing looks identical whether it is disabled, unbound, or unhittable, and no amount of reading the model tells them apart. A line that says *the press happened* separates the third from the first two before any theory is needed.
+
+## The app has tests of its own
+
+Added with the Settings panel, because the model is where the panel's behaviour actually lives: what a refusal leaves on screen, whether Configure is offered for what is selected, what happens to the selection when the row under it changes identity, and what the panel does while a change is in flight.
+
+**What it cannot cover is the window.** The first bug this panel shipped with — a double-click gesture on a row swallowing the click that sets the selection, so every control acted on nothing — lived entirely in the view, and thirty passing tests said nothing about it. The target earns its keep on the model and the client; the window still needs somebody looking at it.
+
+**Poll intervals are injected** for the same reason a socket test has a deadline: a test that waits three real minutes to prove a timer stopped is a test nobody runs. That one is not hypothetical — it was written with the production interval and took three minutes.
+
+## What the panel could get without the agent
+
+**Captured, not acted on. The app does not write preferences, and is not to start yet.** Everything it changes still goes over HTTP; the one preference it reads is `servicePort`, which is how it finds the agent at all. This is written down because it matters when the next source kind arrives, and because it is the sort of thing that gets rediscovered expensively.
+
+**For a file or folder source, the panel needs the agent for one fact.** This app is unsandboxed and links the kit, so it can read the durable list itself and look at the filesystem:
+
+| | preferences and the filesystem | only the agent |
+| --- | --- | --- |
+| kind, locator, recursive, enabled | yes | |
+| name, icon, whether it can be reached | yes | |
+| **photo count** | | yes |
+| `uuid` | | yes |
+
+The `uuid` costs nothing — preferences key on the locator, and so would the panel. **The photo count is the only real loss**, and it is the one number in that row that cannot be computed from a path: it lives in the pool, which is the database, which is the service's.
+
+**The endpoint is not going away**, because the argument only holds for kinds that are paths. A Photos album is a `PHAssetCollection` identifier and a Google album is an id on somebody's server; neither can be looked at from here, and the agent is the only process that can say whether they are reachable or how many photographs they hold.
+
+**What would still be true if the panel wrote preferences directly.** `PLAN.md`'s *The database is private to the service* rejected preferences-as-transport for five reasons, and three of them weaken for this app specifically: it resolves paths itself, so it knows immediately whether one is real; and it reads back its own writes, so it never watches its own change arrive late. **Two writers on one array does not weaken at all** — `pgr_ctl` writes the same key, `UserDefaults` has no compare-and-swap, and a lost update is a source that silently did not get added.
+
 ## Removing, and what it does not touch
 
-`remove` drops the source from preferences; its photographs and their queue entries go by cascade. **Cached bytes are not deleted at that moment** — the rows naming them are gone, so nothing points at the files, and a running agent reclaims them on its next maintenance pass. Freeing the space immediately is `pgr_ctl cache clear --source` *before* removing, which the panel does not offer and should not: it is a storage operation with a price worth stating, and stating prices is what `pgr_ctl` is for.
+`remove` drops the source from preferences; its photographs and their queue entries go by cascade. **Its cached bytes go with them, at that moment** — the originals we copied and every rendering made from them. That is a correction: this document used to say they were left for a running agent to reclaim on its next maintenance pass, and no such pass existed. The only reclaim was the byte index being rebuilt at the *next launch*, so removing a large source freed nothing until the agent was restarted. See `PLAN.md`, *Rows and bytes leave together*.
+
+`pgr_ctl cache clear --source` remains the way to free one source's space *without* removing it, which the panel does not offer and should not: it is a storage operation with a price worth stating, and stating prices is what `pgr_ctl` is for.
 
 Removal is not deletion. Nothing on disk is touched — only the library's knowledge of it. Disabling, for "not right now", stays in `pgr_ctl`; the panel offers the destructive-sounding verb because it is the one with a user-facing need.
 
@@ -170,7 +251,7 @@ Two facts that already exist and would otherwise be rediscovered. **Saving** wan
 
 Not edited here; recorded so the contradictions are deliberate.
 
-- **`Documentation/photogoroundd.md`** — SERVICE says the agent "answers one request that matters"; it will answer four once the source endpoints land, and the PREFERENCES table will gain `advanceIntervalSeconds`, the first key the agent itself does not read. Both wait until the code exists, because a man page that describes something unbuilt is worse than one that is behind.
+- **`Documentation/photogoroundd.md`** — updated. SERVICE still opens on the one request that matters and now carries a *Sources* subsection for the five that manage the library, and DESCRIPTION acknowledges that a client commands the source list over HTTP while configuring never requires the agent. The PREFERENCES table will gain `advanceIntervalSeconds` when that key exists; a man page describing something unbuilt is worse than one that is behind.
 - **`Documentation/pgr_ctl.md`** — unaffected. `pgr_ctl` keeps preferences and the database and gains no web verbs, so every word of it stays true.
 - **`PLAN.md`** — already reconciled: *The Mac app as instrument panel* now records the reversal, and *The database is private to the service* carries the rest.
 

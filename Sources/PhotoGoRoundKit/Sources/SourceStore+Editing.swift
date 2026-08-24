@@ -33,6 +33,11 @@ extension SourceStore {
         /// misspelled adds none of them, rather than leaving the library in a
         /// state that depends on the order they were given in.
         case pathsNotFound([String])
+        /// An option this kind of source does not have — recursion on a single
+        /// file. Refused rather than stored, because a source table that holds
+        /// answers to questions its kind cannot be asked is a table nobody can
+        /// read confidently afterwards.
+        case optionNotAvailable(option: String, kind: SourceKind)
         /// Written to preferences, and the reconcile did not produce a row. Not
         /// reachable by anything a caller did wrong; it means the projection is
         /// broken, which is worth saying rather than returning a short list.
@@ -60,6 +65,10 @@ extension SourceStore {
         _ requests: [SourceRequest], to preferences: Preferences,
         fileManager: FileManager = .default, now: Date = Date()
     ) throws -> Addition {
+        // The write and the reconcile are one act — see `SourceStore.editing`.
+        Self.editing.lock()
+        defer { Self.editing.unlock() }
+
         if let unsupported = requests.first(where: { !$0.kind.isFileBacked })?.kind {
             throw EditFailure.unsupportedKind(unsupported)
         }
@@ -73,7 +82,7 @@ extension SourceStore {
         }
 
         let added = preferences.addSources(specs)
-        try reconcile(with: preferences.sources, now: now)
+        try reconcile(with: preferences, now: now)
 
         let rows = try all()
         var created: [Source] = []
@@ -91,6 +100,38 @@ extension SourceStore {
         )
     }
 
+    /// Changes what a source was configured with, and returns it as it now
+    /// stands.
+    ///
+    /// **Recursion is the only option today**, and it is deliberately not a
+    /// remove-and-re-add: that would mint a new `uuid`, orphan the cache
+    /// directory named by the old one, and throw away everything the deck knew
+    /// about those photographs — for a checkbox.
+    ///
+    /// Turning it off is a real removal, and the pool notices at the next
+    /// refresh rather than here: `FolderSourceProvider.existence` reports a
+    /// nested photograph as absent once its source is no longer recursive, so
+    /// the ordinary removal walk takes them out. Turning it on adds nothing
+    /// until that same refresh finds the nested files.
+    @discardableResult
+    public func setRecursive(
+        _ recursive: Bool, for source: Source, in preferences: Preferences, now: Date = Date()
+    ) throws -> Source {
+        guard source.kind == .folder else {
+            throw EditFailure.optionNotAvailable(option: "recursive", kind: source.kind)
+        }
+        Self.editing.lock()
+        defer { Self.editing.unlock() }
+        guard preferences.setSourceRecursive(recursive, locator: source.locator) else {
+            throw EditFailure.notProjected(source.locator)
+        }
+        try reconcile(with: preferences, now: now)
+        guard let updated = try self.source(uuid: source.uuid) else {
+            throw EditFailure.notProjected(source.locator)
+        }
+        return updated
+    }
+
     /// Drops a source from the durable list, and with it the row, its
     /// photographs, and their queue entries.
     ///
@@ -99,11 +140,26 @@ extension SourceStore {
     /// finds the source however it names one — `pgr_ctl` by row id, a client by
     /// `uuid` — and hands the row here.
     ///
-    /// Removal is not deletion: nothing on disk is touched, only the library's
-    /// knowledge of it. Reconciling deletes the row even for a source that was
-    /// never in preferences, which is the state a hand-written row leaves behind.
-    public func remove(_ source: Source, from preferences: Preferences, now: Date = Date()) throws {
+    /// Removal is not deletion: **nothing on the source is touched**, only the
+    /// library's knowledge of it. Reconciling deletes the row even for a source
+    /// that was never in preferences, which is the state a hand-written row
+    /// leaves behind.
+    ///
+    /// The photographs go by cascade and **their cached bytes go with them**,
+    /// which is what this returns. That is a change of behaviour: they used to
+    /// survive until the next launch rebuilt the byte index from the filesystem
+    /// and discarded whatever the database no longer claimed, so removing a
+    /// large source freed nothing until the agent was restarted.
+    @discardableResult
+    public func remove(
+        _ source: Source, from preferences: Preferences, now: Date = Date()
+    ) throws -> Int64 {
+        // Removing from the durable list and projecting that removal are one
+        // act. Apart, a reconcile already under way with the list as it was puts
+        // the source straight back — see `SourceStore.editing`.
+        Self.editing.lock()
+        defer { Self.editing.unlock() }
         preferences.removeSource(locator: source.locator)
-        try reconcile(with: preferences.sources, now: now)
+        return try reconcile(with: preferences, now: now).bytesFreed
     }
 }

@@ -50,13 +50,6 @@ final class Shuffle {
             case .noAgent: "No agent"
             }
         }
-
-        var detail: String? {
-            switch self {
-            case .noPhotos: "the queue is empty — the agent may still be filling it"
-            case .noAgent(let reason): reason
-            }
-        }
     }
 
     /// How long a picture stays up. Not yet a preference: *Everything

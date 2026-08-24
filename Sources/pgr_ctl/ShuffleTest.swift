@@ -116,7 +116,7 @@ enum ShuffleTest {
         var drawn: [Int64] = []
         drawn.reserveCapacity(count)
         while drawn.count < count {
-            guard let card = try deck.nextCandidate(forSource: source, settings: settings) else {
+            guard let card = try deck.nextCandidate(settings: settings) else {
                 break
             }
             _ = try deck.markShown(photoID: card.id)

@@ -118,8 +118,10 @@ enum SourceCommands {
             Console.failure("no source #\(id)")
             throw ExitCode(1)
         }
-        try context.sources.remove(source, from: environment.preferences)
-        Console.recovered("removed source #\(id): \(source.locator)")
+        let freed = try context.sources.remove(source, from: environment.preferences)
+        Console.recovered(
+            "removed source #\(id): \(source.locator)"
+                + (freed > 0 ? "  (freed \(Library.bytes(freed)))" : ""))
         environment.announce(.sourcesChanged)
     }
 
@@ -138,40 +140,44 @@ enum SourceCommands {
             Console.failure("#\(id) is in the database but not in preferences; remove and re-add it")
             throw ExitCode(1)
         }
-        try context.sources.reconcile(with: environment.preferences.sources)
+        try context.sources.reconcile(with: environment.preferences)
         Console.recovered("source #\(id) \(enabled ? "enabled" : "disabled")")
         environment.announce(.sourcesChanged)
     }
 
     // MARK: - Refreshing
 
+    /// Asks the agent to rescan. **It does not scan anything itself.**
+    ///
+    /// It used to, and that was wrong in three ways at once: the walk it did was
+    /// the same walk the agent does, so a network share was enumerated twice;
+    /// the terminal blocked for however long that took, with nothing to look at,
+    /// because a refresh only prints what *changed*; and the account of the work
+    /// ended up in the rig rather than in the process whose job it is. The agent
+    /// now says what it is refreshing, and how long each source took.
+    ///
+    /// Every source, because the doorbell is a Darwin notification and those
+    /// carry no payload — there is nowhere to put "just this one".
     static func refresh(sourceID: Int64?, environment: MacHostEnvironment) async throws {
-        let context = try Library.context(environment)
-        let due: [Source]
         if let sourceID {
-            guard let source = try context.sources.source(id: sourceID) else {
-                Console.failure("no source #\(sourceID)")
-                throw ExitCode(1)
-            }
-            due = [source]
-        } else {
-            due = try context.sources.enabled()
-        }
-        guard !due.isEmpty else {
-            Console.note("nothing to refresh")
-            return
+            Console.failure(
+                """
+                refresh asks the agent to rescan, and the doorbell it rings carries no payload —
+                so there is no way to say "only #\(sourceID)". Drop --source to refresh every
+                enabled source, which is what the agent does when it hears.
+                """)
+            throw ExitCode(1)
         }
 
-        for source in due {
-            let result = await context.sources.refresh(source)
-            if result.sourceUnavailable {
-                Console.alert("#\(source.id) unavailable: \(result.reason ?? "unknown")")
-            } else {
-                Console.note(
-                    "#\(source.id)  +\(result.added)  -\(result.removed)  =\(result.unchanged)  "
-                        + "\(source.locator)")
-            }
-        }
         environment.announce(.sourcesChanged)
+
+        // A doorbell nobody is listening for is not an error — configuring a
+        // library never requires the agent — but it does mean nothing is going
+        // to happen, and saying so beats watching for output that never comes.
+        guard environment.preferences.servicePort != nil else {
+            Console.alert("no agent is running, so nothing will act on this")
+            return
+        }
+        Console.recovered("asked the agent to refresh its sources; it reports what it finds")
     }
 }

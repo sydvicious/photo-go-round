@@ -32,15 +32,16 @@ struct RunCommand {
         let database = try Database(path: environment.databaseURL.path(percentEncoded: false))
         try Migrator.migrate(database)
 
-        let sources = SourceStore(database: database)
-        let deck = Deck(database: database)
         var preferences = environment.preferences
 
         // One index for the whole process, shared by everything that touches
-        // bytes: the endpoint's per-request caches, the producer's, and
-        // maintenance.
+        // bytes: the endpoint's per-request caches, the producer's, maintenance,
+        // and the source store — which needs it so that removing a photograph's
+        // row removes its bytes in the same breath.
         let store = PhotoStore(
             root: environment.cacheRoot, byteCeiling: preferences.cacheSettings.byteCeiling)
+        let sources = SourceStore(database: database, bytes: store)
+        let deck = Deck(database: database)
         let cache = PhotoCache(
             database: database,
             root: environment.cacheRoot,
@@ -67,12 +68,49 @@ struct RunCommand {
             Task { await filler.fill(preferences: environment.preferences) }
         }
 
+        // The queue of pictures to cache. Serving puts photographs on it when
+        // their bytes are not local and does not wait; this is what drains it,
+        // and its width is the only bound on how many fetches run at once.
+        // Read by the fetch itself, which is not an actor and cannot await the
+        // queue it was started by.
+        let pendingCaches = CacheQueue.Pending()
+        let cacheQueue = CacheQueue(
+            concurrency: preferences.downloadConcurrency,
+            fetch: { photoID in
+                guard let database = try? Database(path: databasePath) else { return false }
+                var filler = PhotoCache(
+                    database: database, root: environment.cacheRoot,
+                    settings: environment.preferences.cacheSettings,
+                    sources: SourceStore(database: database, bytes: store),
+                    store: store)
+                filler.log = Self.speak
+                filler.pendingCaches = { pendingCaches.count }
+                let fetched = (try? await filler.cache(photoID: photoID)) ?? false
+                if fetched { environment.announce(.cacheChanged) }
+                return fetched
+            },
+            describe: { photoID in
+                guard let database = try? Database(path: databasePath),
+                    let card = (try? Deck(database: database).card(photoID: photoID)) ?? nil
+                else { return ("photo \(photoID)", nil) }
+                return (card.externalID, card.sourceID)
+            },
+            log: Self.speak,
+            pending: pendingCaches
+        )
+        let wantsCaching: @Sendable (Int64) -> Void = { photoID in
+            Task { await cacheQueue.request(photoID) }
+        }
+        filler.reporting(to: Self.speak)
+
         let endpoint = PictureEndpoint(
             databasePath: databasePath,
             cacheRoot: environment.cacheRoot,
             preferences: preferences,
             store: store,
-            queueRanShort: topUp
+            queueRanShort: topUp,
+            wantsCaching: wantsCaching,
+            speak: Self.speak
         )
         // Sources are managed over the same listener, because a client cannot
         // meaningfully write preferences and should not open the database. The
@@ -81,7 +119,8 @@ struct RunCommand {
         // scanned within a tick rather than at the next scheduled pass.
         let router = Router(
             pictures: endpoint,
-            sources: SourceEndpoint(databasePath: databasePath, preferences: preferences)
+            sources: SourceEndpoint(
+                databasePath: databasePath, preferences: preferences, bytes: store)
         )
         // Where the service is, written where every local client can find it:
         // a preference domain is a name rather than a path, which is the only
@@ -125,7 +164,7 @@ struct RunCommand {
 
         // Preferences are the truth; the source table is a projection of them.
         // A database that was deleted rebuilds itself here.
-        let reconciled = try sources.reconcile(with: preferences.sources)
+        let reconciled = try sources.reconcile(with: preferences)
         if !reconciled.isEmpty {
             Console.event(
                 "sources reconciled with preferences: +\(reconciled.added) -\(reconciled.removed) ~\(reconciled.changed)")
@@ -173,13 +212,17 @@ struct RunCommand {
                 preferences.reload()
                 preferences = environment.preferences
                 lastPreferenceCheck = now
-                let changes = try sources.reconcile(with: preferences.sources)
+                let changes = try sources.reconcile(with: preferences)
                 if !changes.isEmpty {
-                    Console.event(
-                        "sources changed in preferences: +\(changes.added) -\(changes.removed) ~\(changes.changed)")
+                    Self.speak(
+                        .configurationChanged(
+                            what:
+                                "sources changed: +\(changes.added) -\(changes.removed) ~\(changes.changed)"
+                                + (changes.bytesFreed > 0
+                                    ? ", freed \(Self.bytes(changes.bytesFreed))" : "")))
                     sourcesChanged.raise()
                 }
-                if rang { Console.event("preferences re-read") }
+                if rang { Self.speak(.configurationChanged(what: "preferences re-read")) }
             }
 
             let scanInterval = scanIntervalOverride ?? preferences.scanInterval
@@ -250,7 +293,13 @@ struct RunCommand {
                     settings: preferences.cacheSettings,
                     sources: sources,
                     deck: deck,
-                    queueSize: preferences.queueSize
+                    queueSize: preferences.queueSize,
+                    // **The process's index, not a fresh one.** Built per tick
+                    // to pick up changed preferences, this used to be handed no
+                    // store — so it made an empty one, nobody indexed it, and
+                    // the line reported nought held while the cache had
+                    // gigabytes in it.
+                    store: store
                 ),
                 deck: deck, preferences: preferences)
             if status != lastStatus {
@@ -279,6 +328,9 @@ struct RunCommand {
         guard !due.isEmpty else { return }
 
         let databasePath = environment.databaseURL.path(percentEncoded: false)
+        // The refresh is where photographs leave a source, so each task carries
+        // the process's byte index and frees what it removes.
+        let bytes = sources.bytes
         let cap = min(Self.maximumConcurrentRefreshes, due.count)
         let reported = Reporter()
 
@@ -292,11 +344,15 @@ struct RunCommand {
                     // Its own connection: a `Database` belongs to one isolation
                     // domain, and WAL is what makes several of them safe.
                     guard let database = try? Database(path: databasePath) else { return }
-                    let store = SourceStore(database: database)
+                    let store = SourceStore(database: database, bytes: bytes)
+                    reported.began(source)
+                    let started = ContinuousClock.now
                     let result = await store.refresh(source) { change in
                         reported.change(change, source: source.id)
                     }
-                    reported.finish(result, wasAvailable: source.available)
+                    reported.finish(
+                        result, wasAvailable: source.available,
+                        took: ContinuousClock.now - started)
                 }
             }
             for _ in 0..<cap { schedule() }
@@ -372,6 +428,18 @@ struct RunCommand {
             \(status.residentCount) originals · \(status.renderingCount) renderings · \
             \(status.referencedCount) referenced · \(Self.bytes(status.bytesOnDisk)) on disk
             """
+    }
+
+    /// Every queue decision, on the console where a person is watching and in
+    /// the unified log. The prefixes are what keep two interleaved queues
+    /// readable: `SERVE:`, `CACHE:`, `CONFIG:`.
+    static let speak: @Sendable (QueueEvent) -> Void = { event in
+        switch event {
+        case .dropped, .cacheFailed: Console.alert(event.line)
+        case .serving, .cached: Console.event(event.line)
+        default: Console.note(event.line)
+        }
+        event.report()
     }
 
     static func bytes(_ count: Int64) -> String {
@@ -458,9 +526,14 @@ final class FillerBox: @unchecked Sendable {
     }
 
     /// One connection for the gauge, serialised, because `needsTopUp` is a COUNT
-    /// asked once per lane per iteration and opening a connection each time would
-    /// cost more than the answer. Producing gets its own connection per ask, since
-    /// it is doing real I/O anyway and a `Database` belongs to one isolation domain.
+    /// asked once per iteration and opening a connection each time would cost
+    /// more than the answer. Dealing gets its own, because a `Database` belongs
+    /// to one isolation domain.
+    ///
+    /// **Dealing no longer fetches anything**, so this is the cheap operation it
+    /// looks like: a row read and a row written, with no provider involved and
+    /// nothing to be slow about. Bytes are fetched by the queue of pictures to
+    /// cache, which serving fills as it discovers what it does not hold.
     private func makeFiller(nominalSize: Int) -> QueueFiller {
         lock.lock()
         if let filler {
@@ -475,23 +548,34 @@ final class FillerBox: @unchecked Sendable {
         let sizes = Sizes()
         lock.lock()
         let bytes = store
+        let report = self.log
         lock.unlock()
         let built = QueueFiller(
             isShort: { gauge.isShort(nominalSize: sizes.queueSize) },
-            produce: { sourceID in
+            produce: {
                 guard let database = try? Database(path: path) else { return false }
                 let store = SourceStore(database: database)
-                let producer = PhotoCache(
+                var dealer = PhotoCache(
                     database: database, root: root, settings: sizes.cacheSettings,
                     sources: store, queueSize: sizes.queueSize, store: bytes)
-                return (try? await producer.produce(
-                    forSource: sourceID, settings: sizes.deckSettings)) ?? false
+                dealer.log = report
+                return (try? dealer.deal(settings: sizes.deckSettings)) ?? false
             })
         lock.lock()
         filler = built
         self.sizes = sizes
         lock.unlock()
         return built
+    }
+
+    /// Where the queues say what they did. Set by the host so the lines reach a
+    /// console; the unified log takes them either way.
+    private var log: @Sendable (QueueEvent) -> Void = { $0.report() }
+
+    func reporting(to log: @escaping @Sendable (QueueEvent) -> Void) {
+        lock.lock()
+        self.log = log
+        lock.unlock()
     }
 
     private var sizes: Sizes?
@@ -539,13 +623,7 @@ final class FillerBox: @unchecked Sendable {
         let filler = makeFiller(nominalSize: preferences.queueSize)
         sizes?.update(preferences)
 
-        let (path, _) = paths()
-        guard let database = try? Database(path: path),
-            let enabled = try? SourceStore(database: database).enabled()
-        else { return .alreadyRunning }
-
-        return await filler.fill(
-            sources: enabled.map(\.id), concurrency: preferences.downloadConcurrency)
+        return await filler.fill()
     }
 }
 
@@ -554,6 +632,18 @@ final class FillerBox: @unchecked Sendable {
 final class Reporter: @unchecked Sendable {
     private let lock = NSLock()
     private var anything = false
+
+    /// Said before the walk rather than after it.
+    ///
+    /// **A refresh used to be silent unless something changed**, which was right
+    /// while a refresh was half a second against a local folder. Over a network
+    /// share with five thousand photographs it is minutes, the loop is inside it
+    /// the whole time, and "nothing has happened for four minutes" is
+    /// indistinguishable from "the agent has stopped". So it says what it is
+    /// about to do, and how long it took.
+    func began(_ source: Source) {
+        Console.note("refreshing #\(source.id)  \(source.locator)")
+    }
 
     func change(_ change: ScanChange, source: Int64) {
         lock.lock()
@@ -576,7 +666,7 @@ final class Reporter: @unchecked Sendable {
     ///
     /// `wasAvailable` is the row as it stood before this refresh, which is all
     /// the edge detection needs.
-    func finish(_ result: ScanResult, wasAvailable: Bool) {
+    func finish(_ result: ScanResult, wasAvailable: Bool, took: Duration = .zero) {
         let lost = result.sourceUnavailable && wasAvailable
         let returned = !result.sourceUnavailable && !wasAvailable
 
@@ -589,6 +679,22 @@ final class Reporter: @unchecked Sendable {
         } else if returned {
             Console.recovered("source \(result.sourceID) is available again")
         }
+
+        // Always, including when nothing changed — that *is* the news when a
+        // walk takes minutes. The duration is the number worth having: it is how
+        // a slow source announces itself, and it is what the loop spent not
+        // topping up the queue.
+        let counts =
+            result.sourceUnavailable
+            ? "unavailable: \(result.reason ?? "unknown")"
+            : "+\(result.added)  -\(result.removed)  =\(result.unchanged)"
+        Console.note(
+            "refreshed #\(result.sourceID)  \(counts)  in \(Self.seconds(took))"
+                + (result.bytesFreed > 0 ? "  (freed \(RunCommand.bytes(result.bytesFreed)))" : ""))
+    }
+
+    private static func seconds(_ duration: Duration) -> String {
+        duration.totalSeconds.formatted(.number.precision(.fractionLength(1))) + "s"
     }
 
     func sawAnything() -> Bool {

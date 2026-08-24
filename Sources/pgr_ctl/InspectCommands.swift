@@ -139,19 +139,20 @@ enum InspectCommands {
         let context = try Library.context(environment)
         try context.cache.prepare()
 
+        // Dealing rather than producing: the queue holds cards now, so a round
+        // is a row read and a row written and no bytes move. Fetching is the
+        // agent's queue of pictures to cache, driven by what serving finds it
+        // does not hold — there is nothing here to stand in for that.
         for round in 1...max(1, rounds) {
-            var produced = 0
-            for source in try context.sources.enabled() {
-                if try await context.cache.produce(
-                    forSource: source.id, settings: context.preferences.deckSettings)
-                {
-                    produced += 1
-                }
+            var dealt = 0
+            while try context.cache.deal(settings: context.preferences.deckSettings) {
+                dealt += 1
+                if dealt >= context.preferences.queueSize { break }
             }
             Console.note(
-                "round \(round): \(produced) produced, \(try context.cache.queue.size()) queued")
-            if produced == 0 {
-                Console.note("nothing left to offer; stopping")
+                "round \(round): \(dealt) dealt, \(try context.cache.queue.size()) queued")
+            if dealt == 0 {
+                Console.note("nothing left to deal; stopping")
                 break
             }
         }

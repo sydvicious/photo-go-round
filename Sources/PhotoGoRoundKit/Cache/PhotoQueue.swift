@@ -86,8 +86,6 @@ public struct PhotoQueue {
         }
     }
 
-    // MARK: - Draining
-
     /// Removes and returns the head.
     ///
     /// Returns nil when the queue is empty, which is an ordinary answer rather
@@ -118,13 +116,4 @@ public struct PhotoQueue {
             return head.card
         }
     }
-
-    /// Drops a photo from the queue without serving it — the offline case, and
-    /// what a removal from the pool does by cascade.
-    @discardableResult
-    public func remove(photoID: Int64) throws -> Int {
-        try database.run("DELETE FROM queue WHERE photo_id = :id;", ["id": .int(photoID)])
-        return database.changes
-    }
-
 }

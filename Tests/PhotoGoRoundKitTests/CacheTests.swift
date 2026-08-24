@@ -51,12 +51,11 @@ struct CacheTests {
         /// Asks the source for pictures until it stops offering them.
         @discardableResult
         func produceAll(limit: Int = 200) async throws -> Int {
-            var made = 0
-            for _ in 0..<limit {
-                guard try await cache.produce(forSource: source.id) else { break }
-                made += 1
-            }
-            return made
+            // Two steps now: deal the cards, then fetch the bytes for what was
+            // dealt. Dealing alone leaves a queue of cards with nothing behind
+            // them, which is a state the agent has but a test asserting on
+            // *cached* pictures does not want.
+            try await cache.fillCompletely(limit: limit)
         }
     }
 
@@ -94,47 +93,55 @@ struct CacheTests {
         #expect(values.isExcludedFromBackup == true)
     }
 
-    // MARK: - Producing
+    // MARK: - Dealing, which costs nothing
 
-    @Test("Producing fetches the bytes and queues the picture, in one step")
-    func producingFetchesAndQueues() async throws {
+    @Test("Dealing queues a card and fetches nothing")
+    func dealingDoesNotFetch() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
-        #expect(try await fixture.cache.produce(forSource: fixture.source.id))
 
-        // A picture is never queued unless it is ready to show: producing it and
-        // fetching its bytes are the same operation.
+        #expect(try fixture.cache.deal())
+
+        // The queue holds cards, not bytes. Nothing was downloaded, and that is
+        // the inversion: whether this picture can be shown is found out by
+        // trying to show it.
         #expect(try fixture.cache.queue.size() == 1)
-        let queued = try #require(try fixture.cache.queue.peek().first)
-        #expect(try fixture.cache.residentURL(forPhoto: queued.id) != nil)
-        #expect(try fixture.cache.status().residentCount == 1)
+        #expect(try fixture.cache.status().residentCount == 0)
     }
 
-    @Test("Each request yields a different picture")
-    func producingDoesNotRepeat() async throws {
+    @Test("Each deal yields a different picture, and running out is an ordinary answer")
+    func dealingDoesNotRepeat() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
-        #expect(try await fixture.produceAll() == 3)
+
+        var dealt = 0
+        while try fixture.cache.deal() { dealt += 1 }
+        #expect(dealt == 3)
         #expect(try fixture.cache.queue.size() == 3)
         #expect(Set(try fixture.cache.queue.peek(10).map(\.id)).count == 3)
 
-        // Nothing left to offer is an ordinary answer.
-        #expect(!(try await fixture.cache.produce(forSource: fixture.source.id)))
+        // Everything it has is queued, so there is nothing left to deal.
+        #expect(try fixture.cache.deal() == false)
     }
 
-    @Test("Producing stops rather than filling the volume")
-    func lowDiskStopsProduction() async throws {
+    @Test("Caching is what stops rather than filling the volume; dealing is unaffected")
+    func lowDiskStopsCachingNotDealing() async throws {
         let fixture = try await Fixture(
             photos: ["a.png", "b.png"],
             settings: CacheSettings(minimumFreeBytes: .max, criticalFreeBytes: .max)
         )
-        #expect(!(try await fixture.cache.produce(forSource: fixture.source.id)))
-        #expect(try fixture.cache.queue.size() == 0)
+
+        // Dealing writes a row and costs no space, so the floor has nothing to
+        // say about it. Fetching bytes is where the volume can fill up.
+        #expect(try fixture.cache.deal())
+        let queued = try #require(try fixture.cache.queue.peek().first)
+        #expect(try await fixture.cache.cache(photoID: queued.id) == false)
+        #expect(try fixture.cache.status().residentCount == 0)
     }
 
-    @Test("A source that is unavailable is not asked to produce")
-    func unavailableSourcesProduceNothing() async throws {
+    @Test("A disabled source is not dealt from")
+    func disabledSourcesAreNotDealt() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         try fixture.store.setEnabled(false, for: fixture.source.id)
-        #expect(!(try await fixture.cache.produce(forSource: fixture.source.id)))
+        #expect(try fixture.cache.deal() == false)
     }
 
     @Test("A file that vanished before its download leaves the pool")
@@ -145,8 +152,8 @@ struct CacheTests {
         // Two attempts: one hits the missing file and removes it, the other
         // succeeds. The source is right there, so a missing file is a file that
         // no longer exists.
-        _ = try await fixture.cache.produce(forSource: fixture.source.id)
-        _ = try await fixture.cache.produce(forSource: fixture.source.id)
+        _ = try await fixture.cache.fillCompletely() > 0
+        _ = try await fixture.cache.fillCompletely() > 0
 
         #expect(try fixture.deck.poolSize() == 1)
         #expect(try fixture.cache.queue.size() == 1)
@@ -379,10 +386,33 @@ struct CacheTests {
         try FileManager.default.removeItem(at: held)
 
         // The index is built *from* the disk, so it cannot claim what is not
-        // there — and the queue is reconciled in the same direction.
+        // there. The queue keeps both cards: one whose bytes went missing is a
+        // card to fetch again, not a card to throw away.
         try fixture.cache.indexCache()
         #expect(try fixture.cache.status().residentCount == 1)
-        #expect(try fixture.cache.queue.size() == 1)
+        #expect(try fixture.cache.queue.size() == 2)
+    }
+
+    @Test("A card dealt before its bytes exist survives a restart")
+    func dealtCardsSurviveARestart() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+
+        // Dealt and nothing more: no bytes were fetched, which is the ordinary
+        // state of a materialized card. Reaching the head uncached is *how* a
+        // photograph's bytes come to be asked for.
+        while try fixture.cache.deal() {}
+        let dealt = try fixture.cache.queue.size()
+        #expect(dealt == 2)
+        #expect(try fixture.cache.status().residentCount == 0)
+
+        // A restart rebuilds the byte index from the disk, and must leave the
+        // queue alone. Dropping every card whose bytes are absent discards
+        // precisely the materialized ones, so a source reachable only through
+        // the cache queue never gets a turn — it is emptied out of the deck at
+        // every launch and refilled with the referenced cards that never needed
+        // bytes in the first place.
+        try fixture.cache.indexCache()
+        #expect(try fixture.cache.queue.size() == dealt)
     }
 
     // MARK: - Referenced photos

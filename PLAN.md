@@ -103,8 +103,8 @@ Each phase carries its own spike rather than front-loading them all, so the firs
   - **All of the fit and aspect options land here**, rather than being held back to *Beyond 0.1*. A window is the first place a person can see the difference between fitting, filling, and tiling, and the first place the choice can be made by eye instead of by argument. The service already takes a box and knows nothing about what fills it, so a `fit` parameter arrives alongside `w` and `h` without changing what either means.
   - **The App Group container question may have gone.** Phase 1.5 makes the app a client that is handed bytes, so it need not open the container at all. Confirm that before spending an afternoon on CoreDevice's redirection.
   - **Two measurements move here from Phase 2**, where they were parked as blocked and were never part of that gate. Decode time to display size for the worst files in a real library — a large ProRAW, a 48-megapixel HEIC, a stitched panorama — which is the number that justifies rendering on demand at all, and which a window is the first place anyone can *feel* rather than read off a log. And the byte-budget sweep across roughly 5 / 10 / 25 / 50 / 100 GB, to replace the guessed `cacheByteCeiling` with a measured one.
-  - **Web services for managing sources**: `GET`, `POST`, and `DELETE /v1/sources` on the agent, so a client can list, add, and remove without opening the database. See *The database is private to the service*.
-  - **UI for managing them in the app**: a Settings panel showing what is configured with its counts and state, pickers to add, and a button to remove. See `app/mac/FEATURES.md`.
+  - **Web services for managing sources**: `GET`, `POST`, `PATCH`, and `DELETE /v1/sources` on the agent, so a client can list, add, reconfigure, and remove without opening the database. See *The database is private to the service*.
+  - **UI for managing them in the app**: a Settings panel showing what is configured with its counts and state, pickers to add, and buttons to remove and to reconfigure. See `app/mac/FEATURES.md`.
   - Diagnostic panels accrete later, as the phases that need them arrive — not in Phase 3.
   - **The app's own features have their own plan**: `app/mac/FEATURES.md`, starting with a Settings panel that adds and removes sources. That reverses *The Mac app as instrument panel*'s "it manages no sources", and the reversal is argued there rather than here.
 - **Phase 4** — iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
@@ -350,6 +350,16 @@ A periodic refresh cannot promise this on its own, because "eventually" is up to
 | `present` | still there | shown, from wherever its bytes are |
 | `absent` | gone from a source that is *right there* | removed from the pool; our copy deleted with it |
 | `unknown` | source unreachable — says nothing about the photo | cached bytes play; an undock costs nothing |
+
+When the answer is `unknown`, the question moves up to the source, **which is in one of three states rather than two**:
+
+| source | meaning | what happens |
+| --- | --- | --- |
+| available | there, and readable | its photographs are shown, and anything missing can be fetched again |
+| offline | cannot be reached — volume unmounted, share down, access refused | cached bytes play; nothing is removed; anything uncached is skipped |
+| gone | confirmed absent, on a volume that *is* mounted | its photographs leave the pool and the cache as each is reached |
+
+Offline and gone are the same `stat` failure and mean opposite things, exactly as `absent` and `unknown` are. What separates them is whether the *volume* is mounted, plus whether the parent directory can be read — because a folder the agent has been refused access to is indistinguishable from one that is not there, and deleting a library over a permission prompt is the worst outcome this system can produce. A provider that cannot tell must answer offline; only a positive confirmation earns `gone`.
 
 `absent` and `unknown` are one `stat` apart and conflating them is catastrophic in both directions. Treat `unknown` as `absent` and undocking a drive empties the library. Treat `absent` as `unknown` and the photo gets shown, which is the failure this section exists to prevent. When a provider is unsure which it is holding, the honest answer is `unknown` — but it must not reach for `unknown` merely because answering properly would be slow.
 
@@ -787,6 +797,8 @@ An earlier draft of this plan justified stored derivatives by claiming a large d
 
 **This document argued at length against caching the results, and that argument was wrong at one end of its range.** It ran: in a shuffle deck each photo is displayed once and not again for at least a window's worth of deals, so a cached rendering serves about one read before the deck moves on — a one-to-one write-to-read ratio, which is write amplification rather than a cache. That is a claim about *large* libraries stated as though it were universal. It is a function of pool size: a photo recurs after roughly `pool` deals, so at four thousand photos a rendering is indeed dead before its second read, and at a hundred photos it is re-read every seventeen minutes at a ten-second dwell. The small end is exactly where a person notices, because a small library is one where everything comes round often. Renderings are therefore cached, bounded by bytes and evicted as peers of the originals.
 
+**A rendering can outlive the original it came from, and half of that is not yet true.** Eviction takes originals and renderings as peers, and letting the original go first is deliberate — a rendering is a fraction of the bytes, and a client asking again at a size already held should not need the original back. Serving now honours it: the requested box is named up front, and a photograph whose original has gone is still served from a rendering held at exactly that size. What does not honour it is *queueing*, because three rules keep the original present for anything queued — producing materializes it first, eviction never touches a queued photograph's bytes, and the launch rebuild drops any queued card whose original is missing. Making the promise real means letting a photograph be queued backed only by renderings, which weakens *a picture is never queued unless it is ready to show* to *ready at the sizes we happen to hold*. **Not decided.** The serve side is built and tested either way, and the cost of leaving it is a re-download of an original to produce a size already on disk.
+
 What the design does keep is a small **in-memory** decoded-image cache — the card being displayed and the next one or two, held as ready `CGImage`s. That is where the latency actually needs to be zero, it costs no disk, and it evicts itself when the process dies.
 
 **Two exceptions used to be carved out here, and Phase 1.5 absorbs both rather than keeping them.** *Widget extensions* needed the server to write a small file sized to the widget family, because an extension runs under a roughly 30 MB ceiling that an arbitrary HEIC decode cannot be trusted to stay below. *The Watch and tvOS* needed a small file that is not derived from a local original but is the only copy that ever arrives. Sizing for every client makes both of those the ordinary path: nobody decodes but the service, and what a client receives is already the size it asked for. Three mechanisms became one.
@@ -794,6 +806,8 @@ What the design does keep is a small **in-memory** decoded-image cache — the c
 **One measurement would close the remaining doubt,** and it belongs in Phase 2 as a `pgr_ctl` subcommand: subsampled decode time to display size for the worst files in a real library — a large ProRAW, a 48-megapixel HEIC, a stitched panorama — on this machine. If those land in the tens of milliseconds, as expected, the case for on-disk derivatives disappears entirely. If a panorama exceeds the GPU's maximum texture dimension, that is a separate problem needing tiling rather than a derivative file.
 
 ### Filling: there is no prefetcher
+
+**Superseded 2026-08-23 by *Deal over everything, and try at the moment of need*.** Everything below describes producing as it was when it *was* fetching — the per-source pump, its lanes, its exhausted-for-the-round rule, and an overshoot bounded by `sources × concurrency`. None of it exists now: dealing writes a row and fetches nothing, and bytes arrive because serving asked for them. Kept because the reasoning about re-asking rates is what the new shape inherited, and because the mistake it records is one worth not making twice.
 
 There used to be one — chunks of ten, an elevated first burst, then background chunks walking a work list until the cap. All of it is gone, and what replaced it is one sentence: **producing a picture and fetching its bytes are the same operation.**
 
@@ -817,6 +831,80 @@ So each answer re-asks its own source, and the tick is only what gets it started
 **When the library is smaller than the queue, a clock takes over.** A pool of two hundred photos against a thousand-entry target can never fill it, and "ask again on every answer" is exactly the wrong rule there — the queue already holds everything there is, every request comes back empty, and the agent spins a core forever discovering that. So when the dealable pool is smaller than the queue's target, the pump stops chasing its own answers and reverts to one round of asks per tick. Small libraries are the normal case for a folder of wallpapers, not an edge case.
 
 **Adding a source is still two phases**, and that part was always right: enumerate identifiers and insert rows first — seconds even for a large album, batched about five hundred rows to a transaction — and only then start fetching bytes. Rows are cheap and complete; bytes are expensive and windowed.
+
+### Proposed: deal over everything, and try at the moment of need
+
+**Not built.** Syd's design, stated below in his terms. Claude's objections are in *Costs Claude raised* at the end, kept separate so they cannot be mistaken for part of it.
+
+Shuffle all the photographs we know about, whether or not their sources are available. Count on trying to get a photo to take care of serving from the cache, or filling the cache and serving, or skipping to the next.
+
+Rather than keeping a count of a combination of what is cached and what is mounted. That way, when the server comes back up or goes down, the queue just works.
+
+#### On fetch
+
+1. See if the pic in the queue is in the cache, and if it is, serve it.
+2. Otherwise, fire off a separate process to cache the picture if possible, but the queue moves on and tries until it finds one.
+3. If it cycles the entire queue, return no picture. It will populate soon enough. Returning "no photo" for taking too long is also fine — though cycling a cold library should not take very long, since each step is a cache lookup rather than a fetch.
+4. ~~When the caching for a pic is finished, add it back to the queue.~~ **Reversed the same evening**: it does not go back. Let those files come back naturally — the deck deals them again in its own time, and the bytes are there when it does. See *Why a fetched picture does not rejoin the queue*.
+
+#### The queue of pictures to cache
+
+Another queue: pictures to cache. If it gets a request of something that is now in the cache, skip it and move on.
+
+That is also what stops two requests fetching the same photograph twice — the check happens when the entry is taken off this queue, so asking for the same picture more than once costs a skip rather than a second fetch.
+
+#### Asking for a fetch is not free, and the walk is where the flood would come from
+
+**Every card a walk skips becomes a fetch request.** For a folder that costs nothing — the bytes are on the disk already, or they are a file copy. For Photos it is a `PHImageManager` request apiece, and for Google Photos an API call and a download against somebody's quota. So one request against a cold queue asks for as many fetches as the queue is deep.
+
+The queue of pictures to cache absorbs it rather than passing it on: it drops a request for something already waiting, and however many are asked for it only ever runs `downloadConcurrency` of them at once. What it does not do is *decline* — everything asked for is eventually fetched.
+
+Two consequences, both settled deliberately.
+
+- **`queueSize` bounds the flood as well as the walk.** It decides how many cards a request may skip, therefore how many fetches it may ask for, therefore how quickly the queue reflects a change in the library — a full queue only turns over as pictures are served. Two hundred and fifty is the number for all three at once: a few hundred pictures to remix rather than a few thousand, at one every ten seconds.
+- **The queue is never emptied to remix it**, which was proposed after a source added to a full queue took hours to appear. Emptying is cheap in cards and expensive in requests: the next walk would meet a queue of entirely uncached photographs and ask for one fetch per card, which against a metered provider is exactly the wrong thing to do for a cosmetic gain. A new or returning source mixes in at serving rate instead.
+
+**Before the Photos and Google providers ship**, this wants one more lever: a cap on how many misses a single walk will ask for, separate from how deep the queue is. Nothing needs it while every source is a folder.
+
+#### Why a fetched picture does not rejoin the queue
+
+Raised and settled 2026-08-23, after two wrong answers about *where* to put it.
+
+**The queue should be distributed proportionally across the sources, whatever their mount status.** Dealing already does that: one shuffled order over every photograph gives each source a share of the queue matching its share of the library, and it does so knowing nothing about what is mounted. Unreachable photographs are skipped when they come up, which changes what is *shown* without changing what is *queued*.
+
+**The re-insertion is the only thing that perturbs it.** Step 4 puts a photograph back when its bytes arrive, so the queue is continuously topped up in the order fetches *complete* — a local folder finishes quickly, a network share slowly, and the mix drifts toward whichever is fastest rather than whichever is larger. Random placement spreads that drift around the queue; it does not remove it.
+
+So step 4 is gone. The queue's composition is purely the deck's, and caching is a pure side effect — bytes appear, and nothing about what is queued changes. **What it costs**: a photograph just paid for is not shown soon; it waits until the deck deals it again. The bytes stay cached, so when it does come up it serves at once. The fetch is not wasted, only unrewarded for a while.
+
+**Two wrong answers preceded it**, both about *where* to put it rather than whether to. At the **tail** it sat behind everything the walk already knew it could not show — and the walk stops after one cycle, so the one card known to be servable was reliably just past the bound. That was "stuck on the same picture for minutes". At the **head**, the order pictures appeared in became the order they were *fetched* in, so a local folder filled the front and a network share never got a look in. That was "not seeing enough mixing of the sources", and it was caused by fixing the first. A random position spread the second fault around without removing it; removing the step removes both.
+
+`PhotoQueue.insertRandomly` and the position machinery it needed — gap-finding, spacing, explicit-position inserts — existed only for this and are deleted.
+
+#### What this replaces
+
+- **Per-source candidate selection.** One shuffled order over every photograph, so `Deck.poolSize(forSource:)` and the per-source repeat window go.
+- **Producing as fetching.** Today nothing is queued until its bytes are local. Here the queue holds cards and the bytes are fetched when something tries to show one — so the per-source pump, its lanes, and its exhausted-for-the-round rule go with it.
+- **Restricting an unavailable source to what is cached.** `PhotoStore.heldOriginals(ofSource:)` and the `usable` filter on candidate selection were built this evening and are exactly the combination-keeping this removes.
+- **`Source.available` as a gate.** It stays as something the panel reports; nothing about dealing consults it.
+
+#### Why, from what went wrong
+
+Two of the three faults found on 2026-08-23 were artifacts of the shape above rather than mistakes inside it.
+
+- The repeat window was measured against the whole library while candidates were chosen per source, so twenty photographs beside five thousand got a window of two hundred and sixty, could never satisfy it, and reshuffled on every deal.
+- Production chose a photograph before knowing it could fetch it. For an unreachable source holding thirty of five thousand it chose blind, failed, and wrote the source off for the round — so the thirty that could have been shown were passed over roughly ninety-nine times in a hundred.
+
+Both were fixed in place, and both fixes were then deleted by this: `Deck.poolSize(forSource:)`, the per-source repeat window, `PhotoStore.heldOriginals(ofSource:)`, and the `usable` filter on candidate selection are all gone.
+
+#### Costs Claude raised
+
+Recorded as objections to answer, not as part of the design.
+
+- ~~**The promise being spent.**~~ Accepted. The queue existed so that `GET /v1/next` never held a socket open through a download; firing the fetch into the background and moving on keeps the request fast by a different route. What it gives up is that the photograph the deck chose may not be the one shown, and that a cold library answers "no photo" until the first fetch lands — both fine.
+- ~~**A cold library walks the whole queue.**~~ Answered: it returns no picture, and populates soon enough.
+- ~~**Two requests must not fetch the same photograph twice.**~~ Answered by the queue of pictures to cache: an entry already in the cache when it comes off that queue is skipped. The deck's claim is not needed for this.
+- ~~**How many fetches may be in flight.**~~ Answered by the same queue — whatever drains it is the bound. The number of workers is a number to pick, not a mechanism to design.
+- ~~**What happens to a card whose fetch fails.**~~ Confirmed: a skipped card leaves the queue and comes back on success. A fetch that fails leaves it out, and it comes round again in the ordinary shuffle rather than accumulating as a queue of things that cannot be shown.
 
 ### Eviction
 
@@ -875,7 +963,9 @@ What we owe the user is a clear explanation rather than cleverness: the source i
 
 ### What happens to a source that never comes back
 
-Unavailability is a state, not an event, so a source that is gone forever needs no special handling — it decays on its own.
+**A source that cannot be reached and a source that is confirmed gone are different states**, and this section used to describe only the first. Both are covered below, and the difference decides whether anything is deleted.
+
+**Offline: nothing happens, and that is the design.** Unavailability is a state rather than an event, so a source that is merely unreachable needs no special handling — it decays on its own.
 
 **A photo is dealable if its bytes are local, regardless of its source's state.** Because materialization is keyed to volume, this mostly resolves in the user's favour. An unplugged external drive, a disconnected share, a switched Photos library — all of those sources were materialized, so their cached photos keep being dealt from what we hold. Nothing blanks.
 
@@ -884,6 +974,42 @@ The exception is a same-volume file that is genuinely deleted. Those were refere
 Then FIFO does the rest. As other photos are materialized, the orphaned ones age toward the front of the cache and are evicted in the ordinary way. They shuffle out gradually rather than vanishing at once, and when the last cached copy goes, the photo simply stops being dealable. No reaping pass, no special case, no code that exists only for this — the cache's normal behavior is the garbage collector.
 
 The one thing to get right is that an orphan must not be re-fetched. A source that is unavailable is not asked to produce, so it never tries and never logs a storm of failures.
+
+**Gone: the rows and the bytes go together.** A folder deleted while its volume sat right there is not coming back, and neither are its photographs. Holding a row nothing can produce and bytes nothing will ask for helps nobody, so each photograph leaves the pool *and* the cache as it is reached. The source itself stays — it is in preferences, which is the durable list, and it repopulates if the folder ever returns.
+
+Removing a source is the same rule stated deliberately rather than discovered: the row goes, its photographs go by cascade, and **its cache directory is deleted in the same breath** rather than waiting for the next launch to notice nothing claims it. `pgr_ctl sources remove` prints what came back. See *Rows and bytes leave together*.
+
+### The source list, audited
+
+Read through on 2026-08-23 after a run of faults that all turned out to live in the same place. **It is the one piece of state that cannot be rebuilt from anything, so every fault here loses something a person chose.** Five were found; each was reproduced as a failing test before it was fixed.
+
+- **An entry it could not read was destroyed by the next unrelated write.** Reading dropped whatever failed to parse and every mutation is read-modify-write, so one malformed entry — a hand-edited plist missing a locator — cost you that source permanently the next time anything was added. Reads now return the specs *and* the entries they could not parse, and writes carry the second half through untouched.
+- **Re-adding a folder discarded the options asked for.** Already-listed meant *skip*, so asking for recursion on a folder already there was dropped on the floor and reported as "nothing new". It now applies them; `added` still reports only what was created.
+- **A folder stored the old way stranded.** The locator is the identity and it is matched as a bare string, so an entry written before folders were normalised could not be removed by the spelling everything else used — removal silently failed and reconciling put the source straight back. Normalisation moved into `SourceSpec.init`, so every path agrees by construction. Normalising on *read* alone had made it worse: writes still produced the other spelling, and the same folder became two sources.
+- **Forcing a re-read named the wrong domain.** `reload` synchronised `kCFPreferencesCurrentApplication` — this process's own domain, never the suite the values live in. The agent calls it once a tick precisely to pick up a `defaults write` from another process, and it had never done that. `Preferences` now remembers its suite and names it.
+- **A concurrent writer's change vanished.** `UserDefaults` has no compare-and-swap and the whole array is rewritten on every change, so the agent and `pgr_ctl` could each read the same list and write over each other, and the loser's source simply never appeared. Every mutation now re-reads before writing and starts over if the list moved, up to five attempts. **This is the fourth of the five objections *Preferences as a client transport* raised, and the only one that was still live** — it is narrowed rather than eliminated, because nothing short of a lock file makes two processes safe here.
+
+### Reconciling reads the list; it is never handed one
+
+Found by deleting a source in the app and watching it come back — refreshed, rescanned, and serving pictures again.
+
+**The table is rebuilt from whatever list it is given, so a caller holding a copy from a moment ago re-creates anything removed since.** The agent's loop is exactly that caller: it reads the durable list, walks its sources for as long as that takes — minutes, over a network share — and reconciles. A source deleted in between came back, with a *new* `uuid`, all its photographs, and its place in the queue.
+
+So `reconcile` takes the preferences and reads the list itself. Nobody can hold a stale copy of something they are never handed. The list-taking form survives as an internal call for the tests that assert the projection rules against a list they wrote.
+
+**It also broke the panel in a way that looked unrelated.** A resurrected source has a new identity, so the row the user had selected stopped existing; every control reads the selection, so `−` went dead while the row still looked chosen. One click, nothing happens, and no way to tell why. The panel now follows a selection by *locator* when the identity under it changes, and clears it only when the source is genuinely gone.
+
+### Rows and bytes leave together
+
+Settled after the source endpoints landed, and written up because it revises what *Phase 1.5.3* concluded about sweeps.
+
+**Whenever a photograph's row is deleted, its cached bytes are deleted with it.** That covers every way a photograph leaves: the source removed, the folder deleted, recursion switched off, the file deleted from under us. The source store holds the byte index for exactly this reason, and every path that removes reports what it freed — so a caller that was handed no index reads zero rather than leaking silently.
+
+**What this replaces was a report nobody read.** A refresh used to hand back a list of orphaned cache paths on the reasoning that the store did not know where the cache root was. Nothing ever consumed it. Every photograph that left a source therefore kept its bytes until the next launch rebuilt the index from the filesystem and discarded whatever the database no longer claimed — which is a long time to hold a large library's worth of bytes, and required a restart to collect.
+
+**The launch rebuild stays, as the backstop it always was.** An index built *from* the disk cannot disagree with it, so a crash midway through a removal is still cleaned up at the next start. What changed is that it is no longer the only mechanism, or the fastest one.
+
+**Removing by source rather than photograph by photograph**, because the cache is already laid out by source `uuid`: one directory, one removal, and no walk proportional to how many photographs were inside it.
 
 ### Clearing the cache on purpose
 
@@ -1292,6 +1418,8 @@ The service already hands out pictures on loopback. It also answers questions ab
 ```
 GET    /v1/sources           the list, with counts and availability
 POST   /v1/sources           add one or more, all or none
+GET    /v1/sources/<uuid>    one source, with the options it was added with
+PATCH  /v1/sources/<uuid>    change one of those options
 DELETE /v1/sources/<uuid>    remove one
 ```
 
@@ -1344,8 +1472,9 @@ Sources have had a durable identity since the first schema: `Source.uuid`, minte
 
 So there is one identity and it lives in the database. Two consequences follow:
 
-- **Preferences address a source by locator**, which is what the user chose and what `reconcile` already matches on. `addSources` and `removeSources` are locator-keyed, and so is the panel's remove.
-- **The UUID is what a client names a source by**, since it is what `GET /v1/sources` returns and what `DELETE /v1/sources/<uuid>` takes. It is stable where the row id is not.
+- **Preferences address a source by locator**, which is what the user chose and what `reconcile` already matches on. `addSources` and `removeSources` are locator-keyed, and so is the panel's remove. **A folder's locator ends in a slash**, decided in `SourceSpec.init` so that a path from a picker and a path typed on a command line are the same string — two spellings of one identity is two sources that cannot remove each other.
+- **The row id is what a *log line* names a source by.** `source 6` is what `pgr_ctl sources list` prints beside the path, and a uuid is thirty-six characters of nothing to hold on to when you are reading a console. The instability that disqualifies it as an identity does not matter for a line somebody is reading now.
+- **The UUID is what a client names a source by**, since it is what `GET /v1/sources` returns and what `PATCH` and `DELETE /v1/sources/<uuid>` take. It is stable where the row id is not — and a `PATCH` is what keeps changing an option from costing a source its identity, its cache directory, and its deal history, which remove-and-re-add would.
 
 `pgr_ctl remove`, `enable`, and `disable` keep taking a row id, because they open the database and always will.
 
@@ -1365,6 +1494,8 @@ Worth being explicit, because "the database is private to the service" sounds li
 
 **`pgr_ctl` is not a client.** It is the rig: internal, never shipped, and allowed to know exactly how the library is stored. It reads and writes preferences and opens the database directly, which is what lets every one of its verbs work with **no agent running** — the state a rig is most needed in. Nothing about it changes.
 
+**`refresh` asks rather than does.** It rings the doorbell and returns; the agent walks the sources and reports what it found on its own console. Doing the walk here meant enumerating a network share twice — once in the rig, once in the agent — and blocking a terminal for minutes with nothing to look at, because a refresh only prints what *changed*. The doorbell carries no payload, so `--source` is refused rather than quietly ignored.
+
 **It will not gain HTTP verbs either.** Command-line HTTP is `curl`, which is already how a picture is taken from a terminal and is documented that way in `README.md`. A second HTTP client inside the rig would duplicate that for nothing and hand the tool the dependency it exists to avoid.
 
 The consequence worth keeping: **the two views can disagree, and that is useful.** `pgr_ctl` sees the store; a client sees what the service says about the store. When they differ, the difference is the bug, and two independent windows onto it are what make it findable.
@@ -1377,6 +1508,8 @@ The consequence worth keeping: **the two views can disagree, and that is useful.
 - *The database holds state; `UserDefaults` holds preferences* keeps one published exception, `servicePort`, and no longer needs a second.
 - **`sourceStatus` was built and is superseded.** Per-source counts and availability published into preferences, replaced by `GET /v1/sources` before anything consumed it. `Preferences.publishSourceStatus`, `Preferences.sourceStatus`, `SourceStatus`, `SourceStore.statuses()`, and the three publish calls in `RunCommand` are all deleted — nothing called them, and the endpoint can grow what it needs when it exists. `SourceRequest` and `Preferences.addSources` survive, because `pgr_ctl` uses both.
 - *The Mac app as instrument panel* said the app manages no sources. See `app/mac/FEATURES.md`.
+- **Phase 1.5.3 said an unclaimed file is deleted at the rebuild, and left it at that.** It still is, but that is now the backstop rather than the only reclaim: removing a source deletes its cache directory at once, and a photograph that leaves a source takes its bytes with it. See *Rows and bytes leave together*.
+- **A source's state was reachable-or-not, and is now three.** *Never showing a photo the user deleted* carried a three-valued answer for the *photograph* while the source underneath it had two, so a deleted folder and an unplugged drive were the same fact. They are not, and only one of them deletes anything.
 
 ## The Mac app as instrument panel
 

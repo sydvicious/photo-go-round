@@ -344,7 +344,7 @@ struct Options {
           sources list              Sources with their photo counts and state
           sources remove <id>
           sources enable <id> | disable <id>
-          refresh [--source <id>]   Re-enumerate sources into the pool
+          refresh                   Ask the agent to re-enumerate its sources
           pool stats                Rows per source, storage, cache residency
           queue peek [-n <n>]       What is ready to serve, in order
           queue fill [-n <rounds>]  Ask every source for a picture, synchronously
@@ -374,7 +374,7 @@ struct Options {
           -d, --database <path>   Database file
               --cache-root <dir>  Cache root
           -n, --count <n>         How many to peek at, or rounds to fill. Default: 10
-              --source <id>       Scope `refresh` or `cache clear` to one source
+              --source <id>       Scope `cache clear` to one source
               --unavailable       Scope `cache clear` to sources that are gone
               --yes               Do not ask before clearing
               --no-default-values `get` reports what is stored, blank where

@@ -126,7 +126,32 @@ public struct FolderSourceProvider: SourceProvider {
     }
 
     public func existence(of externalID: String, in source: Source) async -> PhotoExistence {
-        Self.fileExistence(of: externalID, in: source, using: fileAccess)
+        // A photo inside a subfolder of a source that is no longer recursive is
+        // *out of the source*, however healthily it sits on disk. Nothing else
+        // notices: the walk simply stops yielding it, and the removal pass asks
+        // this question rather than diffing against what the walk found — so
+        // without this, turning the checkbox off left every nested photograph in
+        // the pool for ever, still being dealt.
+        if source.recursive != true, externalID.contains("/") { return .absent }
+        return Self.fileExistence(of: externalID, in: source, using: fileAccess)
+    }
+
+    public func availability(of source: Source) async -> SourceAvailability {
+        Self.fileAvailability(of: source, using: fileAccess)
+    }
+
+    /// The three states, for anything backed by a path — which is
+    /// `FileClassifier.availability(of:)`, shared with every other caller that
+    /// needs the same answer about the same path.
+    static func fileAvailability(
+        of source: Source, using fileAccess: any FileAccess
+    ) -> SourceAvailability {
+        do {
+            return try fileAccess.withSourceURL(source) { FileClassifier.availability(of: $0) }
+        } catch {
+            // Could not even ask. That is not evidence of anything.
+            return .offline(reason: String(describing: error))
+        }
     }
 
     /// A `stat`, and — when it comes back negative — a second `stat` on the
@@ -246,5 +271,11 @@ public struct FileSourceProvider: SourceProvider {
         // "is the photo there" are the same question — and a negative answer
         // cannot be attributed without knowing whether the volume is mounted.
         FolderSourceProvider.fileExistence(of: externalID, in: source, using: fileAccess)
+    }
+
+    /// The same question once more, and the same three answers: for a file
+    /// source, the photograph going away *is* the source going away.
+    public func availability(of source: Source) async -> SourceAvailability {
+        FolderSourceProvider.fileAvailability(of: source, using: fileAccess)
     }
 }

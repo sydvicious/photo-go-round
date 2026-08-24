@@ -42,8 +42,19 @@ enum Library {
     /// way.
     static func context(_ environment: MacHostEnvironment) throws -> Context {
         let database = try open(environment)
-        let sources = SourceStore(database: database)
         let preferences = environment.preferences
+        // One index, shared by the cache and the source store: removing a source
+        // has to remove its bytes, and two indexes over one directory would
+        // disagree about what is still there.
+        let bytes = PhotoStore(
+            root: environment.cacheRoot, byteCeiling: preferences.cacheSettings.byteCeiling)
+        // **A fresh index knows nothing.** The agent builds one at launch and
+        // keeps it; a new process starts empty, so every cache number this tool
+        // printed was nought regardless of what was on disk. Read-only, because
+        // a status command must not delete a file over a disagreement about what
+        // some other process claims.
+        bytes.index(photos: try Self.cachedPhotoOwners(database))
+        let sources = SourceStore(database: database, bytes: bytes)
         return Context(
             environment: environment,
             database: database,
@@ -55,7 +66,8 @@ enum Library {
                 root: environment.cacheRoot,
                 settings: preferences.cacheSettings,
                 sources: sources,
-                queueSize: preferences.queueSize
+                queueSize: preferences.queueSize,
+                store: bytes
             )
         )
     }
@@ -72,8 +84,16 @@ enum Library {
         try environment.prepare()
         let database = try Database(path: environment.databaseURL.path(percentEncoded: false))
         try Migrator.migrate(database)
-        let sources = SourceStore(database: database)
         let preferences = environment.preferences
+        let bytes = PhotoStore(
+            root: environment.cacheRoot, byteCeiling: preferences.cacheSettings.byteCeiling)
+        // **A fresh index knows nothing.** The agent builds one at launch and
+        // keeps it; a new process starts empty, so every cache number this tool
+        // printed was nought regardless of what was on disk. Read-only, because
+        // a status command must not delete a file over a disagreement about what
+        // some other process claims.
+        bytes.index(photos: try Self.cachedPhotoOwners(database))
+        let sources = SourceStore(database: database, bytes: bytes)
         return Context(
             environment: environment,
             database: database,
@@ -85,9 +105,23 @@ enum Library {
                 root: environment.cacheRoot,
                 settings: preferences.cacheSettings,
                 sources: sources,
-                queueSize: preferences.queueSize
+                queueSize: preferences.queueSize,
+                store: bytes
             )
         )
+    }
+
+    /// Every photograph's uuid against its source's, which is what the byte
+    /// index is keyed by.
+    static func cachedPhotoOwners(_ database: Database) throws -> [String: String] {
+        var owners: [String: String] = [:]
+        try database.query(
+            "SELECT p.uuid AS photo_uuid, s.uuid AS source_uuid"
+                + " FROM photo p JOIN source s ON s.id = p.source_id;"
+        ) { row in
+            owners[try row.string("photo_uuid")] = try row.string("source_uuid")
+        }
+        return owners
     }
 
     struct Context {

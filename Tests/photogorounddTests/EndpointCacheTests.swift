@@ -80,13 +80,43 @@ struct EndpointCacheTests {
 
         deinit { try? FileManager.default.removeItem(at: directory) }
 
-        func fill() async throws {
+        func fill(materialized: Bool = false) async throws {
             try cache.prepare()
             let folder = directory.appending(path: "photos").path(percentEncoded: false)
             let source = try sources.add(kind: .folder, locator: folder)
             sourceIdentifier = source.id
             _ = await sources.refresh(source)
-            while try await cache.produce(forSource: source.id) {}
+            // Materialized means the bytes are copied into the cache, which is
+            // the only arrangement where the *original* can be evicted out from
+            // under a rendering. A referenced photograph's original is the file
+            // on the boot volume, and that is never ours to evict.
+            if materialized {
+                try sources.database.run("UPDATE photo SET storage = 'materialized';")
+            }
+            _ = try await cache.fillCompletely()
+        }
+
+        /// Deletes the cached original and re-indexes the byte store from the
+        /// filesystem, leaving the rendering and the queue entry alone.
+        ///
+        /// `rebuild` rather than `PhotoCache.indexCache`, and the difference is
+        /// the point: `indexCache` *also* drops any queued card whose original
+        /// is missing, so calling it here would remove the very photograph this
+        /// is arranging to ask for.
+        func evictTheOriginal() throws {
+            let uuid = try #require(
+                try sources.database.scalarString("SELECT uuid FROM photo LIMIT 1;"))
+            let original = try #require(cache.store.url(for: PhotoStore.Key(photoUUID: uuid)))
+            try FileManager.default.removeItem(at: original)
+
+            var owners: [String: String] = [:]
+            try sources.database.query(
+                "SELECT p.uuid AS photo_uuid, s.uuid AS source_uuid"
+                    + " FROM photo p JOIN source s ON s.id = p.source_id;"
+            ) { row in
+                owners[try row.string("photo_uuid")] = try row.string("source_uuid")
+            }
+            _ = cache.store.rebuild(photos: owners)
         }
 
         /// One request, with the queue topped up first.
@@ -95,8 +125,14 @@ struct EndpointCacheTests {
         /// what notices it has run short; here that is explicit, so a test
         /// asking twice is asking twice rather than asking once and then being
         /// told there is nothing left.
-        func get(_ query: String, accept: String? = nil) async throws -> HTTPListener.Response {
-            while try await cache.produce(forSource: sourceIdentifier) {}
+        func get(
+            _ query: String, accept: String? = nil, toppingUp: Bool = true
+        ) async throws -> HTTPListener.Response {
+            // Off for the eviction tests, and that is the whole of why it is an
+            // option: producing re-materializes the original, so a test that
+            // topped up after evicting it would be asserting against a cache it
+            // had just refilled.
+            if toppingUp { _ = try await cache.fillCompletely() }
             var request = try #require(HTTPListener.parse("GET /v1/next?\(query) HTTP/1.1"))
             if let accept {
                 request = HTTPListener.Request(
@@ -106,8 +142,14 @@ struct EndpointCacheTests {
             return await endpoint.route(request)
         }
 
-        func getOriginal() async throws -> HTTPListener.Response {
-            while try await cache.produce(forSource: sourceIdentifier) {}
+        /// Tops the queue up without serving anything, so a test can arrange a
+        /// queued photograph and *then* change what the cache is holding.
+        func topUp() async throws {
+            _ = try await cache.fillCompletely()
+        }
+
+        func getOriginal(toppingUp: Bool = true) async throws -> HTTPListener.Response {
+            if toppingUp { _ = try await cache.fillCompletely() }
             return await endpoint.route(
                 try #require(HTTPListener.parse("GET /v1/next HTTP/1.1")))
         }
@@ -214,10 +256,67 @@ struct EndpointCacheTests {
 
         // Top the queue up first: serving popped it, and this endpoint has no
         // agent behind it to notice.
-        while try await library.cache.produce(forSource: library.sourceIdentifier) {}
+        _ = try await library.cache.fillCompletely()
         let response = await restarted.route(
             try #require(HTTPListener.parse("GET /v1/next?w=100&h=100 HTTP/1.1")))
         #expect(headers(response)["X-PGR-Cache"] == "hit")
+    }
+
+    // MARK: - When the original is gone and the rendering is not
+
+    /// The case `PhotoStore.evictIfNeeded` documents as a feature — "a client
+    /// asking again at a size already held never needs the original back" — and
+    /// which did not work, because serving insisted on finding the original
+    /// before it would part with anything.
+    @Test("A rendering is served after its original has been evicted")
+    func aRenderingOutlivesItsOriginal() async throws {
+        let library = try Library()
+        try await library.fill(materialized: true)
+
+        let first = try await library.get("w=200&h=200")
+        #expect(first.status == 200)
+        #expect(headers(first)["X-PGR-Cache"] == "miss")
+
+        // Queue it *before* evicting, and do not top up afterwards — producing
+        // would copy the original back in and there would be nothing to prove.
+        try await library.topUp()
+        try library.evictTheOriginal()
+
+        let second = try await library.get("w=200&h=200", toppingUp: false)
+        #expect(
+            second.status == 200,
+            "the photograph was skipped, though we were holding exactly the pixels asked for")
+        #expect(headers(second)["X-PGR-Cache"] == "hit")
+        #expect(headers(second)["X-PGR-Pixels"] == "200x150")
+    }
+
+    @Test("A size nobody rendered is not invented from one that was")
+    func anotherSizeIsNotServedFromTheWrongRendering() async throws {
+        let library = try Library()
+        try await library.fill(materialized: true)
+        _ = try await library.get("w=200&h=200")
+        try await library.topUp()
+        try library.evictTheOriginal()
+
+        // 300×300 was never rendered and the original is gone, so there is
+        // nothing to make it from. Answering with the 200-wide file would be
+        // handing over pixels the client did not ask for.
+        let response = try await library.get("w=300&h=300", toppingUp: false)
+        #expect(response.status == 204)
+    }
+
+    @Test("Asking for the original when only a rendering is held serves nothing")
+    func theOriginalIsNotFakedFromARendering() async throws {
+        let library = try Library()
+        try await library.fill(materialized: true)
+        _ = try await library.get("w=200&h=200")
+        try await library.topUp()
+        try library.evictTheOriginal()
+
+        // No box at all means the original bytes, untouched. We do not have
+        // them, and a rendering is not them.
+        let response = try await library.getOriginal(toppingUp: false)
+        #expect(response.status == 204)
     }
 
     // MARK: - What comes back
@@ -248,6 +347,11 @@ struct EndpointCacheTests {
         #expect(entry.width == "200")
         #expect(entry.height == "200")
         #expect(entry.card != nil)
+        // Which source it came from, because a name alone does not say: two
+        // folders can both hold `Image_001.jpg`. The row id, which is what
+        // `pgr_ctl sources list` prints — a person reads this line.
+        #expect(entry.sourceID != nil)
+        #expect(entry.summary.contains("source \(entry.sourceID ?? 0)"))
         // The deal ordinal is assigned when the picture is handed over, so a
         // logged record of a served picture always has one.
         #expect(entry.deal != nil)
@@ -258,6 +362,35 @@ struct EndpointCacheTests {
         // The record describes the same picture the client was handed.
         #expect(String(entry.card ?? 0) == headers(response)["X-PGR-Card"])
         #expect(String(entry.deal ?? 0) == headers(response)["X-PGR-Deal"])
+    }
+
+    @Test("The console line says hit or miss, which is what a miss costs is read against")
+    func theRecordSaysHitOrMiss() async throws {
+        let library = try Library()
+        try await library.fill()
+
+        _ = try await library.get("w=200&h=200")
+        _ = try await library.get("w=200&h=200")
+        _ = try await library.getOriginal()
+
+        let records = library.log.all.suffix(3)
+        #expect(records.map(\.cache) == [.miss, .hit, nil])
+        // The size of the cache beside the hit or miss: a miss is ordinary while
+        // it is filling and worth looking at once it is not, and the two are
+        // only readable together.
+        // The cache size beside the hit or miss, and how deep the queue was —
+        // a miss is ordinary while the cache fills, and the queue depth says
+        // whether the walk is outrunning the deck.
+        #expect(try #require(records.first).cacheBytes != nil)
+        #expect(try #require(records.first).queued != nil)
+        #expect(try #require(records.first).summary.contains("miss of "))
+        #expect(try #require(records.first).summary.contains(" queued"))
+        // A miss is the one worth reading, so it has to be in the words a
+        // person sees rather than only in the header a client sees.
+        #expect(try #require(records.first).summary.contains("miss"))
+        // Asking for the original is neither: nothing was decoded to produce it.
+        #expect(try #require(records.last).summary.contains("hit") == false)
+        #expect(try #require(records.last).summary.contains("miss") == false)
     }
 
     @Test("A hit is logged as well as a miss, and reports the bytes it sent")
@@ -298,5 +431,21 @@ struct EndpointCacheTests {
 
         let response = await library.endpoint.route(jpeg)
         #expect(headers(response)["Content-Type"] == "image/jpeg")
+    }
+}
+
+
+/// Filling a queue the way the agent does, in the two steps it now takes: deal
+/// the cards, then fetch the bytes for what was dealt. A copy of the kit tests'
+/// helper, because a test target cannot see another test target's code.
+extension PhotoCache {
+    @discardableResult
+    func fillCompletely(limit: Int = 500) async throws -> Int {
+        var dealt = 0
+        while dealt < limit, try deal() { dealt += 1 }
+        for card in try queue.peek(Int.max) {
+            _ = try await cache(photoID: card.id)
+        }
+        return try queue.size()
     }
 }

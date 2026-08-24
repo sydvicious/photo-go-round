@@ -74,6 +74,20 @@ public struct Deck {
         try database.scalarInt(Self.poolSizeSQL) ?? 0
     }
 
+    /// One card by its photograph's id, for a caller holding an identifier and
+    /// nothing else — the queue of pictures to cache, which carries ids because
+    /// what it is asked to fetch may be gone by the time it gets there.
+    public func card(photoID: Int64) throws -> DeckCard? {
+        try database.first(
+            """
+            SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
+              FROM photo p JOIN source s ON s.id = p.source_id
+             WHERE p.id = :id;
+            """,
+            ["id": .int(photoID)]
+        ) { try DeckCard(row: $0, dealSeq: nil) }
+    }
+
     /// The single monotonic ordinal, advanced by every card played anywhere in
     /// the system, and the ordinal at which the current pass began.
     public func state() throws -> (dealSeq: Int64, passStartSeq: Int64) {
