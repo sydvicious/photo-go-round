@@ -722,7 +722,7 @@ final class CountingProvider: SourceProvider, @unchecked Sendable {
     }
 
     func enumerate(
-        _ source: Source, into sink: (DiscoveredPhoto) throws -> Void
+        _ source: Source, into sink: (DiscoveredPhoto) async throws -> Void
     ) async throws -> SourceReachability {
         try await inner.enumerate(source, into: sink)
     }

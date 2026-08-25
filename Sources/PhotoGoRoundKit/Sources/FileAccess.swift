@@ -24,6 +24,22 @@ public protocol FileAccess: Sendable {
     /// Runs `body` with a URL for the source's own item — the folder, or the
     /// single file. The URL is valid only for the duration of the closure.
     func withSourceURL<T>(_ source: Source, _ body: (URL) throws -> T) throws -> T
+
+    /// The same scope, for a body that suspends.
+    ///
+    /// **Enumeration needs this because its sink writes to the database.** A
+    /// walk of a network folder streams thousands of photographs into batched
+    /// transactions, and doing that synchronously from an async task parks a
+    /// cooperative-pool thread on every contended batch — four concurrent walks
+    /// were enough to leave nothing for serving to run on. See
+    /// `Database.transaction`'s async form.
+    /// A distinct label rather than an overload: a trailing closure drops its
+    /// label, and the synchronous form then wins resolution even when the body
+    /// plainly suspends.
+    func withSourceURL<T>(
+        _ source: Source,
+        performing body: (URL) async throws -> T
+    ) async throws -> T
 }
 
 extension FileAccess {
@@ -59,6 +75,16 @@ public struct UnsandboxedFileAccess: FileAccess {
             throw FileAccessError.notFileBacked(kind: source.kind)
         }
         return try body(URL(filePath: source.locator))
+    }
+
+    public func withSourceURL<T>(
+        _ source: Source,
+        performing body: (URL) async throws -> T
+    ) async throws -> T {
+        guard source.kind.isFileBacked else {
+            throw FileAccessError.notFileBacked(kind: source.kind)
+        }
+        return try await body(URL(filePath: source.locator))
     }
 }
 

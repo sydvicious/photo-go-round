@@ -306,12 +306,20 @@ struct DatabaseTests {
         #expect(try database.scalarInt("SELECT COUNT(*) FROM t;") == 1)
     }
 
-    @Test("Retries are finite; a lock that never clears eventually surfaces")
+    /// **Patience is a budget of time, not a count of tries.**
+    ///
+    /// It used to be a count, sitting on top of SQLite's own five-second
+    /// `busy_timeout` — so the real waiting happened inside `sqlite3_step`, on
+    /// whatever thread called it. That is now zero and all the patience is here,
+    /// which means the bound that matters is how long a caller is willing to
+    /// wait rather than how many times it asks.
+    @Test("Retrying is bounded by time; a lock that never clears eventually surfaces")
     func retriesGiveUpEventually() throws {
         let database = try Database.inMemory()
         var attempts = 0
+        let started = ContinuousClock.now
         #expect(throws: SQLiteError.self) {
-            try database.transaction(retries: 3) {
+            try database.transaction(.immediate, within: .milliseconds(120)) {
                 attempts += 1
                 throw SQLiteError(
                     code: SQLITE_BUSY, extendedCode: SQLITE_BUSY,
@@ -319,9 +327,28 @@ struct DatabaseTests {
                 )
             }
         }
-        // The first attempt plus three retries. A wedged writer must not spin
-        // for ever.
-        #expect(attempts == 4)
+        // It gave up, and it did so somewhere near the budget rather than
+        // spinning for ever or bailing on the first refusal.
+        #expect(attempts > 1)
+        #expect(ContinuousClock.now - started >= .milliseconds(120))
+        #expect(ContinuousClock.now - started < .seconds(3))
+    }
+
+    /// The async form waits by suspending, and is bounded the same way.
+    @Test("Awaiting a busy database is bounded by the same budget")
+    func asyncRetriesGiveUpEventually() async throws {
+        let database = try Database.inMemory()
+        var attempts = 0
+        await #expect(throws: SQLiteError.self) {
+            try await database.transaction(.immediate, within: .milliseconds(120)) {
+                attempts += 1
+                throw SQLiteError(
+                    code: SQLITE_BUSY, extendedCode: SQLITE_BUSY,
+                    message: "database is locked", context: "test"
+                )
+            }
+        }
+        #expect(attempts > 1)
     }
 
     @Test("A second writer waits for the first rather than failing")

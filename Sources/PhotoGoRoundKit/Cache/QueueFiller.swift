@@ -28,13 +28,13 @@ import Foundation
 /// and no disk.
 public final class QueueFiller: @unchecked Sendable {
     private let isShort: @Sendable () -> Bool
-    private let produce: @Sendable () async -> Bool
+    private let produce: @Sendable () async throws -> Bool
     private let lock = NSLock()
     private var running = false
 
     public init(
         isShort: @escaping @Sendable () -> Bool,
-        produce: @escaping @Sendable () async -> Bool
+        produce: @escaping @Sendable () async throws -> Bool
     ) {
         self.isShort = isShort
         self.produce = produce
@@ -49,6 +49,24 @@ public final class QueueFiller: @unchecked Sendable {
         /// True when the round did not run because something else was already
         /// filling.
         public let skipped: Bool
+        /// Why the round stopped, when it stopped because the deck could not be
+        /// *asked* rather than because it had nothing to give.
+        ///
+        /// **These are opposite facts and they used to be the same value.**
+        /// `produce` answered a plain `Bool` and the dealer reached it through
+        /// `try?`, so a database that was merely busy — the ordinary state
+        /// during a long refresh — arrived here as `exhausted`, which the whole
+        /// system reads as *this library has nothing left*. The round then
+        /// ended, silently, with a full pool behind it and no line in any log
+        /// saying so. That is the shape of the 2026-08-25 outage.
+        public let failure: String?
+
+        public init(produced: Int, exhausted: Bool, skipped: Bool, failure: String? = nil) {
+            self.produced = produced
+            self.exhausted = exhausted
+            self.skipped = skipped
+            self.failure = failure
+        }
 
         public static let alreadyRunning = Round(
             produced: 0, exhausted: false, skipped: true)
@@ -67,8 +85,21 @@ public final class QueueFiller: @unchecked Sendable {
 
         var produced = 0
         while isShort() {
-            guard await produce() else {
-                return Round(produced: produced, exhausted: true, skipped: false)
+            do {
+                guard try await produce() else {
+                    return Round(produced: produced, exhausted: true, skipped: false)
+                }
+            } catch {
+                // **Not exhausted.** The deck was not asked and answered
+                // nothing; it could not be asked at all. Saying so is the whole
+                // point — a round that gives up has to leave a reason behind,
+                // because a queue that stops filling looks identical from the
+                // outside to a library that has run out.
+                Log.deck.error(
+                    "could not deal: \(String(describing: error), privacy: .public)")
+                return Round(
+                    produced: produced, exhausted: false, skipped: false,
+                    failure: String(describing: error))
             }
             produced += 1
         }

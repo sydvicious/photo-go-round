@@ -116,9 +116,138 @@ extension Deck {
     /// source is in. Whether a card can actually be shown is not asked here and
     /// is not knowable here: it is found out by trying to show it, which is what
     /// serving does.
+    /// **Choosing is reading; only the claim writes.**
+    ///
+    /// This used to run entirely inside one `BEGIN IMMEDIATE`, so every count,
+    /// every piece of pass arithmetic, and the candidate select all held the
+    /// database's single writer — for work that wrote nothing at all until the
+    /// last statement. The cost is not theoretical: while a refresh inserts
+    /// thousands of rows across its own connections, a deal cannot so much as
+    /// begin, and `PhotoCache.deal` then reports the busy error as a deck with
+    /// nothing left in it. Serving was measured at 122 seconds for a single
+    /// request on 2026-08-25 for the same reason.
+    ///
+    /// So the lock is taken when there is something to write and not before.
     public func nextCandidate(
         settings: DeckSettings = .default,
         now: Date = Date()
+    ) throws -> DeckCard? {
+        // **Losing the claim race means somebody took *that* card, not that
+        // there are none.** Choosing happens outside any transaction now, so two
+        // producers can land on the same row; the loser must choose again rather
+        // than report nothing, because "nothing" travels all the way up to a
+        // queue that stops filling.
+        //
+        // The loop terminates because a card that was claimed is excluded from
+        // every subsequent choice — each turn round costs exactly one competitor.
+        // The cap is a backstop against a pathology nobody has seen, and is far
+        // above the number of producers this process runs.
+        for _ in 0..<Self.claimAttempts {
+            guard let card = try chooseCandidate(settings: settings, now: now) else { return nil }
+
+            // The one write, and the only place the writer is held.
+            if try claim(card, now: now) { return card }
+        }
+        Log.deck.notice("gave up claiming a card after \(Self.claimAttempts, privacy: .public) attempts")
+        return nil
+    }
+
+    /// How many times a chooser will try again after losing a claim.
+    static let claimAttempts = 32
+
+    /// A candidate that can be **shown right now** — no fetch, no wait.
+    ///
+    /// Two ways a photograph qualifies. It is `referenced`, meaning it lives on
+    /// the boot volume and is read in place rather than copied, so there is
+    /// nothing to fetch at all. Or its original is already in the cache, which
+    /// `resident` carries because that index lives in memory rather than in the
+    /// database.
+    ///
+    /// **This exists for the first tick after launch and nothing else.** A cold
+    /// start deals a perfectly good queue of twenty cards and then cannot serve
+    /// one of them, because every card's bytes are still coming over the wire —
+    /// observed on 2026-08-25 as `out of cards, walked 20` with a full pool and
+    /// an empty cache. Preferring what is already here turns that into a
+    /// picture immediately.
+    ///
+    /// **Startup only, deliberately.** As a standing rule it would be a bias
+    /// with no end: a local folder would crowd out every network source for
+    /// ever, and the deck's single shuffle over the whole library would quietly
+    /// stop being true. The ordinary candidate is what runs from the second tick
+    /// onward.
+    func nextServableCandidate(
+        settings: DeckSettings = .default,
+        now: Date = Date(),
+        resident: Set<String>
+    ) throws -> DeckCard? {
+        try withServableSet(resident) {
+            for _ in 0..<Self.claimAttempts {
+                guard
+                    let card = try chooseCandidate(
+                        settings: settings, now: now, servableOnly: true)
+                else { return nil }
+                if try claim(card, now: now) { return card }
+            }
+            return nil
+        }
+    }
+
+    /// Holds the resident set in a temp table for the duration of `body`.
+    ///
+    /// A temp table rather than a bound list because the set is as large as the
+    /// cache — eight hundred entries on a warm restart — and because it is per
+    /// connection, so two refreshers cannot see each other's.
+    private func withServableSet<T>(_ resident: Set<String>, _ body: () throws -> T) throws -> T {
+        try database.run(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS servable_now (
+              uuid TEXT PRIMARY KEY
+            );
+            """
+        )
+        try database.run("DELETE FROM servable_now;")
+        if !resident.isEmpty {
+            try database.transaction(.immediate) {
+                for uuid in resident {
+                    try database.run(
+                        "INSERT OR IGNORE INTO servable_now (uuid) VALUES (:uuid);",
+                        ["uuid": .text(uuid)]
+                    )
+                }
+            }
+        }
+        defer { try? database.run("DELETE FROM servable_now;") }
+        return try body()
+    }
+
+    /// The claim, shared by both candidate paths.
+    private func claim(_ card: DeckCard, now: Date) throws -> Bool {
+        try database.transaction(.immediate) {
+            try database.run(
+                """
+                UPDATE photo
+                   SET claimed_at = :now
+                 WHERE id = :id
+                   AND (claimed_at IS NULL OR claimed_at <= :expiry);
+                """,
+                [
+                    "now": SQLValue(now), "id": .int(card.id),
+                    "expiry": SQLValue(now.addingTimeInterval(-Self.claimTimeout)),
+                ]
+            )
+            return database.changes > 0
+        }
+    }
+
+    /// Everything that decides *which* card, with no write in it.
+    ///
+    /// Internal rather than private so a test can hold the writer on another
+    /// connection and prove that choosing still works — which is the whole
+    /// property this split exists to provide.
+    func chooseCandidate(
+        settings: DeckSettings = .default,
+        now: Date = Date(),
+        servableOnly: Bool = false
     ) throws -> DeckCard? {
         let pool = try poolSize()
         guard pool > 0 else { return nil }
@@ -126,14 +255,14 @@ extension Deck {
         let window = settings.repeatWindow(poolSize: pool)
         let claimedBefore = now.addingTimeInterval(-Self.claimTimeout)
 
-        return try database.transaction(.immediate) {
+        do {
             let state = try state()
             var threshold = Self.threshold(
                 seq: state.dealSeq, passStartSeq: state.passStartSeq, window: window
             )
 
             var eligible = try countCandidates(
-                threshold: threshold, claimedBefore: claimedBefore)
+                threshold: threshold, claimedBefore: claimedBefore, servableOnly: servableOnly)
             if eligible == 0 {
                 // Nothing eligible is three states, and only one of them ends
                 // the pass. Queued and claimed photographs are staged, not used
@@ -157,40 +286,40 @@ extension Deck {
                 // mostly-blacklisted library must reshuffle rather than wait
                 // for a release that cannot come.
                 let unconstrained = try countCandidates(
-                    threshold: state.dealSeq, claimedBefore: claimedBefore)
+                    threshold: state.dealSeq, claimedBefore: claimedBefore,
+                    servableOnly: servableOnly)
                 guard unconstrained > 0 else { return nil }
                 guard try dealablePopulation() <= window + 1 else { return nil }
                 threshold = state.dealSeq
                 if threshold != state.passStartSeq {
-                    try database.run(
-                        "UPDATE deck_state SET pass_start_seq = :pass WHERE id = 1;",
-                        ["pass": .int(threshold)]
-                    )
+                    // A write, so it takes the writer — and only here, where
+                    // there is finally something to write.
+                    try database.transaction(.immediate) {
+                        try database.run(
+                            "UPDATE deck_state SET pass_start_seq = :pass WHERE id = 1;",
+                            ["pass": .int(threshold)]
+                        )
+                        try recordEvent(
+                            kind: "pass", detail: "reshuffled at ordinal \(threshold)", at: now)
+                    }
                     Log.deck.notice(
                         "deck reshuffled; new pass begins at ordinal \(threshold, privacy: .public)"
                     )
-                    try recordEvent(kind: "pass", detail: "reshuffled at ordinal \(threshold)", at: now)
                 }
                 eligible = try countCandidates(
-                    threshold: threshold, claimedBefore: claimedBefore)
+                    threshold: threshold, claimedBefore: claimedBefore,
+                    servableOnly: servableOnly)
             }
             guard eligible > 0 else { return nil }
 
-            let card = try database.first(
-                Self.candidateSQL,
+            return try database.first(
+                servableOnly ? Self.servableCandidateSQL : Self.candidateSQL,
                 [
                     "threshold": .int(threshold),
                     "claimExpiry": SQLValue(claimedBefore),
                     "offset": .int(Int64(randomOffset(eligible))),
                 ]
             ) { try DeckCard(row: $0, dealSeq: nil) }
-            guard let card else { return nil }
-
-            try database.run(
-                "UPDATE photo SET claimed_at = :now WHERE id = :id;",
-                ["now": SQLValue(now), "id": .int(card.id)]
-            )
-            return card
         }
     }
 
@@ -275,9 +404,11 @@ extension Deck {
         )
     }
 
-    func countCandidates(threshold: Int64, claimedBefore: Date) throws -> Int {
+    func countCandidates(
+        threshold: Int64, claimedBefore: Date, servableOnly: Bool = false
+    ) throws -> Int {
         try database.scalarInt(
-            Self.candidateCountSQL,
+            servableOnly ? Self.servableCandidateCountSQL : Self.candidateCountSQL,
             ["threshold": .int(threshold), "claimExpiry": SQLValue(claimedBefore)]
         ) ?? 0
     }
@@ -302,28 +433,48 @@ extension Deck {
     /// reached a client. This one fires when serving *chooses* a card, before
     /// any rendering has been attempted.
     public func markShown(photoID: Int64, now: Date = Date()) throws -> Int64 {
-        try database.transaction(.immediate) {
-            let seq = try currentDealSeq() + 1
-            try database.run(
-                """
-                UPDATE photo
-                   SET times_shown    = times_shown + 1,
-                       last_dealt_seq = :seq,
-                       shuffle_key    = :key,
-                       last_shown_at  = :now,
-                       claimed_at     = NULL
-                 WHERE id = :id;
-                """,
-                [
-                    "seq": .int(seq), "key": .double(randomKey()),
-                    "now": SQLValue(now), "id": .int(photoID),
-                ]
-            )
-            try database.run(
-                "UPDATE deck_state SET deal_seq = :seq WHERE id = 1;", ["seq": .int(seq)]
-            )
-            return seq
+        try database.transaction(.immediate) { try recordShown(photoID: photoID, now: now) }
+    }
+
+    /// The same deal, for a caller that is already `async`.
+    ///
+    /// **The second of the two statements a picture request contends on**, after
+    /// popping the queue. It advances the single ordinal every consumer shares,
+    /// so it takes the writer — and serving must never hold a cooperative-pool
+    /// thread waiting for it. This suspends instead.
+    public func markShown(
+        photoID: Int64,
+        now: Date = Date(),
+        isolation: isolated (any Actor)? = #isolation
+    ) async throws -> Int64 {
+        try await database.transaction(.immediate) {
+            try recordShown(photoID: photoID, now: now)
         }
+    }
+
+    /// Assumes it is already inside a transaction, so the two forms above differ
+    /// in nothing but how they wait.
+    private func recordShown(photoID: Int64, now: Date) throws -> Int64 {
+        let seq = try currentDealSeq() + 1
+        try database.run(
+            """
+            UPDATE photo
+               SET times_shown    = times_shown + 1,
+                   last_dealt_seq = :seq,
+                   shuffle_key    = :key,
+                   last_shown_at  = :now,
+                   claimed_at     = NULL
+             WHERE id = :id;
+            """,
+            [
+                "seq": .int(seq), "key": .double(randomKey()),
+                "now": SQLValue(now), "id": .int(photoID),
+            ]
+        )
+        try database.run(
+            "UPDATE deck_state SET deal_seq = :seq WHERE id = 1;", ["seq": .int(seq)]
+        )
+        return seq
     }
 
     /// Records that a photograph's bytes actually left the process.
@@ -358,6 +509,25 @@ extension Deck {
           AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry)
           AND p.render_failures < \(Deck.renderFailureLimit)
           AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.photo_id = p.id)
+        """
+
+    /// Servable *now*: read in place, or its original already cached.
+    static let servablePredicate = """
+        \(candidatePredicate)
+          AND (p.storage = 'referenced'
+               OR EXISTS (SELECT 1 FROM servable_now s WHERE s.uuid = p.uuid))
+        """
+
+    static let servableCandidateCountSQL = """
+        SELECT COUNT(*) FROM photo p WHERE \(servablePredicate);
+        """
+
+    static let servableCandidateSQL = """
+        SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
+          FROM photo p JOIN source s ON s.id = p.source_id
+         WHERE \(servablePredicate)
+         ORDER BY p.shuffle_key
+         LIMIT 1 OFFSET :offset;
         """
 
     static let candidateCountSQL = """

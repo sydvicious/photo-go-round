@@ -210,6 +210,24 @@ public final class PhotoStore: @unchecked Sendable {
 
     public func contains(_ key: Key) -> Bool { url(for: key) != nil }
 
+    /// Every photograph whose **original** is held right now.
+    ///
+    /// For the startup seed, which wants to fill the queue with pictures that
+    /// can be shown *this second* rather than ones that will need fetching. A
+    /// set rather than a per-photo question because the deck asks about the
+    /// whole pool at once, and a call per candidate would be a lock acquisition
+    /// per row.
+    ///
+    /// Deliberately does **not** stat each file the way `url(for:)` does. This
+    /// is a hint used to order the queue, not a promise: a photograph whose file
+    /// vanished since the index was built costs one skipped card, which is
+    /// exactly what the serve walk already handles.
+    public var residentPhotoUUIDs: Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return Set(entries.keys.filter { $0.size == nil }.map(\.photoUUID))
+    }
+
     private func forget(_ key: Key) {
         lock.lock()
         entries.removeValue(forKey: key)

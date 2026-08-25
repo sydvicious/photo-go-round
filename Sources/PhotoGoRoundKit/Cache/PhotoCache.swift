@@ -269,6 +269,39 @@ public struct PhotoCache {
         return true
     }
 
+    /// Deals one card that can be shown without fetching anything.
+    ///
+    /// Answers false when there is nothing left that qualifies, which is the
+    /// signal for the caller to fall back to ordinary dealing. See
+    /// `Deck.nextServableCandidate`.
+    @discardableResult
+    public func dealServable(
+        settings: DeckSettings = .default,
+        resident: Set<String>,
+        now: Date = Date()
+    ) throws -> Bool {
+        guard
+            let candidate = try deck.nextServableCandidate(
+                settings: settings, now: now, resident: resident)
+        else { return false }
+        defer { try? deck.releaseClaim(photoID: candidate.id) }
+
+        store.note(photoUUID: candidate.uuid, sourceUUID: candidate.sourceUUID)
+        guard try queue.append(photoID: candidate.id, sourceID: candidate.sourceID, at: now) else {
+            return false
+        }
+        log(
+            .dealt(
+                photo: candidate.externalID, source: candidate.sourceID,
+                queued: (try? queue.size()) ?? 0))
+        return true
+    }
+
+    /// What the byte store is holding originals for, which is half of what
+    /// "servable now" means. The other half is `referenced` storage, which the
+    /// database knows on its own.
+    public var residentPhotoUUIDs: Set<String> { store.residentPhotoUUIDs }
+
     // MARK: - Caching one picture, off the serving path
 
     /// Fetches one photograph's bytes into the cache.
@@ -502,7 +535,7 @@ public struct PhotoCache {
                 log(.nothingToShow(walked: walked, because: "out of time"))
                 return nil
             }
-            guard let card = try queue.serve(at: now) else { break }
+            guard let card = try await queue.serve(at: now) else { break }
             walked += 1
 
             // Neither guard below is a photograph that has *gone*, so neither
@@ -580,7 +613,7 @@ public struct PhotoCache {
                     photo: card.externalID, source: card.sourceID,
                     rendering: held != nil, unconfirmed: unconfirmed, queued: depth()))
             lookAhead()
-            let seq = try deck.markShown(photoID: card.id, now: now)
+            let seq = try await deck.markShown(photoID: card.id, now: now)
             if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
             // The deck moved, so anything mirroring its position — a diagnostic
             // panel, another surface's idea of what is next — should go and look.

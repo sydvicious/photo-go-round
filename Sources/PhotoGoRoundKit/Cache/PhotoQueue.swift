@@ -157,27 +157,46 @@ public struct PhotoQueue {
     /// the first requests are answered with *no photos available* and pictures
     /// begin arriving as providers deliver.
     public func serve(at now: Date = Date()) throws -> DeckCard? {
-        try database.transaction(.immediate) {
-            let head = try database.first(
-                """
-                SELECT q.position, p.id, p.uuid, p.source_id, s.uuid AS source_uuid,
-                       p.external_id, p.storage
-                  FROM queue q
-                  JOIN photo p ON p.id = q.photo_id
-                  JOIN source s ON s.id = p.source_id
-                 ORDER BY q.sort_key, q.position
-                 LIMIT 1;
-                """
-            ) { row in
-                (position: try row.int64("position"), card: try DeckCard(row: row, dealSeq: nil))
-            }
-            guard let head else { return nil }
+        try database.transaction(.immediate) { try takeHead() }
+    }
 
-            try database.run(
-                "DELETE FROM queue WHERE position = :position;",
-                ["position": .int(head.position)]
-            )
-            return head.card
+    /// The same pop, for a caller that is already `async`.
+    ///
+    /// **Popping the queue takes SQLite's single writer**, so it is one of the
+    /// two statements a picture request contends on. Waiting for that writer by
+    /// blocking costs the process a cooperative-pool thread — and serving is the
+    /// operation that must never be the reason everything else stopped. This
+    /// waits by suspending instead. See `Database.transaction`'s async form.
+    public func serve(
+        at now: Date = Date(),
+        isolation: isolated (any Actor)? = #isolation
+    ) async throws -> DeckCard? {
+        try await database.transaction(.immediate) { try takeHead() }
+    }
+
+    /// The head of the queue, removed. Assumes it is already inside a
+    /// transaction, which is what lets the two forms above differ in nothing but
+    /// how they wait.
+    private func takeHead() throws -> DeckCard? {
+        let head = try database.first(
+            """
+            SELECT q.position, p.id, p.uuid, p.source_id, s.uuid AS source_uuid,
+                   p.external_id, p.storage
+              FROM queue q
+              JOIN photo p ON p.id = q.photo_id
+              JOIN source s ON s.id = p.source_id
+             ORDER BY q.sort_key, q.position
+             LIMIT 1;
+            """
+        ) { row in
+            (position: try row.int64("position"), card: try DeckCard(row: row, dealSeq: nil))
         }
+        guard let head else { return nil }
+
+        try database.run(
+            "DELETE FROM queue WHERE position = :position;",
+            ["position": .int(head.position)]
+        )
+        return head.card
     }
 }

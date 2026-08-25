@@ -225,7 +225,7 @@ struct SourceStateTests {
         struct Mute: SourceProvider {
             let kind = SourceKind("mute")
             func enumerate(
-                _ source: Source, into sink: (DiscoveredPhoto) throws -> Void
+                _ source: Source, into sink: (DiscoveredPhoto) async throws -> Void
             ) async throws -> SourceReachability { .reachable }
             func existence(of externalID: String, in source: Source) async -> PhotoExistence {
                 .unknown(reason: "cannot say")

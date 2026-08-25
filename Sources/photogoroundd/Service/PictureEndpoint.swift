@@ -380,13 +380,24 @@ struct PictureEndpoint {
             // Ordinary, not an error. A fresh install answers this way until
             // downloads land, and every surface has an empty state already.
             //
-            // **And it does not ask for more.** It used to, on the reasoning
-            // that an empty answer is the loudest signal the queue has run
-            // short. That is true and it is the wrong response: the cards this
-            // walk passed over are all out being fetched and will come back, so
-            // dealing here buys a fresh cold card in place of a warm one that is
-            // already paid for. Dealing is tied to pictures actually served
-            // instead — see `FillerBox.fill`.
+            // **And it asks for more, which reverses what this comment used to
+            // say.**
+            //
+            // The old reasoning was that the cards this walk passed over are all
+            // out being fetched and will come back, so dealing here buys a fresh
+            // cold card in place of a warm one already paid for. That is sound
+            // about a walk that *passed over* cards. It says nothing about a
+            // walk that found none — `walked 0`, an empty queue — where nothing
+            // was skipped, nothing is coming back, and tying the deal to
+            // pictures actually served makes the one event that could restart
+            // dealing the one event that cannot happen.
+            //
+            // Observed 2026-08-25: an empty queue answering 204 every three
+            // seconds for minutes with a full pool behind it. So a 204 rings the
+            // filler. The overshoot the old note worried about is prevented
+            // where it belongs — `FillerBox.Gauge.isShort` still counts cards in
+            // flight as the queue's the moment the queue has anything at all.
+            queueRanShort()
             report(request, status: 204, detail: "no photos available")
             return .noContent()
         } catch {

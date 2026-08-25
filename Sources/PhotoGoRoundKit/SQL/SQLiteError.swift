@@ -38,6 +38,20 @@ public struct SQLiteError: Error, CustomStringConvertible, Sendable {
     public var description: String {
         "sqlite3 error \(code)/\(extendedCode): \(message) — while \(context)"
     }
+
+    /// Contention that outlasted the caller's patience.
+    ///
+    /// **Deliberately still a busy error**, so `isBusy` is true and an outer
+    /// retry treats it as the ordinary WAL outcome it is rather than as a
+    /// corrupt database. What it is *not* is "there was nothing to do" — the
+    /// distinction that cost a full library every picture it had on 2026-08-25,
+    /// when a busy database reached `QueueFiller` as an exhausted deck.
+    public static let busyAfterWaiting = SQLiteError(
+        code: SQLITE_BUSY,
+        extendedCode: SQLITE_BUSY,
+        message: "the database stayed busy for as long as this caller would wait",
+        context: "waiting to begin a transaction"
+    )
 }
 
 /// Failures that are ours rather than SQLite's.

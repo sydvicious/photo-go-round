@@ -91,7 +91,7 @@ struct FillerBoxTests {
         // Serving is what tops up a merely short queue; the heartbeat filling
         // one was the churn the rework removed. A card popped and a seed asked
         // for must leave the queue exactly as the pop left it.
-        _ = try PhotoQueue(database: fixture.database).serve()
+        _ = try await PhotoQueue(database: fixture.database).serve()
         let reseeded = await box.seedIfEmpty(preferences: preferences)
         #expect(try fixture.queueSize() == 4, "the seed topped up a queue that was not empty")
         #expect(reseeded.skipped)
@@ -104,7 +104,7 @@ struct FillerBoxTests {
         let preferences = Self.preferences()
 
         _ = await box.seedIfEmpty(preferences: preferences)
-        _ = try PhotoQueue(database: fixture.database).serve()
+        _ = try await PhotoQueue(database: fixture.database).serve()
         #expect(try fixture.queueSize() == 4)
 
         let round = await box.servedOne(preferences: preferences)

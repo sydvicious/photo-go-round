@@ -82,9 +82,16 @@ public protocol SourceProvider: Sendable {
     /// unavailable source whose photos keep their deal history. Reaching that
     /// conclusion before streaming anything is normal — an unmounted volume is
     /// known to be unreachable before a single entry is produced.
+    ///
+    /// **The sink is `async` because it writes.** The scanner's sink batches
+    /// what it is handed into database transactions, and a walk of a network
+    /// folder does that thousands of times. Done synchronously from an async
+    /// task, every contended batch parks a cooperative-pool thread — and four
+    /// concurrent walks were enough to stop the agent answering picture requests
+    /// at all on 2026-08-25. Suspending gives the thread back.
     func enumerate(
         _ source: Source,
-        into sink: (DiscoveredPhoto) throws -> Void
+        into sink: (DiscoveredPhoto) async throws -> Void
     ) async throws -> SourceReachability
 
     /// Is this one photo still in this source?
@@ -157,7 +164,7 @@ extension SourceProvider {
     /// the streaming form exists to avoid.
     public func enumerate(_ source: Source) async throws -> SourceEnumeration {
         var photos: [DiscoveredPhoto] = []
-        let reachability = try await enumerate(source) { photos.append($0) }
+        let reachability = try await enumerate(source) { photo in photos.append(photo) }
         return SourceEnumeration(photos: photos, unavailableReason: reachability.unavailableReason)
     }
 }

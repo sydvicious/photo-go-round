@@ -27,6 +27,10 @@ public final class Database {
     /// The file this connection was opened on, or `:memory:`.
     public let path: String
 
+    /// How long a contended transaction keeps trying before it gives up.
+    /// Honoured by `transaction`, not by SQLite — see the note at the pragma.
+    public let busyTimeout: Duration
+
     private var cachedStatements: [String: Statement] = [:]
     private var transactionDepth = 0
     private var savepointCounter = 0
@@ -34,6 +38,10 @@ public final class Database {
     /// How long SQLite itself waits on a locked database before giving up and
     /// returning `SQLITE_BUSY`. Retry-with-backoff sits on top of this.
     public static let defaultBusyTimeout: Duration = .seconds(5)
+
+    /// What SQLite itself may still wait, in milliseconds, to absorb momentary
+    /// page contention on statements that have no retry of their own.
+    static let incidentalWait: Int32 = 50
 
     // MARK: - Opening
 
@@ -57,7 +65,29 @@ public final class Database {
         self.path = path
 
         sqlite3_extended_result_codes(handle, 1)
-        sqlite3_busy_timeout(handle, Int32(busyTimeout.milliseconds))
+        // **Zero, deliberately, and the budget is honoured in Swift instead.**
+        //
+        // `sqlite3_busy_timeout` waits by blocking the calling thread inside
+        // `sqlite3_step`. That is fine on a thread we own and ruinous on a
+        // cooperative-pool thread: at five seconds an attempt, a contended
+        // transaction could hold one of a handful of pool threads for most of a
+        // minute, and several at once starve every other async operation in the
+        // process. Serving a picture was measured at 122 seconds on 2026-08-25
+        // with the database under a long refresh.
+        //
+        // So SQLite returns `SQLITE_BUSY` immediately and `transaction` does the
+        // waiting — on a clock it can honour with `Thread.sleep` or `Task.sleep`
+        // depending on who is calling. Same total patience, no hostage thread.
+        //
+        // Not quite zero, and the residue is deliberate. `transaction` retries,
+        // but a bare `run` or `first` outside one does not — and with a flat
+        // zero those would start failing on the brief page contention WAL
+        // produces at a checkpoint, where before SQLite simply absorbed it.
+        // Fifty milliseconds is far too short to hold a thread hostage and long
+        // enough to swallow that, so the un-retried statements keep the
+        // robustness they had and the long waiting is still ours.
+        sqlite3_busy_timeout(handle, Self.incidentalWait)
+        self.busyTimeout = busyTimeout
 
         do {
             // Per-connection, every time.
@@ -201,38 +231,103 @@ public final class Database {
     @discardableResult
     public func transaction<T>(
         _ kind: TransactionKind = .immediate,
-        retries: Int = 8,
+        within budget: Duration? = nil,
         _ body: () throws -> T
+    ) throws -> T {
+        try retrying(kind, within: budget, body) { delay in Thread.sleep(forTimeInterval: delay) }
+    }
+
+    /// The same transaction, for a caller that is already `async`.
+    ///
+    /// **The only difference is how it waits, and it is the whole reason this
+    /// exists.** The synchronous form sleeps a thread. On the cooperative pool
+    /// that thread is one of very few and is holding up everything else in the
+    /// process; here the wait is a suspension, so the pool gets the thread back
+    /// and the contended caller costs nothing but its own progress.
+    ///
+    /// `body` is synchronous on purpose. A transaction that awaits inside itself
+    /// holds SQLite's single writer across a suspension of unbounded length,
+    /// which is the deadlock this project would least enjoy finding.
+    @discardableResult
+    public func transaction<T>(
+        _ kind: TransactionKind = .immediate,
+        within budget: Duration? = nil,
+        isolation: isolated (any Actor)? = #isolation,
+        _ body: () throws -> T
+    ) async throws -> T {
+        // Written out here rather than delegated to a helper: a separate
+        // `async` method on a non-`Sendable` class is a region crossing, and
+        // Swift 6 is right to refuse it. Inheriting the caller's isolation and
+        // staying put is what keeps this connection in the one domain it
+        // belongs to.
+        if transactionDepth > 0 { return try savepoint(body) }
+
+        let deadline = ContinuousClock.now + (budget ?? busyTimeout)
+        var attempt = 0
+        while true {
+            if let result = try attemptTransaction(kind, body) { return result }
+            attempt += 1
+            guard ContinuousClock.now < deadline else { throw SQLiteError.busyAfterWaiting }
+            Log.sql.debug(
+                "awaiting a busy database, attempt \(attempt, privacy: .public)")
+            // **A suspension, not a sleeping thread.** This is the whole of F.
+            //
+            // Cancellation is honoured rather than swallowed: a caller that has
+            // been cancelled has no interest in the writer any more, and going
+            // on waiting for it would keep a queue of doomed transactions
+            // contending for the lock behind whatever is still live.
+            try await Task.sleep(
+                for: .milliseconds(Int(Self.backoffInterval(attempt: attempt) * 1000)))
+        }
+    }
+
+    /// One attempt, plus the bookkeeping that makes a replay safe.
+    ///
+    /// Returns nil when the attempt was refused for contention and is worth
+    /// making again, so both retry loops share every rule except how they wait.
+    private func attemptTransaction<T>(
+        _ kind: TransactionKind, _ body: () throws -> T
+    ) throws -> T? {
+        do {
+            try execute("BEGIN \(kind.rawValue);")
+            transactionDepth = 1
+            do {
+                let result = try body()
+                try execute("COMMIT;")
+                transactionDepth = 0
+                return result
+            } catch {
+                // ROLLBACK can itself fail if the transaction was already
+                // rolled back by SQLite; that is not the error worth
+                // reporting, so the original one wins.
+                try? execute("ROLLBACK;")
+                transactionDepth = 0
+                throw error
+            }
+        } catch let error as SQLiteError where error.isBusy {
+            return nil
+        }
+    }
+
+    private func retrying<T>(
+        _ kind: TransactionKind,
+        within budget: Duration?,
+        _ body: () throws -> T,
+        wait: (TimeInterval) -> Void
     ) throws -> T {
         // A nested transaction becomes a savepoint. Retry belongs to the
         // outermost one, since only it can replay the whole unit of work.
-        if transactionDepth > 0 {
-            return try savepoint(body)
-        }
+        if transactionDepth > 0 { return try savepoint(body) }
 
+        let deadline = ContinuousClock.now + (budget ?? busyTimeout)
         var attempt = 0
         while true {
-            do {
-                try execute("BEGIN \(kind.rawValue);")
-                transactionDepth = 1
-                do {
-                    let result = try body()
-                    try execute("COMMIT;")
-                    transactionDepth = 0
-                    return result
-                } catch {
-                    // ROLLBACK can itself fail if the transaction was already
-                    // rolled back by SQLite; that is not the error worth
-                    // reporting, so the original one wins.
-                    try? execute("ROLLBACK;")
-                    transactionDepth = 0
-                    throw error
-                }
-            } catch let error as SQLiteError where error.isBusy && attempt < retries {
-                attempt += 1
-                Log.sql.debug("retrying transaction after busy, attempt \(attempt, privacy: .public)")
-                Thread.sleep(forTimeInterval: Self.backoffInterval(attempt: attempt))
-            }
+            if let result = try attemptTransaction(kind, body) { return result }
+            attempt += 1
+            guard ContinuousClock.now < deadline else { throw SQLiteError.busyAfterWaiting }
+            Log.sql.debug(
+                "retrying transaction after busy, attempt \(attempt, privacy: .public)")
+            wait(Self.backoffInterval(attempt: attempt))
         }
     }
 
@@ -256,8 +351,13 @@ public final class Database {
     /// Exponential backoff with jitter, capped. The jitter matters: without it,
     /// two processes that collide once tend to collide again on the same
     /// schedule.
+    /// **Capped higher than it used to be, because SQLite is no longer waiting
+    /// too.** The old 200 ms ceiling sat on top of a five-second `busy_timeout`,
+    /// so the real patience came from SQLite. With that at zero, all of it is
+    /// here, and a ceiling low enough to spin would turn a busy database into a
+    /// hot loop.
     private static func backoffInterval(attempt: Int) -> TimeInterval {
-        let base = min(0.200, 0.002 * pow(2, Double(attempt - 1)))
+        let base = min(0.250, 0.002 * pow(2, Double(attempt - 1)))
         return base * Double.random(in: 0.5...1.5)
     }
 

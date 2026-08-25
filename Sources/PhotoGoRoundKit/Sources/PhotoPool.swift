@@ -64,6 +64,61 @@ public struct PhotoPool {
         public let byteSize: Int64?
     }
 
+    /// The same upsert, for a caller that is already `async`.
+    ///
+    /// **This is the write that holds SQLite's writer longest.** A scan of a
+    /// network folder inserts thousands of rows, five hundred to a transaction,
+    /// for as long as the walk takes — thirty-nine seconds for one source on
+    /// 2026-08-25. Done through the synchronous form from an async task, every
+    /// contended batch parks a cooperative-pool thread, and four concurrent
+    /// walks are enough to leave nothing for serving to run on: eight picture
+    /// requests went unanswered across ninety-two seconds, returning neither a
+    /// photograph nor a `204`.
+    ///
+    /// Awaiting between batches also gives the rest of the process a turn, which
+    /// the synchronous loop never did.
+    @discardableResult
+    public func upsert(
+        _ photos: [DiscoveredPhoto],
+        to source: Source,
+        at now: Date = Date(),
+        isolation: isolated (any Actor)? = #isolation,
+        onAdded: ((DiscoveredPhoto) -> Void)? = nil
+    ) async throws -> (added: Int, updated: Int) {
+        var added = 0
+        var updated = 0
+        for batch in photos.chunked(into: Self.batchSize) {
+            let counts = try await database.transaction(.immediate) {
+                try applyUpsert(batch, to: source, at: now, onAdded: onAdded)
+            }
+            added += counts.added
+            updated += counts.updated
+        }
+        return (added, updated)
+    }
+
+    /// The same removal, for a caller that is already `async`.
+    @discardableResult
+    public func remove(
+        _ photoIDs: [Int64],
+        isolation: isolated (any Actor)? = #isolation
+    ) async throws -> Removal {
+        guard !photoIDs.isEmpty else { return .none }
+        var removed = 0
+        var orphaned: [String] = []
+        for batch in photoIDs.chunked(into: Self.batchSize) {
+            let batchResult = try await database.transaction(.immediate) {
+                try applyRemoval(batch)
+            }
+            removed += batchResult.removed
+            orphaned.append(contentsOf: batchResult.orphaned)
+        }
+        if removed > 0 {
+            Log.sources.notice("removed \(removed, privacy: .public) entries from the pool")
+        }
+        return Removal(count: removed, orphaned: orphaned)
+    }
+
     /// Rows per write transaction. Large enough that a fifty-thousand-photo
     /// folder is not fifty thousand transactions, small enough that it never
     /// holds the single writer lock long enough for a consumer to notice.
@@ -88,57 +143,74 @@ public struct PhotoPool {
         var added = 0
         var updated = 0
         for batch in photos.chunked(into: Self.batchSize) {
-            try database.transaction(.immediate) {
-                for photo in batch {
-                    try database.run(
-                        """
-                        INSERT OR IGNORE INTO photo
-                            (uuid, source_id, external_id, media_type, source_enabled,
-                             storage, byte_size, shuffle_key, added_at)
-                        VALUES (:uuid, :source, :external, :media, :enabled, :storage, :size, :key, :now);
-                        """,
-                        [
-                            // Durable identity, generated here because it is what
-                            // the cache's filenames carry and the row id is not
-                            // stable across a rebuilt database.
-                            "uuid": .text(UUID().uuidString.lowercased()),
-                            "source": .int(source.id),
-                            "external": .text(photo.externalID),
-                            "media": .text(photo.mediaType.rawValue),
-                            "enabled": SQLValue(source.enabled),
-                            "storage": .text(photo.storage.rawValue),
-                            "size": SQLValue(photo.byteSize),
-                            "key": .double(Double.random(in: 0..<1)),
-                            "now": SQLValue(now),
-                        ]
-                    )
-                    if database.changes == 1 {
-                        added += 1
-                        onAdded?(photo)
-                        continue
-                    }
-
-                    // Already known. Update only if something we track moved,
-                    // so an unchanged library does not dirty a page per photo
-                    // per scan. `IS NOT` rather than `<>` because byte_size is
-                    // nullable and `NULL <> NULL` is null, not true.
-                    try database.run(
-                        """
-                        UPDATE photo
-                           SET storage = :storage, byte_size = :size
-                         WHERE source_id = :source AND external_id = :external
-                           AND (storage <> :storage OR byte_size IS NOT :size);
-                        """,
-                        [
-                            "source": .int(source.id),
-                            "external": .text(photo.externalID),
-                            "storage": .text(photo.storage.rawValue),
-                            "size": SQLValue(photo.byteSize),
-                        ]
-                    )
-                    updated += database.changes
-                }
+            let counts = try database.transaction(.immediate) {
+                try applyUpsert(batch, to: source, at: now, onAdded: onAdded)
             }
+            added += counts.added
+            updated += counts.updated
+        }
+        return (added, updated)
+    }
+
+    /// One batch, assumed to be inside a transaction already — which is what
+    /// lets the synchronous and `async` forms above differ in nothing but how
+    /// they wait for the writer.
+    private func applyUpsert(
+        _ batch: ArraySlice<DiscoveredPhoto>,
+        to source: Source,
+        at now: Date,
+        onAdded: ((DiscoveredPhoto) -> Void)?
+    ) throws -> (added: Int, updated: Int) {
+        var added = 0
+        var updated = 0
+        for photo in batch {
+            try database.run(
+                """
+                INSERT OR IGNORE INTO photo
+                    (uuid, source_id, external_id, media_type, source_enabled,
+                     storage, byte_size, shuffle_key, added_at)
+                VALUES (:uuid, :source, :external, :media, :enabled, :storage, :size, :key, :now);
+                """,
+                [
+                    // Durable identity, generated here because it is what
+                    // the cache's filenames carry and the row id is not
+                    // stable across a rebuilt database.
+                    "uuid": .text(UUID().uuidString.lowercased()),
+                    "source": .int(source.id),
+                    "external": .text(photo.externalID),
+                    "media": .text(photo.mediaType.rawValue),
+                    "enabled": SQLValue(source.enabled),
+                    "storage": .text(photo.storage.rawValue),
+                    "size": SQLValue(photo.byteSize),
+                    "key": .double(Double.random(in: 0..<1)),
+                    "now": SQLValue(now),
+                ]
+            )
+            if database.changes == 1 {
+                added += 1
+                onAdded?(photo)
+                continue
+            }
+
+            // Already known. Update only if something we track moved,
+            // so an unchanged library does not dirty a page per photo
+            // per scan. `IS NOT` rather than `<>` because byte_size is
+            // nullable and `NULL <> NULL` is null, not true.
+            try database.run(
+                """
+                UPDATE photo
+                   SET storage = :storage, byte_size = :size
+                 WHERE source_id = :source AND external_id = :external
+                   AND (storage <> :storage OR byte_size IS NOT :size);
+                """,
+                [
+                    "source": .int(source.id),
+                    "external": .text(photo.externalID),
+                    "storage": .text(photo.storage.rawValue),
+                    "size": SQLValue(photo.byteSize),
+                ]
+            )
+            updated += database.changes
         }
         return (added, updated)
     }
@@ -165,7 +237,21 @@ public struct PhotoPool {
         var orphaned: [String] = []
 
         for batch in photoIDs.chunked(into: Self.batchSize) {
-            try database.transaction(.immediate) {
+            let result = try database.transaction(.immediate) { try applyRemoval(batch) }
+            removed += result.removed
+            orphaned.append(contentsOf: result.orphaned)
+        }
+        if removed > 0 {
+            Log.sources.notice("removed \(removed, privacy: .public) entries from the pool")
+        }
+        return Removal(count: removed, orphaned: orphaned)
+    }
+
+    /// One batch, assumed to be inside a transaction already.
+    private func applyRemoval(_ batch: ArraySlice<Int64>) throws -> (removed: Int, orphaned: [String]) {
+        var removed = 0
+        var orphaned: [String] = []
+        do {
                 for id in batch {
                     // Read the path before the row goes, or there is no way to
                     // find the bytes afterwards.
@@ -186,12 +272,8 @@ public struct PhotoPool {
                     try database.run("DELETE FROM photo WHERE id = :id;", ["id": .int(id)])
                     removed += database.changes
                 }
-            }
         }
-        if removed > 0 {
-            Log.sources.notice("removed \(removed, privacy: .public) entries from the pool")
-        }
-        return Removal(count: removed, orphaned: orphaned)
+        return (removed, orphaned)
     }
 
     @discardableResult

@@ -17,13 +17,13 @@ public struct FolderSourceProvider: SourceProvider {
 
     public func enumerate(
         _ source: Source,
-        into sink: (DiscoveredPhoto) throws -> Void
+        into sink: (DiscoveredPhoto) async throws -> Void
     ) async throws -> SourceReachability {
         guard source.kind == kind else {
             throw SourceProviderError.wrongProvider(expected: kind, got: source.kind)
         }
 
-        return try fileAccess.withSourceURL(source) { root in
+        return try await fileAccess.withSourceURL(source, performing: { root in
             var isDirectory: ObjCBool = false
             guard
                 FileManager.default.fileExists(
@@ -74,7 +74,13 @@ public struct FolderSourceProvider: SourceProvider {
             // draining it: 12.4 MB unpooled against 12.5 MB pooled, and 0.3s
             // per 80,000 files cheaper. `URL` and `URLResourceValues` are Swift
             // structs and never needed a pool of their own.
-            for case let fileURL as URL in enumerator {
+            // `for case ... in enumerator` is unavailable from an async
+            // context — `NSEnumerator`'s iterator is not safe to hold across a
+            // suspension — so the walk pulls one object at a time itself. This
+            // is what the for-in was doing underneath in any case, so the
+            // allocation behaviour measured in the note above is unchanged.
+            while let object = enumerator.nextObject() {
+                guard let fileURL = object as? URL else { continue }
                 let values = try? fileURL.resourceValues(forKeys: keySet)
                 guard values?.isRegularFile == true else { continue }
 
@@ -97,7 +103,7 @@ public struct FolderSourceProvider: SourceProvider {
                 let relative = fileURL.relativePath
                 guard !relative.isEmpty else { continue }
 
-                try sink(
+                try await sink(
                     DiscoveredPhoto(
                         externalID: relative,
                         mediaType: mediaType,
@@ -112,7 +118,7 @@ public struct FolderSourceProvider: SourceProvider {
                 "folder source \(source.id, privacy: .public) enumerated \(found, privacy: .public) images, skipped \(skippedVideos, privacy: .public) videos"
             )
             return .reachable
-        }
+        })
     }
 
     public func materialize(
@@ -223,13 +229,13 @@ public struct FileSourceProvider: SourceProvider {
 
     public func enumerate(
         _ source: Source,
-        into sink: (DiscoveredPhoto) throws -> Void
+        into sink: (DiscoveredPhoto) async throws -> Void
     ) async throws -> SourceReachability {
         guard source.kind == kind else {
             throw SourceProviderError.wrongProvider(expected: kind, got: source.kind)
         }
 
-        return try fileAccess.withSourceURL(source) { fileURL in
+        return try await fileAccess.withSourceURL(source, performing: { fileURL in
             let values = try? fileURL.resourceValues(forKeys: Set(FileClassifier.resourceKeys))
             guard values?.isRegularFile == true else {
                 return .unavailable(reason: FileClassifier.unavailableReason(for: fileURL))
@@ -244,7 +250,7 @@ public struct FileSourceProvider: SourceProvider {
 
             var classifier = FileClassifier(
                 sourceIsUbiquitous: FileClassifier.isUbiquitous(fileURL))
-            try sink(
+            try await sink(
                 DiscoveredPhoto(
                     externalID: fileURL.lastPathComponent,
                     mediaType: mediaType,
@@ -253,7 +259,7 @@ public struct FileSourceProvider: SourceProvider {
                 )
             )
             return .reachable
-        }
+        })
     }
 
     public func materialize(

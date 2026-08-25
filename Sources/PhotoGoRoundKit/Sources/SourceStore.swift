@@ -388,6 +388,33 @@ public struct SourceStore {
     ) async -> ScanResult {
         do {
             return try await applyRefresh(source, now: now, onChange: onChange)
+        } catch let error as SQLiteError where error.isBusy {
+            // **Contention is not a source going away, and confusing the two is
+            // the expensive mistake this whole model exists to avoid.**
+            //
+            // `markUnavailable` is how the system says *these photographs are
+            // not reachable* — it is meant for an unplugged drive or a revoked
+            // permission. A database that was merely busy says nothing whatever
+            // about the source; the folder is right there. Reporting it as
+            // unavailable takes a healthy library off the screen and puts a
+            // reason next to it in the settings panel that is simply untrue.
+            //
+            // This became reachable when SQLite stopped absorbing busy waits
+            // internally: statements outside a transaction have no retry, so a
+            // contended `UPDATE source` now surfaces rather than blocking. Seen
+            // on 2026-08-25 — "source 22 unavailable: database is locked" for a
+            // local folder that was perfectly fine.
+            //
+            // Nothing is written and nothing is claimed. The next pass tries
+            // again, which is all a busy database ever asks of anybody.
+            let reason = "refresh skipped: the library was busy"
+            Log.sources.notice(
+                "source \(source.id, privacy: .public) \(reason, privacy: .public)"
+            )
+            return ScanResult(
+                sourceID: source.id, added: 0, removed: 0, unchanged: 0,
+                sourceUnavailable: false, reason: reason
+            )
         } catch {
             let reason = "refresh failed: \(error)"
             Log.sources.error(
@@ -460,9 +487,15 @@ public struct SourceStore {
         try database.run(
             "DELETE FROM walk_seen WHERE source_id = :id;", ["id": .int(source.id)])
 
-        func flush() throws {
+        // **`async`, so the batch write suspends rather than blocking.** This is
+        // the write that holds SQLite's writer longest — thousands of rows, five
+        // hundred to a transaction, for as long as a network walk takes. Doing
+        // it synchronously from an async task parked a cooperative-pool thread
+        // on every contended batch, and four concurrent walks left nothing for
+        // serving to run on. See `PhotoPool.upsert`'s async form.
+        func flush() async throws {
             guard !pending.isEmpty else { return }
-            let counts = try pool.upsert(pending, to: source, at: now) { photo in
+            let counts = try await pool.upsert(pending, to: source, at: now) { photo in
                 onChange?(.added(externalID: photo.externalID))
             }
             for photo in pending {
@@ -484,7 +517,7 @@ public struct SourceStore {
             pending.append(photo)
             // Batched only to keep the write transaction count sane. The buffer
             // is five hundred entries, not a library.
-            if pending.count >= PhotoPool.batchSize { try flush() }
+            if pending.count >= PhotoPool.batchSize { try await flush() }
         }
 
         if let reason = reachability.unavailableReason {
@@ -498,7 +531,7 @@ public struct SourceStore {
                 sourceUnavailable: true, reason: reason
             )
         }
-        try flush()
+        try await flush()
 
         // A source that loses *everything* at once has become unavailable; its
         // contents were not deleted. This covers a Photos library switch and a
@@ -556,7 +589,7 @@ public struct SourceStore {
             guard !departed.isEmpty else { break }
 
             for entry in departed { onChange?(.removed(externalID: entry.externalID)) }
-            let removal = try pool.remove(departed.map(\.id))
+            let removal = try await pool.remove(departed.map(\.id))
             removed += removal.count
             // The bytes go with the rows, here rather than at the next launch. A
             // photograph that has left its source — deleted from the folder, or
@@ -596,35 +629,45 @@ public struct SourceStore {
 
     // MARK: - Availability
 
+    /// **Inside a transaction so that contention is waited out rather than
+    /// surfaced.** A bare statement has no retry of its own, and these two run
+    /// at the end of every refresh — squarely in the path of whatever else is
+    /// writing. Failing here used to turn a busy database into a source marked
+    /// unavailable, which is a lie about the user's library.
     public func markUnavailable(sourceID: Int64, reason: String, at now: Date = Date()) throws {
-        try database.run(
-            """
-            UPDATE source
-               SET available = 0, unavailable_reason = :reason, unavailable_at = :now,
-                   scanned_at = :now
-             WHERE id = :id;
-            """,
-            ["reason": .text(reason), "now": SQLValue(now), "id": .int(sourceID)]
-        )
+        try database.transaction(.immediate) {
+            try database.run(
+                """
+                UPDATE source
+                   SET available = 0, unavailable_reason = :reason, unavailable_at = :now,
+                       scanned_at = :now
+                 WHERE id = :id;
+                """,
+                ["reason": .text(reason), "now": SQLValue(now), "id": .int(sourceID)]
+            )
+        }
         Log.sources.notice(
             "source \(sourceID, privacy: .public) unavailable: \(reason, privacy: .public)"
         )
     }
 
     public func markAvailable(sourceID: Int64, scannedAt now: Date = Date()) throws {
-        let wasUnavailable =
-            try database.scalarInt(
-                "SELECT available FROM source WHERE id = :id;", ["id": .int(sourceID)]
-            ) == 0
-        try database.run(
-            """
-            UPDATE source
-               SET available = 1, unavailable_reason = NULL, unavailable_at = NULL,
-                   scanned_at = :now
-             WHERE id = :id;
-            """,
-            ["now": SQLValue(now), "id": .int(sourceID)]
-        )
+        let wasUnavailable = try database.transaction(.immediate) {
+            let was =
+                try database.scalarInt(
+                    "SELECT available FROM source WHERE id = :id;", ["id": .int(sourceID)]
+                ) == 0
+            try database.run(
+                """
+                UPDATE source
+                   SET available = 1, unavailable_reason = NULL, unavailable_at = NULL,
+                       scanned_at = :now
+                 WHERE id = :id;
+                """,
+                ["now": SQLValue(now), "id": .int(sourceID)]
+            )
+            return was
+        }
         if wasUnavailable {
             Log.sources.notice("source \(sourceID, privacy: .public) is available again")
         }

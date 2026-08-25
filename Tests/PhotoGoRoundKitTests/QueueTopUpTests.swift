@@ -88,7 +88,7 @@ struct QueueTopUpTests {
     /// The agent's loop: serve a picture, then top up once.
     private func serveAndTopUp(_ table: Table, times: Int, using filler: () -> QueueFiller) async {
         for _ in 0..<times {
-            _ = try? table.queue.serve()
+            _ = try? await table.queue.serve()
             await filler().fill()
         }
     }
@@ -133,7 +133,7 @@ struct QueueTopUpTests {
         // pacing the deal to serving exists to remove.
         let table = try Table(photos: 200, nominal: 20)
         for _ in 0..<20 { _ = table.deal() }
-        for _ in 0..<5 { _ = try table.queue.serve() }
+        for _ in 0..<5 { _ = try await table.queue.serve() }
         #expect(table.depth == 15)
 
         await serveAndTopUp(table, times: 1) {

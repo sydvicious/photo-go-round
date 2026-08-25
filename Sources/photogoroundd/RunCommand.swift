@@ -213,14 +213,20 @@ struct RunCommand {
             sources_?.cancel()
         }
 
-        var lastPreferenceCheck = Date.distantPast
-        var lastScan = Date.distantPast
-        var lastQueueRefresh = Date.distantPast
-        var lastMaintenance = Date.distantPast
+        // The schedule, lifted out so it can be asserted rather than trusted.
+        // See `Heartbeat`, and in particular why every job is stamped when it
+        // *finishes*.
+        var heartbeat = Heartbeat()
+        // The first tick seeds the queue before it refreshes anything, so a
+        // restart serves from the pool and cache it already has instead of
+        // waiting out a network walk. See `Heartbeat.order(launching:)`.
+        var launching = true
         var lastStatus = ""
 
         repeat {
             let now = Date()
+            let order = Heartbeat.order(launching: launching)
+            launching = false
 
             // Re-read every tick, not only when the doorbell rings. `cfprefsd`
             // batches writes and a notification can be missed entirely, so the
@@ -228,10 +234,10 @@ struct RunCommand {
             // This is what lets `defaults write` reconfigure a running service
             // with no cooperation from anything.
             let rang = preferencesChanged.lower()
-            if rang || now.timeIntervalSince(lastPreferenceCheck) >= 30 {
+            if heartbeat.isDue(.preferences, every: .seconds(30), at: now, forced: rang) {
                 preferences.reload()
                 preferences = environment.preferences
-                lastPreferenceCheck = now
+                heartbeat.finished(.preferences, at: Date())
                 let changes = try sources.reconcile(with: preferences)
                 if !changes.isEmpty {
                     Self.speak(
@@ -246,35 +252,52 @@ struct RunCommand {
             }
 
             let scanInterval = scanIntervalOverride ?? preferences.scanInterval
-            // Not announced. Refreshing promptly when a source changes is what
-            // the agent is supposed to do, and saying so every time is a line
-            // about routine work. What is worth printing is what the refresh
-            // *found*, which it already prints.
             let asked = sourcesChanged.lower()
-            if asked || now.timeIntervalSince(lastScan) >= scanInterval.totalSeconds || once {
-                try await runRefresh(environment: environment, sources: sources)
-                lastScan = now
-                // A ring that lands mid-refresh stays raised and is honoured on
-                // the next tick. Every ring on this topic is now somebody else
-                // changing the durable list — a refresh announces nothing, so
-                // there is no self-ring to guard against, and re-walking a
-                // change the refresh already saw is cheaper than costing a
-                // client its promptness.
+
+            // **Run in the order this tick calls for.** At launch that is the
+            // queue first, so a restart with a warm cache serves immediately
+            // rather than after the slowest network share has been walked.
+            for work in order {
+                switch work {
+                case .preferences, .maintenance:
+                    continue  // handled around this loop
+
+                case .refresh:
+                    // Not announced. Refreshing promptly when a source changes
+                    // is what the agent is supposed to do, and saying so every
+                    // time is a line about routine work. What is worth printing
+                    // is what the refresh *found*, which it already prints.
+                    guard
+                        heartbeat.isDue(
+                            .refresh, every: scanInterval, at: now, forced: asked || once)
+                    else { continue }
+                    try await runRefresh(
+                        environment: environment, sources: sources,
+                        localFirst: heartbeat.lastFinished(.refresh) == nil)
+                    heartbeat.finished(.refresh, at: Date())
+                    // A ring that lands mid-refresh stays raised and is honoured
+                    // on the next tick. Every ring on this topic is now somebody
+                    // else changing the durable list — a refresh announces
+                    // nothing, so there is no self-ring to guard against, and
+                    // re-walking a change the refresh already saw is cheaper
+                    // than costing a client its promptness.
+
+                case .queue:
+                    // Topping up and sweeping answer to different pressures, so
+                    // they run on separate clocks.
+                    guard
+                        heartbeat.isDue(
+                            .queue, every: preferences.queueRefreshInterval, at: now,
+                            forced: asked || once)
+                    else { continue }
+                    try await maintainQueue(
+                        sources: sources, preferences: preferences, environment: environment)
+                    heartbeat.finished(.queue, at: Date())
+                }
             }
 
-            // Topping up and sweeping answer to different pressures, so they
-            // run on separate clocks.
-            if asked
-                || now.timeIntervalSince(lastQueueRefresh) >= preferences.queueRefreshInterval.totalSeconds
-                || once
-            {
-                try await maintainQueue(
-                    sources: sources, preferences: preferences, environment: environment)
-                lastQueueRefresh = now
-            }
-
-            if now.timeIntervalSince(lastMaintenance) >= preferences.maintenanceInterval.totalSeconds
-                || once
+            if heartbeat.isDue(
+                .maintenance, every: preferences.maintenanceInterval, at: now, forced: once)
             {
                 try await runMaintenance(
                     cache: PhotoCache(
@@ -289,7 +312,7 @@ struct RunCommand {
                     preferences: preferences,
                     environment: environment
                 )
-                lastMaintenance = now
+                heartbeat.finished(.maintenance, at: Date())
             }
 
             // Built from the preferences in force rather than reused from
@@ -335,8 +358,10 @@ struct RunCommand {
     ///
     /// Capped, because fifty sources should not mean fifty simultaneous
     /// directory walks competing for the same disk.
-    private func runRefresh(environment: MacHostEnvironment, sources: SourceStore) async throws {
-        let due = try sources.enabled()
+    private func runRefresh(
+        environment: MacHostEnvironment, sources: SourceStore, localFirst: Bool = false
+    ) async throws {
+        let due = localFirst ? Self.localFirst(try sources.enabled()) : try sources.enabled()
         guard !due.isEmpty else { return }
 
         let databasePath = environment.databaseURL.path(percentEncoded: false)
@@ -353,6 +378,28 @@ struct RunCommand {
                 let source = due[next]
                 next = due.index(after: next)
                 group.addTask {
+                    // **One walk per source, and the guard is per source rather
+                    // than per pass.**
+                    //
+                    // A pass-wide gate would let one folder on a slow share hold
+                    // up every other source behind it, which is the opposite of
+                    // why these run concurrently at all. What must not overlap is
+                    // two walks of the *same* source: they would each open a
+                    // connection, find the same photographs, and contend for the
+                    // single writer to insert rows the other is already
+                    // inserting.
+                    //
+                    // Dropped rather than queued, because a refresh is
+                    // idempotent — the walk already running sees everything the
+                    // second would have, so repeating it is pure cost.
+                    guard Self.refreshing.tryEnter(source: source.id) else {
+                        Log.sources.notice(
+                            "source \(source.id, privacy: .public) is already being refreshed; dropped"
+                        )
+                        return
+                    }
+                    defer { Self.refreshing.leave(source: source.id) }
+
                     // Its own connection: a `Database` belongs to one isolation
                     // domain, and WAL is what makes several of them safe.
                     guard let database = try? Database(path: databasePath) else { return }
@@ -378,7 +425,56 @@ struct RunCommand {
         // from the outside world to the service, never back.
     }
 
+    /// Sources on the boot volume first, everything else after, each keeping its
+    /// order otherwise.
+    ///
+    /// **For the first pass after launch, and no other.** Walking a local folder
+    /// is milliseconds; walking a network share is minutes. In id order the
+    /// cheap source is wherever the user happened to add it — on this library it
+    /// was last, behind ten network folders, so the one source that could have
+    /// put a picture on screen immediately was the last one enumerated and the
+    /// agent showed nothing for the length of the pass.
+    ///
+    /// Only the first pass, because after that there is nothing to be first
+    /// *for*: the queue is full, the shuffle is in force, and reordering every
+    /// pass would be churn in aid of a problem that only exists at launch.
+    ///
+    /// Stable within each group, so two local folders keep the order they were
+    /// added in and the walk stays predictable.
+    static func localFirst(_ sources: [Source]) -> [Source] {
+        let ranked = sources.enumerated().map { (offset, source) in
+            (offset: offset, local: isOnBootVolume(source), source: source)
+        }
+        return
+            ranked
+            .sorted { left, right in
+                left.local == right.local ? left.offset < right.offset : left.local
+            }
+            .map(\.source)
+    }
+
+    /// Whether this source's photographs can be read without fetching anything.
+    ///
+    /// The boot volume and not iCloud. A ubiquitous folder looks local — it is
+    /// under `~/Library/Mobile Documents` on an internal disk — and is not:
+    /// its contents may be evicted placeholders that have to come down first.
+    static func isOnBootVolume(_ source: Source) -> Bool {
+        guard source.kind.isFileBacked else { return false }
+        let url = URL(filePath: source.locator)
+        if (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true {
+            return false
+        }
+        let values = try? url.resourceValues(
+            forKeys: [.volumeIsInternalKey, .volumeIsLocalKey, .volumeIsRemovableKey])
+        guard values?.volumeIsRemovable != true else { return false }
+        return values?.volumeIsInternal == true
+    }
+
     static let maximumConcurrentRefreshes = 4
+
+    /// Which sources are being walked right now. Process-wide, because what it
+    /// protects is process-wide: the one writer on one database.
+    static let refreshing = RefreshGate()
 
 
     /// The queue maintainer, which always runs — and since dealing moved to
@@ -400,7 +496,11 @@ struct RunCommand {
         // written for. With nothing dealt, nothing can be served; with nothing
         // served, nothing is dealt. So it fills an *empty* queue and leaves a
         // merely short one alone.
-        await filler.seedIfEmpty(preferences: preferences)
+        if filler.isBridging() {
+            await filler.seedServableFirst(preferences: preferences)
+        } else {
+            await filler.seedIfEmpty(preferences: preferences)
+        }
     }
 
     private func runMaintenance(
@@ -523,6 +623,15 @@ final class FillerBox: @unchecked Sendable {
 
     private var store: PhotoStore?
 
+    /// Read in a synchronous method for the same reason `paths()` is: `NSLock`
+    /// is unavailable from an async context, and holding one across a suspension
+    /// is exactly the bug that restriction exists to prevent.
+    private func storeAndLog() -> (PhotoStore?, @Sendable (QueueEvent) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (store, log)
+    }
+
     private func paths() -> (database: String, cache: URL) {
         lock.lock()
         defer { lock.unlock() }
@@ -550,6 +659,15 @@ final class FillerBox: @unchecked Sendable {
 
         let gauge = Gauge(databasePath: path)
         let sizes = Sizes()
+        // One connection for dealing, on a thread of its own, for the life of
+        // the process. See `ConfinedDatabase`.
+        guard let dealing = try? ConfinedDatabase(path: path, label: "dealing") else {
+            // Nothing can be dealt without a connection, and a filler that
+            // silently never produces is the failure this whole change exists
+            // to stop being invisible.
+            Log.deck.error("could not open the dealing connection at \(path, privacy: .public)")
+            return QueueFiller(isShort: { false }, produce: { false })
+        }
         lock.lock()
         let bytes = store
         let report = self.log
@@ -559,14 +677,24 @@ final class FillerBox: @unchecked Sendable {
             isShort: {
                 gauge.isShort(nominalSize: sizes.queueSize, inFlight: pending?.count ?? 0)
             },
-            produce: {
-                guard let database = try? Database(path: path) else { return false }
-                let store = SourceStore(database: database)
-                var dealer = PhotoCache(
-                    database: database, root: root, settings: sizes.cacheSettings,
-                    sources: store, queueSize: sizes.queueSize, store: bytes)
-                dealer.log = report
-                return (try? dealer.deal(settings: sizes.deckSettings)) ?? false
+            produce: { [dealing] in
+                // **On the dealing connection's own thread, and errors travel.**
+                //
+                // This used to open a connection per call and swallow whatever
+                // came back with `try?`. Both were wrong in the same direction:
+                // dealing is the hot path that takes the write lock, so it is
+                // exactly the work that must not occupy a cooperative-pool
+                // thread while it waits — and a database that was merely busy
+                // arrived at `QueueFiller` as `false`, which reads as a deck
+                // with nothing left in it and stops the round.
+                try await dealing.run { database in
+                    let store = SourceStore(database: database)
+                    var dealer = PhotoCache(
+                        database: database, root: root, settings: sizes.cacheSettings,
+                        sources: store, queueSize: sizes.queueSize, store: bytes)
+                    dealer.log = report
+                    return try dealer.deal(settings: sizes.deckSettings)
+                }
             })
         lock.lock()
         filler = built
@@ -624,11 +752,34 @@ final class FillerBox: @unchecked Sendable {
         /// about to return, and the queue would overshoot by exactly the number
         /// of fetches — which is the churn that pacing the deal to serving
         /// exists to remove.
+        /// **An empty queue is short whatever is in flight, and that exception is
+        /// the whole of this method's history.**
+        ///
+        /// The accounting above is right about *pacing* and wrong about
+        /// starvation, because it reasons as though a card in flight were
+        /// interchangeable with one on the queue. It is not: a card in flight
+        /// cannot be served. On a cold library over a slow link every card is
+        /// skipped for want of bytes, so the depth falls to zero while the
+        /// in-flight count climbs to nominal — and `depth + inFlight < nominal`
+        /// then answers *not short* about a queue with nothing in it.
+        ///
+        /// Nothing dealing can do makes that false statement true again. Only a
+        /// *fetch* landing does, so the outage lasts as long as the slowest
+        /// outstanding download — observed at several minutes over a hotel
+        /// network on 2026-08-25, with 2.3 GB of perfectly good cached
+        /// photographs that were never dealt because no card could be added to
+        /// ask for them.
+        ///
+        /// So: a queue at zero is always short. Dealing one card at a time from
+        /// there is deliberate rather than grudging — each one is tried, and a
+        /// photograph whose bytes are already held is served on the spot, which
+        /// is how the system walks out of the hole instead of waiting in it.
         func isShort(nominalSize: Int, inFlight: Int) -> Bool {
             lock.lock()
             defer { lock.unlock() }
             guard let database else { return false }
             let depth = (try? PhotoQueue(database: database, nominalSize: nominalSize).size()) ?? 0
+            guard depth > 0 else { return true }
             return depth + inFlight < nominalSize
         }
     }
@@ -650,23 +801,117 @@ final class FillerBox: @unchecked Sendable {
     /// fine.
     @discardableResult
     func servedOne(preferences: Preferences) async -> QueueFiller.Round {
+        // While the bridge is in force this is the path that matters: a `204`
+        // rings it, and that happens long before the heartbeat's next tick.
+        if isBridging() { return await seedServableFirst(preferences: preferences) }
         let filler = makeFiller()
         sizes?.update(preferences)
         return await filler.fill()
     }
 
+    /// How many immediately-servable cards the startup bridge deals.
+    ///
+    /// **Deliberately a handful, not a queueful.** Filling all twenty from the
+    /// one local folder would put twenty consecutive pictures from a single
+    /// source on the screen, which is precisely the opposite of the shuffle
+    /// being in force. Three is enough that a request right now succeeds and
+    /// that the next couple do too, which is all the time the ordinary cards
+    /// need for their fetches to land.
+    static let servableBridge = 3
+
+    /// The startup bridge: a few pictures that can be shown *now*, then the
+    /// ordinary shuffle.
+    ///
+    /// **A cold start deals a full queue it cannot serve.** Every card's bytes
+    /// are still arriving, so the walk goes through all twenty and answers
+    /// `204` — seen on 2026-08-25 as `out of cards, walked 20` against a full
+    /// pool and an empty cache. Photographs already here need no fetch:
+    /// `referenced` files are read in place, and a warm restart still holds
+    /// whatever was cached.
+    ///
+    /// **It keeps preferring until the queue is actually full**, rather than
+    /// firing once. The first tick after a deleted database has an empty pool
+    /// and nothing to prefer; what makes the bridge work is that it is still in
+    /// force a moment later, once the first sources have been walked.
+    @discardableResult
+    func seedServableFirst(preferences: Preferences) async -> QueueFiller.Round {
+        let (path, root) = paths()
+        let (bytes, report) = storeAndLog()
+
+        if let database = try? Database(path: path), let bytes {
+            var dealer = PhotoCache(
+                database: database, root: root, settings: preferences.cacheSettings,
+                sources: SourceStore(database: database),
+                queueSize: preferences.queueSize, store: bytes)
+            dealer.log = report
+            let resident = bytes.residentPhotoUUIDs
+            let queue = PhotoQueue(database: database, nominalSize: preferences.queueSize)
+            var dealt = 0
+            while (try? queue.size()) ?? 0 < min(Self.servableBridge, preferences.queueSize) {
+                guard
+                    let more = try? dealer.dealServable(
+                        settings: preferences.deckSettings, resident: resident), more
+                else { break }
+                dealt += 1
+            }
+            if dealt > 0 {
+                Console.event(
+                    "bridged \(dealt) picture\(dealt == 1 ? "" : "s") that need no fetching")
+                Log.deck.notice(
+                    "launch bridge queued \(dealt, privacy: .public) immediately servable photographs"
+                )
+            }
+        }
+
+        // The rest of the queue is the ordinary shuffle, so the fetches those
+        // cards need start now rather than a tick from now.
+        let round = await seedIfEmpty(preferences: preferences, evenIfNotEmpty: true)
+
+        // **The shuffle takes over the moment the queue is full.** The bridge is
+        // for the gap at launch and for nothing else; left in force it would be
+        // a standing bias towards whichever source happens to be local.
+        if let database = try? Database(path: path),
+            let size = try? PhotoQueue(database: database, nominalSize: preferences.queueSize)
+                .size(), size >= preferences.queueSize
+        {
+            stopBridging()
+        }
+        return round
+    }
+
+    /// True until the queue has been filled once. See `seedServableFirst`.
+    private var bridging = true
+
+    func isBridging() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return bridging
+    }
+
+    private func stopBridging() {
+        lock.lock()
+        let was = bridging
+        bridging = false
+        lock.unlock()
+        if was { Log.deck.notice("launch bridge finished; the shuffle is in force") }
+    }
+
     /// Fills an empty queue and leaves a short one alone. See the call site.
     @discardableResult
-    func seedIfEmpty(preferences: Preferences) async -> QueueFiller.Round {
+    func seedIfEmpty(
+        preferences: Preferences, evenIfNotEmpty: Bool = false
+    ) async -> QueueFiller.Round {
         let filler = makeFiller()
         sizes?.update(preferences)
 
-        let (path, _) = paths()
-        guard let database = try? Database(path: path),
-            let size = try? PhotoQueue(database: database, nominalSize: preferences.queueSize)
-                .size(),
-            size == 0
-        else { return .alreadyRunning }
+        if !evenIfNotEmpty {
+            let (path, _) = paths()
+            guard let database = try? Database(path: path),
+                let size = try? PhotoQueue(database: database, nominalSize: preferences.queueSize)
+                    .size(),
+                size == 0
+            else { return .alreadyRunning }
+        }
 
         return await filler.fill()
     }
@@ -784,5 +1029,47 @@ final class Flag: @unchecked Sendable {
         let was = raised
         raised = false
         return was
+    }
+}
+
+/// Admits one walk per source and turns every other ask for that source away.
+///
+/// **Per source rather than per pass**, so a folder on a slow network share
+/// cannot hold up a local one queued behind it — which is the whole reason the
+/// walks run concurrently in the first place.
+///
+/// Deliberately not a lock a second caller waits on. Waiting would serialise the
+/// walks rather than collapse them, which is the same contention arriving a
+/// little later; a refresh is idempotent, so the walk already running covers
+/// whatever the one being turned away would have found.
+final class RefreshGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var walking: Set<Int64> = []
+
+    /// True when the caller now owns this source's walk and must `leave` it.
+    func tryEnter(source: Int64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return walking.insert(source).inserted
+    }
+
+    func leave(source: Int64) {
+        lock.lock()
+        walking.remove(source)
+        lock.unlock()
+    }
+
+    func isWalking(source: Int64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return walking.contains(source)
+    }
+
+    /// For a status line that would otherwise leave a four-minute silence
+    /// unexplained, and for tests.
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return walking.count
     }
 }
