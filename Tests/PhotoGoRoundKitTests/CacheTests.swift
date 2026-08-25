@@ -467,4 +467,130 @@ struct CacheTests {
         #expect(try fixture.deck.currentDealSeq() == seqBefore)
         #expect(try fixture.deck.poolSize() == 3)
     }
+
+    @Test("Clearing one source frees its bytes and leaves every other source alone")
+    func clearingOneSourceSparesTheRest() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        let second = TemporaryFolder(name: "pgr-cache-src2")
+        defer { _ = second }
+        for name in ["c.png", "d.png", "e.png"] { second.write(name, bytes: 100) }
+        let other = try fixture.store.add(kind: .folder, locator: second.path, recursive: true)
+        await fixture.store.refresh(other)
+        try fixture.library.database.run("UPDATE photo SET storage = 'materialized';")
+        try await fixture.produceAll()
+        #expect(try fixture.cache.status().residentCount == 5)
+
+        // One directory removal rather than thousands of unlinks, which is the
+        // whole reason the cache layout has a per-source level.
+        let result = try fixture.cache.clear(.source(fixture.source.id))
+        #expect(result.cleared == 2)
+        #expect(result.bytesFreed == 200)
+        #expect(try fixture.cache.status().residentCount == 3, "the other source lost bytes too")
+
+        // Rows and shuffle history are untouched: clearing is a storage
+        // operation, never a shuffle operation.
+        #expect(try fixture.deck.poolSize() == 5)
+    }
+
+    @Test("Clearing unavailable sources frees only what can never be fetched again")
+    func clearingUnavailableSourcesIsNarrow() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        let gone = TemporaryFolder(name: "pgr-cache-gone")
+        defer { _ = gone }
+        for name in ["c.png", "d.png"] { gone.write(name, bytes: 100) }
+        let missing = try fixture.store.add(kind: .folder, locator: gone.path, recursive: true)
+        await fixture.store.refresh(missing)
+        try fixture.library.database.run("UPDATE photo SET storage = 'materialized';")
+        try await fixture.produceAll()
+        try fixture.library.database.run(
+            "UPDATE source SET available = 0 WHERE id = :id;", ["id": .int(missing.id)])
+
+        // The variant to reach for first: photographs whose source is gone can
+        // never be re-fetched, so this frees space at zero future cost.
+        let cost = try fixture.cache.costOfClearing(.unavailableSources)
+        #expect(cost.costsNothingToRefetch)
+        #expect(cost.bytesFreed == 200)
+
+        let result = try fixture.cache.clear(.unavailableSources)
+        #expect(result.cleared == 2)
+        #expect(result.bytesFreed == 200)
+        // The reachable source keeps everything.
+        #expect(try fixture.cache.status().residentCount == 2)
+        #expect(try fixture.deck.poolSize() == 4)
+    }
+
+    @Test("An explicit clear states its price before charging it")
+    func clearingReportsItsCost() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
+        try await fixture.produceAll()
+
+        // For materialized photographs the price is a re-download apiece; the
+        // command and the UI both say so before confirming.
+        let cost = try fixture.cache.costOfClearing(.everything)
+        #expect(cost.needingRefetch == 3)
+        #expect(cost.bytesFreed == 300)
+        #expect(cost.referencedAndFree == 0)
+        #expect(!cost.costsNothingToRefetch, "a full clear is never free")
+    }
+
+    @Test("Referenced photographs cost nothing to re-retrieve, because that means opening a file")
+    func referencedPhotographsAreFreeToClear() async throws {
+        // Never copied, so there is nothing of theirs to free and nothing to
+        // fetch again.
+        let fixture = try await Fixture(photos: ["a.png", "b.png"], materialized: false)
+        try await fixture.produceAll()
+
+        let cost = try fixture.cache.costOfClearing(.everything)
+        #expect(cost.referencedAndFree == 2)
+        #expect(cost.needingRefetch == 0)
+        #expect(cost.bytesFreed == 0)
+    }
+
+    /// Reaching the critical branch takes a cache built for it: the settings
+    /// clamp `criticalFreeBytes` to `minimumFreeBytes`, and a minimum that
+    /// every volume is under stops anything being cached in the first place.
+    /// So the bytes are put there under ordinary settings and the pass is run
+    /// by a second cache over the same store — the same shape the ceiling
+    /// tests use.
+    @Test("Below the critical floor, eviction runs ahead of the ceiling")
+    func criticallyLowDiskEvictsAheadOfTheCeiling() async throws {
+        let fixture = try await Fixture(photos: (0..<10).map { "photo-\($0).png" })
+        try await fixture.produceAll()
+        try fixture.library.database.run("DELETE FROM queue;")
+        #expect(try fixture.cache.status().bytesOnDisk == 1000)
+
+        // The ceiling sits above what is held, so nothing would go on the
+        // ordinary path — and `criticalFreeBytes: .max` makes every volume
+        // critically low, which is how the branch is reached without a
+        // filesystem that can be starved on demand.
+        let starved = PhotoCache(
+            database: fixture.library.database, root: fixture.cache.root,
+            settings: CacheSettings(
+                byteCeiling: 1500, minimumFreeBytes: .max, criticalFreeBytes: .max),
+            sources: fixture.store, store: fixture.cache.store
+        )
+        // Halved: running out of disk degrades into a smaller cache rather
+        // than a full volume, which on macOS is a bad day for everything else
+        // running.
+        #expect(try starved.evictIfNeeded().evicted > 0)
+        #expect(try starved.status().bytesOnDisk <= 750)
+    }
+
+    @Test("With free space in hand, the ceiling is the whole policy")
+    func healthyDiskEvictsOnlyAtTheCeiling() async throws {
+        let fixture = try await Fixture(photos: (0..<10).map { "photo-\($0).png" })
+        try await fixture.produceAll()
+        try fixture.library.database.run("DELETE FROM queue;")
+
+        // The same thousand bytes under the same ceiling, with the floor not
+        // tripped: nothing goes.
+        let healthy = PhotoCache(
+            database: fixture.library.database, root: fixture.cache.root,
+            settings: CacheSettings(
+                byteCeiling: 1500, minimumFreeBytes: 0, criticalFreeBytes: 0),
+            sources: fixture.store, store: fixture.cache.store
+        )
+        #expect(try healthy.evictIfNeeded().evicted == 0)
+        #expect(try healthy.status().bytesOnDisk == 1000)
+    }
 }

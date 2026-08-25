@@ -162,6 +162,84 @@ struct HostTests {
         #expect(split.cacheRoot.path(percentEncoded: false) == "/tmp/scratch/cache")
     }
 
+    @Test("Every path has an environment form, and the flag wins over it")
+    func environmentNamesEveryPath() {
+        // A launchd plist sets environment variables far more naturally than it
+        // sets argv, which is the whole reason these exist.
+        let fromEnvironment = MacHostEnvironment(
+            deployment: .development,
+            environment: [
+                "PGR_DATABASE": "/tmp/env/db.sqlite",
+                "PGR_CACHE": "/tmp/env/cache",
+            ]
+        )
+        #expect(fromEnvironment.databaseURL.path(percentEncoded: false) == "/tmp/env/db.sqlite")
+        #expect(fromEnvironment.cacheRoot.path(percentEncoded: false) == "/tmp/env/cache")
+
+        let flagged = MacHostEnvironment(
+            deployment: .development,
+            databaseOverride: URL(filePath: "/tmp/flag/db.sqlite"),
+            cacheOverride: URL(filePath: "/tmp/flag/cache"),
+            environment: [
+                "PGR_DATABASE": "/tmp/env/db.sqlite",
+                "PGR_CACHE": "/tmp/env/cache",
+            ]
+        )
+        #expect(flagged.databaseURL.path(percentEncoded: false) == "/tmp/flag/db.sqlite")
+        #expect(flagged.cacheRoot.path(percentEncoded: false) == "/tmp/flag/cache")
+
+        // An empty variable is not a value, here as everywhere else.
+        let empty = MacHostEnvironment(
+            deployment: .development,
+            environment: ["PGR_DATABASE": "", "PGR_CACHE": ""],
+            executableURL: Self.build
+        )
+        #expect(empty.databaseURL.lastPathComponent == Deployment.databaseFilename)
+        #expect(empty.cacheRoot.lastPathComponent == "pgr-cache")
+    }
+
+    @Test("Relocating the container does not relocate preferences; PGR_PREFS_SUITE is what does")
+    func onlyThePrefsSuiteMovesTheSourceList() {
+        // **The hazard this pins is one that has already been paid for.** A
+        // scratch agent started with `--container` and `--cache-root` is *not*
+        // isolated: preferences are global to the executable, so the source
+        // list — and `servicePort` — are still the real ones, and a run that
+        // believed it was isolated could remove somebody's sources for good.
+        let relocated = MacHostEnvironment(
+            deployment: .development,
+            containerOverride: URL(filePath: "/tmp/pgr-scratch"),
+            cacheOverride: URL(filePath: "/tmp/pgr-scratch/cache"),
+            environment: [:]
+        )
+        #expect(
+            relocated.preferences.synchronisedDomain
+                == MacHostEnvironment.preferenceDomain(for: .development),
+            "moving the storage root moved the preference domain with it")
+
+        // The environment form is the only thing that isolates the third rung.
+        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        defer {
+            let defaults = UserDefaults(suiteName: name)
+            defaults?.removePersistentDomain(forName: name)
+            defaults?.removeSuite(named: name)
+            try? FileManager.default.removeItem(
+                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
+        }
+        let isolated = MacHostEnvironment(
+            deployment: .development,
+            containerOverride: URL(filePath: "/tmp/pgr-scratch"),
+            environment: ["PGR_PREFS_SUITE": name]
+        )
+        #expect(isolated.preferences.synchronisedDomain == name)
+
+        // And an empty one is not a value, so it falls back to the deployment's
+        // domain rather than to an unnamed suite.
+        let blank = MacHostEnvironment(
+            deployment: .production, environment: ["PGR_PREFS_SUITE": ""]
+        )
+        #expect(blank.preferences.synchronisedDomain == Deployment.identifier)
+    }
+
     // MARK: - Preferences
 
     @Test("Unset preferences give the shipping defaults")

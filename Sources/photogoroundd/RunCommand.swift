@@ -438,8 +438,15 @@ struct RunCommand {
     /// readable: `SERVE:`, `CACHE:`, `CONFIG:`.
     static let speak: @Sendable (QueueEvent) -> Void = { event in
         switch event {
-        case .dropped, .cacheFailed: Console.alert(event.line)
-        case .serving, .cached: Console.event(event.line)
+        // **Red is for the library changing, not for a fetch that could not
+        // happen.** A photograph dropped has left the library; a source that
+        // went away is reported where sources are. A fetch that failed because
+        // its volume is not mounted is the ordinary, expected shape of a
+        // library that spans removable storage — it changes nothing, it
+        // resolves itself when the drive returns, and colouring it red draws
+        // the eye to the one line on the console that needs no attention.
+        case .dropped: Console.alert(event.line)
+        case .serving, .cached, .cacheFailed: Console.event(event.line)
         default: Console.note(event.line)
         }
         event.report()

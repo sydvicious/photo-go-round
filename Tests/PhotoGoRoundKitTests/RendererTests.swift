@@ -151,6 +151,74 @@ struct RendererTests {
         }
     }
 
+    // MARK: - Upright
+
+    /// The same image, written with an EXIF orientation tag.
+    ///
+    /// Orientation 6 is "rotate 90° clockwise to display": the stored pixels
+    /// are landscape and the photograph is portrait. A camera held on its side
+    /// produces exactly this, and it is most of a real library.
+    private func write(
+        width: Int, height: Int, orientation: Int, to url: URL
+    ) throws {
+        let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(
+            destination, context.makeImage()!,
+            [kCGImagePropertyOrientation: orientation] as CFDictionary)
+        #expect(CGImageDestinationFinalize(destination))
+    }
+
+    @Test("A sideways photograph comes back upright, and the box is applied to what is drawn")
+    func orientationIsApplied() throws {
+        let directory = temporary()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "sideways.jpg")
+        // Stored 400×200; displayed 200×400 once the tag is honoured.
+        try write(width: 400, height: 200, orientation: 6, to: source)
+
+        // The pixel size is what the file says it holds, before any rotation.
+        let stored = try #require(PhotoRenderer.pixelSize(of: source))
+        #expect(stored.width == 400)
+        #expect(stored.height == 200)
+
+        // The client draws what it is handed, 1:1 and never resampled, so the
+        // rotation has to happen here — a portrait photograph handed over
+        // landscape would be drawn on its side.
+        let rendered = try PhotoRenderer.render(
+            contentsOf: source, fitting: 1000, by: 1000, as: .jpeg)
+        #expect(rendered.height > rendered.width, "the photograph was handed over sideways")
+        #expect(rendered.width == 200)
+        #expect(rendered.height == 400)
+    }
+
+    @Test("The box bounds the upright photograph, not the stored pixels")
+    func orientationIsAppliedBeforeTheFit() throws {
+        let directory = temporary()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "sideways.jpg")
+        try write(width: 400, height: 200, orientation: 6, to: source)
+
+        // A 200×400 photograph into a 100×100 box is width-limited at 100×200
+        // if the rotation were ignored, and height-limited at 50×100 once it is
+        // honoured. **No image returned may exceed either bound**, which is the
+        // claim the man page makes and the one a sideways photograph breaks
+        // when orientation is applied after the fit rather than before it.
+        let rendered = try PhotoRenderer.render(
+            contentsOf: source, fitting: 100, by: 100, as: .jpeg)
+        #expect(rendered.width <= 100)
+        #expect(rendered.height <= 100)
+        #expect(rendered.height > rendered.width)
+    }
+
     // MARK: - Content negotiation
 
     @Test("HEIC unless the client will only take JPEG")

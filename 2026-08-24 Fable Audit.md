@@ -404,11 +404,55 @@ at Syd's direction):**
   since, test names not captured. Worth watching; not attributed.
 - Full suite: 443 tests, all passing.
 
-**Still open from this audit:** FEATURES.md's `advanceIntervalSeconds`
-(unbuilt, deferred to the app audit); the remaining coverage gaps (consumer
-registry, cache clearing scopes, critical-free-space eviction branch, EXIF
-orientation, `PGR_DATABASE`/`PGR_PREFS_SUITE` effects); and the unattributed
-one-off kit-suite flake above.
+**Seventh pass — the coverage gaps closed, and the flake attributed:**
+
+- **Consumer registry** — a new `ConsumerTests` suite: first sight creates and
+  every sight after is the same row with the heartbeat moved; identity is
+  `(kind, displayID)`, so two monitors are two consumers and `widget.small` /
+  `widget.large` discriminate in the kind; a displayless consumer is stable;
+  `touch` moves `seenAt` without moving `createdAt`; `forget` removes one and
+  spares the rest; an unknown id is nil; and registering never spends a card.
+- **Cache clearing scopes** — `clear(.source)` frees one source's bytes and
+  leaves every other source's alone, keeping rows and shuffle history;
+  `clear(.unavailableSources)` frees only what can never be re-fetched, with
+  `costOfClearing` reporting `costsNothingToRefetch`; `costOfClearing`
+  (.everything) states the price a full clear charges; and referenced
+  photographs report as free, because re-retrieving one means opening a file.
+- **Critical-free-space eviction** — the halve-the-ceiling branch, reached by
+  a second cache over the same store (the settings clamp ties
+  `criticalFreeBytes` to `minimumFreeBytes`, and a minimum every volume is
+  under stops anything being cached at all), plus the healthy-disk control
+  where the ceiling is the whole policy.
+- **EXIF orientation** — a sideways JPEG (stored 400×200, orientation 6) is
+  handed over upright at 200×400, and the box bounds the *upright*
+  photograph: into 100×100 it comes back 50×100, which is the man page's
+  "no image returned will exceed either bound" for the case that would break
+  it. Both pin behaviour that was already correct.
+- **`PGR_DATABASE` / `PGR_CACHE` / `PGR_PREFS_SUITE`** — the environment form
+  of every path, the flag winning over it, an empty variable not being a
+  value, and the hazard that has already been paid for once: relocating the
+  container does **not** relocate preferences, and `PGR_PREFS_SUITE` is the
+  only thing that isolates the third rung.
+
+- **The one-off flake, attributed and fixed.** It was never reproducible on an
+  idle machine — 24 clean full runs and 12 kit-only runs — so it was forced
+  instead: every core loaded, and it appeared within six runs. All five issues
+  were the same line, `CacheQueueTests`'s `eventually` deadline, and five
+  *different* tests timing out together is the tell — not five slow queues but
+  the whole target's tasks starved of a core while four test targets run in
+  parallel. The two-second bound is now ten: a genuinely wedged queue still
+  fails fast rather than hanging the suite, with enough headroom for a loaded
+  machine. Verified with eight runs under the identical load that produced it.
+
+**Also this pass, at Syd's direction:** a fetch that failed because its volume
+is not mounted no longer prints in red. It changes nothing, it resolves itself
+when the drive returns, and colouring it red drew the eye to the one line on
+the console needing no attention. Red now means the library changed — a
+photograph dropped, a source going unavailable, a scan's removals — which is
+where it belongs.
+
+**Nothing is left open from this audit** except `app/mac/FEATURES.md`'s
+`advanceIntervalSeconds`, deliberately deferred to Syd's audit of the Mac app.
 
 ## Suggested fix order
 

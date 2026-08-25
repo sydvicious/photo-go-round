@@ -82,8 +82,20 @@ struct CacheQueueTests {
 
     /// Waits for a condition rather than for a duration. **Bounded** — a queue
     /// that never drains is a failed test, not a hung suite.
+    ///
+    /// **Ten seconds rather than two, and the difference is a flake that took
+    /// two evenings to attribute.** The bound is there to fail fast when the
+    /// queue is genuinely broken, and two seconds did that — while also
+    /// failing when nothing was broken at all. Roughly one full-suite run in
+    /// eight reported five issues here and nowhere else, which is the tell:
+    /// five *different* tests timing out in the same run is not five slow
+    /// queues, it is the whole target's tasks being starved of a core while
+    /// four test targets run in parallel. Reproduced on demand by loading
+    /// every core and running this suite; never once reproducible on an idle
+    /// machine. A hang still fails rather than wedging the suite, ten seconds
+    /// later instead of two.
     private func eventually(
-        _ description: String, within: Duration = .seconds(2), _ condition: () async -> Bool
+        _ description: String, within: Duration = .seconds(10), _ condition: () async -> Bool
     ) async throws {
         let giveUp = ContinuousClock.now + within
         while ContinuousClock.now < giveUp {
