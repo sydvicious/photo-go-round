@@ -26,6 +26,21 @@ struct Options {
     /// place now the default floats, because a pinned number is one you can
     /// `curl` without first reading the published one out of preferences.
     var servicePort: UInt16?
+    /// Whether to announce the bound port in preferences.
+    ///
+    /// **A test agent does not.** `servicePort` is the one thing the agent
+    /// publishes, and it is published by whichever agent started most recently
+    /// — so a scratch run started to poke at something captures the app's window
+    /// mid-session and serves it from a different library. Isolating storage
+    /// with `--container` does not help, because the preference domain is shared
+    /// and that is where the port lives.
+    ///
+    /// Not publishing removes the confusion at its source rather than teaching
+    /// clients to ignore one. The cost is discovery — nothing can find an agent
+    /// that has not said where it is — which is the right way round for an agent
+    /// somebody started on purpose and is watching. The bound port is printed so
+    /// it can be copied straight into `curl`.
+    var publishesPort = true
     var containerOverride: URL?
     var databaseOverride: URL?
     var cacheOverride: URL?
@@ -93,6 +108,8 @@ struct Options {
                 throw OptionsError.misplacedRecursive
             case "--once":
                 options.once = true
+            case "--no-publish":
+                options.publishesPort = false
             case "--port":
                 let raw = try next(argument)
                 guard let value = UInt16(raw), value > 0 else {
@@ -169,6 +186,10 @@ struct Options {
               --container <dir>   Storage root
           -i, --interval <secs>   How often the loop wakes. Default: 2
               --port <n>          Pin the port. Without it the kernel assigns one
+              --no-publish        Do not announce the port in preferences, so the
+                                  app and every other client keep talking to the
+                                  agent they were already using. For a scratch
+                                  agent you drive by hand; the port is printed.
                                   and the agent publishes it to preferences and
                                   prints it at startup
           -h, --help              This

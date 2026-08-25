@@ -81,6 +81,18 @@ machine can read it. Nothing has to agree on a number in advance, and two agents
 can run side by side without either being told about the other. `pgr_ctl status`
 prints the published address.
 
+`--no-publish` (_internal testing only_)
+Serve normally, but do not write `servicePort`. Nothing announces this agent, so
+nothing follows it: the Mac app and every other client keep talking to whichever
+agent they were already using.
+
+For standing up a scratch agent beside a working one. `--container` and
+`--cache-root` isolate storage but **not** the preference domain, which is where
+the port lives — so without this a scratch run publishes over the real agent and
+silently captures the app's window, serving it from a different library. Pair it
+with `--port` and reach the agent at the number you chose; the bound port is
+printed at startup either way.
+
 The value is withdrawn when the agent stops. A crash leaves it behind, and a
 client that tries it finds nothing listening — the same answer it gets when no
 agent is running.

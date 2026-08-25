@@ -195,6 +195,12 @@ Added with the Settings panel, because the model is where the panel's behaviour 
 
 **That one preference is a single point of confusion, and it bit on 2026-08-24.** The port is published by whichever agent started most recently, and the app follows it without asking whose it is. A second agent — started for a scratch run with `--container` and `--cache-root`, which isolate storage but *not* the preference domain — published over the running one, and the app began serving from an empty scratch library: real photographs, but a deck starting at ordinal 1 and every request a cold miss. When that scratch agent exited, the published port pointed at nothing and the window said "No agent" while a perfectly healthy agent was listening on the port it used to own. Neither state is distinguishable from a real fault by looking at the app. This is written down because it matters when the next source kind arrives, and because it is the sort of thing that gets rediscovered expensively.
 
+**Settled: a test agent does not publish `servicePort` at all.** It serves normally and is reached by a port handed to `curl` and `pgr_ctl` by hand; nothing announces it, so nothing follows it. Starting a second agent to poke at becomes a safe thing to do rather than something that quietly redirects the window mid-session.
+
+**The decision is the agent's to keep, and that is why this shape won.** The alternative considered was a reserved port — or range — that this app refuses on sight, and it is the worse answer twice over: it puts a blocklist in the client, which is a rule that can be got wrong by the side with the least information, and it still leaves a scratch agent publishing over the real one for every port outside the range. Not publishing removes the confusion at its source instead of teaching one reader to ignore it. **No app change at all**, which is the tell — the app already does the right thing with a port nobody overwrote.
+
+What it costs is discovery: an unpublished agent cannot be found by anything that does not already know its port, so the flag should say what it bound plainly enough to copy out of a terminal. That is the whole of the trade, and it is the right way round — a test agent is started by someone who is watching.
+
 **For a file or folder source, the panel needs the agent for one fact.** This app is unsandboxed and links the kit, so it can read the durable list itself and look at the filesystem:
 
 | | preferences and the filesystem | only the agent |

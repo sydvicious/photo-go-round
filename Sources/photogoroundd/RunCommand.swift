@@ -20,6 +20,9 @@ struct RunCommand {
     /// it can be changed without restarting the agent.
     var scanIntervalOverride: Duration?
     var servicePort: UInt16?
+    /// Whether to announce the bound port. False for a scratch agent — see
+    /// `Options.publishesPort`.
+    var publishesPort = true
 
     /// Filling is policy and lives in the kit; what stays here is the two facts
     /// it needs — is the queue short, and produce one picture — each of which
@@ -129,10 +132,26 @@ struct RunCommand {
         // Where the service is, written where every local client can find it:
         // a preference domain is a name rather than a path, which is the only
         // thing both ends can locate without being told.
+        // **A test agent says nothing, and is therefore followed by nobody.**
+        // `servicePort` is written by whichever agent started most recently, so
+        // publishing from a scratch run captures the app's window mid-session
+        // and serves it from a different library. `--container` does not help:
+        // it isolates storage and the preference domain is shared, which is
+        // exactly where the port lives.
+        let publishes = publishesPort
         let listener = HTTPListener(
             port: servicePort,
             advertising: PictureEndpoint.path,
-            onReady: { environment.preferences.publishServicePort($0) }
+            onReady: { port in
+                guard publishes else {
+                    // Nothing can discover it, so say it plainly enough to copy.
+                    Console.event("not published — reach this agent at http://localhost:\(port)")
+                    Log.deck.notice(
+                        "serving on port \(port, privacy: .public), not published")
+                    return
+                }
+                environment.preferences.publishServicePort(port)
+            }
         ) { await router.route($0) }
         // A one-pass run configures and fills; it does not serve. Its listener
         // would publish a port that only a signal withdraws, so `--once` would
@@ -143,8 +162,9 @@ struct RunCommand {
             listener.stop()
             // The unwind for a thrown error, which no signal covers. Withdraw
             // only an address this run published: another agent may own the
-            // key by now.
-            if environment.preferences.servicePort == listener.boundPort {
+            // key by now — and a run that published nothing has nothing to take
+            // back, so it must not touch a key that belongs to somebody else.
+            if publishes, environment.preferences.servicePort == listener.boundPort {
                 environment.preferences.withdrawServicePort()
             }
         }
@@ -153,7 +173,9 @@ struct RunCommand {
         // a person types Ctrl-C — so a `defer` is not where the published port
         // can be withdrawn. Without this, every ordinary stop leaves an address
         // behind and `pgr_ctl status` names a port nothing is answering on.
-        let shutdown = once ? [] : Self.withdrawPortOnTermination(environment.preferences)
+        let shutdown =
+            (once || !publishes)
+            ? [] : Self.withdrawPortOnTermination(environment.preferences)
         // A resumed `DispatchSourceSignal` stops delivering when released, and
         // ARC may release a local after its last use — which without this is
         // the line above, in an optimized build, leaving SIGTERM and SIGINT

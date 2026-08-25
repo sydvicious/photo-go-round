@@ -46,7 +46,8 @@ do {
             tick: options.interval,
             once: options.once,
             scanIntervalOverride: options.scanIntervalOverride,
-            servicePort: options.servicePort
+            servicePort: options.servicePort,
+            publishesPort: options.publishesPort
         ).run()
     }
 } catch {
