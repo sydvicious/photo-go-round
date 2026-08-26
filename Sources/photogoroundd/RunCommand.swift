@@ -617,7 +617,14 @@ struct RunCommand {
         case .cacheTimedOut: Console.alert(event.line)
         // Red as well: a benched source is why nothing from it is appearing.
         case .sourcePaused: Console.alert(event.line)
-        default: Console.note(event.line)
+        // **Timestamped, because all of these happen inside the loop.** This
+        // was `Console.note` — untimestamped, and documented as being for the
+        // banner and for anything printed before the loop starts — so lines
+        // were promoted to `event` one at a time as somebody noticed one
+        // sorting oddly. `DEAL:`, `asked for`, `fetching`, `looked ahead` and
+        // `resized` never were, and a console that timestamps some of a burst
+        // and not the rest is unreadable when you come back to it.
+        default: Console.event(event.line)
         }
         event.report()
     }
