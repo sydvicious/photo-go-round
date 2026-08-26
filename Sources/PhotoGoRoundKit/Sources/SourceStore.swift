@@ -426,6 +426,32 @@ public struct SourceStore {
                 sourceID: source.id, added: 0, removed: 0, unchanged: 0,
                 sourceUnavailable: false, reason: reason
             )
+        } catch let error as SQLiteError
+            where error.isForeignKeyViolation && (try? sourceIsGone(source.id)) == true
+        {
+            // **The source was removed while this scan was walking it.**
+            //
+            // A walk of a large folder runs for minutes and writes in batches
+            // of five hundred. Removing that source from the panel deletes its
+            // row, every `photo` row cascades away with it, and the next batch
+            // inserts a `source_id` that no longer names anything. `OR IGNORE`
+            // does not cover foreign keys, so it lands here.
+            //
+            // Nothing has gone wrong. The scan is doing work for something the
+            // user has said they no longer want, and the answer is to stop —
+            // not to mark it unavailable, which would be writing a status onto
+            // a row that is not there, and would put a line of raw SQL beside
+            // it in the panel if it were.
+            //
+            // Seen on 2026-08-26, removing sources while a walk was in flight.
+            let reason = "refresh abandoned: the source was removed"
+            Log.sources.notice(
+                "source \(source.id, privacy: .public) \(reason, privacy: .public)"
+            )
+            return ScanResult(
+                sourceID: source.id, added: 0, removed: 0, unchanged: 0,
+                sourceUnavailable: false, reason: reason
+            )
         } catch {
             let reason = "refresh failed: \(error)"
             Log.sources.error(
@@ -437,6 +463,16 @@ public struct SourceStore {
                 sourceUnavailable: true, reason: reason
             )
         }
+    }
+
+    /// Whether the source row has been deleted underneath us.
+    ///
+    /// Asked rather than assumed: a foreign-key failure is *almost* always a
+    /// removed source, and "almost" is not what should decide between "this is
+    /// fine" and reporting a fault.
+    private func sourceIsGone(_ id: Int64) throws -> Bool {
+        try database.scalarInt(
+            "SELECT COUNT(*) FROM source WHERE id = :id;", ["id": .int(id)]) == 0
     }
 
     private func applyRefresh(

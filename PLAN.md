@@ -141,7 +141,7 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **A photo may repeat across a pass boundary, and we accept it.** This is a photo shuffle, not a casino. Preventing it costs a guard band and a relaxation path, to spare someone who happens to be watching when two passes meet — every few weeks — from seeing a picture twice.
 - **Selection takes a uniformly random offset into the eligible set, never its first row.** Ordering by a re-rolled random key and taking the minimum starves photos permanently: a high key loses, is never re-rolled *because* it lost, and loses forever. Measured at fraction 0.5, that gives showings from 3 to 391 where a random offset gives 186 to 217.
 - **The window is a configurable fraction of the pool, default 0.5.** At 1.0 the window is unsatisfiable and the pass alone governs: the classic every-photo-once-before-any-repeat shuffle, reshuffled each time through. Lower values let photos recur sooner, which matters on a fifty-thousand-photo library where strict fairness means never seeing a favourite again. Exposed as a user default from day one, and worth a slider later.
-- **No deduplication in v1.** A photo reachable from two sources is two rows and gets dealt twice. Content-level identity is genuinely hard — perceptual hashing, edited versions, format conversions — and it is additive to bolt on later.
+- **One photograph is one row, whichever source found it. Reversed 2026-08-26; `SchemaV9`.** The content hash this decision was waiting for turned out not to be needed: a Photos asset in twelve collections has one `localIdentifier`, and a file under two overlapping folders has one absolute path. Both are already in hand at intake, so identity costs nothing to compute and a unique index enforces it. A hash would only buy genuinely distinct copies of identical bytes in unrelated folders — rare, and arguably not even wrong to show twice. See *One photograph, one row*.
 
 *Consumers*
 
@@ -576,6 +576,14 @@ Consumers do not block on any of this. The exchange is:
 
 It also means **"no photos" is an ordinary reply rather than an error**. A fresh install has an empty queue and an empty cache, so the first few requests answer *nothing available* and photos begin arriving as downloads succeed. Every surface has a defined empty state already; this just gives it something to be triggered by.
 
+### A source removed while it is being scanned
+
+A walk of a large folder runs for minutes and writes in batches of five hundred. Removing that source deletes its row, every `photo` row cascades away with it, and the next batch inserts a `source_id` that no longer names anything.
+
+`INSERT OR IGNORE` does not cover this: SQLite's conflict clause handles `NOT NULL`, `UNIQUE`, `CHECK` and primary keys, and a foreign key is not a conflict to be resolved. It reached the user on 2026-08-26 as a page of raw SQL beside the words *source 8 unavailable*.
+
+`refresh` now recognises the failure, confirms the source row is actually gone rather than assuming it, and abandons the scan quietly. Marking it unavailable was writing a status onto a row that is not there — and `unavailable` means *these photographs cannot be reached*, which is a claim about an unplugged drive and not about something the user has deleted.
+
 ## Rows versus bytes
 
 The single most important thing to keep straight in this design is that there are two populations, and only one of them is bounded.
@@ -601,6 +609,25 @@ Once cached, the entry is an ordinary materialized photo and the original is fre
 **Today this is approximated per source, and that is a deliberate trade.** `sourceIsUbiquitous` asks whether the source root lives in iCloud, once per scan, and marks everything under it materialized. It answers *lives in iCloud* rather than *is currently evicted* — so a fully-downloaded iCloud folder is copied unnecessarily. The precise question is `.ubiquitousItemDownloadingStatusKey`, which is per file, and per-file iCloud properties are what cost 787 MB across an 80,000-photo walk. Coarse and constant beats precise and linear.
 
 **Doing this properly waits for the download half of `pgr_ctl`**, which is the first thing that will actually exercise a slow, failable, resumable fetch. Building the general mechanism before there is something to test it against would be designing against an imagined provider.
+
+## One photograph, one row
+
+`SchemaV1` declined deduplication and said why, reserving a nullable `content_hash` for whenever it was wanted. That column was never added, because identity turned out to be free.
+
+`photo.identity` is written at intake and carries a unique index. The rule has two currencies:
+
+- **A Photos asset is its own `localIdentifier`.** One asset in twelve collections is one string, already stored in `external_id`. Nothing is read, hashed, or compared.
+- **A file is its absolute path** — `source.locator` joined to `external_id`. The relative form is what `external_id` holds, so `~/Pictures` walked recursively and `~/Pictures/2024` added beside it store the same file twice under two different relative paths and never conflicted. A file source's locator *is* the photograph, matching the branch `FileAccess.withPhotoURL` takes, so one file added on its own and again inside a folder is also one row.
+
+**Strict identity, never resemblance.** Nothing here compares images. Two photographs that look alike — the same scene at two resolutions, an edited version beside its original, a JPEG next to its HEIC — are two photographs, and both are kept and both are shown. What is deduplicated is *the same file* reached by more than one route, and the test is an identifier rather than a likeness. This is the line `SchemaV1` was gesturing at with "perceptual hashing, edited versions, format conversions", and it is on the far side of it: that was the hard problem, and it is not being solved, attempted, or approximated.
+
+**Why the change happened now.** Overlapping folders were always possible and rare enough to live with. Checking twelve boxes in a collection picker makes overlap the normal case: a photograph is in Recents, in Favorites, and in the album it was put in. The same asset would have been cached three times, dealt three times, and shown as repeats that look like a deck bug.
+
+**The row belongs to whichever source reached it first**, and `INSERT OR IGNORE` means a later source's copy simply does not land. Unchecking that first collection takes the photograph with it until the remaining sources are rescanned. The correct answer is a junction table, which changes the deal query and the cascade both; the cheap answer is a rescan, and the cheap answer is what is here.
+
+**Two consequences worth expecting rather than discovering.** A collection whose photographs are all already known reports nothing added, which is dedup working and reads like a failed scan. And the picker's count and the source row's count will disagree, because the picker asks PhotoKit — which counts an asset in every collection holding it — while the row counts only what landed.
+
+**A recurring startup pass was considered and rejected.** With the unique index in place a new duplicate cannot be inserted at all, so such a pass could only ever return zero rows — and would read, to whoever found it later, as though duplicates were expected. The migration collapses what was already there once; cache files belonging to rows it deleted are reclaimed by the next launch's index build, which is built from the filesystem and deletes what nothing claims.
 
 ## The deck algorithm
 

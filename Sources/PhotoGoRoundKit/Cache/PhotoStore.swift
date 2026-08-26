@@ -369,7 +369,7 @@ public final class PhotoStore: @unchecked Sendable {
 
     /// Evicts in the order the caller gives, until the ceiling is met.
     ///
-    /// **Least-recently-viewed first, and nothing is exempt.** `order` is
+    /// **Least-recently-viewed first, and the last photo standing is exempt.** `order` is
     /// photographs oldest-first by `COALESCE(last_shown_at, cached_at)`, which
     /// only the database can answer — `Entry.createdAt` is a file's
     /// modification date and says nothing about when anybody looked at the
@@ -381,13 +381,37 @@ public final class PhotoStore: @unchecked Sendable {
     /// download nobody ever picks is eventually evicted on the same rule, with
     /// no special case for it.
     ///
-    /// **The `protecting:` set is gone.** It held back photographs the deck was
-    /// carrying, which made the ceiling unreachable: set `byteCeiling` low, or
-    /// let the volume fill from outside, and we sat over the limit holding
-    /// entries we were forbidden to touch. It was also unnecessary — the
-    /// endpoint opens the file before it writes any header, so unlinking a file
-    /// mid-serve does not disturb the transfer, and the deck's cards are among
-    /// the most-recently-shown entries anyway.
+    /// **The cache is never emptied.** A cache holding nothing meets any
+    /// ceiling perfectly and makes the product do the one thing it must never
+    /// do, which is show a blank frame. So eviction stops at one entry and the
+    /// ceiling is missed rather than the frame — a single file larger than the
+    /// whole budget is simply held. It also makes a very small cache a usable
+    /// setting instead of a way to switch the product off.
+    ///
+    /// **What it kept is released by the ordinary order, with no rule for it.**
+    /// A cache down to one entry has held that entry while it was the only
+    /// thing servable, so it has been shown, and it carries a real
+    /// `last_shown_at`. Anything arriving afterwards has never been shown and
+    /// counts as of the moment it arrived — newer by construction. So the
+    /// survivor is always first out the next time anything else is cached, and
+    /// a budget that had room for one picture has room for many again without
+    /// anybody deciding to let go of it.
+    ///
+    /// **A rendering is a photo somebody can be shown**, which is what decides
+    /// where the floor sits. One photograph here is an original plus whatever
+    /// renderings were made from it, so dropping the original while keeping a
+    /// rendering leaves the frame filled *and* meets a ceiling that holding
+    /// both would have missed. The floor is one servable file, and the rule
+    /// gives up exactly as little as it has to.
+    ///
+    /// **This is not the `protecting:` set coming back.** That held back every
+    /// photograph the deck was carrying, which made the ceiling unreachable in
+    /// the ordinary case: set `byteCeiling` low, or let the volume fill from
+    /// outside, and we sat over the limit holding entries we were forbidden to
+    /// touch. It was also unnecessary — the endpoint opens the file before it
+    /// writes any header, so unlinking a file mid-serve does not disturb the
+    /// transfer. This is exactly one photograph, and only ever the last one, so
+    /// the ceiling is met in every case where meeting it is possible at all.
     ///
     /// Within one photograph the **original goes before its renderings**. A
     /// rendering is a fraction of the bytes and is display-ready, so the same
@@ -416,14 +440,31 @@ public final class PhotoStore: @unchecked Sendable {
             return (left.key.size == nil ? 0 : 1) < (right.key.size == nil ? 0 : 1)
         }
 
+        // Whatever survives is the tail of the queue, which is the most
+        // recently shown — `order` runs oldest-first.
+        var surviving = entries.count
+
         var going: [(Key, Entry)] = []
         for (key, entry) in queue {
             guard total > byteCeiling else { break }
+            guard surviving > 1 else { break }
             going.append((key, entry))
             entries.removeValue(forKey: key)
+            surviving -= 1
             total -= entry.byteCount
         }
+        let remaining = total
         lock.unlock()
+
+        if remaining > byteCeiling {
+            Log.cache.notice(
+                """
+                cache holds \(remaining, privacy: .public) bytes against a ceiling of \
+                \(self.byteCeiling, privacy: .public): what is left is bigger than the whole \
+                budget and is kept rather than leaving nothing to show
+                """
+            )
+        }
 
         var freed: Int64 = 0
         for (_, entry) in going {

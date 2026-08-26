@@ -35,6 +35,29 @@ public struct SQLiteError: Error, CustomStringConvertible, Sendable {
         code == SQLITE_BUSY || code == SQLITE_LOCKED
     }
 
+    /// A row pointing at a parent that is not there.
+    ///
+    /// **Not suppressed by `OR IGNORE`.** SQLite's conflict clause covers
+    /// `NOT NULL`, `UNIQUE`, `CHECK` and primary keys; foreign keys are not a
+    /// conflict resolution and go straight to the caller. So a scan writing
+    /// into `photo` after its source has been deleted throws, however
+    /// forgivingly the insert was written.
+    ///
+    /// Matched on the extended code alone, because this connection has extended
+    /// result codes on and the primary code arrives already widened — the error
+    /// reads `787/787` rather than `19/787`.
+    public var isForeignKeyViolation: Bool {
+        extendedCode == Self.constraintForeignKey
+    }
+
+    /// `SQLITE_CONSTRAINT_FOREIGNKEY`, spelled out.
+    ///
+    /// sqlite3.h defines it as arithmetic on another macro, and Swift imports
+    /// no macro it has to evaluate — so the constant does not exist in the
+    /// `SQLite3` module and this restates its definition rather than pasting
+    /// the 787 it comes to.
+    private static let constraintForeignKey: Int32 = SQLITE_CONSTRAINT | (3 << 8)
+
     public var description: String {
         "sqlite3 error \(code)/\(extendedCode): \(message) — while \(context)"
     }

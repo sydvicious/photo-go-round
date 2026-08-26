@@ -31,10 +31,13 @@ The window is showing a test folder. Every architectural claim this project has 
   - `GET /v2/photos/albums` — identifier, title, subtype, image count.
   - `GET /v1/photos/authorization` and `POST /v1/photos/authorization` — read the state, and raise the prompt.
   - `SourceEndpoint.Wire` gains `title`, because a Photos locator has no last path component to name it by.
+  - **`GET /v2/photos/albums` is the name this plan already gave it**, and it stands. Four sections, images-only counts.
   - **Exit gate: `curl` lists the albums and adds one, and the agent is the only process that touched PhotoKit.**
-- **Phase 5 — the picker in the app.** `Add from Photos Library…` stops being disabled.
-  - A sheet: unauthorized state with an Allow button, then the album list, multiple selection, one `POST /v1/sources`.
-  - Photos sources join the existing single list rather than waiting for *Sources by kind, in sections*.
+- **Phase 5 — the picker in the app. Reshaped 2026-08-26; the panel half is done.** Settings is two panels now, and the picker is what the upper one opens.
+  - **Done.** An *Apple Photos* panel above the file-backed list: the chosen collections comma-separated, the total photo count, and a `Select Collections…` button, still disabled. The app moved to `/v2/sources` to get `title`, without which the panel would name an album `040`.
+  - **Done.** Settings became a `Window` scene of the app's own, because the `Settings` scene would not yield a resizable window at any price. `CommandGroup(replacing: .appSettings)` buys the menu item and `⌘,` back.
+  - Remaining: the picker itself — scrolling sectioned list, a checkbox per collection, name, count; multiple selection; one `POST /v2/sources`.
+  - Remaining: the unauthorized state, which now has somewhere permanent to live.
   - **Exit gate: a person who has never opened a terminal can put their Favorites on their screen.**
 - **Deliberately not here.** `PHPhotoLibraryChangeObserver`; pinned individual assets (`SourceKind.photosAsset`); the whole library as one source; the panel's per-kind sections. Each is argued below.
 
@@ -61,7 +64,10 @@ The window is showing a test folder. Every architectural claim this project has 
 - **`requestData`, cancelled on its first chunk, is the availability probe.** 13.9 ms median, and right about all six assets that were then fetched. `PHImageResultIsInCloudKey` answers about a rendition rather than the original resource, and disagreed 3 times in 45 across two albums — every one in the same direction.
 - **A `PhotoLibrary` seam, mirroring `FileAccess`.** PhotoKit cannot be exercised in a unit test without a real library and a TCC grant, so the provider's logic goes behind a protocol and the PhotoKit binding stays thin enough to read in one sitting.
 - **Albums and smart albums only, for now.** Favorites is a smart album, so the kind the user actually asks for is covered. Pinned assets and a whole-library source are additions rather than completions, and both are argued below.
-- **Photos joins the existing single list in the panel.** Sections are a real improvement and a separate piece of work; making this feature depend on reworking rows that already work would be the third time scope discipline got spent on presentation.
+- **Photos gets its own panel above the file-backed list. Reversed 2026-08-26.** The argument for one list was that sections are a rework of rows that already work. What changed is the realisation that there is exactly one Photos library and there always will be, so this was never a *section* of a list of sources — it is one standing statement of which collections are in play. That shape costs nothing the old argument was protecting: no multiple selection, no second `+` and `−`, no batch `DELETE`. It also gives authorization somewhere permanent to live, which a picker that exists only while it is open cannot.
+- **The picker groups collections into four sections, matching Photos' own sidebar.** Albums, Sharing, Media Types, Utilities. Three was the first instinct and it buries Live Photos, Panoramas and Screenshots under Utilities, which is not where anybody looks for them — and *Live Photos* is the album the spike was run against.
+- **Counts in the picker are images only**, matching what would actually be served. They will not agree with the numbers Photos shows for a collection holding videos, and the video-only smart albums read `0`.
+- **One photograph is one row across collections.** Overlap is the normal case once checking boxes is easy — a photograph is in Recents, in Favorites, and in its album. `SchemaV9` deduplicates on `localIdentifier` at intake; see `PLAN.md`, *One photograph, one row*.
 - **Watching is separable and is held.** `PHPhotoLibraryChangeObserver` is Phase 3 work in `PLAN.md`, but it is a change to how the pool *notices*, not to how a source is added, and folding it in would mean two unproven mechanisms failing at once.
 
 # Background
@@ -466,15 +472,30 @@ So the wire grows a `title`: the leaf name for a file or folder, the collection'
 
 There is a small consequence for `SourcesModel.state(of:)`, which already branches on `SourceKind(source.kind).isFileBacked` and returns the agent's stored answer for anything else. That branch is already correct for Photos and needs no change — worth noting only because it is the kind of thing that looks like it needs one.
 
-## The panel, and what it deliberately does not become
+## The panel, and what it became instead
 
-`app/mac/FEATURES.md` describes *Sources by kind, in sections* as replacing the single list, and says Photos gets its own section when the provider arrives. That is the better design and it is not this work.
+**Rewritten 2026-08-26.** This section argued that Photos should join the single list as another row, and that sections were a separate piece of work not to be entangled with proving the provider. The reasoning was sound and the premise was wrong.
 
-The reason to separate them is that sections are a rework of rows that already function — multiple selection, per-section `+` and `−`, a batch `DELETE` the endpoint does not yet have — and none of it is required for a Photos source to be addable. Doing both at once means a feature that could have been proven in isolation arrives entangled with a list rework, and when something is wrong there are two candidates.
+The premise was that a Photos source is *a source*, one of a growing list you add to. It is not. There is exactly one Photos library and there always will be, so what belongs in Settings is not a section of a list — it is one standing statement of which collections are in play, and a way to change it. Settings therefore has two panels: *Apple Photos* on top, holding the chosen collections comma-separated, the total photo count, and a `Select Collections…` button; and *Folders and Files* below, enclosing exactly what was already there.
 
-So Photos joins the list as another row, with an icon and a title and a count, exactly like a folder. The `Add from Photos Library…` button opens the sheet. `Configure` is not offered for a Photos source, for the same reason it is not offered for a file: `canConfigureSelection` reads `selected?.isFolder == true`, and an album has no options today. When it gets some — and `FEATURES.md` predicts it will, which is why Configure is a sheet rather than an inline checkbox — that is the moment sections earn their keep.
+That shape costs none of what the original argument was protecting. The upper panel has no rows, so there is no multiple selection, no second `+` and `−`, and no batch `DELETE` for the endpoint to grow. The lower list is unchanged apart from the predicate that fills it, which is now *everything that is not a Photos collection* rather than folders and files by name — so a kind the panel has not been taught about appears somewhere it can be seen and removed, instead of being configured and invisible.
 
-One thing the sheet does need that no existing picker does: it is the first dialog in this app that is not `NSOpenPanel`. Everything about the source panel so far has leaned on the system picker doing the work. An album list is ours to draw, and it is also the first place a person sees their own library inside this app, which makes it the first place presentation is visible. `FEATURES.md` already has the answer for how much effort that deserves: the visual language stays plain, and the screensaver is where presentation is the product.
+What the new shape buys that the old one could not: **authorization has somewhere to live**. A picker that exists only while it is open has nowhere to say *this app has not been given access to your photo library*, and nowhere to put the button that asks. A permanent panel does.
+
+`Configure` is still not offered for a Photos source, for the same reason it is not offered for a file — `canConfigureSelection` reads `selected?.isFolder == true`, and a collection has no options today. When it gets some, they belong in the upper panel rather than in the sheet.
+
+One thing the picker does need that no existing picker does: it is the first dialog in this app that is not `NSOpenPanel`. Everything about the source panel so far has leaned on the system picker doing the work. An album list is ours to draw, and it is also the first place a person sees their own library inside this app, which makes it the first place presentation is visible. `FEATURES.md` already has the answer for how much effort that deserves: the visual language stays plain, and the screensaver is where presentation is the product.
+
+## Apple provides no collection picker, and one thing that follows from it
+
+Checked against the macOS 27.0 SDK on 2026-08-26, because "surely there is one" is the kind of assumption that costs a day.
+
+- **`PHPickerResult` carries exactly two things**: `itemProvider` and `assetIdentifier`. Assets, never collections.
+- **`PHPickerCapabilitiesCollectionNavigation` is not what its name suggests.** The header calls it *"the sidebar or the albums tab"* — it lets the person browse into an album; what comes back is still the photographs they picked.
+- **Nothing else in PhotosUI is a chooser.** The remaining view controllers are shared-album creation, customization, and posting.
+- **There is no `Duplicates` subtype** in `PHAssetCollectionSubtype` at all; the list runs to `Spatial` and `ScreenRecordings`. Photos' own Duplicates album cannot be offered even if it were wanted. It is also solving a different problem: it finds pictures that *resemble* each other — the same scene at two resolutions, an edited version beside its original — where this project deduplicates the same file reached by two routes and never compares images at all. See `PLAN.md`, *One photograph, one row*.
+
+So the picker is ours to draw, which was already assumed. **The thing that follows is about a feature this plan excludes**: `PHPickerViewController` runs out of process and needs *no photo library authorization at all* — no TCC prompt, ever. For pinned individual assets (`SourceKind.photosAsset`) Apple's picker does the entire job for free, including the consent question. That does not make pinned assets more urgent, but it does mean their picker is not work, and the argument below against them should be read knowing it.
 
 ## What is deliberately excluded, and why each
 
@@ -488,12 +509,14 @@ One thing the sheet does need that no existing picker does: it is the first dial
 
 ## Documents this touches, and where they disagree
 
-Recorded rather than acted on — `PLAN.md` and `app/mac/FEATURES.md` are Syd's, and neither has been edited.
+**Acted on 2026-08-26, at Syd's instruction.** This section was written while both documents were untouched; all three were brought current together, and what follows records where each now stands.
 
 - **`PLAN.md`, Phase 3.** Lists the Apple Photos provider, watching, and individually pinned assets together. This plan takes the provider, holds watching and pinned assets, and argues both above. If that split is right, Phase 3's bullet is what would record it.
 - **`PLAN.md`, *Getting full-resolution originals out of Photos*.** Says the `.fullSizePhoto`-then-`.photo` rule "needs the Photos provider's spike to measure it against a real library." Phase 1 is that measurement, and its result belongs there when it exists.
-- **`app/mac/FEATURES.md`, *Sources in Settings*.** Says `Add from Photos Library…` is "present and disabled, because the provider does not exist yet." Phase 5 falsifies the second clause.
-- **`app/mac/FEATURES.md`, *Sources by kind, in sections*.** Says "Photos and Google Photos get their own sections when those providers arrive." This plan arrives without them, deliberately.
+- **`app/mac/FEATURES.md`, *Sources in Settings*.** Said `Add from Photos Library…` is "present and disabled, because the provider does not exist yet." The menu item is gone: the affordance is now `Select Collections…` in the *Apple Photos* panel, still disabled, and the provider does exist.
+- **`app/mac/FEATURES.md`, *Sources by kind, in sections*.** Said "Photos and Google Photos get their own sections when those providers arrive." Photos got a panel rather than a section, for the reason in *The panel, and what it became instead* — there is one Photos library and never a list of them. Google Photos is untouched by that argument and would still be a section, or a panel of its own, whenever it arrives.
+- **`PLAN.md`, *No deduplication in v1*.** Reversed. `SchemaV9` deduplicates strictly on identity, because a collection picker makes overlapping sources the normal case.
+- **`Deck and Queue v2.md`, *Eviction*.** Updated: eviction now stops at one servable file rather than emptying the cache, which is *Always have something to show* applied to the ceiling.
 - **`Documentation/photogoroundd.md`.** Would gain the two `/v1/photos` routes under SERVICE, and would need a line about the Photos authorization state. Not yet, since a man page describing something unbuilt is worse than one that is behind — which is the rule that document already follows.
 
 # References

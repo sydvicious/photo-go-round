@@ -21,7 +21,8 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - A list with icon, name, count, and state; path secondary.
   - `Add Picture Files…` — files only, multiple selection, one source per file.
   - `Add Picture Folder…` — one at a time, with an "Add contents of contained folders" checkbox.
-  - `Add from Photos Library…` — present and disabled. **The provider exists as of 2026-08-25** and `pgr_ctl sources add --album` works; what is missing is the picker, which is Phase 5 of `Apple Photos Plan.md`. Albums have no browser here until then, and the agent is the only process that can list them.
+  - **Two panels as of 2026-08-26**: *Apple Photos* on top, *Folders and Files* below enclosing everything above. See *Two panels, because there is one Photos library*.
+  - `Select Collections…` in the upper panel — present and disabled, replacing the `Add from Photos Library…` menu item. The provider exists and `pgr_ctl sources add --album` works; what is missing is the picker, Phase 5 of `Apple Photos Plan.md`.
   - Remove a selected source.
   - Configure a selected folder — the button, the context menu, or a double-click — showing the full path and the one option it has.
   - The list is re-read at launch, when the panel appears, and every few seconds while it is open.
@@ -32,11 +33,12 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - A "Files" section and a "Folders" section, each with its own `+` and `−` beneath it, each showing five rows before it scrolls.
   - `+` is that kind's picker, so the menu that chooses a kind goes away with it.
   - Multiple selection inside a section, ⌘A included, so `−` removes everything selected in one act.
-  - Photos and Google Photos get their own sections when those providers arrive; each kind's section carries whatever that kind needs.
+  - **Photos did not wait for this and did not take a section.** It is a panel, because there is one Photos library and never a list of them — see *Two panels, because there is one Photos library*. Google Photos is untouched by that argument and would still be a section here, or a panel of its own.
+  - What remains for this phase is Files and Folders, which are genuinely a list of things you add to.
   - **Supersedes collapsing per-file sources into one row.** Sections do the same job — keeping two hundred pinned photographs from being two hundred undifferentiated rows — without inventing the batch identifier the data does not have.
   - Removing several at once wants a batch `DELETE`, or the panel makes a request, a preference write, and a doorbell *per row*. `POST` takes an array for exactly this reason and `DELETE` does not yet.
-- *The sources panel resizes* — a list that is always the same height is the wrong height twice: once for a single folder, and again for two hundred pinned files.
-  - The window can be resized vertically. Horizontally it stays as it is; the row has an icon, a name, a count, and a path, and none of them are waiting for width.
+- *The sources panel resizes* — **done 2026-08-26.** A list that is always the same height is the wrong height twice: once for a single folder, and again for two hundred pinned files.
+  - The window resizes in both directions. Vertically for the reason above; horizontally because a row shows its whole path and head-truncates when it will not fit, and because the Apple Photos panel names every collection in play in three lines at most, so width is what decides how many of them can be read.
   - It opens tall enough for what is actually configured, bounded by the screen, rather than opening at a fixed height and being dragged out again on every visit.
   - **This meets *Sources by kind, in sections***, which fixes each section at five rows before it scrolls. Whether the sections divide the available height between them or keep their own count is unsettled, and belongs to whichever of the two is built second.
 - *Saying the agent is not there* — **done.** The window title becomes `Photo-Go-Round - No agent`, and the photograph dims behind a flat grey at three-tenths.
@@ -65,6 +67,10 @@ Building the first of them forced a decision that is **not** app-specific: the d
 
 - **The architecture is `PLAN.md`'s, not this document's.** The database is private to the service; a client asks over HTTP and never opens the store; preferences stay the durable source list, the discovery channel, and `pgr_ctl`'s business; a source is named by its `Source.uuid`. See *The database is private to the service*.
 - **Settings, not the File menu.** Adding and removing act on one list, and only one of them has a picker shape.
+- **A `Window` scene of the app's own, not SwiftUI's `Settings` scene. Changed 2026-08-26.** `Settings` gives the menu item and ⌘, for free and will not yield a resizable window at any price — `.windowResizability(.contentMinSize)` declared on it is ignored. `CommandGroup(replacing: .appSettings)` buys both back in two lines.
+- **Apple Photos is a panel, not a row and not a section.** There is one Photos library and there always will be, so what Settings holds is one standing statement of which collections are in play. It also gives authorization somewhere permanent to live, which a picker that exists only while it is open cannot.
+- **The lower list is everything that is *not* a Photos collection**, rather than folders and files by name, so a kind the panel has not been taught about appears somewhere it can be seen and removed instead of being configured and invisible.
+- **The word is "photo", not "photograph."** It matches the product's own name. Prose in these documents is not bound by it.
 - **One source per file, collapsed in the UI later.** The deck already treats a pinned photograph and a folder of ten thousand alike; changing that to tidy a list would be a schema change.
 - **"Add contents of contained folders", not "Recursive."** Read by people who have never heard the word. Per folder, default off, not sticky.
 - **One request, one write, one doorbell.** `POST` takes an array rather than one source, because adding two hundred one at a time would ask the agent to refresh two hundred times.
@@ -105,7 +111,23 @@ The first sketch put `Add Files…` and `Add Folder…` in the File menu, and it
 
 A panel dissolves that. The list is what you act on, removal is selecting a row, and adding is a button that happens to open a picker. It also produces the acknowledgement a menu item could not: **the new source appears in the list immediately**, because the app just wrote it and does not have to ask anyone.
 
-macOS has a place for this: SwiftUI's `Settings` scene, which is the standard window and takes ⌘, for free.
+macOS has a place for this: the Settings window, under the application menu and on ⌘,.
+
+**It is not SwiftUI's `Settings` scene, as of 2026-08-26.** That scene gives the menu item and the shortcut for free, and it would not give a window the user can resize — `.windowResizability(.contentMinSize)` declared on it is ignored, and reaching the `NSWindow` to insert `.resizable` in its style mask did not help either. It is a `Window` scene now, with `CommandGroup(replacing: .appSettings)` restating the menu item and ⌘,. Two lines, and the window resizes.
+
+## Two panels, because there is one Photos library
+
+The first sketch had Photos as another row in the list, and the one after it had a picker opened from the `+` menu. Both are wrong in the same way: they treat a Photos source as *a source*, one of a growing list you add to.
+
+There is one Photos library on this machine and there always will be. What Settings holds is therefore not a list to append to but **one standing statement of which collections are in play** — so it is a panel, permanently present, above the list of things that genuinely are a growing collection.
+
+It holds three things: the chosen collections comma-separated, capped at three lines so that checking forty of them cannot push the folder list off the bottom; the total number of photos across them, right-aligned above the button; and `Select Collections…`, which opens the picker.
+
+**The count is a plain sum and that is now correct.** One asset in three collections is one row belonging to whichever collection reached it first, so adding the per-source counts cannot double-count — see `PLAN.md`, *One photograph, one row*. Before that landed it would have, and badly, since overlapping collections are the normal case rather than the exception. While any chosen collection is unscanned the line reads "so far", for the same reason a fresh row says "scanning…" instead of "0 photos": a number that silently omits a collection nobody has walked yet is a delay dressed as an answer.
+
+**What the shape buys that a picker alone could not** is somewhere for authorization to live. A dialog that exists only while it is open has nowhere to say *this app has not been given access to your photo library*, and nowhere to put the button that asks. That state is not built yet and now has a home waiting for it.
+
+**What it costs** is that the panel is present even for someone who never uses Photos, saying "No collections selected." That is the right trade: it is one line, and it is also the only place the feature announces that it exists.
 
 ## The beat between asking and knowing
 
@@ -274,6 +296,7 @@ Raised and deliberately not worked out.
 - Print the current image.
 - Save the current image to a file.
 - Drop an image from the queue from the app.
+- A thumbnail for each file-backed source in the settings list, in place of the generic file icon.
 - The grow / shrink / stretch / aspect-ratio family, which needs the service's `fit` parameter — already parked in `PLAN.md`'s Phase 3.
 - **Deleting the file itself gets its own plan.** Not an app feature: it crosses the app, the service, the pool, the deck's history, the cache, and the source, and it is the only irreversible thing the product would do. Everything `PLAN.md` says about deletion today is *reactive* — noticing a photograph somebody else removed and ceasing to show it. Removing one on purpose runs the other way and nothing covers it.
 

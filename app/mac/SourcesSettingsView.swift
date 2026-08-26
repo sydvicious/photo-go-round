@@ -11,17 +11,37 @@ import UniformTypeIdentifiers
 /// thing you act on: adding opens a picker, removing takes the selected row, and
 /// configuring opens what that row has options for.
 struct SourcesSettingsView: View {
+    /// Names the scene, since this is a `Window` of the app's own rather than
+    /// the `Settings` scene — see `PhotoGoRoundApp` for why it gave that up.
+    static let windowID = "sources-settings"
+
     @State private var model = SourcesModel()
     /// The row whose options are open. A value rather than a flag, so the sheet
     /// cannot be showing while nothing is selected.
     @State private var configuring: SourceService.Source?
+    /// Whether a file picker is on screen.
+    ///
+    /// **A modeless panel does not stop a second click on `+`.** `runModal` did
+    /// that for free, at the cost of parking the main thread at
+    /// user-interactive QoS while AppKit's own panel machinery works at a lower
+    /// one — which the runtime reports as a priority inversion. Going modeless
+    /// removes the block and hands back the one job the modality was doing, so
+    /// this does it: one picker at a time, and the menu says so while it is up.
+    @State private var picking = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            list
-            controls
+        VStack(spacing: 12) {
+            photosPanel
+            filesPanel
         }
-        .frame(width: 520, height: 360)
+        .padding(12)
+        // The width floor is what this was pinned at. The height floor grew
+        // with the second panel: 360 was the list on its own, and keeping it
+        // would have let the window shrink until the list it encloses was a
+        // couple of rows tall.
+        .frame(
+            minWidth: 520, idealWidth: 520, maxWidth: .infinity,
+            minHeight: 440, idealHeight: 440, maxHeight: .infinity)
         // Both, and deliberately: the first is the panel being opened, the
         // second is this app starting up with it already open. Neither can be
         // assumed from the other.
@@ -35,11 +55,102 @@ struct SourcesSettingsView: View {
         }
     }
 
+    // MARK: - The panels
+
+    /// There is one Photos library and there will only ever be one, so this is
+    /// not a list of sources you add to — it is one standing statement of which
+    /// collections are in play, and a way to change it. The collections *are*
+    /// sources underneath, and the lower panel deliberately does not show them.
+    private var photosPanel: some View {
+        GroupBox {
+            HStack(alignment: .top, spacing: 12) {
+                chosenCollections
+                Spacer(minLength: 12)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if !model.photoCollections.isEmpty {
+                        Text(photosHeld)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Select Collections…") {}
+                        // No picker yet. Shown rather than hidden, because its
+                        // absence is a fact about this build rather than about
+                        // the product.
+                        .disabled(true)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            heading("Apple Photos")
+        }
+    }
+
+    /// How many photographs the library has a record of across every chosen
+    /// collection.
+    ///
+    /// **A plain sum is the true total.** One asset in three collections is one
+    /// row belonging to whichever collection reached it first — see `SchemaV9`
+    /// — so adding the per-source counts cannot double-count. Before the
+    /// de-duplication it would have, and by a lot: overlapping collections are
+    /// the normal case, not the exception.
+    ///
+    /// **"so far" while anything is unscanned**, for the reason `state(of:)`
+    /// says "scanning…" rather than "0 photos": a collection added a
+    /// moment ago has not been walked, and a number that omits it is a delay
+    /// rather than an answer.
+    private var photosHeld: String {
+        let collections = model.photoCollections
+        let total = collections.reduce(0) { $0 + $1.photos }
+        let held = total == 1 ? "1 photo" : "\(total.formatted()) photos"
+        return collections.contains { $0.scannedAt == nil } ? "\(held) so far" : held
+    }
+
+    /// **A `GroupBox` label is caption-sized by default**, which reads as a
+    /// footnote attached to the box rather than as the name of a section. These
+    /// two are the only structure the panel has, so they say so.
+    private func heading(_ text: String) -> some View {
+        Text(text).font(.headline)
+    }
+
+    @ViewBuilder
+    private var chosenCollections: some View {
+        if model.photoCollections.isEmpty {
+            Text("No collections selected.")
+                .foregroundStyle(.secondary)
+        } else {
+            // Plain commas rather than a list formatter: this is an inventory,
+            // and "Favorites, Live Photos, and Kids" reads like a sentence
+            // somebody wrote.
+            // **Three lines, then it truncates.** Wrapping without a bound
+            // means the number of collections chosen decides how much of the
+            // window is left for the list of folders, and a person who checked
+            // forty of them would have pushed it off the bottom.
+            Text(model.photoCollections.map(\.name).joined(separator: ", "))
+                .textSelection(.enabled)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// What we already had, with a box drawn round it and a name put on it.
+    private var filesPanel: some View {
+        GroupBox {
+            VStack(spacing: 0) {
+                list
+                controls
+            }
+            .frame(maxHeight: .infinity)
+        } label: {
+            heading("Folders and Files")
+        }
+    }
+
     // MARK: - The list
 
     private var list: some View {
         List(selection: $model.selection) {
-            ForEach(model.sources) { source in
+            ForEach(model.fileSources) { source in
                 row(source)
                     .tag(source.uuid)
                     .contextMenu {
@@ -54,7 +165,7 @@ struct SourcesSettingsView: View {
         }
         .listStyle(.inset(alternatesRowBackgrounds: true))
         .disabled(model.isWorking)
-        .overlay { if model.sources.isEmpty { empty } }
+        .overlay { if model.fileSources.isEmpty { empty } }
     }
 
     private func row(_ source: SourceService.Source) -> some View {
@@ -94,9 +205,9 @@ struct SourcesSettingsView: View {
         let standing = SourcesModel.state(of: source)
         guard standing.available else { return standing.reason ?? "unavailable" }
         // A folder added a moment ago has not been scanned yet, and saying "0
-        // photographs" would be a claim rather than a delay.
+        // photos" would be a claim rather than a delay.
         guard source.scannedAt != nil else { return "scanning…" }
-        return source.photos == 1 ? "1 photograph" : "\(source.photos) photographs"
+        return source.photos == 1 ? "1 photo" : "\(source.photos) photos"
     }
 
     private var empty: some View {
@@ -105,7 +216,7 @@ struct SourcesSettingsView: View {
                 .font(.title3)
                 .multilineTextAlignment(.center)
             if model.trouble == nil {
-                Text("Add a folder or a few photographs to get started.")
+                Text("Add a folder or a few photos to get started.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -120,11 +231,6 @@ struct SourcesSettingsView: View {
             Menu {
                 Button("Add Picture Files…") { addFiles() }
                 Button("Add Picture Folder…") { addFolder() }
-                // The provider does not exist yet. Shown rather than hidden,
-                // because its absence is a fact about this build rather than
-                // about the product.
-                Button("Add from Photos Library…") {}
-                    .disabled(true)
             } label: {
                 // **The label carries the size, not the button.** A borderless
                 // control hit-tests its content, so sizing the button instead
@@ -136,7 +242,7 @@ struct SourcesSettingsView: View {
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .disabled(model.isWorking)
+            .disabled(model.isWorking || picking)
             .help("Add a source")
 
             Button {
@@ -182,7 +288,7 @@ struct SourcesSettingsView: View {
 
             // The failure from the last thing asked, beside the controls that
             // asked it rather than in a dialog that has to be dismissed.
-            if let trouble = model.trouble, !model.sources.isEmpty {
+            if let trouble = model.trouble, !model.fileSources.isEmpty {
                 Text(trouble)
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -213,10 +319,12 @@ struct SourcesSettingsView: View {
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = [.image]
         panel.prompt = "Add"
-        panel.message = "Choose photographs to show."
-        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        let chosen = panel.urls
-        Task { await model.add(files: chosen) }
+        panel.message = "Choose photos to show."
+        present(panel) { panel in
+            let chosen = panel.urls
+            guard !chosen.isEmpty else { return }
+            Task { await model.add(files: chosen) }
+        }
     }
 
     /// One folder, with its own answer about nested folders.
@@ -231,7 +339,7 @@ struct SourcesSettingsView: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Add"
-        panel.message = "Choose a folder of photographs."
+        panel.message = "Choose a folder of photos."
 
         let nested = NSButton(
             checkboxWithTitle: "Add contents of contained folders", target: nil, action: nil)
@@ -245,9 +353,27 @@ struct SourcesSettingsView: View {
         panel.accessoryView = inset
         panel.isAccessoryViewDisclosed = true
 
-        guard panel.runModal() == .OK, let folder = panel.url else { return }
-        let recursive = nested.state == .on
-        Task { await model.add(folder: folder, recursive: recursive) }
+        present(panel) { panel in
+            guard let folder = panel.url else { return }
+            let recursive = nested.state == .on
+            Task { await model.add(folder: folder, recursive: recursive) }
+        }
+    }
+
+    /// Puts a picker on screen without blocking the main thread, and holds
+    /// `picking` for exactly as long as it is up — including when it is
+    /// cancelled, which is the case a sentinel set in one place and cleared in
+    /// another gets wrong.
+    @MainActor
+    private func present(_ panel: NSOpenPanel, chosen act: @escaping (NSOpenPanel) -> Void) {
+        guard !picking else { return }
+        picking = true
+        Task {
+            let response = await panel.begin()
+            picking = false
+            guard response == .OK else { return }
+            act(panel)
+        }
     }
 }
 

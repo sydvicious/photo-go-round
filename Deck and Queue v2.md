@@ -67,7 +67,7 @@ worth keeping.
 - **The deck keeps its configured maximum size — twenty today — and stays a FIFO.** Random placement existed only because completed fetches rejoined the queue out of deck order. Nothing rejoins now, so `sort_key` and its respacing are deleted rather than kept for a reason that no longer applies.
 - **`claimed_at` changes owner rather than leaving.** It exists because a fetch happens between choosing and storing — which is now true of the cache and false of the deck.
 - **The lane pool keeps its hard-won parts.** Per-photograph deadlines, the detached-and-abandoned fetch, `BlockingWork`, and exponential source benching all stay: they answer a hostile provider, and v2 does not make providers less hostile.
-- **Eviction becomes LRU by view, and nothing is exempt.** The order is `COALESCE(last_shown_at, cached_at)`, so a photograph that has never been shown counts as of the moment it landed — the newest thing in the cache rather than the oldest. Nothing is protected, so the ceiling is always reachable.
+- **Eviction becomes LRU by view, and one servable file is exempt.** The order is `COALESCE(last_shown_at, cached_at)`, so a photograph that has never been shown counts as of the moment it landed — the newest thing in the cache rather than the oldest. **Amended 2026-08-26:** eviction stops at one file rather than emptying the cache, because a cache holding nothing meets every ceiling and shows nobody anything. That is the only case where the ceiling is not reached, and it is *Always have something to show* applied to the cache.
 
 # Background
 
@@ -279,11 +279,26 @@ The order is `COALESCE(last_shown_at, cached_at)` ascending. A photograph that h
 
 Dropping that protection is safe rather than merely acceptable. `PictureEndpoint` opens the file and takes a `StreamedFile` handle *before* it writes any header, so unlinking a file mid-serve does not disturb the transfer — the handle keeps the bytes whatever happens to the name. And the cards the deck holds are among the most-recently-shown entries anyway, so ordinary eviction reaches them last without being told to. The protection was buying an ordering it already had.
 
+### One floor, added 2026-08-26
+
+Eviction stops at one file rather than emptying the cache.
+
+A cache holding nothing meets any ceiling perfectly and makes the product do the one thing this document's first Design Decision forbids. **Always have something to show** outranks the ceiling, so a single file larger than the whole budget is simply held, and the ceiling is missed rather than the frame. It also makes a very small cache a usable setting instead of a way to switch the product off — which is how the case came up: you can now set the budget tiny on purpose.
+
+**This is not the `protecting:` set coming back**, and the difference is the one the paragraph above is about. That held every photograph the deck was carrying — an unbounded set, growing with the deck, which made the ceiling unreachable in the *ordinary* case. This is exactly one file, and only ever when there is nothing else, so the ceiling is met in every case where meeting it is possible at all.
+
+**One file, not one photograph**, and that is load-bearing. A rendering is a photo somebody can be shown, so dropping an original while keeping its rendering fills the frame *and* meets a ceiling that holding both would have missed. The first implementation exempted the whole photograph and broke `RendererTests`, which had been asserting exactly this since before the exemption existed.
+
+**Releasing what it kept needs no rule of its own.** A cache down to one file has held that file while it was the only thing servable, so it has been shown, and it carries a real `last_shown_at`. Anything arriving afterwards has never been shown and counts as of the moment it arrived — newer by construction, per the ordering at the top of this section. So the survivor is always first out the next time anything else is cached, and a budget that had room for one picture has room for many again without anybody deciding to let go of it.
+
+Eviction logs at `notice` when it finishes over the ceiling, naming both figures, so a cache sitting above its limit is a stated condition rather than something to be inferred.
+
 ## Failure modes this design still has
 
 - **A single hostile source can still starve the cache.** The refresher draws uniformly, so a source that is 98% of the library gets 98% of the draws — which is what happened on 2026-08-26 with the iCloud Drive folder. Source benching still answers it: a source that produces nothing but timeouts is benched with exponential backoff, and its draws are put back. Worth checking that "put back" is cheap now that there is no backlog to put anything back *into* — the answer is that the refresher just picks again.
 - **Eviction churn at the ceiling.** Once the cache is full, one download per draw means one eviction per draw. That is the intended rotation, but it means a library much larger than the ceiling is continuously paying for bytes. The credit rule bounds it to picture rate, which is the right bound; there is no separate throttle and probably should not be one.
 - **A photograph downloaded and then evicted before it is shown.** Possible, and correct: it means everything else in the cache has been shown more recently than that photograph arrived, which is the rotation working.
+- **A single file larger than the ceiling holds the cache above its limit indefinitely.** Deliberate — see *One floor* — and self-clearing, since the next thing cached displaces it. What it is not is bounded: a 50 GB original would sit there until something else arrived, and nothing in the design stops one being fetched in the first place.
 
 ## What running it found
 

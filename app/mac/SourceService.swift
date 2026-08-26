@@ -48,6 +48,15 @@ struct SourceService {
         var enabled: Bool
         var available: Bool
         var unavailableReason: String?
+        /// What to call this source when its locator does not name itself.
+        ///
+        /// **v2 only, which is why the panel is on v2.** A folder is named by
+        /// its last path component; a Photos album's locator is
+        /// `A1B2C3D4-.../L0/040`, whose last component is `040` — worse than
+        /// showing the whole identifier, because it looks like it means
+        /// something. Only the agent can ask the library what an album is
+        /// called.
+        var title: String?
         var photos: Int
         var scannedAt: Date?
 
@@ -57,11 +66,16 @@ struct SourceService {
         /// a person recognises. The full path is shown underneath and in
         /// Configure.
         var name: String {
+            if let title, !title.isEmpty { return title }
             let leaf = URL(filePath: locator).lastPathComponent
             return leaf.isEmpty ? locator : leaf
         }
 
         var isFolder: Bool { kind == "folder" }
+        /// An album, smart album, or Favorites in the system Photos library.
+        /// These are listed in their own panel and are not added, removed, or
+        /// configured by the controls that serve the file-backed ones.
+        var isPhotosCollection: Bool { kind == "photos_collection" }
     }
 
     /// Why an ask did not work, in the terms the panel has something to say
@@ -87,7 +101,7 @@ struct SourceService {
     // MARK: - Asking
 
     func list() async throws -> [Source] {
-        try await send(decoding: [Source].self, "GET", "/v1/sources")
+        try await send(decoding: [Source].self, "GET", "/v2/sources")
     }
 
     /// Adds every path in one request, so a selection of two hundred files is
@@ -115,20 +129,20 @@ struct SourceService {
         guard let body = try? JSONSerialization.data(withJSONObject: entries) else {
             throw Failure.unreadable
         }
-        return try await send(decoding: [Source].self, "POST", "/v1/sources", body: body)
+        return try await send(decoding: [Source].self, "POST", "/v2/sources", body: body)
     }
 
     @discardableResult
     func setRecursive(_ recursive: Bool, of uuid: String) async throws -> Source {
         let body = try JSONEncoder().encode(["recursive": recursive])
         return try await send(
-            decoding: Source.self, "PATCH", "/v1/sources/\(uuid)", body: body)
+            decoding: Source.self, "PATCH", "/v2/sources/\(uuid)", body: body)
     }
 
     /// Answers `204`, so there is nothing to decode — the absence of a refusal
     /// is the whole answer.
     func remove(_ uuid: String) async throws {
-        _ = try await send("DELETE", "/v1/sources/\(uuid)", body: nil)
+        _ = try await send("DELETE", "/v2/sources/\(uuid)", body: nil)
     }
 
     // MARK: - The one request shape

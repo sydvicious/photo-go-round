@@ -25,6 +25,17 @@ struct PhotoGoRoundApp: App {
                     openWindow(id: AboutView.windowID)
                 }
             }
+            // **Replacing the standard item, not adding beside it.** A `Window`
+            // scene puts nothing in the application menu and answers to no
+            // keyboard shortcut, so both are restated here. `replacing:` keeps
+            // the item where every Mac app has it — under About, above Quit —
+            // and `⌘,` is the shortcut `Settings` would have taken for free.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    openWindow(id: SourcesSettingsView.windowID)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
         }
         // An ordinary title bar, and the photograph strictly below it. The
         // controls are not allowed to sit on top of the picture — a window is
@@ -44,12 +55,20 @@ struct PhotoGoRoundApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
 
-        // The standard scene, which puts "Settings…" in the application menu
-        // under About and takes ⌘, — rather than a window of our own that would
-        // have to reimplement both and would sit in the wrong menu.
-        Settings {
+        // **A `Window` of our own rather than the `Settings` scene.** `Settings`
+        // gives the menu item and `⌘,` for free, and this gave both of them
+        // back to get one thing it would not yield: a window the user can
+        // resize. `.windowResizability(.contentMinSize)` was declared on the
+        // `Settings` scene and ignored — the window came up pinned to its
+        // content whatever the content said its maximum was. The two lines in
+        // `.commands` above are the whole price.
+        Window("\(Bundle.main.displayName) Settings", id: SourcesSettingsView.windowID) {
             SourcesSettingsView()
         }
-        .windowResizability(.contentSize)
+        // The content names a floor and the rest is the user's. A list of
+        // sources has no natural length: somebody with forty should be able to
+        // see forty.
+        .windowResizability(.contentMinSize)
+        .defaultPosition(.center)
     }
 }

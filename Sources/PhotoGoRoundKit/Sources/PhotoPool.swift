@@ -120,6 +120,32 @@ public struct PhotoPool {
         return Removal(count: removed, orphaned: orphaned)
     }
 
+    /// What makes two rows the same photograph, whichever source found them.
+    ///
+    /// **File-backed kinds resolve to the absolute path; everything else is
+    /// already globally unique.** A `PHAsset.localIdentifier` names one asset
+    /// in one library no matter how many collections contain it, and a Google
+    /// media item id is the same kind of thing. Only files need assembling,
+    /// because `external_id` is stored relative to the source that found them
+    /// and the same file under two overlapping folders is stored twice under
+    /// two different relative paths.
+    ///
+    /// **A file source's locator is the photograph**, which is why it does not
+    /// join anything — `FileAccess.withPhotoURL` takes the same branch, and the
+    /// two must agree or one file added twice, once on its own and once inside
+    /// a folder, would be two rows.
+    ///
+    /// `SchemaV9` states this rule a second time, in SQL, to backfill rows that
+    /// predate the column. `MigrationTests` holds the two against each other,
+    /// because nothing else would notice them drifting apart.
+    static func identity(of externalID: String, in source: Source) -> String {
+        if source.kind == .file { return source.locator }
+        // The trailing slash is applied in `SourceSpec.init`, so this is a
+        // join and not a guess.
+        if source.kind == .folder { return source.locator + externalID }
+        return externalID
+    }
+
     /// Rows per write transaction. Large enough that a fifty-thousand-photo
     /// folder is not fifty thousand transactions, small enough that it never
     /// holds the single writer lock long enough for a consumer to notice.
@@ -168,9 +194,10 @@ public struct PhotoPool {
             try database.run(
                 """
                 INSERT OR IGNORE INTO photo
-                    (uuid, source_id, external_id, media_type, source_enabled,
+                    (uuid, source_id, external_id, identity, media_type, source_enabled,
                      storage, byte_size, shuffle_key, added_at)
-                VALUES (:uuid, :source, :external, :media, :enabled, :storage, :size, :key, :now);
+                VALUES (:uuid, :source, :external, :identity, :media, :enabled,
+                        :storage, :size, :key, :now);
                 """,
                 [
                     // Durable identity, generated here because it is what
@@ -179,6 +206,11 @@ public struct PhotoPool {
                     "uuid": .text(UUID().uuidString.lowercased()),
                     "source": .int(source.id),
                     "external": .text(photo.externalID),
+                    // The second `OR IGNORE` this statement can hit, and the
+                    // one that matters here: the row is already present from
+                    // *another* source. It stays that source's, and this scan
+                    // moves on. See `SchemaV9`.
+                    "identity": .text(Self.identity(of: photo.externalID, in: source)),
                     "media": .text(photo.mediaType.rawValue),
                     "enabled": SQLValue(source.enabled),
                     "storage": .text(photo.storage.rawValue),

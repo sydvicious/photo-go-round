@@ -22,6 +22,26 @@ final class SourcesModel {
     /// What the agent says is configured, newest last — the order it returns,
     /// which is the order they were added.
     private(set) var sources: [SourceService.Source] = []
+    /// The Photos collections in play, named and in name order.
+    ///
+    /// Their names come from the agent — only it can ask the library what an
+    /// album is called — which is why the panel reads `/v2/sources`.
+    var photoCollections: [SourceService.Source] {
+        sources
+            .filter(\.isPhotosCollection)
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Everything the lower panel lists, in the order the agent returned them.
+    ///
+    /// **Everything that is not a Photos collection, rather than folders and
+    /// files by name.** A kind this panel has not been taught about yet — a
+    /// Google album, a pinned asset — then appears somewhere a person can see
+    /// and remove it, instead of being configured and invisible.
+    var fileSources: [SourceService.Source] {
+        sources.filter { !$0.isPhotosCollection }
+    }
+
     /// Single selection, by `uuid`. The panel is a list of things you act on one
     /// at a time.
     var selection: String? {
@@ -40,13 +60,15 @@ final class SourcesModel {
 
     /// How often the list is re-read while the panel is open.
     ///
-    /// **Minutes, not seconds.** Opening Settings re-reads it, and after that the
-    /// only things that change without this app touching anything are somebody
-    /// using `pgr_ctl`, a drive coming or going, and a scan finishing — none of
-    /// which is worth a request every few seconds. Where a source *stands* is
-    /// not asked over HTTP at all; the app looks at the path itself, every time
-    /// it draws.
-    static let pollInterval = Duration.seconds(180)
+    /// **A minute, because this panel is a status display and not only a form.**
+    /// Two things on it go stale with nobody touching anything: the photograph
+    /// counts, which only the agent knows, and whether a source's volume is
+    /// mounted, which this app works out from the path itself. The second is
+    /// recomputed every time a row draws — but nothing *makes* a row draw, so
+    /// this read is what notices a drive that came or went. Three minutes of a
+    /// wrong count and a stale mount beside it is too long to be looking at,
+    /// and a request a minute costs the agent nothing.
+    static let pollInterval = Duration.seconds(60)
 
     /// How soon to look again after something went wrong.
     ///
@@ -120,8 +142,8 @@ final class SourcesModel {
         poll = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.load()
-                let failed = await self?.trouble != nil
-                let wait = await failed ? (self?.retry ?? Self.retryInterval)
+                let failed = self?.trouble != nil
+                let wait = failed ? (self?.retry ?? Self.retryInterval)
                     : (self?.interval ?? Self.pollInterval)
                 try? await Task.sleep(for: wait)
             }
