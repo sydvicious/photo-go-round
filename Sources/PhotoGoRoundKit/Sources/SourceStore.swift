@@ -100,7 +100,16 @@ public struct SourceStore {
         self.providers = Dictionary(uniqueKeysWithValues: providers.map { ($0.kind, $0) })
     }
 
-    /// The providers Phase 1 ships with: files on disk, and nothing else.
+    /// The providers the agent runs with.
+    ///
+    /// **A kind absent from here cannot be added at all** — `add` refuses a
+    /// request whose kind has no provider, which is what stops a source being
+    /// accepted, never scanned, and reported unavailable forever.
+    ///
+    /// `SystemPhotoLibrary` touches PhotoKit only when something asks it to, so
+    /// registering it costs nothing and prompts nobody. A caller that wants a
+    /// store with no Photos in it — every test — uses the `providers:`
+    /// initialiser.
     public init(
         database: Database,
         fileAccess: any FileAccess = UnsandboxedFileAccess(),
@@ -112,6 +121,7 @@ public struct SourceStore {
             providers: [
                 FolderSourceProvider(fileAccess: fileAccess),
                 FileSourceProvider(fileAccess: fileAccess),
+                PhotosCollectionSourceProvider(library: SystemPhotoLibrary()),
             ],
             bytes: bytes
         )

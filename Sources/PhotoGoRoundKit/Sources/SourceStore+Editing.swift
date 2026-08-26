@@ -26,9 +26,19 @@ extension SourceStore {
     /// What went wrong before anything was written. Every case leaves the
     /// library exactly as it was.
     public enum EditFailure: Error, Sendable, Equatable {
-        /// A kind with no provider — a Photos album, today. It would be
-        /// accepted, never scanned, and reported unavailable forever.
+        /// A kind with no provider registered. It would be accepted, never
+        /// scanned, and reported unavailable forever.
+        ///
+        /// **The question is "is there a provider", not "is it a path".** It
+        /// used to be the latter, which was the same answer while every kind
+        /// was file-backed and the wrong one the moment a Photos album could
+        /// be added.
         case unsupportedKind(SourceKind)
+        /// Locators that are not paths and did not resolve — an album
+        /// identifier naming nothing in this Photos library, or a library that
+        /// cannot be read at all. Refused under the same all-or-none rule as a
+        /// mistyped path, and naming itself.
+        case locatorsNotFound([String])
         /// Paths that are not there. **All of them, and the whole batch is
         /// refused**: a request naming three folders where the second is
         /// misspelled adds none of them, rather than leaving the library in a
@@ -70,14 +80,49 @@ extension SourceStore {
     public func add(
         _ requests: [SourceRequest], to preferences: Preferences,
         fileManager: FileManager = .default, now: Date = Date()
+    ) async throws -> Addition {
+        // **Asked before the lock is taken, and that is not tidiness.**
+        // Validating a locator that is not a path means asking a provider,
+        // which suspends, and `editing` is an `NSLock` — holding one across an
+        // await is unavailable in an async context for good reason. Nothing
+        // here writes, so there is nothing to guard yet.
+        if let unsupported = requests.first(where: { provider(for: $0.kind) == nil })?.kind {
+            throw EditFailure.unsupportedKind(unsupported)
+        }
+        let unresolved = await unresolvedLocators(in: requests, now: now)
+        guard unresolved.isEmpty else { throw EditFailure.locatorsNotFound(unresolved) }
+
+        return try write(requests, to: preferences, fileManager: fileManager, now: now)
+    }
+
+    /// Which of the non-path locators name nothing.
+    ///
+    /// A Photos album is validated by asking its own provider whether the
+    /// collection still resolves — the same question `availability` answers for
+    /// a source that already exists, asked one moment earlier. A library that
+    /// cannot be read fails here too, and should: an album nobody can see is
+    /// not one to accept and then report unavailable forever.
+    private func unresolvedLocators(in requests: [SourceRequest], now: Date) async -> [String] {
+        var bad: [String] = []
+        for request in requests where !request.kind.isFileBacked {
+            guard let provider = provider(for: request.kind) else { continue }
+            let provisional = Source(
+                id: 0, uuid: "", kind: request.kind, locator: request.path, addedAt: now)
+            let standing: SourceAvailability = await provider.availability(of: provisional)
+            if standing != .available { bad.append(request.path) }
+        }
+        return bad
+    }
+
+    /// The part that writes, and therefore the part that holds the lock.
+    private func write(
+        _ requests: [SourceRequest], to preferences: Preferences,
+        fileManager: FileManager, now: Date
     ) throws -> Addition {
         // The write and the reconcile are one act — see `SourceStore.editing`.
         Self.editing.lock()
         defer { Self.editing.unlock() }
 
-        if let unsupported = requests.first(where: { !$0.kind.isFileBacked })?.kind {
-            throw EditFailure.unsupportedKind(unsupported)
-        }
         // The same refusal `setRecursive` gives, so the two verbs agree that a
         // file has no such option — dropping it silently here would store a
         // source that PATCH then claims cannot be configured that way.

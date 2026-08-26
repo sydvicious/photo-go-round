@@ -99,6 +99,36 @@ struct RunCommand {
                 if fetched { environment.announce(.cacheChanged) }
                 return fetched
             },
+            // **Per photograph, because the providers differ by an order of
+            // magnitude.** One scalar query rather than a cached table: this
+            // runs twice per fetch, against a database the process already has
+            // open elsewhere, and a stale answer here would be a bound applied
+            // to the wrong kind of source.
+            deadline: { photoID in
+                guard let database = try? Database(path: databasePath),
+                    let kind = try? database.scalarString(
+                        """
+                        SELECT s.kind FROM photo p
+                          JOIN source s ON s.id = p.source_id
+                         WHERE p.id = :id;
+                        """,
+                        ["id": .int(photoID)])
+                else { return CacheSettings.fileFetchLimit }
+                return SourceKind(kind).isFileBacked
+                    ? CacheSettings.fileFetchLimit : CacheSettings.libraryFetchLimit
+            },
+            // **Put back, not retried.** Whatever was not ready a moment ago is
+            // still not ready, and a card left queued would be asked for again
+            // on the next look-ahead and hang the next lane the same way. Out
+            // of the queue it goes back to being an ordinary undealt
+            // photograph, and gets another turn when the shuffle reaches it.
+            abandoned: { photoID in
+                guard let database = try? Database(path: databasePath) else { return }
+                try? database.run(
+                    "DELETE FROM queue WHERE photo_id = :id;", ["id": .int(photoID)])
+                Log.deck.notice(
+                    "fetch timed out for photo \(photoID, privacy: .public); put back in the pool")
+            },
             describe: { photoID in
                 guard let database = try? Database(path: databasePath),
                     let card = (try? Deck(database: database).card(photoID: photoID)) ?? nil
@@ -119,6 +149,15 @@ struct RunCommand {
             preferences: preferences,
             store: store,
             queueRanShort: topUp,
+            // **What is already on disk, not more of the same.** An empty walk
+            // means every card on hand needs bytes that are not here; dealing
+            // uniformly would hand back another cold one and the next walk
+            // would answer `204` too. This deals from what the cache holds,
+            // which is the same preference the launch bridge makes and for the
+            // same reason — it was simply fenced behind a launch-only flag.
+            queueCameUpEmpty: {
+                Task { await filler.dealWhatIsAlreadyHere(preferences: environment.preferences) }
+            },
             wantsCaching: wantsCaching,
             speak: Self.speak
         )
@@ -517,14 +556,16 @@ struct RunCommand {
         // bytes are in flight would each be replaced by a fresh cold card, and
         // the warm one would come back to a queue that had already moved on.
         //
-        // What the heartbeat is still needed for is the cold start it was
-        // written for. With nothing dealt, nothing can be served; with nothing
-        // served, nothing is dealt. So it fills an *empty* queue and leaves a
-        // merely short one alone.
+        // The heartbeat still answers the cold start it was written for — with
+        // nothing dealt, nothing can be served; with nothing served, nothing is
+        // dealt — but it no longer waits for empty. Dealing is independent of
+        // anybody asking for a picture, so an idle agent spends its idle time
+        // getting the next few ready rather than discovering at the last moment
+        // that they need fetching.
         if filler.isBridging() {
             await filler.seedServableFirst(preferences: preferences)
         } else {
-            await filler.seedIfEmpty(preferences: preferences)
+            await filler.topUpIfShort(preferences: preferences)
         }
     }
 
@@ -572,6 +613,10 @@ struct RunCommand {
         // the eye to the one line on the console that needs no attention.
         case .dropped: Console.alert(event.line)
         case .serving, .cached, .cacheFailed: Console.event(event.line)
+        // Red, and it earns it: this is the failure that hides.
+        case .cacheTimedOut: Console.alert(event.line)
+        // Red as well: a benched source is why nothing from it is appearing.
+        case .sourcePaused: Console.alert(event.line)
         default: Console.note(event.line)
         }
         event.report()
@@ -858,6 +903,56 @@ final class FillerBox: @unchecked Sendable {
     /// firing once. The first tick after a deleted database has an empty pool
     /// and nothing to prefer; what makes the bridge work is that it is still in
     /// force a moment later, once the first sources have been walked.
+    /// Deals cards that can be shown without fetching anything, **whatever the
+    /// queue's depth**.
+    ///
+    /// `seedServableFirst` stops once the queue holds a handful, which is right
+    /// at launch: the queue is empty and the point is to get a few pictures on
+    /// screen. It is exactly wrong when a walk has just come up empty, because
+    /// the queue is then *full* — of cards whose bytes are not here. Observed
+    /// 2026-08-26: twenty queued cards, eighty-eight originals in the cache,
+    /// and every walk answering `nothing to show — out of cards`.
+    ///
+    /// **It fills the queue, where the bridge deals a handful.** The bridge's
+    /// argument against filling is a good one *at launch*: twenty consecutive
+    /// pictures from the one local folder that happens to be warm is the
+    /// opposite of the shuffle being in force, and the ordinary cards are only
+    /// seconds away.
+    ///
+    /// It does not hold here. This runs when a walk has already come up with
+    /// nothing, so the alternative is not a slightly biased queue but a blank
+    /// wall — and dealing three meant *empty answer, three pictures, empty
+    /// again*, every cycle of which is an interval with nothing on screen.
+    /// Measured 2026-08-26 with iCloud Drive wedged: fifteen pictures served
+    /// against thirty-two empty answers.
+    @discardableResult
+    func dealWhatIsAlreadyHere(preferences: Preferences) async -> QueueFiller.Round {
+        let (path, root) = paths()
+        let (bytes, report) = storeAndLog()
+        guard let database = try? Database(path: path), let bytes else { return .alreadyRunning }
+
+        var dealer = PhotoCache(
+            database: database, root: root, settings: preferences.cacheSettings,
+            sources: SourceStore(database: database),
+            queueSize: preferences.queueSize, store: bytes)
+        dealer.log = report
+
+        let resident = bytes.residentPhotoUUIDs
+        let queue = PhotoQueue(database: database, nominalSize: preferences.queueSize)
+        var dealt = 0
+        // Bounded by attempts as well as by depth: `dealServable` answering
+        // true for a card already queued would otherwise spin.
+        for _ in 0..<preferences.queueSize {
+            guard ((try? queue.size()) ?? 0) < preferences.queueSize else { break }
+            guard
+                let more = try? dealer.dealServable(
+                    settings: preferences.deckSettings, resident: resident), more
+            else { break }
+            dealt += 1
+        }
+        return QueueFiller.Round(produced: dealt, exhausted: dealt == 0, skipped: false)
+    }
+
     @discardableResult
     func seedServableFirst(preferences: Preferences) async -> QueueFiller.Round {
         let (path, root) = paths()
@@ -890,7 +985,7 @@ final class FillerBox: @unchecked Sendable {
 
         // The rest of the queue is the ordinary shuffle, so the fetches those
         // cards need start now rather than a tick from now.
-        let round = await seedIfEmpty(preferences: preferences, evenIfNotEmpty: true)
+        let round = await topUpIfShort(preferences: preferences, force: true)
 
         // **The shuffle takes over the moment the queue is full.** The bridge is
         // for the gap at launch and for nothing else; left in force it would be
@@ -921,20 +1016,35 @@ final class FillerBox: @unchecked Sendable {
         if was { Log.deck.notice("launch bridge finished; the shuffle is in force") }
     }
 
-    /// Fills an empty queue and leaves a short one alone. See the call site.
+    /// Fills a queue that is short of its target, and leaves a full one alone.
+    ///
+    /// **It used to fill only an *empty* queue**, on the reasoning that serving
+    /// tops up a merely short one and a heartbeat doing it as well was churn.
+    /// That held while every fetch was a local file read: a queue one card
+    /// short stayed short for a couple of seconds.
+    ///
+    /// It does not hold now. A Photos fetch can take five minutes, and a
+    /// top-up that only follows a serve leaves an idle agent doing nothing
+    /// with the time it has most of — then makes the first picture after idle
+    /// wait on a cold fetch. Dealing has to happen whether or not anybody
+    /// asked, which is what this is.
+    ///
+    /// Still a top-*up*, not a deal-every-tick: a queue at its target is left
+    /// alone, because claiming cards nobody is going to see was the churn the
+    /// earlier design was right to avoid.
     @discardableResult
-    func seedIfEmpty(
-        preferences: Preferences, evenIfNotEmpty: Bool = false
+    func topUpIfShort(
+        preferences: Preferences, force: Bool = false
     ) async -> QueueFiller.Round {
         let filler = makeFiller()
         sizes?.update(preferences)
 
-        if !evenIfNotEmpty {
+        if !force {
             let (path, _) = paths()
             guard let database = try? Database(path: path),
                 let size = try? PhotoQueue(database: database, nominalSize: preferences.queueSize)
                     .size(),
-                size == 0
+                size < preferences.queueSize
             else { return .alreadyRunning }
         }
 

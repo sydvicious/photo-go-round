@@ -88,6 +88,16 @@ public protocol SourceProvider: Sendable {
     /// precisely because it is the answer that changes nothing.
     func availability(of source: Source) async -> SourceAvailability
 
+    /// What to call this source, when its locator is not something to show a
+    /// person.
+    ///
+    /// **Nil for anything path-shaped**, which is why the default is nil: a
+    /// folder is named by its last component and nothing can improve on that.
+    /// An album cannot be — `A1B2C3D4-.../L0/040` renders as `040`, which is
+    /// worse than the raw identifier because it looks like it means something.
+    /// Only the agent can ask the library what an album is called.
+    func title(of source: Source) async -> String?
+
     /// Writes the bytes for one photo to `destination`.
     ///
     /// Only called for photos whose storage is `.materialized`. A referenced
@@ -120,6 +130,9 @@ extension SourceProvider {
     /// The answer that changes nothing, for a provider that has not been taught
     /// to tell the two kinds of missing apart.
     public func availability(of source: Source) async -> SourceAvailability { .available }
+
+    /// A path names itself.
+    public func title(of source: Source) async -> String? { nil }
 
     /// The whole source as one array.
     ///

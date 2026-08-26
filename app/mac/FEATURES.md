@@ -21,7 +21,7 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - A list with icon, name, count, and state; path secondary.
   - `Add Picture Files…` — files only, multiple selection, one source per file.
   - `Add Picture Folder…` — one at a time, with an "Add contents of contained folders" checkbox.
-  - `Add from Photos Library…` — present and disabled, because the provider does not exist yet.
+  - `Add from Photos Library…` — present and disabled. **The provider exists as of 2026-08-25** and `pgr_ctl sources add --album` works; what is missing is the picker, which is Phase 5 of `Apple Photos Plan.md`. Albums have no browser here until then, and the agent is the only process that can list them.
   - Remove a selected source.
   - Configure a selected folder — the button, the context menu, or a double-click — showing the full path and the one option it has.
   - The list is re-read at launch, when the panel appears, and every few seconds while it is open.
@@ -124,8 +124,8 @@ Distinct from the one above, and worth separating because a user hits it as one 
 Three delays compose, and only the first is the scan:
 
 1. **The scan.** Seconds. The panel shows this honestly as no count yet.
-2. **Reaching the queue.** Cards are dealt from one shuffled order over the whole library, so a new source takes its proportional share — but only of *new* deals, and the queue only turns over as pictures are served. A source that is a third of the library reaches a third of a 250-card queue after roughly 250 pictures have been shown.
-3. **Having bytes.** A photograph on a network volume or in Photos is not shown until its original has been fetched. Until then its card is skipped when its turn comes.
+2. **Reaching the queue.** Cards are dealt from one shuffled order over the whole library, so a new source takes its proportional share — but only of *new* deals, and a card is only dealt when there is room for one. Since 2026-08-25 the agent fills the queue to its target whether or not anybody is watching, so a source added to an idle library reaches the queue rather than waiting for somebody to open the window. Past that the queue still turns over only as cards leave it, and serving is what makes them leave: a source that is a third of the library reaches a third of a 250-card queue after roughly 250 pictures have been shown.
+3. **Having bytes.** A photograph on a network volume or in Photos is not shown until its original has been fetched. Until then its card is skipped when its turn comes — and if the fetch itself does not answer within its bound (a minute for a file, fifteen for a photo library) the card is put back in the pool for a later turn rather than holding a queue slot. An undownloaded iCloud Drive file did exactly that on 2026-08-25, with no bound to stop it.
 
 Step 3 is the one that surprises, because it is invisible: the source is present, available, correctly counted, and shows nothing. Two agent-side changes cut it down — serving now asks in advance for the bytes of the cards ahead of the one it showed, and the launch purge that was deleting exactly those cards is gone — but the shape remains. **A large network source warms over hours, not minutes**, and its share of what is *shown* rises with its share of what is *cached*, not with its share of the library.
 

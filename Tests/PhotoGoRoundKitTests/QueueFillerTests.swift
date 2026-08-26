@@ -84,7 +84,7 @@ struct QueueFillerTests {
     /// never yields, so two rounds started together would run one after the
     /// other and never overlap at all — the test would pass or fail on
     /// scheduling rather than on the guard it is about.
-    private func suspendingFiller(_ dealer: MockDealer) -> QueueFiller {
+    private func suspendingFiller(_ dealer: MockDealer) async  -> QueueFiller {
         QueueFiller(
             isShort: { dealer.isShort() },
             produce: {
@@ -213,7 +213,7 @@ struct QueueFillerTests {
     func concurrentFillsDoNotMultiply() async throws {
         let (_, queue, source, ids) = try library(photos: 200, nominal: 100)
         let dealer = MockDealer(queue: queue, sourceID: source, photos: ids)
-        let filling = suspendingFiller(dealer)
+        let filling = await suspendingFiller(dealer)
 
         // Serving calls this once per picture handed over, so a fast consumer
         // starts rounds faster than they finish. Without the guard they would

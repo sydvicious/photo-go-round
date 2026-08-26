@@ -56,6 +56,28 @@ struct OptionsTests {
                 == .source(.add([.init(path: "/tmp/a", kind: .folder, recursive: false)])))
     }
 
+    @Test("An album is added by identifier, and its slashes are not path separators")
+    func addAnAlbum() throws {
+        // `PHAssetCollection.localIdentifier` has the form `UUID/L0/040`. It
+        // reaches the store as typed: no standardizing, no trailing slash, no
+        // question about whether it is a directory.
+        let identifier = "DAD90FB7-1F24-463E-8688-A8504D7283C7/L0/040"
+        #expect(
+            try command(["sources", "add", "--album", identifier])
+                == .source(.add([.init(path: identifier, kind: .photosCollection, recursive: false)])))
+    }
+
+    @Test("A folder and an album can be named in one command")
+    func albumsMixWithFolders() throws {
+        #expect(
+            try command(["sources", "add", "--folder", "/tmp/a", "--album", "ALBUM/L0/040"])
+                == .source(
+                    .add([
+                        .init(path: "/tmp/a", kind: .folder, recursive: false),
+                        .init(path: "ALBUM/L0/040", kind: .photosCollection, recursive: false),
+                    ])))
+    }
+
     @Test("`--file` pins one photo rather than a folder")
     func addAFile() throws {
         #expect(

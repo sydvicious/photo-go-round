@@ -7,6 +7,24 @@ import Foundation
 /// measurements rather than by guess.
 public struct CacheSettings: Sendable, Equatable {
 
+    /// How long a materialize may take before its lane is taken back.
+    ///
+    /// **Two numbers because the providers differ by an order of magnitude.** A
+    /// file on the boot volume has no excuse for taking a minute; one on an
+    /// iCloud Drive folder that is not downloaded locally hands off to `bird`
+    /// and, measured on 2026-08-25, does not return at all. Sixty seconds is
+    /// generous for a read and short enough that a stuck one is a blip.
+    public static let fileFetchLimit = Duration.seconds(60)
+
+    /// The same bound for a photo library, and it has to be far larger.
+    ///
+    /// Three of five downloads in the Phase 1 Photos spike paid a **fixed
+    /// 300-second stall** before transferring normally — 76 kB and 3.4 MB both
+    /// arriving at 301.5 s. A bound that sounds generous, sixty seconds or two
+    /// minutes, would have failed all three of the ones that then succeeded.
+    public static let libraryFetchLimit = Duration.seconds(900)
+
+
     /// Enough to keep a provider's latency covered without turning a warm-up
     /// into a thundering herd against one disk. Four is the number every package
     /// manager settled on, for the same reason: fetching is nearly all latency.

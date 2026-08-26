@@ -34,6 +34,18 @@ struct PictureEndpoint {
     /// that shortens the queue and therefore the only thing that can notice it
     /// has run low. The host decides what to do about it; this just says so.
     let queueRanShort: @Sendable () -> Void
+    /// Called when a walk went through every card and none could be served.
+    ///
+    /// **A different event from the queue running short, and it wants a
+    /// different answer.** Running short means deal more, and dealing draws
+    /// uniformly from the whole library. Coming up empty means the cards on
+    /// hand all need bytes that are not here — so dealing uniformly hands back
+    /// another cold one, and the walk answers `204` again. Observed 2026-08-26
+    /// with eighty-eight originals in the cache and a queue of twenty that
+    /// could not produce one of them.
+    ///
+    /// The host's answer is to deal from what is already on disk.
+    var queueCameUpEmpty: @Sendable () -> Void = {}
     /// Where a picture whose bytes are not local goes. Serving asks for it and
     /// moves on, so a miss costs this request a skip rather than a wait.
     var wantsCaching: @Sendable (Int64) -> Void = { _ in }
@@ -250,7 +262,6 @@ struct PictureEndpoint {
             let size = box.map { PhotoStore.Size(width: $0.width, height: $0.height) }
 
             while let served = try await context.cache.serve(to: consumerID, fitting: size) {
-                queueRanShort()
 
                 // What a re-render would decode from. The served URL, except
                 // for a held rendering the client cannot accept, where it
@@ -308,6 +319,15 @@ struct PictureEndpoint {
                     }
                     headers["X-PGR-Cache"] = "hit"
                     try? context.deck.markDelivered(photoID: served.card.id)
+                    // **A deal follows a picture that reached somebody**, not a
+                    // request that arrived. Rung at the top of this loop it
+                    // fired once per card *taken*, so a request walking past
+                    // three unrenderable photographs bought four fresh cards —
+                    // against `PhotoCache`'s own statement that "a skip no
+                    // longer buys a fresh card". `markDelivered` is the
+                    // endpoint's existing notion of a 200 in hand, so this
+                    // belongs beside it and nowhere else.
+                    queueRanShort()
                     report(
                         request, status: 200, detail: served.card.externalID,
                         card: served.card, bytes: stream.byteCount, cache: .hit,
@@ -325,6 +345,15 @@ struct PictureEndpoint {
                         continue
                     }
                     try? context.deck.markDelivered(photoID: served.card.id)
+                    // **A deal follows a picture that reached somebody**, not a
+                    // request that arrived. Rung at the top of this loop it
+                    // fired once per card *taken*, so a request walking past
+                    // three unrenderable photographs bought four fresh cards —
+                    // against `PhotoCache`'s own statement that "a skip no
+                    // longer buys a fresh card". `markDelivered` is the
+                    // endpoint's existing notion of a 200 in hand, so this
+                    // belongs beside it and nowhere else.
+                    queueRanShort()
                     report(
                         request, status: 200, detail: served.card.externalID,
                         card: served.card, bytes: stream.byteCount)
@@ -348,6 +377,15 @@ struct PictureEndpoint {
                     headers["X-PGR-Pixels"] = "\(rendered.width)x\(rendered.height)"
                     headers["X-PGR-Cache"] = "miss"
                     try? context.deck.markDelivered(photoID: served.card.id)
+                    // **A deal follows a picture that reached somebody**, not a
+                    // request that arrived. Rung at the top of this loop it
+                    // fired once per card *taken*, so a request walking past
+                    // three unrenderable photographs bought four fresh cards —
+                    // against `PhotoCache`'s own statement that "a skip no
+                    // longer buys a fresh card". `markDelivered` is the
+                    // endpoint's existing notion of a 200 in hand, so this
+                    // belongs beside it and nowhere else.
+                    queueRanShort()
                     report(
                         request, status: 200, detail: served.card.externalID,
                         card: served.card, bytes: Int64(rendered.bytes.count), cache: .miss, cacheBytes: store.totals.byteCount,
@@ -398,7 +436,7 @@ struct PictureEndpoint {
             // filler. The overshoot the old note worried about is prevented
             // where it belongs — `FillerBox.Gauge.isShort` still counts cards in
             // flight as the queue's the moment the queue has anything at all.
-            queueRanShort()
+            queueCameUpEmpty()
             report(request, status: 204, detail: "no photos available")
             return .noContent()
         } catch {

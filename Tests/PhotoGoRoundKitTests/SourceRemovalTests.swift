@@ -63,9 +63,9 @@ struct SourceRemovalTests {
         }
 
         /// Adds the folder through the same call `pgr_ctl` and the service make.
-        func add(to preferences: Preferences, recursive: Bool = true) throws -> Source {
+        func add(to preferences: Preferences, recursive: Bool = true) async throws -> Source {
             try #require(
-                try store.add([.folder(folder.path, recursive: recursive)], to: preferences)
+                try await store.add([.folder(folder.path, recursive: recursive)], to: preferences)
                     .added.first)
         }
 
@@ -89,7 +89,7 @@ struct SourceRemovalTests {
     func removingASourceFreesItsBytes() async throws {
         let scratch = Scratch()
         let fixture = try await Fixture(photos: ["one.png", "two.png", "three.png"])
-        let source = try fixture.add(to: scratch.preferences)
+        let source = try await fixture.add(to: scratch.preferences)
         try await fixture.materialize(source)
 
         #expect(try fixture.store.pool.size(forSource: source.id) == 3)
@@ -116,7 +116,7 @@ struct SourceRemovalTests {
     func removingAnEmptySourceFreesNothing() async throws {
         let scratch = Scratch()
         let fixture = try await Fixture(photos: ["one.png"])
-        let source = try fixture.add(to: scratch.preferences)
+        let source = try await fixture.add(to: scratch.preferences)
         _ = await fixture.store.refresh(source)
 
         // Referenced, never copied — so there is nothing of ours to delete.
@@ -128,7 +128,7 @@ struct SourceRemovalTests {
     func withoutAByteIndexNothingIsFreedAndItShows() async throws {
         let scratch = Scratch()
         let fixture = try await Fixture(photos: ["one.png", "two.png"])
-        let source = try fixture.add(to: scratch.preferences)
+        let source = try await fixture.add(to: scratch.preferences)
         try await fixture.materialize(source)
         #expect(fixture.held > 0)
 
@@ -146,7 +146,7 @@ struct SourceRemovalTests {
     func recursionOffDropsNestedPhotographs() async throws {
         let scratch = Scratch()
         let fixture = try await Fixture(photos: ["top.png"], nested: ["deep.png"])
-        let source = try fixture.add(to: scratch.preferences, recursive: true)
+        let source = try await fixture.add(to: scratch.preferences, recursive: true)
         try await fixture.materialize(source)
 
         #expect(try fixture.store.pool.size(forSource: source.id) == 2)
@@ -171,7 +171,7 @@ struct SourceRemovalTests {
     func recursionOffIsAlsoNoticedByARefresh() async throws {
         let scratch = Scratch()
         let fixture = try await Fixture(photos: ["top.png"], nested: ["deep.png", "deeper.png"])
-        let source = try fixture.add(to: scratch.preferences, recursive: true)
+        let source = try await fixture.add(to: scratch.preferences, recursive: true)
         try await fixture.materialize(source)
         #expect(try fixture.store.pool.size(forSource: source.id) == 3)
 
@@ -187,7 +187,7 @@ struct SourceRemovalTests {
     func recursionOnFindsThemAgain() async throws {
         let scratch = Scratch()
         let fixture = try await Fixture(photos: ["top.png"], nested: ["deep.png"])
-        let source = try fixture.add(to: scratch.preferences, recursive: false)
+        let source = try await fixture.add(to: scratch.preferences, recursive: false)
         _ = await fixture.store.refresh(source)
         #expect(try fixture.store.pool.size(forSource: source.id) == 1)
 
@@ -202,7 +202,7 @@ struct SourceRemovalTests {
         let fixture = try await Fixture(photos: ["one.png"])
         let file = fixture.folder.url.appending(path: "one.png").path(percentEncoded: false)
         let source = try #require(
-            try fixture.store.add([.file(file)], to: scratch.preferences).added.first)
+            try await fixture.store.add([.file(file)], to: scratch.preferences).added.first)
 
         #expect(throws: SourceStore.EditFailure.optionNotAvailable(option: "recursive", kind: .file)) {
             try fixture.store.setRecursive(true, for: source, in: scratch.preferences)
@@ -215,7 +215,7 @@ struct SourceRemovalTests {
     func offlineAndUncachedIsSkippedNotDeleted() async throws {
         let scratch = Scratch()
         let fixture = try await Fixture(photos: ["one.png", "two.png"])
-        let source = try fixture.add(to: scratch.preferences)
+        let source = try await fixture.add(to: scratch.preferences)
         _ = await fixture.store.refresh(source)
         // Referenced, so the bytes *are* the files on the source. Nothing of
         // ours is holding a copy.

@@ -10,6 +10,8 @@ This is a decades-old itch, chased through a friend's "Desktop Picture" extensio
 
 Each phase carries its own spike rather than front-loading them all, so the first running thing arrives as early as possible. Each new surface is also the first real test of assumptions made before it, so expect sandboxing and architecture decisions to move as the sequence proceeds — the design below is arranged to absorb that rather than to resist it.
 
+**The Mac is finished to 1.0 before any other device is started.** Decided 2026-08-25. Every non-Mac phase below — the iOS and iPadOS app, the iOS widget, the Watch, tvOS and visionOS — is deferred past that line and keeps its number rather than being renumbered around. What stays in front of 1.0 is the Mac: the app, the Apple Photos provider, the screensaver, the wallpaper, the Mac widget, and watching for changes.
+
 - **Phase 1 — complete.** Staged 2026-08-17 and left alone; the gate below is met. **The Mac server for pictures.** `PhotoGoRoundKit` — SQLite schema and migrator, the pool, the deck, the queue, the source protocol and its file-backed providers, the cache — plus the headless macOS process that owns it, **run from the command line**. Folder and explicitly-selected-file sources. No UI at all, and no packaging: registering as a login item is a much later concern, and nothing in Phase 1 should depend on it.
   - **Exit gate: the server is staged and running, and stays running.** Concretely:
 
@@ -107,16 +109,16 @@ Each phase carries its own spike rather than front-loading them all, so the firs
   - **UI for managing them in the app**: a Settings panel showing what is configured with its counts and state, pickers to add, and buttons to remove and to reconfigure. See `app/mac/FEATURES.md`.
   - Diagnostic panels accrete later, as the phases that need them arrive — not in Phase 3.
   - **The app's own features have their own plan**: `app/mac/FEATURES.md`, starting with a Settings panel that adds and removes sources. That reverses *The Mac app as instrument panel*'s "it manages no sources", and the reversal is argued there rather than here.
-- **Phase 4** — iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
-- **Phase 5** — iOS widget: WidgetKit extension sharing an App Group container, serving from the queue in the timeline provider.
+- **Phase 4 — deferred past 1.0.** iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
+- **Phase 5 — deferred past 1.0.** iOS widget: WidgetKit extension sharing an App Group container, serving from the queue in the timeline provider.
 - **Phase 6** — Mac screensaver: a `.saver` bundle, one photo at a time, sized to fit, panning slowly along whichever axis would otherwise be black.
   - Spike first: can a saver inside `legacyScreenSaver` make an HTTP request? That is the whole question now — it needs no file access to the container and no write access to the deck.
 - **Phase 7** — Mac wallpaper: per-screen `NSWorkspace.setDesktopImageURL`, scheduled by the server.
 - **Phase 8** — Mac widget: WidgetKit extension for Notification Center and the desktop.
   - No App Group spike: the extension asks the service for an image at its family size, inside its timeline budget, and never opens the container.
-- **Phase 9** — Apple Watch: a watchOS app plus its WidgetKit widget, fed photos by the paired iPhone.
+- **Phase 9 — deferred past 1.0.** Apple Watch: a watchOS app plus its WidgetKit widget, fed photos by the paired iPhone.
   - Spike first: confirm a photo survives the watch's widget rendering modes legibly, and measure what `WCSession.transferFile` costs for a rolling set of small derivatives.
-- **Phase 10** — Other platforms: tvOS top shelf, visionOS wall-mounted frame.
+- **Phase 10 — deferred past 1.0.** Other platforms: tvOS top shelf, visionOS wall-mounted frame.
 - **Phase 11** — Google Photos provider behind the same source protocol. Last because of its OAuth flow, not because of anything structural.
 
 Distribution is a 1.0 concern, not an 0.1 one: 0.1 runs from Xcode and from a locally built binary. What 1.0 needs — packaging, agent registration, screensaver installation, and an update mechanism — is worked out under *Shipping it* below, where the conclusion is that `SMAppService` probably removes the need for an installer altogether.
@@ -146,7 +148,9 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **One deck, shared by every surface.** Wallpaper, screensaver, and widgets all deal from the same sequence, so the repeat window holds across every surface together — a photo just shown on one cannot immediately reappear on another. Dealing is therefore a cross-process atomic operation, and the cache must stay ahead of the *fastest* consumer, not the average one.
 - **The Watch app is a companion and requires the paired iPhone.** Not an independent watchOS app, even though the platform permits one. With no Photos framework and no sources of its own, an unpaired watch has nothing to show — so the dependency is declared up front rather than degraded into at runtime.
 - **One global queue of ready pictures, and consumers just take the head.** Producers fill it, clients drain it, and two displays get different pictures because serving *removes* the entry rather than because they were dealt disjoint sets in advance. There are no per-consumer reservations, no hand sizes, and nothing to reclaim from a display that goes away.
-- **The queue's size is a target, not a ceiling.** Dealing is paced to pictures served and a card returning from a completed fetch is never refused, so the depth floats around the target rather than being held at it — refusing work already done would be worse than a number that floats. Nothing is evicted when an entry arrives; serving is the only thing that shortens the queue.
+- **The queue's size is a target, not a ceiling.** A card returning from a completed fetch is never refused, so the depth floats around the target rather than being held at it — refusing work already done would be worse than a number that floats. Nothing is evicted when an entry arrives; serving is the only thing that shortens the queue.
+- **Dealing happens whether or not anybody asked.** The heartbeat tops up a queue short of its target and leaves a full one alone. **Changed 2026-08-25, reversing an earlier decision made on evidence it did not have**: dealing used to be paced to pictures served, on the reasoning that a heartbeat filling a merely short queue was churn. That was affordable while every fetch was a local file read and a queue one card short stayed short for seconds. A Photos fetch can take five minutes, so the old rule leaves an idle agent doing nothing with the time it has most of, then makes the first picture after idle wait on a cold fetch.
+- **A deal follows a picture that reached somebody, not a request that arrived.** The filler is rung beside `markDelivered` — the endpoint with a 200 in hand — and nowhere else. Rung at selection instead, as it was until 2026-08-25, one request that walked past three unrenderable photographs bought four fresh cards, against this document's own rule that a skip buys nothing.
 
 *Sources*
 
@@ -510,7 +514,9 @@ Three moving parts, and the point of naming them separately is that none of them
 
 **The refreshers put things in and take things out.** One task per source, running concurrently, each against its own database connection. A source is enumerated, diffed against what the pool holds for it, and the difference applied. A refresher touches the queue never, and knows about other sources not at all.
 
-**The queue maintainer always runs.** It deals cards from the pool as pictures are served — the bytes are fetched by a separate queue that serving fills — and serves the head to whoever asks. It does not know what a provider is. It does not know a refresh is happening.
+**The queue maintainer always runs.** It deals cards from the pool to keep the queue at its target, on its own clock rather than waiting to be asked — the bytes are fetched by a separate queue that filling feeds — and serves the head to whoever asks. It does not know what a provider is. It does not know a refresh is happening.
+
+Dealing was paced to pictures served until 2026-08-25. See *Dealing happens whether or not anybody asked*: prefetching only while somebody is watching is a poor trade once a single fetch can take five minutes.
 
 That separation is what makes the concurrency safe to have. A folder on a dead network share takes its timeout inside its own task; a provider that hangs hangs alone; and the queue goes on dealing throughout, because a refresh is a series of short write transactions against a database that permits readers continuously. It is also why the earlier measurement holds: the queue's latency was unchanged with a full twenty-thousand-photo scan running beside it.
 

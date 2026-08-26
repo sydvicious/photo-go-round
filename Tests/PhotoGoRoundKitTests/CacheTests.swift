@@ -40,7 +40,7 @@ struct CacheTests {
             )
             try cache.prepare()
 
-            source = try store.add(kind: .folder, locator: folder.path, recursive: true)
+            source = try await store.add(kind: .folder, locator: folder.path, recursive: true)
             await store.refresh(source)
             if materialized {
                 try library.database.run("UPDATE photo SET storage = 'materialized';")
@@ -214,7 +214,7 @@ struct CacheTests {
         #expect(await provider.existence(of: "a.png", in: source) == .present)
         #expect(await provider.existence(of: "ghost.png", in: source) == .absent)
 
-        let unreachable = try fixture.store.add(kind: .folder, locator: "/Volumes/NotMounted/photos")
+        let unreachable = try await fixture.store.add(kind: .folder, locator: "/Volumes/NotMounted/photos")
         let verdict = await provider.existence(of: "a.png", in: unreachable)
         #expect(verdict != .absent)
         if case .unknown = verdict {} else {
@@ -475,7 +475,7 @@ struct CacheTests {
         let second = TemporaryFolder(name: "pgr-cache-src2")
         defer { _ = second }
         for name in ["c.png", "d.png", "e.png"] { second.write(name, bytes: 100) }
-        let other = try fixture.store.add(kind: .folder, locator: second.path, recursive: true)
+        let other = try await fixture.store.add(kind: .folder, locator: second.path, recursive: true)
         await fixture.store.refresh(other)
         try fixture.library.database.run("UPDATE photo SET storage = 'materialized';")
         try await fixture.produceAll()
@@ -499,7 +499,7 @@ struct CacheTests {
         let gone = TemporaryFolder(name: "pgr-cache-gone")
         defer { _ = gone }
         for name in ["c.png", "d.png"] { gone.write(name, bytes: 100) }
-        let missing = try fixture.store.add(kind: .folder, locator: gone.path, recursive: true)
+        let missing = try await fixture.store.add(kind: .folder, locator: gone.path, recursive: true)
         await fixture.store.refresh(missing)
         try fixture.library.database.run("UPDATE photo SET storage = 'materialized';")
         try await fixture.produceAll()

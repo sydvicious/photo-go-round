@@ -35,7 +35,7 @@ struct StarvedQueueTests {
     /// one event that restarts dealing as the one event that cannot occur. The
     /// endpoint therefore rings the filler on the empty answer — asserted in
     /// `InFlightStarvationTests.emptyAnswerRestartsTheFiller` — and the
-    /// heartbeat's `seedIfEmpty` remains the backstop.
+    /// heartbeat's `topUpIfShort` remains the backstop.
     ///
     /// This test pins the half that lives in the deck: declining is a *decision*
     /// and never an error, so it costs nothing and can be asked again

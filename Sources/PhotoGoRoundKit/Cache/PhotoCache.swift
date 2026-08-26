@@ -463,14 +463,13 @@ public struct PhotoCache {
             bytes, for: PhotoStore.Key(photoUUID: card.uuid, size: size),
             sourceUUID: card.sourceUUID, pathExtension: pathExtension)
         // Logged here rather than at the caller, so a second thing that renders
-        // cannot do it silently. Where the pixels were read from is worth
-        // saying: a referenced photograph is resized straight off the disk it
-        // lives on, and this is the only thing the cache ever holds for one.
+        // cannot do it silently. **One line, one event**: where the pixels
+        // were decoded from is a different fact from a rendering being kept,
+        // and putting both in one sentence made neither easy to find.
         log(
             .rendered(
                 photo: card.externalID, source: card.sourceID,
-                at: "\(size.width)x\(size.height)", bytes: bytes.count,
-                from: card.storage == .referenced ? "its file on disk" : "the cached original"))
+                at: "\(size.width)x\(size.height)", bytes: bytes.count))
         return url
     }
 

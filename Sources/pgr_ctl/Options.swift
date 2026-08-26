@@ -150,6 +150,23 @@ struct Options {
             case "--file":
                 newSources.append(
                     NewSource(path: try next(argument), kind: .file, recursive: false))
+            case "--album":
+                // **One flag, recorded two ways, which is what this parser is
+                // for.** Positionals are collected first and interpreted last,
+                // so both readings are kept and the command word decides which
+                // one meant anything: `sources add` takes the source,
+                // `photos-spike` takes the target. `--folder` has always worked
+                // this way — every other command simply ignores it.
+                //
+                // The value is a `PHAssetCollection` local identifier,
+                // `UUID/L0/040`, opaque here and everywhere: nothing
+                // standardizes it or reads its slashes as path separators. For
+                // the spike it may equally be a title, so a run aimed at one
+                // album needs no identifier copied out of the listing above it.
+                let album = try next(argument)
+                options.albumIdentifier = album
+                newSources.append(
+                    NewSource(path: album, kind: .photosCollection, recursive: false))
             case "--recursive", "-r":
                 // Only meaningful attached to a folder.
                 throw OptionsError.misplacedRecursive
@@ -180,11 +197,6 @@ struct Options {
                 options.listAlbums = true
             case "--probe":
                 options.probeCount = try nextInt(argument)
-            case "--album":
-                // Identifier or title, so a spike aimed at one album does not
-                // need the identifier copied out of the listing above it.
-                options.albumIdentifier = try next(argument)
-
             case "--no-default-values":
                 options.noDefaultValues = true
             case "--follow", "-f":
@@ -248,7 +260,7 @@ struct Options {
             switch verb(1) {
             case "add":
                 guard !newSources.isEmpty else {
-                    throw OptionsError.missingValue(flag: "sources add --folder|--file")
+                    throw OptionsError.missingValue(flag: "sources add --folder|--file|--album")
                 }
                 return .source(.add(newSources))
             case "list", nil:
@@ -352,9 +364,12 @@ struct Options {
 
         COMMANDS
           status                    Sources, pool, queue, cache, shuffle position
-          sources add [--folder [--recursive] <p>] [--file <p>] …
+          sources add [--folder [--recursive] <p>] [--file <p>] [--album <id>] …
                                     Add sources. Repeatable, and `--recursive`
                                     applies only to the folder it precedes.
+                                    `--album` takes a Photos collection
+                                    identifier, and nothing is added unless it
+                                    resolves in this Photos library.
                                     Written to preferences, which are the truth;
                                     the source table is a projection
           sources list              Sources with their photo counts and state
@@ -394,6 +409,8 @@ struct Options {
               --container <dir>   Storage root
           -d, --database <path>   Database file
               --cache-root <dir>  Cache root
+              --album <id>        A Photos album, by local identifier, for
+                                  `sources add`. Repeatable
           -n, --count <n>         How many to peek at, or rounds to fill. Default: 10
               --source <id>       Scope `cache clear` to one source
               --unavailable       Scope `cache clear` to sources that are gone

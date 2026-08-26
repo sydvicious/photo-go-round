@@ -77,6 +77,24 @@ public enum QueueEvent: Sendable, Equatable {
     /// after all*.
     case cached(photo: String, source: Int64?, bytes: Int64, pending: Int)
     case cacheFailed(photo: String, source: Int64?, because: String, pending: Int)
+    /// A fetch that never answered and had its lane taken back.
+    ///
+    /// **Its own case, so it can be red.** A provider that fails says so; a
+    /// provider that simply never returns says nothing at all, and the only
+    /// visible trace was a queue permanently one card short. `occurrence`
+    /// counts how many times this photograph has done it in this run, because
+    /// the same file timing out repeatedly is a different problem from a slow
+    /// afternoon and needs to be told apart at a glance.
+    case cacheTimedOut(
+        photo: String, source: Int64?, after: Duration, occurrence: Int, pending: Int)
+    /// A source that produced nothing but timeouts, and is being left alone
+    /// for a while.
+    ///
+    /// **Timeouts on their own are not the problem; a source that only produces
+    /// them is.** Every fetch slot spent on a source that never answers is a
+    /// slot the healthy sources never get, and the queue starves while the
+    /// photographs it needs sit on local disk.
+    case sourcePaused(source: Int64?, after: Int, until: Duration)
     /// Turned away because the backlog is full. Not a failure and not a
     /// blacklisting — the photograph is simply not asked for this time, and the
     /// next look-ahead that reaches it will ask again.
@@ -89,7 +107,7 @@ public enum QueueEvent: Sendable, Equatable {
     /// fetched — its original is the file on disk — and the only thing ever kept
     /// for one is this. A source of referenced photographs could fill gigabytes
     /// of renderings without printing a line.
-    case rendered(photo: String, source: Int64?, at: String, bytes: Int, from: String)
+    case rendered(photo: String, source: Int64?, at: String, bytes: Int)
     /// Bytes asked for in advance, for cards still sitting in the serve queue.
     ///
     /// Prefixed `CACHE:` because it is about filling the cache, not about what
@@ -109,6 +127,12 @@ public enum QueueEvent: Sendable, Equatable {
     /// naming a source still uses the `uuid`, which is the identity that is
     /// stable across a rebuilt database; this one is not, and does not need to
     /// be for a line somebody is reading now.
+    /// Bytes as a person reads them. The cache lines used to print raw counts
+    /// while every status line printed `332.6 MB`.
+    static func bytes(_ count: Int64) -> String {
+        count == 0 ? "0 bytes" : count.formatted(.byteCount(style: .file))
+    }
+
     static func name(_ photo: String, _ source: Int64?) -> String {
         source.map { "\(photo) (source \($0))" } ?? photo
     }
@@ -134,14 +158,25 @@ public enum QueueEvent: Sendable, Equatable {
             "CACHE: \(Self.name(photo, source)) is already here, skipping it — \(pending) waiting"
         case .caching(let photo, let source, let pending):
             "CACHE: fetching \(Self.name(photo, source)) — \(pending) waiting"
-        case .cached(let photo, let source, let bytes, let pending):
-            "CACHE: \(Self.name(photo, source)) fetched, \(bytes) bytes, back on the queue — \(pending) waiting"
+        case .cached(let photo, let source, let bytes, _):
+            // **One line, one event: the original is now in the cache.** It
+            // used to say "fetched, N bytes, back on the queue", which is three
+            // facts about the network and the queue and never the word anybody
+            // reading a console is looking for.
+            "CACHE: \(Self.name(photo, source)) original cached, \(Self.bytes(Int64(bytes)))"
         case .cacheFailed(let photo, let source, let because, let pending):
             "CACHE: \(Self.name(photo, source)) failed — \(because), \(pending) waiting"
+        case .cacheTimedOut(let photo, let source, let after, let occurrence, let pending):
+            "CACHE: \(Self.name(photo, source)) did not answer in \(after) — put back in the pool"
+                + (occurrence > 1 ? "; \(occurrence) times now for this file" : "")
+                + ", \(pending) waiting"
+        case .sourcePaused(let source, let after, let until):
+            "CACHE: source \(source.map(String.init) ?? "?") paused for \(until)"
+                + " — \(after) fetches in a row did not answer"
         case .cacheRefused(let photo, let source, let pending):
             "CACHE: \(Self.name(photo, source)) not asked for — backlog full at \(pending) waiting"
-        case .rendered(let photo, let source, let at, let bytes, let from):
-            "CACHE: resized \(Self.name(photo, source)) to \(at) from \(from), kept \(bytes) bytes"
+        case .rendered(let photo, let source, let at, let bytes):
+            "CACHE: resized \(Self.name(photo, source)) to \(at), \(Self.bytes(Int64(bytes)))"
         case .lookedAhead(let cards, let asked, let pending):
             "CACHE: looked ahead \(cards) cards, asked for \(asked) — \(pending) waiting"
         case .configurationChanged(let what):

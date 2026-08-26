@@ -122,13 +122,23 @@ public struct FolderSourceProvider: SourceProvider {
         })
     }
 
+    /// **Off the cooperative pool, because `copyItem` does not yield.**
+    ///
+    /// Reading a file that happens to be an undownloaded iCloud Drive item
+    /// hands off to `bird` and blocks — measured on 2026-08-26 as *never
+    /// returning*, not merely slowly. On a cooperative thread that is one fewer
+    /// thread for the whole runtime; on `BlockingWork`'s queue it is one thread
+    /// of Dispatch's, and the agent goes on serving.
     public func materialize(
         externalID: String,
         from source: Source,
         to destination: URL
     ) async throws -> MaterializedFile {
-        try fileAccess.withPhotoURL(in: source, externalID: externalID) { fileURL in
-            try Self.copy(fileURL, to: destination, externalID: externalID)
+        let fileAccess = self.fileAccess
+        return try await BlockingWork.run {
+            try fileAccess.withPhotoURL(in: source, externalID: externalID) { fileURL in
+                try Self.copy(fileURL, to: destination, externalID: externalID)
+            }
         }
     }
 

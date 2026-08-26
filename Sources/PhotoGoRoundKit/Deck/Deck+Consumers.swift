@@ -290,7 +290,8 @@ extension Deck {
                     threshold: state.dealSeq, claimedBefore: claimedBefore,
                     servableOnly: servableOnly)
                 guard unconstrained > 0 else { return nil }
-                guard try dealablePopulation() <= window + 1 else { return nil }
+                guard try dealablePopulation(servableOnly: servableOnly) <= window + 1
+                else { return nil }
                 threshold = state.dealSeq
                 if threshold != state.passStartSeq {
                     // A write, so it takes the writer — and only here, where
@@ -419,8 +420,20 @@ extension Deck {
     /// Distinct from `poolSize()`, which counts retired photographs too — the
     /// window is measured against this number, because a photograph that can
     /// never be dealt again can never be freed by waiting either.
-    func dealablePopulation() throws -> Int {
-        try database.scalarInt(Self.dealablePopulationSQL) ?? 0
+    ///
+    /// **`servableOnly` narrows it to the ones with bytes, and that is the
+    /// whole of the 2026-08-26 wedge.** The pass fires when the population is
+    /// small enough that waiting can never free anybody, and *which* population
+    /// depends on what is being asked for. Asked for a servable card while
+    /// measuring the library, the deck saw 445 against a 223 window, concluded
+    /// that serving would open the window shortly, and waited — while the 133
+    /// photographs that had bytes were every one of them inside it. Nothing
+    /// served, so the ordinal never advanced, so the window never opened.
+    /// Waiting is only ever the answer for a population that can actually free
+    /// someone.
+    func dealablePopulation(servableOnly: Bool = false) throws -> Int {
+        try database.scalarInt(
+            servableOnly ? Self.servablePopulationSQL : Self.dealablePopulationSQL) ?? 0
     }
 
     /// Marks a photo as shown. **This is the deal**: the ordinal advances,
@@ -517,6 +530,17 @@ extension Deck {
         \(candidatePredicate)
           AND (p.storage = 'referenced'
                OR EXISTS (SELECT 1 FROM servable_now s WHERE s.uuid = p.uuid))
+        """
+
+    /// The servable half of `dealablePopulationSQL`: what can cycle *and* has
+    /// bytes. Deliberately ignores the window and the claim, because it answers
+    /// "how many could ever be freed", not "how many are free now".
+    static let servablePopulationSQL = """
+        SELECT COUNT(*) FROM photo p
+         WHERE p.source_enabled = 1 AND p.media_type = 'image'
+           AND p.render_failures < \(Deck.renderFailureLimit)
+           AND (p.storage = 'referenced'
+                OR EXISTS (SELECT 1 FROM servable_now s WHERE s.uuid = p.uuid));
         """
 
     static let servableCandidateCountSQL = """

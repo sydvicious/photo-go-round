@@ -26,7 +26,17 @@ public struct SourceSpec: Sendable, Equatable, Hashable {
         // — so a folder written one way and read another is two sources that
         // are really one. Normalising at construction means every path agrees
         // without any of them having to remember.
-        self.locator = kind == .file || locator.hasSuffix("/") ? locator : locator + "/"
+        // **A folder ends in a slash; nothing else does.** The locator is the
+        // identity that preferences, reconciliation, and duplicate detection
+        // all match on as a bare string, so it has to have exactly one
+        // spelling — and for a folder the two spellings a picker and a command
+        // line produce are different strings for the same directory.
+        //
+        // For a kind that is not a path the same argument gives the opposite
+        // answer: one spelling means *the identifier exactly as the library
+        // gave it*. A `PHAssetCollection` identifier with a slash appended
+        // would be stored once and never again match what PhotoKit returns.
+        self.locator = kind == .folder && !locator.hasSuffix("/") ? locator + "/" : locator
         self.recursive = recursive
         self.enabled = enabled
     }

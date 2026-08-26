@@ -146,7 +146,13 @@ struct CacheQueueTests {
         let queue = CacheQueue(concurrency: 1, fetch: fetches.work, log: { _ in })
 
         await queue.request(3)
-        try await eventually("the first fetch") { fetches.all.count == 1 }
+        // **Idle, not merely fetched-once.** The dedup is released by
+        // `finished`, which runs after the fetch returns — so observing the
+        // fetch itself is a moment too early and asking again there is refused
+        // as a duplicate. The window was small enough to get away with until
+        // the fetch began running against a deadline, which widened it.
+        try await eventually("the first fetch to be retired") { await !queue.isBusy }
+        #expect(fetches.all == [3])
         await queue.request(3)
         try await eventually("the second fetch") { fetches.all.count == 2 }
         #expect(fetches.all == [3, 3])
@@ -387,5 +393,481 @@ struct FinishedFetchReportingTests {
         // exact: one still queued, then none — and never counting itself.
         #expect(seen.all.count == 3)
         #expect(Array(seen.all.suffix(2)) == [1, 0], "reported \(seen.all)")
+    }
+}
+
+/// A fetch that takes too long, and what the queue owes everyone else when it
+/// does.
+///
+/// Two failures a day apart, both invisible while they were happening.
+///
+/// **2026-08-25**: an iCloud Drive file that was not downloaded locally. The
+/// read handed off to `bird` and did not return. Its lane was never released,
+/// `executing` stayed at 1, and `FillerBox.Gauge.isShort` — which counts a card
+/// in flight as the queue's — therefore read a 19-card queue as full against a
+/// target of 20. One file pinned the queue a card short for as long as the agent
+/// ran, saying nothing.
+///
+/// **2026-08-26**: the deadline added to fix that released the lane but could
+/// not stop the work, so a freed lane started another copy while the abandoned
+/// one kept running. Eleven accumulated and took every thread in the
+/// cooperative pool. Not a deadlock — nothing left to run on.
+///
+/// So the deadline governs the *lane*, and a separate cap governs the *work*.
+@Suite("A fetch that overruns")
+struct OverrunningFetchTests {
+
+    /// Waits for what is being waited for, rather than for a duration. Four
+    /// test targets run in parallel here, so a fetch given two hundred
+    /// milliseconds gets them only if a core is free.
+    private func settles(
+        _ what: String, within: Duration = .seconds(20), _ condition: () async -> Bool
+    ) async throws {
+        let giveUp = ContinuousClock.now + within
+        while ContinuousClock.now < giveUp {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("timed out waiting for \(what)")
+    }
+
+    /// A counter the fetch closures can write to from any thread.
+    private final class Tally: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [Int64] = []
+
+        func add(_ value: Int64) {
+            lock.lock()
+            values.append(value)
+            lock.unlock()
+        }
+
+        var all: [Int64] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
+        }
+
+        var count: Int { all.count }
+    }
+
+    /// The console lines a run produced, from any thread.
+    private final class Lines: @unchecked Sendable {
+        private let lock = NSLock()
+        private var said: [String] = []
+
+        func record(_ line: String) {
+            lock.lock()
+            said.append(line)
+            lock.unlock()
+        }
+
+        var all: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return said
+        }
+    }
+
+    private static let deadline = Duration.milliseconds(200)
+
+    /// A fetch that never returns at all.
+    private static let neverAnswers: @Sendable (Int64) async -> Bool = { _ in
+        try? await Task.sleep(for: .seconds(3600))
+        return false
+    }
+
+    // MARK: - The lane
+
+    @Test("An overrunning fetch gives its lane back")
+    func theLaneComesBack() async throws {
+        // The whole point: whatever the provider is doing, the queue's own
+        // bookkeeping recovers, so the gauge stops reading a short queue as full.
+        let pending = CacheQueue.Pending()
+        let queue = CacheQueue(
+            concurrency: 2, fetch: Self.neverAnswers,
+            deadline: { _ in Self.deadline }, log: { _ in }, pending: pending)
+
+        await queue.request(1)
+        try await settles("the lane to be released") { pending.count == 0 }
+
+        #expect(pending.count == 0)
+        #expect(pending.backlog == 0)
+    }
+
+    @Test("The card is put back in the pool rather than retried on the spot")
+    func theCardGoesBack() async throws {
+        // Whatever was not ready a moment ago is still not ready, and a card
+        // left queued would be asked for again at the next look-ahead and hang
+        // the next lane the same way.
+        let putBack = Tally()
+        let queue = CacheQueue(
+            concurrency: 2, fetch: Self.neverAnswers,
+            deadline: { _ in Self.deadline },
+            abandoned: { putBack.add($0) }, log: { _ in })
+
+        await queue.request(5)
+        try await settles("the card to be put back") { putBack.all == [5] }
+
+        #expect(putBack.all == [5])
+    }
+
+    @Test("A fetch that answers in time is left alone")
+    func aPromptFetchIsNotDisturbed() async throws {
+        let putBack = Tally()
+        let queue = CacheQueue(
+            concurrency: 1, fetch: { _ in true },
+            deadline: { _ in .seconds(30) },
+            abandoned: { putBack.add($0) }, log: { _ in })
+
+        await queue.request(7)
+        try await settles("the lane to settle") { await !queue.isBusy }
+
+        #expect(putBack.all.isEmpty)
+    }
+
+    // MARK: - Saying so
+
+    @Test("A timeout is announced, and a repeat offender counts itself")
+    func timeoutsAreAnnounced() async throws {
+        // A provider that fails says so; one that simply never returns says
+        // nothing at all, and the only trace was a queue permanently a card
+        // short. A single slow afternoon and one file that never works are also
+        // different problems, and the console has to tell them apart.
+        let said = Lines()
+        let returned = Tally()
+        let queue = CacheQueue(
+            concurrency: 1,
+            // Overruns and then returns. The wait below is on the *return*,
+            // because the dedup lasts as long as the work — asking again while
+            // the previous attempt is still running is refused, correctly.
+            fetch: { photoID in
+                try? await Task.sleep(for: .milliseconds(300))
+                returned.add(photoID)
+                return false
+            },
+            deadline: { _ in Self.deadline },
+            log: { event in
+                if case .cacheTimedOut = event { said.record(event.line) }
+            })
+
+        for round in 1...3 {
+            await queue.request(11)
+            try await settles("timeout \(round)") { said.all.count == round }
+            try await settles("attempt \(round) to return") { returned.all.count == round }
+        }
+
+        let lines = said.all
+        try #require(lines.count == 3)
+        #expect(lines[0].contains("did not answer"))
+        // The first time is a timeout; the third is a pattern.
+        #expect(!lines[0].contains("times now for this file"))
+        #expect(lines[2].contains("3 times now for this file"))
+    }
+
+    // MARK: - The work
+
+    @Test("Abandoned work does not hold a slot, because it is not on the pool")
+    func abandonedWorkDoesNotHoldASlot() async throws {
+        // **This asserted the opposite for a few hours on 2026-08-26, and was
+        // right to.** While a blocked `copyItem` sat on a cooperative thread,
+        // letting a freed lane start another was how eleven of them stopped the
+        // runtime. `BlockingWork` gives that copy a thread of its own, so the
+        // lane can be reused — and what stops a source that never answers is
+        // the bench, not a rationed slot.
+        let started = Tally()
+        let queue = CacheQueue(
+            concurrency: 2,
+            fetch: { photoID in
+                started.add(photoID)
+                try? await Task.sleep(for: .seconds(3600))
+                return false
+            },
+            deadline: { _ in Self.deadline },
+            // High enough that the bench does not fire during this test; the
+            // bench has a suite of its own.
+            pauseAfter: 1_000,
+            log: { _ in })
+
+        for id in Int64(1)...6 { await queue.request(id) }
+        try await settles("every card to be attempted") { started.count == 6 }
+
+        #expect(started.count == 6, "lanes were held by work nobody is waiting for")
+    }
+
+    @Test("A slot comes back when its abandoned work finally returns")
+    func aReturningOrphanFreesItsSlot() async throws {
+        let started = Tally()
+        let queue = CacheQueue(
+            concurrency: 1,
+            fetch: { photoID in
+                started.add(photoID)
+                // The first overruns and then finishes; the second must be let
+                // in once it has.
+                if photoID == 1 { try? await Task.sleep(for: .milliseconds(500)) }
+                return true
+            },
+            deadline: { _ in Self.deadline }, log: { _ in })
+
+        await queue.request(1)
+        await queue.request(2)
+        try await settles("the freed slot to take the second card") { started.count == 2 }
+
+        #expect(started.all.sorted() == [1, 2])
+    }
+
+    @Test("A photograph still being fetched is not fetched a second time")
+    func anAbandonedFetchIsStillAFetch() async throws {
+        // **The dedup lasts as long as the work, not as long as the lane.**
+        // Observed 2026-08-26: a timed-out copy was still writing when its card
+        // came round again, and the second attempt failed with "couldn't be
+        // copied to .staging because an item with the same name already
+        // exists". Two fetches of one photograph, racing on one path.
+        let started = Tally()
+        let queue = CacheQueue(
+            concurrency: 4,
+            fetch: { photoID in
+                started.add(photoID)
+                try? await Task.sleep(for: .seconds(3600))
+                return false
+            },
+            deadline: { _ in Self.deadline }, log: { _ in })
+
+        await queue.request(9)
+        try await settles("the lane to be released") { await !queue.isBusy }
+        // The card has come back round, as a put-back card does.
+        await queue.request(9)
+        try await Task.sleep(for: .milliseconds(300))
+
+        #expect(started.all == [9], "the same photograph was fetched twice at once")
+    }
+
+    @Test("A wedged fetch does not stop the other lanes")
+    func neighboursKeepWorking() async throws {
+        // A wedged fetch keeps its own slot. What must go on working is every
+        // other slot — the property that makes the cap survivable rather than
+        // merely safe.
+        let done = Tally()
+        let queue = CacheQueue(
+            concurrency: 3,
+            fetch: { photoID in
+                if photoID == 1 { try? await Task.sleep(for: .seconds(3600)) }
+                done.add(photoID)
+                return true
+            },
+            deadline: { _ in Self.deadline }, log: { _ in })
+
+        for id in Int64(1)...3 { await queue.request(id) }
+        try await settles("the other two to finish") { done.all.sorted() == [2, 3] }
+
+        #expect(done.all.sorted() == [2, 3], "a wedged card blocked its neighbours")
+    }
+}
+
+/// A source that keeps timing out gets benched.
+///
+/// **Timeouts on their own are not a problem; a source that only produces them
+/// is.** On 2026-08-26 every one of eight fetch slots was held by an iCloud
+/// Drive folder whose files never materialised, and the two other sources —
+/// eight photographs between them, all on local disk — were never asked for.
+/// Nothing was cached for as long as the agent ran.
+///
+/// So after enough of them in a row, stop asking that source for a while, and
+/// wait longer each time it happens again. One success clears it.
+@Suite("A source that keeps timing out")
+struct BenchedSourceTests {
+
+    private final class Tally: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [Int64] = []
+        func add(_ value: Int64) {
+            lock.lock()
+            values.append(value)
+            lock.unlock()
+        }
+        var all: [Int64] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
+        }
+    }
+
+    /// The console lines a run produced, from any thread.
+    private final class Lines: @unchecked Sendable {
+        private let lock = NSLock()
+        private var said: [String] = []
+        func record(_ line: String) {
+            lock.lock()
+            said.append(line)
+            lock.unlock()
+        }
+        var all: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return said
+        }
+    }
+
+    private func settles(
+        _ what: String, within: Duration = .seconds(20), _ condition: () async -> Bool
+    ) async throws {
+        let giveUp = ContinuousClock.now + within
+        while ContinuousClock.now < giveUp {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("timed out waiting for \(what)")
+    }
+
+    /// Odd photo ids belong to source 1, even ones to source 2, so a test can
+    /// say which source a card came from without a database.
+    private func describing(_ photoID: Int64) -> (photo: String, source: Int64?) {
+        ("photo-\(photoID)", photoID % 2 == 0 ? 2 : 1)
+    }
+
+    @Test("Four is the shipped threshold")
+    func fourByDefault() async throws {
+        // Lowered from ten on 2026-08-26: ten is a lot of slots and a lot of
+        // minutes to spend proving what the first few already showed.
+        let attempted = Tally()
+        let queue = CacheQueue(
+            concurrency: 1,
+            fetch: { photoID in
+                attempted.add(photoID)
+                try? await Task.sleep(for: .seconds(3600))
+                return false
+            },
+            deadline: { _ in .milliseconds(50) },
+            firstPause: .seconds(30),
+            describe: describing,
+            log: { _ in })
+
+        for card in stride(from: Int64(2), through: 40, by: 2) { await queue.request(card) }
+        try await settles("four timeouts") { attempted.all.count >= 4 }
+        try await Task.sleep(for: .milliseconds(300))
+
+        #expect(attempted.all.count <= 5, "the default threshold is not four")
+    }
+
+    @Test("Ten timeouts bench the source, and the next card is not even attempted")
+    func tenTimeoutsBenchIt() async throws {
+        let attempted = Tally()
+        let queue = CacheQueue(
+            concurrency: 4,
+            fetch: { photoID in
+                attempted.add(photoID)
+                try? await Task.sleep(for: .seconds(3600))
+                return false
+            },
+            deadline: { _ in .milliseconds(50) },
+            pauseAfter: 10,
+            firstPause: .seconds(30),
+            describe: describing,
+            log: { _ in }
+        )
+
+        // Thirty cards from source 2, all of which will time out.
+        for card in stride(from: Int64(2), through: 60, by: 2) { await queue.request(card) }
+        try await settles("ten timeouts") { attempted.all.count >= 10 }
+        try await Task.sleep(for: .milliseconds(400))
+
+        // Cards already in flight when the tenth timeout lands were started
+        // before the bench existed, so the ceiling is the threshold plus a
+        // lane's worth — not the threshold exactly. What matters is that it
+        // stops, well short of the thirty asked for.
+        let attempts = attempted.all.count
+        #expect(attempts >= 10)
+        #expect(attempts <= 14, "the source was still being asked after ten timeouts: \(attempts)")
+    }
+
+    @Test("A benched source does not take the healthy one down with it")
+    func aHealthySourceKeepsWorking() async throws {
+        // The failure this exists for: two sources, one hostile, and the good
+        // one never asked because every slot was spent on the bad one.
+        let served = Tally()
+        let queue = CacheQueue(
+            concurrency: 2,
+            fetch: { photoID in
+                // Even ids are the hostile source and never answer.
+                if photoID % 2 == 0 {
+                    try? await Task.sleep(for: .seconds(3600))
+                    return false
+                }
+                served.add(photoID)
+                return true
+            },
+            deadline: { _ in .milliseconds(50) },
+            pauseAfter: 10,
+            firstPause: .seconds(30),
+            describe: describing,
+            log: { _ in }
+        )
+
+        for card in stride(from: Int64(2), through: 40, by: 2) { await queue.request(card) }
+        for card in stride(from: Int64(1), through: 9, by: 2) { await queue.request(card) }
+
+        try await settles("the healthy source to be served") { served.all.count == 5 }
+        #expect(served.all.sorted() == [1, 3, 5, 7, 9])
+    }
+
+    @Test("A success clears the count, so an occasional timeout never benches anything")
+    func oneSuccessClearsIt() async throws {
+        let attempted = Tally()
+        let queue = CacheQueue(
+            concurrency: 1,
+            fetch: { photoID in
+                attempted.add(photoID)
+                // Every fourth card answers; the rest overrun and then return.
+                if photoID % 8 == 0 { return true }
+                try? await Task.sleep(for: .milliseconds(120))
+                return false
+            },
+            deadline: { _ in .milliseconds(40) },
+            pauseAfter: 10,
+            firstPause: .seconds(30),
+            describe: describing,
+            log: { _ in }
+        )
+
+        for card in stride(from: Int64(2), through: 40, by: 2) { await queue.request(card) }
+        try await settles("every card to be attempted") { attempted.all.count == 20 }
+
+        #expect(
+            attempted.all.count == 20,
+            "a source with successes among its timeouts was benched anyway")
+    }
+
+    @Test("The pause is announced, and lengthens each time")
+    func thePauseLengthens() async throws {
+        let said = Lines()
+        let queue = CacheQueue(
+            concurrency: 4,
+            fetch: { _ in
+                try? await Task.sleep(for: .milliseconds(80))
+                return false
+            },
+            deadline: { _ in .milliseconds(20) },
+            pauseAfter: 2,
+            firstPause: .milliseconds(100),
+            describe: describing,
+            log: { event in
+                if case .sourcePaused = event { said.record(event.line) }
+            }
+        )
+
+        // Two timeouts bench it; after the short pause elapses, two more bench
+        // it again for twice as long.
+        for round in 0..<3 {
+            for card in stride(from: Int64(2), through: 8, by: 2) {
+                await queue.request(card + Int64(round) * 10)
+            }
+            try await Task.sleep(for: .milliseconds(400))
+        }
+
+        let announced = said.all
+        try #require(announced.count >= 2)
+        #expect(announced[0].contains("paused"))
+        // Doubling, so the second pause names a longer interval than the first.
+        #expect(announced[0] != announced[1])
     }
 }

@@ -106,6 +106,37 @@ struct ServableSeedTests {
         #expect(card.uuid == cached)
     }
 
+    @Test("A small servable set reshuffles rather than waiting for a window that cannot open")
+    func aSmallServableSetEndsItsPass() throws {
+        // **The wedge of 2026-08-26, reduced.** `PLAN.md`'s algorithm is a
+        // disjunction — eligible when more than *w* deals have passed, *or*
+        // when not yet dealt this pass — and the pass exists as a floor for the
+        // one case the window cannot answer: a population small enough that
+        // waiting never frees anybody.
+        //
+        // Asked `servableOnly`, the population that can cycle is the cached
+        // one, not the library. Measuring the library instead said "445 is
+        // plenty, wait" while the twenty photographs with bytes were all inside
+        // the window — and nothing serves, so the ordinal never advances, so
+        // the window never opens. Live: 445 dealable, a 223 window, 133 cached,
+        // and every walk answering `nothing to show`.
+        let (library, _) = try library(referenced: 0, materialized: 400)
+        let cached = try library.database.all(
+            "SELECT id, uuid FROM photo ORDER BY id LIMIT 20;"
+        ) { (id: try $0.int64("id"), uuid: try $0.string("uuid")) }
+        let resident = Set(cached.map(\.uuid))
+
+        // Every cached photograph shown a moment ago, so the window refuses all
+        // twenty. The other 380 are eligible but have no bytes.
+        try library.setDealSeq(5_000)
+        for photo in cached { try library.setLastDealt(photo.id, seq: 5_000) }
+
+        let card = try #require(
+            try library.deck.nextServableCandidate(settings: .default, resident: resident),
+            "a servable set the window can never free must reshuffle, not wait")
+        #expect(resident.contains(card.uuid))
+    }
+
     /// An entirely remote library with an empty cache has nothing to prefer, and
     /// must say so rather than inventing something — that is what tells the
     /// caller to fall back to ordinary dealing.

@@ -38,7 +38,35 @@ struct SourceEndpoint {
     /// the next launch to notice nothing claims them.
     let bytes: PhotoStore
     /// The collection route. The member routes are this plus a `uuid`.
+    ///
+    /// **Two versions, and each is a whole set of routes.** A client picks one
+    /// and finds everything it needs under that prefix; neither is a patch on
+    /// the other.
+    ///
+    /// They differ in exactly one thing: which kinds the list carries. v1 is
+    /// the file-backed surface, because a v1 client can draw a folder and a
+    /// file and can do nothing whatever with a Photos album — shown one, the
+    /// panel names it `040`, the last path component of a `PHAssetCollection`
+    /// identifier, which reads as a folder that is not there. An honest absence
+    /// beats a dishonest row. v2 carries every kind, and is where the Photos
+    /// routes will live.
     static let path = "/v1/sources"
+    static let v2Path = "/v2/sources"
+
+    /// Which surface a request arrived on. The handlers are shared; this is the
+    /// only thing that differs, and it differs in exactly one way.
+    enum Version: Sendable {
+        case v1
+        case v2
+
+        /// Whether a v1 client could make sense of this kind.
+        func admits(_ kind: SourceKind) -> Bool {
+            switch self {
+            case .v1: kind.isFileBacked
+            case .v2: true
+            }
+        }
+    }
 
     /// Where a handled request is recorded, injected for the same reason
     /// `PictureEndpoint`'s is: `os_log` lands in a store no test can read back
@@ -86,6 +114,16 @@ struct SourceEndpoint {
         var enabled: Bool
         var available: Bool
         var unavailableReason: String?
+        /// What to call this source, for a locator that is not something to
+        /// show a person.
+        ///
+        /// **v2 only, and absent when the locator names itself.** A folder is
+        /// named by its last component; an album identifier is not — `040`,
+        /// from `A1B2C3D4-.../L0/040`, is worse than the raw identifier because
+        /// it looks like it means something. Only the agent can ask the library
+        /// what an album is called, which is the whole reason this endpoint
+        /// exists for kinds the app cannot see for itself.
+        var title: String?
         /// How many photographs this source has put in the pool. Zero for a
         /// source added a moment ago, because the scan has not run yet.
         var photos: Int
@@ -130,15 +168,24 @@ struct SourceEndpoint {
     /// method is looked at — so a `POST` to a source route is answered here
     /// rather than by the picture endpoint's "only GET is served".
     static func claims(_ path: String) -> Bool {
-        path == Self.path || path.hasPrefix(Self.path + "/")
+        version(of: path) != nil
+    }
+
+    static func version(of path: String) -> Version? {
+        for (prefix, version) in [(Self.path, Version.v1), (Self.v2Path, .v2)] {
+            if path == prefix || path.hasPrefix(prefix + "/") { return version }
+        }
+        return nil
     }
 
     /// The `uuid` in a member route, or nil for the collection.
     static func identifier(in path: String) -> String? {
-        guard path.hasPrefix(Self.path + "/") else { return nil }
-        let rest = path.dropFirst(Self.path.count + 1)
-        let trimmed = rest.hasSuffix("/") ? rest.dropLast() : rest
-        return trimmed.isEmpty ? nil : String(trimmed)
+        for prefix in [Self.path, Self.v2Path] where path.hasPrefix(prefix + "/") {
+            let rest = path.dropFirst(prefix.count + 1)
+            let trimmed = rest.hasSuffix("/") ? rest.dropLast() : rest
+            return trimmed.isEmpty ? nil : String(trimmed)
+        }
+        return nil
     }
 
     func route(_ request: HTTPListener.Request) async -> HTTPListener.Response {
@@ -155,15 +202,16 @@ struct SourceEndpoint {
                 detail: "library unavailable")
         }
 
+        let version = Self.version(of: request.path) ?? .v1
         switch (request.method, Self.identifier(in: request.path)) {
         case ("GET", nil):
-            return list(request, store: store)
+            return await list(request, store: store, version: version)
         case ("POST", nil):
-            return add(request, store: store)
+            return await add(request, store: store, version: version)
         case ("GET", .some(let uuid)):
-            return one(request, uuid: uuid, store: store)
+            return await one(request, uuid: uuid, store: store, version: version)
         case ("PATCH", .some(let uuid)):
-            return change(request, uuid: uuid, store: store)
+            return await change(request, uuid: uuid, store: store, version: version)
         case ("DELETE", .some(let uuid)):
             return remove(request, uuid: uuid, store: store)
         default:
@@ -178,11 +226,18 @@ struct SourceEndpoint {
 
     // MARK: - Reading
 
+    /// **Only the list is filtered.** The member routes are not, and do not
+    /// need to be: the app can only name a `uuid` the list gave it, so a v1
+    /// client cannot reach a source it was never shown. Filtering them too
+    /// would be a second rule guarding a door nobody can get to.
     private func list(
-        _ request: HTTPListener.Request, store: SourceStore
-    ) -> HTTPListener.Response {
+        _ request: HTTPListener.Request, store: SourceStore, version: Version
+    ) async -> HTTPListener.Response {
         do {
-            let sources = try store.all().map { wire($0, store: store) }
+            var sources: [Wire] = []
+            for source in try store.all() where version.admits(source.kind) {
+                sources.append(await wire(source, store: store, version: version))
+            }
             return answer(
                 request, json(sources),
                 detail: "\(sources.count) source" + (sources.count == 1 ? "" : "s"))
@@ -192,11 +247,13 @@ struct SourceEndpoint {
     }
 
     private func one(
-        _ request: HTTPListener.Request, uuid: String, store: SourceStore
-    ) -> HTTPListener.Response {
+        _ request: HTTPListener.Request, uuid: String, store: SourceStore, version: Version
+    ) async -> HTTPListener.Response {
         do {
             guard let source = try store.source(uuid: uuid) else { return missing(request, uuid) }
-            return answer(request, json(wire(source, store: store)), detail: source.locator)
+            return answer(
+                request, json(await wire(source, store: store, version: version)),
+                detail: source.locator)
         } catch {
             return answer(request, failed(error), detail: "could not read the source")
         }
@@ -213,8 +270,8 @@ struct SourceEndpoint {
     /// for the scan. The write rang the doorbell; the agent walks the folder and
     /// the count arrives on a later `GET`.
     private func add(
-        _ request: HTTPListener.Request, store: SourceStore
-    ) -> HTTPListener.Response {
+        _ request: HTTPListener.Request, store: SourceStore, version: Version
+    ) async -> HTTPListener.Response {
         let requested: [Requested]
         do {
             requested = try JSONDecoder().decode([Requested].self, from: request.body)
@@ -228,7 +285,7 @@ struct SourceEndpoint {
         }
 
         do {
-            let addition = try store.add(
+            let addition = try await store.add(
                 requested.map {
                     SourceRequest(
                         kind: SourceKind($0.kind ?? SourceKind.folder.rawValue),
@@ -237,7 +294,10 @@ struct SourceEndpoint {
                 },
                 to: preferences)
 
-            let created = addition.added.map { wire($0, store: store) }
+            var created: [Wire] = []
+            for source in addition.added {
+                created.append(await wire(source, store: store, version: version))
+            }
             return answer(
                 request,
                 json(
@@ -260,6 +320,13 @@ struct SourceEndpoint {
                     Failure(error: "not found", missing: paths), status: 400,
                     reason: "Bad Request"),
                 detail: "missing: \(paths.joined(separator: ", "))")
+        } catch SourceStore.EditFailure.locatorsNotFound(let locators) {
+            return answer(
+                request,
+                json(
+                    Failure(error: "not in this Photos library", missing: locators), status: 400,
+                    reason: "Bad Request"),
+                detail: "unresolved: \(locators.joined(separator: ", "))")
         } catch SourceStore.EditFailure.pathsNotOfKind(let paths) {
             return answer(
                 request,
@@ -290,8 +357,8 @@ struct SourceEndpoint {
     /// it does not do is rescan — turning recursion on finds nested photographs
     /// at the agent's next refresh, and turning it off drops them there too.
     private func change(
-        _ request: HTTPListener.Request, uuid: String, store: SourceStore
-    ) -> HTTPListener.Response {
+        _ request: HTTPListener.Request, uuid: String, store: SourceStore, version: Version
+    ) async -> HTTPListener.Response {
         let wanted: Change
         do {
             wanted = try JSONDecoder().decode(Change.self, from: request.body)
@@ -318,7 +385,7 @@ struct SourceEndpoint {
             guard let source = try store.source(uuid: uuid) else { return missing(request, uuid) }
             let updated = try store.setRecursive(recursive, for: source, in: preferences)
             return answer(
-                request, json(wire(updated, store: store)),
+                request, json(await wire(updated, store: store, version: version)),
                 detail: "\(source.locator) recursive=\(recursive)")
         } catch SourceStore.EditFailure.optionNotAvailable(let option, let kind) {
             return answer(
@@ -357,8 +424,13 @@ struct SourceEndpoint {
     /// exactly that. A client that cannot see it is not helped by this endpoint
     /// looking either, because for a Photos or Google album the scan is the only
     /// thing that can look.
-    private func wire(_ source: Source, store: SourceStore) -> Wire {
-        Wire(
+    private func wire(
+        _ source: Source, store: SourceStore, version: Version = .v1
+    ) async -> Wire {
+        // v1's shape does not change. Each version is a whole set, and a client
+        // that asked for v1 gets exactly what v1 has always answered.
+        let title = version == .v2 ? await store.provider(for: source.kind)?.title(of: source) : nil
+        return Wire(
             uuid: source.uuid,
             kind: source.kind.rawValue,
             locator: source.locator,
@@ -366,6 +438,7 @@ struct SourceEndpoint {
             enabled: source.enabled,
             available: source.available,
             unavailableReason: source.unavailableReason,
+            title: title,
             photos: (try? store.pool.size(forSource: source.id)) ?? 0,
             addedAt: source.addedAt,
             scannedAt: source.scannedAt

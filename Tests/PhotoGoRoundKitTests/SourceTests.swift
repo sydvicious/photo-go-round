@@ -25,7 +25,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         let found = try await FolderSourceProvider().enumerate(source)
 
         #expect(found.isAvailable)
@@ -84,7 +84,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path, recursive: true)
+        let source = try await store.add(kind: .folder, locator: folder.path, recursive: true)
         let found = try await FolderSourceProvider().enumerate(source)
 
         // Nothing collapsed and nothing was invented.
@@ -109,7 +109,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path, recursive: true)
+        let source = try await store.add(kind: .folder, locator: folder.path, recursive: true)
 
         let first = try await FolderSourceProvider().enumerate(source)
         let second = try await FolderSourceProvider().enumerate(source)
@@ -132,7 +132,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path, recursive: true)
+        let source = try await store.add(kind: .folder, locator: folder.path, recursive: true)
 
         let first = await store.refresh(source)
         #expect(first.added == 2)
@@ -168,11 +168,11 @@ struct SourceTests {
         let library = try TestLibrary()
         let store = Self.store(library.database)
 
-        let flat = try store.add(kind: .folder, locator: folder.path, recursive: false)
+        let flat = try await store.add(kind: .folder, locator: folder.path, recursive: false)
         let flatFound = try await FolderSourceProvider().enumerate(flat)
         #expect(flatFound.photos.map(\.externalID) == ["top.png"])
 
-        let deep = try store.add(kind: .folder, locator: folder.path, recursive: true)
+        let deep = try await store.add(kind: .folder, locator: folder.path, recursive: true)
         let deepFound = try await FolderSourceProvider().enumerate(deep)
         // Relative to the source's own path, which is what makes recovering a
         // moved folder one row to repair rather than fifty thousand.
@@ -275,7 +275,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         let result = await store.refresh(source)
 
         #expect(result.added == 3)
@@ -296,7 +296,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
 
         folder.write("c.png")
@@ -319,7 +319,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
 
         _ = try library.drawSequence(count: 6, settings: .default)
@@ -368,7 +368,7 @@ struct SourceTests {
         let store = SourceStore(
             database: library.database, fileAccess: access,
             providers: [counting, FileSourceProvider(fileAccess: access)])
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
         counting.reset()
 
@@ -396,7 +396,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
 
         // Queue everything, so removal has something to cascade through.
@@ -431,7 +431,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
         _ = try library.drawSequence(count: 3, settings: .default)
 
@@ -458,7 +458,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
 
         // Queue everything, so removal has something to cascade through.
@@ -486,7 +486,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
         _ = try library.drawSequence(count: 3, settings: .default)
 
@@ -518,7 +518,7 @@ struct SourceTests {
         let folder = TemporaryFolder()
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
 
         let result = await store.refresh(source)
         #expect(!result.sourceUnavailable)
@@ -533,7 +533,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
 
         // Simulate the drive going away by pointing the source somewhere gone.
@@ -557,7 +557,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
 
         
@@ -607,7 +607,7 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
         
         try store.remove(id: source.id)
@@ -625,8 +625,8 @@ struct SourceTests {
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        try store.add(kind: .folder, locator: folder.path)
-        try store.add(kind: .file, locator: pinned.path(percentEncoded: false))
+        try await store.add(kind: .folder, locator: folder.path)
+        try await store.add(kind: .file, locator: pinned.path(percentEncoded: false))
 
         let results = await store.refreshAll()
         #expect(results.count == 2)
@@ -680,13 +680,13 @@ struct SourceTests {
     // MARK: - FileAccess
 
     @Test("Photo URLs resolve through the access seam, not from raw paths")
-    func fileAccessResolvesPhotoURLs() throws {
+    func fileAccessResolvesPhotoURLs() async throws {
         let folder = TemporaryFolder()
         folder.write("holiday/beach.png")
 
         let library = try TestLibrary()
         let store = Self.store(library.database)
-        let source = try store.add(kind: .folder, locator: folder.path, recursive: true)
+        let source = try await store.add(kind: .folder, locator: folder.path, recursive: true)
 
         let access = UnsandboxedFileAccess()
         let exists = try access.withPhotoURL(in: source, externalID: "holiday/beach.png") {
@@ -696,7 +696,7 @@ struct SourceTests {
 
         // A file source's locator *is* the photo, so the external id is not
         // appended to it.
-        let pinned = try store.add(
+        let pinned = try await store.add(
             kind: .file, locator: folder.url.appending(path: "holiday/beach.png").path(percentEncoded: false)
         )
         let pinnedExists = try access.withPhotoURL(in: pinned, externalID: "beach.png") {

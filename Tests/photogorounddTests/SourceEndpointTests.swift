@@ -426,16 +426,105 @@ struct SourceEndpointTests {
         #expect(try library.store.all().count == 1)
     }
 
+    /// A Photos source in the table, without going near PhotoKit.
+    private func insertAlbum(_ library: Library, locator: String) throws {
+        try library.store.database.run(
+            """
+            INSERT INTO source (uuid, kind, locator, enabled, available, added_at)
+            VALUES (:uuid, 'photos_collection', :locator, 1, 1, 0);
+            """,
+            ["uuid": .text(UUID().uuidString.lowercased()), "locator": .text(locator)]
+        )
+    }
+
+    @Test("v1 lists only the kinds a v1 client can act on")
+    func v1HidesKindsItCannotHandle() async throws {
+        // **The app can do nothing with a Photos source yet.** Shown one, it
+        // draws a row named `040` — the last path component of an album
+        // identifier — which reads as a folder that is not there. It cannot
+        // name it, browse it, or add a sibling to it. An honest absence beats a
+        // dishonest row.
+        let library = try Library()
+        let folder = library.folder("pictures", photographs: 2)
+        _ = try await library.post(
+            """
+            [{"kind": "folder", "path": "\(library.path(of: folder))"}]
+            """)
+        try insertAlbum(library, locator: "ALBUM/L0/040")
+
+        let listed = try sources(await library.get("/v1/sources"))
+        #expect(listed.count == 1)
+        #expect(listed.first?.kind == "folder")
+        // Still in the library — hidden from one surface, not removed.
+        #expect(try library.store.all().count == 2)
+    }
+
+    @Test("v2 is its own complete set, and lists what v1 hides")
+    func v2ListsEveryKind() async throws {
+        let library = try Library()
+        let folder = library.folder("pictures", photographs: 2)
+        _ = try await library.post(
+            """
+            [{"kind": "folder", "path": "\(library.path(of: folder))"}]
+            """)
+        try insertAlbum(library, locator: "ALBUM/L0/040")
+
+        let listed = try sources(await library.get("/v2/sources"))
+        #expect(listed.count == 2)
+        #expect(Set(listed.map(\.kind)) == ["folder", "photos_collection"])
+    }
+
+    @Test("A member route answers on either version")
+    func v2CarriesTheMemberRoutes() async throws {
+        // **Each version is a whole surface, not a patch on the one below.** A
+        // client picks a version and finds everything it needs there, so a v2
+        // list without v2 member routes would be half an API.
+        let library = try Library()
+        let folder = library.folder("pictures", photographs: 1)
+        let created = try sources(
+            await library.post(
+                """
+                [{"kind": "folder", "path": "\(library.path(of: folder))"}]
+                """))
+        let uuid = try #require(created.first?.uuid)
+
+        #expect(try await library.get("/v2/sources/\(uuid)").status == 200)
+        #expect(try await library.delete("/v2/sources/\(uuid)").status == 204)
+        #expect(try library.store.all().isEmpty)
+    }
+
     @Test("A kind with no provider is refused rather than accepted and never scanned")
     func unsupportedKindIsRefused() async throws {
+        // **`photos_collection` is no longer the example**, because it now has
+        // a provider. The refusal was never about paths; it exists so a source
+        // cannot be accepted, never scanned, and reported unavailable forever,
+        // and `google_album` is what that describes today.
         let library = try Library()
         let response = try await library.post(
             """
-            [{"kind": "photos_collection", "path": "some-album-identifier"}]
+            [{"kind": "google_album", "path": "some-album-identifier"}]
             """)
 
         #expect(response.status == 400)
-        #expect(try failure(response).error == "photos_collection sources cannot be added")
+        #expect(try failure(response).error == "google_album sources cannot be added")
+        #expect(library.preferences.sources.isEmpty)
+    }
+
+    @Test("An album identifier that names nothing is refused at the door, naming itself")
+    func anUnknownAlbumIsRefused() async throws {
+        // A Photos album *can* be posted now. What cannot happen is one being
+        // accepted without resolving — the same all-or-none rule a mistyped
+        // path gets, and for the same reason: a stored identifier that matches
+        // nothing would sit in the library producing nothing and reading as
+        // broken.
+        let library = try Library()
+        let response = try await library.post(
+            """
+            [{"kind": "photos_collection", "path": "NOT-AN-ALBUM/L0/040"}]
+            """)
+
+        #expect(response.status == 400)
+        #expect(try failure(response).missing == ["NOT-AN-ALBUM/L0/040"])
         #expect(library.preferences.sources.isEmpty)
     }
 

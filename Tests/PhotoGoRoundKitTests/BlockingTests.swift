@@ -215,7 +215,7 @@ struct ContentionIsNotUnavailabilityTests {
         // rather than the full default patience.
         let connection = try Database(path: path, busyTimeout: .milliseconds(150))
         let store = SourceStore(database: connection)
-        let source = try store.add(kind: .folder, locator: folder.path, recursive: false)
+        let source = try await store.add(kind: .folder, locator: folder.path, recursive: false)
 
         // Somebody else holds the writer for the whole refresh.
         let holder = try Database(path: path)

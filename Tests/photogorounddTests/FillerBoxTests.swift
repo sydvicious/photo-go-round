@@ -76,26 +76,104 @@ struct FillerBoxTests {
         Preferences(suiteName: "com.sydpolk.photogoround.tests.filler-\(UUID().uuidString)")
     }
 
-    @Test("The seed fills an empty queue and leaves a short one alone")
-    func seedFillsOnlyAnEmptyQueue() async throws {
-        // Fewer photos than the nominal 20, so "full" means "everything there
-        // is" and the round reports the deck ran dry.
+    @Test("The heartbeat fills a queue that is merely short, not only an empty one")
+    func heartbeatTopsUpAShortQueue() async throws {
+        // **This reverses an earlier decision, on evidence that decision did not
+        // have.** The heartbeat used to fill only an empty queue and leave a
+        // short one to the next serve, to stop it churning. That was affordable
+        // while every fetch was a local file read: a queue one card short was
+        // one card short for a few seconds.
+        //
+        // A Photos fetch can take five minutes, and the queue is only refilled
+        // when a picture is served — so an idle agent leaves the gap open for
+        // as long as nobody is looking, and the first picture after idle waits
+        // on a cold fetch. Dealing has to happen whether or not anybody asked.
         let fixture = try Fixture(photos: 5)
         let box = fixture.box()
         let preferences = Self.preferences()
 
-        let seeded = await box.seedIfEmpty(preferences: preferences)
+        // Fewer photos than the nominal 20, so "full" means "everything there
+        // is" and the round reports the deck ran dry.
+        let seeded = await box.topUpIfShort(preferences: preferences)
         #expect(try fixture.queueSize() == 5)
         #expect(seeded.produced == 5)
         #expect(seeded.exhausted)
 
-        // Serving is what tops up a merely short queue; the heartbeat filling
-        // one was the churn the rework removed. A card popped and a seed asked
-        // for must leave the queue exactly as the pop left it.
         _ = try await PhotoQueue(database: fixture.database).serve()
-        let reseeded = await box.seedIfEmpty(preferences: preferences)
-        #expect(try fixture.queueSize() == 4, "the seed topped up a queue that was not empty")
-        #expect(reseeded.skipped)
+        #expect(try fixture.queueSize() == 4)
+
+        let again = await box.topUpIfShort(preferences: preferences)
+        #expect(try fixture.queueSize() == 5, "a short queue was left short")
+        #expect(again.produced == 1)
+    }
+
+    @Test("A queue already at its target is left alone")
+    func aFullQueueIsNotChurned() async throws {
+        // The other half of the same rule: topping up must be a top-*up*. A
+        // heartbeat that dealt on every tick regardless would claim cards
+        // nobody is going to see, which is the churn the earlier design was
+        // right to avoid.
+        let fixture = try Fixture(photos: 5)
+        let box = fixture.box()
+        let preferences = Self.preferences()
+
+        _ = await box.topUpIfShort(preferences: preferences)
+        #expect(try fixture.queueSize() == 5)
+
+        let again = await box.topUpIfShort(preferences: preferences)
+        #expect(try fixture.queueSize() == 5)
+        #expect(again.produced == 0)
+    }
+
+    @Test("The last resort fills the queue, rather than dealing a handful")
+    func theLastResortFillsTheQueue() async throws {
+        // **The bridge deals three; this deals a queueful, and the difference
+        // is what is on screen in between.** The bridge runs at launch, where
+        // the ordinary cards are seconds away and twenty consecutive pictures
+        // from one warm folder would be the opposite of a shuffle. This runs
+        // when a walk has already found nothing, so the alternative is a blank
+        // wall — and dealing three produced *empty answer, three pictures,
+        // empty again*. Measured 2026-08-26 against a wedged iCloud Drive:
+        // fifteen served, thirty-two empty.
+        let fixture = try Fixture(photos: 200)
+        // Referenced photographs need no fetch, so every one of them is
+        // servable without the cache holding anything.
+        try fixture.database.run("UPDATE photo SET storage = 'referenced';")
+        let box = fixture.box()
+        let preferences = Self.preferences()
+
+        let round = await box.dealWhatIsAlreadyHere(preferences: preferences)
+
+        #expect(try fixture.queueSize() == preferences.queueSize)
+        #expect(round.produced == preferences.queueSize)
+    }
+
+    @Test("It stops when the cache runs out, rather than spinning")
+    func theLastResortTerminates() async throws {
+        // Slow is acceptable; endless is not. With fewer servable photographs
+        // than the queue wants, it deals what there is and returns.
+        let fixture = try Fixture(photos: 5)
+        try fixture.database.run("UPDATE photo SET storage = 'referenced';")
+        let box = fixture.box()
+
+        let round = await box.dealWhatIsAlreadyHere(preferences: Self.preferences())
+
+        #expect(try fixture.queueSize() == 5)
+        #expect(round.produced == 5)
+    }
+
+    @Test("With nothing servable at all it answers nothing, and says so")
+    func theLastResortCanBeEmpty() async throws {
+        // Every photograph materialized and none cached: there is genuinely
+        // nothing to show, and inventing something would be worse.
+        let fixture = try Fixture(photos: 5)
+        let box = fixture.box()
+
+        let round = await box.dealWhatIsAlreadyHere(preferences: Self.preferences())
+
+        #expect(try fixture.queueSize() == 0)
+        #expect(round.produced == 0)
+        #expect(round.exhausted)
     }
 
     @Test("A served picture deals the queue back toward its target")
@@ -104,7 +182,7 @@ struct FillerBoxTests {
         let box = fixture.box()
         let preferences = Self.preferences()
 
-        _ = await box.seedIfEmpty(preferences: preferences)
+        _ = await box.topUpIfShort(preferences: preferences)
         _ = try await PhotoQueue(database: fixture.database).serve()
         #expect(try fixture.queueSize() == 4)
 

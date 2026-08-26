@@ -156,7 +156,7 @@ struct ColdStartSeedTests {
             pending: nil)
         let preferences = Preferences(
             defaults: UserDefaults(suiteName: "pgr.coldstart.\(UUID())")!)
-        let round = await box.seedIfEmpty(preferences: preferences)
+        let round = await box.topUpIfShort(preferences: preferences)
 
         #expect(round.failure == nil, "seeding failed: \(round.failure ?? "")")
         #expect(round.produced > 0, "a restart could not deal from a pool it already had")

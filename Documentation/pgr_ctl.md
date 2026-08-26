@@ -8,7 +8,7 @@
 
 ```
 pgr_ctl status
-pgr_ctl sources {add [--folder [--recursive] <path>] [--file <path>] … | list | remove <id> | enable <id> | disable <id>}
+pgr_ctl sources {add [--folder [--recursive] <path>] [--file <path>] [--album <id>] … | list | remove <id> | enable <id> | disable <id>}
 pgr_ctl refresh
 pgr_ctl pool stats
 pgr_ctl queue {peek [-n <count>] | fill [-n <rounds>]}
@@ -124,8 +124,10 @@ them. Separate from `-n` because the two cost wildly different amounts: a probe
 is milliseconds, a pull can be minutes. Default: 200.
 
 `--album <id|title>`
-Which album `photos-spike` measures, by local identifier or by title. Default:
-the largest album that is not `smartAlbumAllHidden`.
+For `sources add`, a Photos album to add, by local identifier; repeatable and
+mixable with `--folder` and `--file`. For `photos-spike`, which album to
+measure, by identifier or by title — default: the largest that is not
+`smartAlbumAllHidden`.
 
 `-f`, `--follow`, `--last <time>`
 Stream the log rather than printing it, and how far back to read. Default: 1h.
@@ -149,7 +151,14 @@ Adds one or more sources. `--folder <path>` enumerates a folder's contents;
 `--folder --recursive <path>` walks its subdirectories too. `--file <path>` pins
 one photograph — a first-class kind rather than a folder special case, since
 pinning one photo and adding a folder of ten thousand are the same operation to
-the deck.
+the deck. `--album <id>` adds a Photos album or smart album by its
+`PHAssetCollection` local identifier, which `photos-spike --albums` prints.
+
+An album identifier is opaque: its slashes are not path separators, it is not
+standardized, and it is stored exactly as given. **Nothing is added unless it
+resolves in this Photos library**, under the same all-or-none rule as a
+mistyped path — and a library that cannot be read refuses too, rather than
+accepting an album nobody can see.
 
 Both flags are repeatable and may be mixed, and each folder keeps its own answer
 about recursion:

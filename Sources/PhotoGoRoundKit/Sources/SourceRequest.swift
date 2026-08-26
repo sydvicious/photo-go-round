@@ -66,6 +66,17 @@ extension SourceRequest {
         var mismatched: [String] = []
 
         for request in requests {
+            // **A locator that is not a path resolves to itself.** Standardizing
+            // it, `stat`ing it, and checking its directory-ness are all wrong
+            // for a `PHAssetCollection` identifier, and appending a trailing
+            // slash is actively harmful — it would be stored once and never
+            // again match what the library returns. Whether such a locator
+            // names anything is a question only a provider can answer, and
+            // `SourceStore.add` asks it before this is called.
+            guard request.kind.isFileBacked else {
+                specs.append(SourceSpec(kind: request.kind, locator: request.path))
+                continue
+            }
             var resolved = URL(filePath: request.path).standardizedFileURL
                 .path(percentEncoded: false)
             var isDirectory: ObjCBool = false

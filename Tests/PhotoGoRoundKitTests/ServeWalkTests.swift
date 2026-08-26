@@ -100,7 +100,7 @@ struct ServeWalkTests {
                 sources: store, store: bytes)
             try cache.prepare()
 
-            source = try store.add(kind: .folder, locator: folder.path)
+            source = try await store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
             if materialized {
                 try library.database.run("UPDATE photo SET storage = 'materialized';")
@@ -385,7 +385,7 @@ struct ServeWalkTests {
             database: library.database, root: directory.appending(path: "cache"),
             sources: store, store: bytes)
         try cache.prepare()
-        let source = try store.add(kind: .folder, locator: folder.path)
+        let source = try await store.add(kind: .folder, locator: folder.path)
         _ = await store.refresh(source)
         try library.database.run("UPDATE photo SET storage = 'materialized';")
         while try cache.deal() {}
@@ -623,7 +623,8 @@ struct ServeWalkTests {
         #expect(lines.contains { $0.hasPrefix("DEAL: a.png (source ") })
         #expect(lines.contains { $0.hasPrefix("SERVE: a.png (source ") && $0.contains(" skipped") })
         #expect(lines.contains { $0.hasPrefix("SERVE: nothing to show") })
-        #expect(lines.contains { $0.hasPrefix("CACHE: a.png (source ") && $0.contains(" fetched") })
+        #expect(
+            lines.contains { $0.hasPrefix("CACHE: a.png (source ") && $0.contains("original cached") })
         #expect(lines.contains { $0.hasPrefix("SERVE: a.png (source ") && $0.contains(" is here") })
         // Every line names what it belongs to, so several interleaved on one
         // console stay readable and each can be filtered out on its own.
@@ -633,15 +634,17 @@ struct ServeWalkTests {
             })
     }
 
-    @Test("Keeping a resize of a photograph on disk says so under CACHE:")
-    func keepingAResizeOfAReferencedPhotographIsSaid() async throws {
-        // Referenced: its original *is* the file on the disk it lives on, so it
-        // is never fetched and a resize is the only thing the cache will ever
-        // hold for it. That is the case that used to fill the cache without
-        // printing a line — the fetch queue was the only thing saying `CACHE:`,
-        // and this path never touches it.
-        let fixture = try await Fixture(photos: ["a.png"], materialized: false)
+    @Test("Keeping a resize says what was resized and to what size, and nothing else")
+    func keepingAResizeIsSaid() async throws {
+        // **This used to be two tests**, one for a referenced photograph and one
+        // for a materialized one, because the line named where the pixels were
+        // decoded from — "from its file on disk" against "from the cached
+        // original". That fact is real but it is a different fact from a
+        // rendering being kept, and carrying both in one sentence made neither
+        // easy to find on a console. One line, one event.
+        let fixture = try await Fixture(photos: ["a.png"])
         try fixture.dealAll()
+        try await fixture.cacheAll()
         let served = try #require(try await fixture.cache.serve())
 
         _ = try fixture.cache.keep(
@@ -650,26 +653,7 @@ struct ServeWalkTests {
 
         #expect(
             fixture.heard.lines.contains {
-                $0 == "CACHE: resized a.png (source \(fixture.source.id)) to 800x600 "
-                    + "from its file on disk, kept 1234 bytes"
-            })
-    }
-
-    @Test("Keeping a resize of a fetched photograph says it came from the cached original")
-    func keepingAResizeOfAMaterialisedPhotographIsSaid() async throws {
-        let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        try await fixture.cacheAll()
-        let served = try #require(try await fixture.cache.serve())
-
-        _ = try fixture.cache.keep(
-            Data(count: 99), of: served.card,
-            at: PhotoStore.Size(width: 100, height: 100), pathExtension: "jpeg")
-
-        #expect(
-            fixture.heard.lines.contains {
-                $0 == "CACHE: resized a.png (source \(fixture.source.id)) to 100x100 "
-                    + "from the cached original, kept 99 bytes"
+                $0.hasPrefix("CACHE: resized a.png (source \(fixture.source.id)) to 800x600,")
             })
     }
 

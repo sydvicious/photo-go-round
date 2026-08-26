@@ -49,7 +49,7 @@ enum SourceCommands {
         // only who is told, and what happens next.
         let addition: SourceStore.Addition
         do {
-            addition = try context.sources.add(
+            addition = try await context.sources.add(
                 requested.map {
                     SourceRequest(kind: $0.kind, path: $0.path, recursive: $0.recursive)
                 },
@@ -57,6 +57,11 @@ enum SourceCommands {
         } catch SourceStore.EditFailure.pathsNotFound(let paths) {
             for path in paths {
                 Console.failure("not found: \(path)")
+            }
+            throw ExitCode(1)
+        } catch SourceStore.EditFailure.locatorsNotFound(let locators) {
+            for locator in locators {
+                Console.failure("not in this Photos library: \(locator)")
             }
             throw ExitCode(1)
         } catch SourceStore.EditFailure.pathsNotOfKind(let paths) {

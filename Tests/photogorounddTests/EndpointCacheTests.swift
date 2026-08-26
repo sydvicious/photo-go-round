@@ -84,7 +84,7 @@ struct EndpointCacheTests {
         func fill(materialized: Bool = false) async throws {
             try cache.prepare()
             let folder = directory.appending(path: "photos").path(percentEncoded: false)
-            let source = try sources.add(kind: .folder, locator: folder)
+            let source = try await sources.add(kind: .folder, locator: folder)
             sourceIdentifier = source.id
             _ = await sources.refresh(source)
             // Materialized means the bytes are copied into the cache, which is

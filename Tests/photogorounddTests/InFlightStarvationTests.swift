@@ -138,7 +138,7 @@ struct InFlightStarvationTests {
     /// the one event that cannot happen. Nothing is served, so nothing asks for
     /// more, so nothing is dealt, so nothing is served.
     ///
-    /// The heartbeat's `seedIfEmpty` is the only other way out, and it runs on a
+    /// The heartbeat's `topUpIfShort` is the only other way out, and it runs on a
     /// several-minute clock behind a refresh that can hold the loop for longer
     /// than that. So the empty answer itself has to ask.
     @Test("Answering no photos asks for the queue to be filled again")
@@ -150,13 +150,19 @@ struct InFlightStarvationTests {
         try Migrator.migrate(Database(path: path))
 
         let asked = Mutex(0)
+        // **Two events, not one.** Running short means deal more, and dealing
+        // draws uniformly from the library. Coming up empty means the cards on
+        // hand all need bytes that are not here, so dealing uniformly hands
+        // back another cold one. The empty answer rings its own bell.
+        let cameUpEmpty = Mutex(0)
         let cacheRoot = directory.appending(path: "cache")
         let endpoint = PictureEndpoint(
             databasePath: path,
             cacheRoot: cacheRoot,
             preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.204.\(UUID())")!),
             store: PhotoStore(root: cacheRoot),
-            queueRanShort: { asked.withLock { $0 += 1 } }
+            queueRanShort: { asked.withLock { $0 += 1 } },
+            queueCameUpEmpty: { cameUpEmpty.withLock { $0 += 1 } }
         )
 
         let head = try #require(
@@ -165,9 +171,12 @@ struct InFlightStarvationTests {
 
         #expect(response.status == 204)
         #expect(
-            asked.withLock({ $0 }) == 1,
+            cameUpEmpty.withLock({ $0 }) == 1,
             "a 204 left the filler unrung, so nothing would ever deal again"
         )
+        #expect(
+            asked.withLock({ $0 }) == 0,
+            "an empty answer asked for more of the same rather than for what is here")
     }
 }
 
