@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// A source somebody has asked for, before anything has checked whether it is
 /// there.

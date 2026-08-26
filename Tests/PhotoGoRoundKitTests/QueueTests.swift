@@ -115,6 +115,43 @@ struct QueueTests {
         #expect(thirds.allSatisfy { $0 >= 5 }, "clustered at one end: \(thirds)")
     }
 
+    @Test("The card at the top is not starved by the ones queued after it")
+    func theTopCardIsNotStarved() throws {
+        // **Observed live on 2026-08-25**: photo 8239 held the highest sort key
+        // for six and a half hours while cards queued minutes earlier were
+        // served and replaced around it.
+        //
+        // A new key is drawn between the lowest and the highest currently
+        // queued. Inserting uniformly among *n* cards has *n+1* gaps — before
+        // the first, between each pair, and after the last — and a draw bounded
+        // above by the maximum can only ever reach the first *n* of them. The
+        // card holding the top key is therefore a fixed point, and respacing
+        // preserves order, so it stays there. One slot of twenty dies, one
+        // photograph is never shown, and nothing says so.
+        let (library, ids, source) = try library(photos: 400)
+        let queue = PhotoQueue(database: library.database, nominalSize: 20)
+
+        let original = Array(ids.prefix(20))
+        for id in original { try queue.append(photoID: id, sourceID: source) }
+
+        // Steady state, which is the only state that matters: the filler keeps
+        // the queue full, so one card goes on for every one served. A queue
+        // allowed to drain would reach its top card eventually and hide this.
+        var served: Set<Int64> = []
+        var next = original.count
+        for _ in 0..<300 {
+            guard let card = try queue.serve() else { break }
+            served.insert(card.id)
+            try queue.append(photoID: ids[next], sourceID: source)
+            next += 1
+        }
+
+        let starved = Set(original).subtracting(served)
+        #expect(
+            starved.isEmpty,
+            "\(starved.count) of 20 never served in 300 cycles: \(starved.sorted())")
+    }
+
     @Test("An empty queue answers 'no photos', which is not an error")
     func emptyQueueServesNothing() throws {
         let library = try TestLibrary()

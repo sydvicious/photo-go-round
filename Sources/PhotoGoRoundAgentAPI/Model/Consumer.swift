@@ -52,12 +52,14 @@ public struct Consumer: Sendable, Equatable, Identifiable {
     public let seenAt: Date
     public let createdAt: Date
 
-    init(row: Row) throws {
-        id = try row.int64("id")
-        kind = ConsumerKind(try row.string("kind"))
-        displayID = try row.optionalString("display_id")
-        seenAt = try row.date("seen_at")
-        createdAt = try row.date("created_at")
+    public init(
+        id: Int64, kind: ConsumerKind, displayID: String?, seenAt: Date, createdAt: Date
+    ) {
+        self.id = id
+        self.kind = kind
+        self.displayID = displayID
+        self.seenAt = seenAt
+        self.createdAt = createdAt
     }
 }
 

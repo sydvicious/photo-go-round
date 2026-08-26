@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// Opening the library, and the two conveniences every subcommand wants.
 ///

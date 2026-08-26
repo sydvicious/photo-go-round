@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// The shared deck: one sequence, dealt from by every surface.
 ///

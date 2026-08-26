@@ -3,6 +3,7 @@ import Testing
 
 @testable import PhotoGoRoundKit
 @testable import pgr_ctl
+@testable import PhotoGoRoundAgentAPI
 
 @Suite("pgr_ctl preferences")
 struct PreferenceCommandsTests {
@@ -80,29 +81,51 @@ struct PreferenceCommandsTests {
 @Suite("pgr_ctl doorbells")
 struct NotifyCommandTests {
 
-    @Test("Every topic the man page offers maps to a real notification")
+    private let environment = MacHostEnvironment(
+        containerOverride: URL(filePath: "/tmp/pgr-notify-tests"))
+
+    @Test("Every topic the man page offers is a real one, and the word is the topic")
     func topicsAreComplete() {
-        let names = NotifyCommand.topics.map(\.name)
+        // The lookup table this used to hold is gone: a topic's raw value *is*
+        // the word `pgr_ctl notify` takes, so a table pairing them could only
+        // ever disagree with itself.
+        let names = DarwinNotification.Topic.allCases.map(\.rawValue)
         #expect(names == ["prefs", "deck", "sources", "cache"])
-        // Distinct topics, so no two words ring the same bell.
-        #expect(Set(NotifyCommand.topics.map(\.topic)).count == names.count)
+        #expect(Set(names).count == names.count)
     }
 
-    @Test("Topics carry the identifier the agent observes")
+    @Test("A topic's word survives into the name the agent observes")
     func topicsAreTheAgentsOwn() {
-        let byName = Dictionary(
-            uniqueKeysWithValues: NotifyCommand.topics.map { ($0.name, $0.topic) })
-        #expect(byName["prefs"] == .preferencesChanged)
-        #expect(byName["deck"] == .deckAdvanced)
-        #expect(byName["sources"] == .sourcesChanged)
-        #expect(byName["cache"] == .cacheChanged)
-        #expect(byName["sources"]?.rawValue == "com.sydpolk.photogoround.sources")
+        #expect(DarwinNotification.Topic(rawValue: "prefs") == .preferencesChanged)
+        #expect(DarwinNotification.Topic(rawValue: "deck") == .deckAdvanced)
+        #expect(DarwinNotification.Topic(rawValue: "sources") == .sourcesChanged)
+        #expect(DarwinNotification.Topic(rawValue: "cache") == .cacheChanged)
+
+        // **Scoped to the library, not global.** The bare name was shared by
+        // every agent on the Mac, which is what let a scratch agent on a
+        // throwaway database order the development agent to rescan.
+        let name = environment.doorbells.name(.sourcesChanged)
+        #expect(name.hasPrefix("com.sydpolk.photogoround."))
+        #expect(name.hasSuffix(".sources"))
+        #expect(name != "com.sydpolk.photogoround.sources")
+    }
+
+    @Test("A different container rings a different bell")
+    func containersDoNotShare() {
+        let other = MacHostEnvironment(containerOverride: URL(filePath: "/tmp/pgr-notify-other"))
+        #expect(
+            environment.doorbells.name(.sourcesChanged)
+                != other.doorbells.name(.sourcesChanged))
     }
 
     @Test("An unknown topic is refused rather than posted")
     func unknownTopicIsAnError() {
-        #expect(throws: (any Error).self) { try NotifyCommand.run(topic: "wallpaper") }
-        #expect(throws: (any Error).self) { try NotifyCommand.run(topic: "") }
+        #expect(throws: (any Error).self) {
+            try NotifyCommand.run(topic: "wallpaper", environment: environment)
+        }
+        #expect(throws: (any Error).self) {
+            try NotifyCommand.run(topic: "", environment: environment)
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 import AppKit
-import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 import os
 import SwiftUI
 import UniformTypeIdentifiers

@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// Pictures that are ready to be served, in an order nothing chose.
 ///
@@ -70,11 +71,25 @@ public struct PhotoQueue {
     /// makes the order pictures appear in the order they were *fetched* in, so
     /// the fastest source owns the front whatever its share of the library.
     ///
-    /// The key is drawn uniformly between the smallest and largest currently
-    /// queued, which places the card uniformly among the cards present without
-    /// moving any of them. An empty queue spans nothing, so it gets `[0, 1)`;
-    /// a queue of one has no interval either, so the new card is offset past it
-    /// rather than tying.
+    /// The key is drawn uniformly across the cards present, **including the gap
+    /// above the highest of them**, which places the card without moving any.
+    /// An empty queue spans nothing, so it gets `[0, 1)`; a queue of one has no
+    /// interval either, so the new card is offset past it rather than tying.
+    ///
+    /// **That gap above the top is not decoration.** Inserting among *n* cards
+    /// has *n+1* gaps — before the first, between each pair, and after the last
+    /// — and a draw bounded above by the maximum reaches only the first *n*.
+    /// The card holding the top key is then a fixed point: every arrival sorts
+    /// below it, serving takes the lowest first, and `respaceIfCollapsing`
+    /// renumbers in order, so it stays on top forever. One slot of twenty dies,
+    /// one photograph is never shown, its bytes stay pinned, and nothing says
+    /// so. Found live on 2026-08-25 with a card that had held the top key for
+    /// six and a half hours. Widening the span by one average gap — `n / (n-1)`
+    /// — makes the region above the top exactly as likely as any other gap.
+    ///
+    /// It also relieves the collapse `respaceIfCollapsing` exists for, since
+    /// `hi` can now rise rather than only `lo`. That is a side effect and not a
+    /// replacement: respacing stays as the backstop.
     ///
     /// Nothing is evicted, nothing is capped, and an entry already queued is not
     /// added twice — a provider re-offering a picture we are already holding is
@@ -94,10 +109,12 @@ public struct PhotoQueue {
                 SELECT :photo, :source, :now,
                        CASE
                          WHEN lo IS NULL THEN :r
-                         WHEN hi > lo    THEN lo + :r * (hi - lo)
+                         WHEN hi > lo    THEN lo + :r * (hi - lo) * n / (n - 1.0)
                          ELSE lo + :r
                        END
-                  FROM (SELECT MIN(sort_key) AS lo, MAX(sort_key) AS hi FROM queue);
+                  FROM (
+                    SELECT MIN(sort_key) AS lo, MAX(sort_key) AS hi, COUNT(*) AS n FROM queue
+                  );
                 """,
                 [
                     "photo": .int(photoID), "source": .int(sourceID), "now": SQLValue(now),

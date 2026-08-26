@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 public enum DeckError: Error, CustomStringConvertible, Sendable {
     case unknownConsumer(id: Int64)

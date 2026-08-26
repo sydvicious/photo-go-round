@@ -1,5 +1,5 @@
 import Foundation
-import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// The agent's source endpoints, over HTTP and nothing else.
 ///

@@ -1,5 +1,6 @@
 import Foundation
-import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
+import PhotoGoRoundAgentAPI
 
 /// The Mac agent's client: one `GET /v1/next` per picture.
 ///

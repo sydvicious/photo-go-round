@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// Looking at the library: what it holds, what is ready, and what it has been
 /// doing.

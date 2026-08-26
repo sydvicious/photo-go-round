@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// Applies the schema's history to a database.
 ///

@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// Managing sources from a terminal.
 ///

@@ -267,6 +267,11 @@ listening goes and looks. Valid topics are `prefs`, `sources`, `deck`, and
 `cache` — the preferences, the source list, the shuffle's position, and the
 cached bytes respectively.
 
+The bell is scoped to the library, so it reaches only processes that have the
+same database open. `--prod`, `--container`, and `--database` therefore decide
+whose bell rings, and the posted name is printed so it can be checked against
+the agent being watched.
+
 `log`
 What this project's processes have recorded. They all write to the system log
 under one subsystem, and this reads back that subsystem and nothing else. `-f`

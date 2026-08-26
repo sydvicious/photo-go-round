@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotoGoRoundKit
+@testable import PhotoGoRoundAgentAPI
 
 /// The consumer registry: a row per surface and a heartbeat, and deliberately
 /// nothing more.

@@ -1,5 +1,5 @@
 import Foundation
-import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 import Testing
 
 @testable import Photo_Go_Round

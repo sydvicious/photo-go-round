@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// The statistical assertions, which are the thing a command line can do that a
 /// window cannot.

@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// Hand-rolled argument parsing. A dozen flags is an afternoon and about two
 /// hundred lines, which is cheaper than taking a dependency for it.

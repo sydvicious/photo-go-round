@@ -7,6 +7,17 @@ import Foundation
 /// measurements rather than by guess.
 public struct CacheSettings: Sendable, Equatable {
 
+    /// Enough to keep a provider's latency covered without turning a warm-up
+    /// into a thundering herd against one disk. Four is the number every package
+    /// manager settled on, for the same reason: fetching is nearly all latency.
+    ///
+    /// **It is one number across every source, not one per source.** That is
+    /// fine for folders, where it is a throughput knob against your own disk. It
+    /// will not be once the Photos and Google providers exist, where it is a
+    /// politeness limit against somebody else's service.
+    public static let defaultConcurrency = 4
+
+
     /// The bound, and the only one.
     ///
     /// A photograph count stopped meaning anything once one photograph became an

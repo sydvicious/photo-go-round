@@ -3,6 +3,7 @@ import Testing
 
 @testable import PhotoGoRoundKit
 @testable import photogoroundd
+@testable import PhotoGoRoundAgentAPI
 
 /// Deleting a source in the app, and it staying deleted.
 ///

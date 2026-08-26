@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotoGoRoundKit
+@testable import PhotoGoRoundAgentAPI
 
 @Suite("Host environment and preferences")
 struct HostTests {
@@ -451,17 +452,20 @@ struct HostTests {
 
     @Test("A posted notification reaches an observer")
     func notificationsAreDelivered() async throws {
-        let topic = DarwinNotification.Topic("tests.\(UUID().uuidString.prefix(8))")
+        // A namespace of its own, so a real topic can be rung without any
+        // agent on this Mac hearing it — which is the same isolation the
+        // libraries themselves now get.
+        let bells = DarwinNotification.Doorbells(namespace: "tests-\(UUID().uuidString.prefix(8))")
         let received = Mutex(0)
 
         let observation = try #require(
-            DarwinNotification.observe(topic, on: .global()) {
+            bells.observe(.sourcesChanged, on: .global()) {
                 received.withLock { $0 += 1 }
             }
         )
         defer { observation.cancel() }
 
-        DarwinNotification.post(topic)
+        bells.post(.sourcesChanged)
         // Darwin notifications are asynchronous by nature; poll rather than
         // assuming an ordering the mechanism does not promise.
         for _ in 0..<50 where received.withLock({ $0 }) == 0 {
@@ -472,16 +476,16 @@ struct HostTests {
 
     @Test("A cancelled observation stops hearing")
     func cancellingStopsDelivery() async throws {
-        let topic = DarwinNotification.Topic("tests.\(UUID().uuidString.prefix(8))")
+        let bells = DarwinNotification.Doorbells(namespace: "tests-\(UUID().uuidString.prefix(8))")
         let received = Mutex(0)
         let observation = try #require(
-            DarwinNotification.observe(topic, on: .global()) { received.withLock { $0 += 1 } }
+            bells.observe(.sourcesChanged, on: .global()) { received.withLock { $0 += 1 } }
         )
         observation.cancel()
         // Cancelling twice is not an error.
         observation.cancel()
 
-        DarwinNotification.post(topic)
+        bells.post(.sourcesChanged)
         try await Task.sleep(for: .milliseconds(200))
         #expect(received.withLock { $0 } == 0)
     }

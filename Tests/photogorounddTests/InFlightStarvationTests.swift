@@ -3,6 +3,7 @@ import Testing
 
 @testable import PhotoGoRoundKit
 @testable import photogoroundd
+@testable import PhotoGoRoundAgentAPI
 
 /// The queue emptying because everything it held is out being fetched.
 ///

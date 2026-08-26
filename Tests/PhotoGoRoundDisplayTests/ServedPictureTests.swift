@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotoGoRoundDisplay
+@testable import PhotoGoRoundAgentAPI
 
 @Suite("Reading what the service said about a picture")
 struct PictureTests {

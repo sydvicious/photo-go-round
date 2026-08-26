@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 // The headless agent. It owns the library and does all the work; every other
 // surface is a consumer that reads the deck and displays cards.

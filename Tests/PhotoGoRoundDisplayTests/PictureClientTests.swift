@@ -4,6 +4,7 @@ import Synchronization
 import Testing
 
 @testable import PhotoGoRoundDisplay
+@testable import PhotoGoRoundAgentAPI
 
 @Suite("Asking the service for a picture")
 struct PictureClientTests {

@@ -19,7 +19,7 @@
 		AA0000000000000000000045 /* SourceServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000055 /* SourceServiceTests.swift */; };
 		AA0000000000000000000046 /* SourceStandingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000056 /* SourceStandingTests.swift */; };
 		AA0000000000000000000047 /* SelectionFollowsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000057 /* SelectionFollowsTests.swift */; };
-		AA0000000000000000000013 /* PhotoGoRoundKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000011 /* PhotoGoRoundKit */; };
+		AA0000000000000000000013 /* PhotoGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000011 /* PhotoGoRoundAgentAPI */; };
 		AA0000000000000000000014 /* PhotoGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000012 /* PhotoGoRoundDisplay */; };
 /* End PBXBuildFile section */
 
@@ -45,7 +45,7 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
-				AA0000000000000000000013 /* PhotoGoRoundKit in Frameworks */,
+				AA0000000000000000000013 /* PhotoGoRoundAgentAPI in Frameworks */,
 				AA0000000000000000000014 /* PhotoGoRoundDisplay in Frameworks */,
 			);
 		};
@@ -121,7 +121,7 @@
 			name = "Photo-Go-Round";
 			productName = "Photo-Go-Round";
 			packageProductDependencies = (
-				AA0000000000000000000011 /* PhotoGoRoundKit */,
+				AA0000000000000000000011 /* PhotoGoRoundAgentAPI */,
 				AA0000000000000000000012 /* PhotoGoRoundDisplay */,
 			);
 			productReference = 000000000000000000000120 /* Photo-Go-Round.app */;
@@ -240,9 +240,9 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		AA0000000000000000000011 /* PhotoGoRoundKit */ = {
+		AA0000000000000000000011 /* PhotoGoRoundAgentAPI */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = PhotoGoRoundKit;
+			productName = PhotoGoRoundAgentAPI;
 		};
 		AA0000000000000000000012 /* PhotoGoRoundDisplay */ = {
 			isa = XCSwiftPackageProductDependency;

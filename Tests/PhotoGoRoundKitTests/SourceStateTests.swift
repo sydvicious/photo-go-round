@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotoGoRoundKit
+@testable import PhotoGoRoundAgentAPI
 
 /// The source state machine, and what serving does in each square of it.
 ///

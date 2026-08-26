@@ -1,6 +1,7 @@
 import Foundation
 
 @testable import PhotoGoRoundKit
+@testable import PhotoGoRoundAgentAPI
 
 /// A migrated database plus the handful of inserts the deck tests need.
 ///

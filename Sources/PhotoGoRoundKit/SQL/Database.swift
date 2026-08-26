@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import PhotoGoRoundAgentAPI
 
 /// A connection to the library database.
 ///

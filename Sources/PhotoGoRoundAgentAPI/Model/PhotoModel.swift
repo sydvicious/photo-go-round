@@ -73,16 +73,5 @@ public struct DeckCard: Sendable, Equatable, Identifiable {
         self.storage = storage
         self.dealSeq = dealSeq
     }
-
-    init(row: Row, dealSeq: Int64?) throws {
-        self.init(
-            id: try row.int64("id"),
-            uuid: try row.string("uuid"),
-            sourceID: try row.int64("source_id"),
-            sourceUUID: try row.string("source_uuid"),
-            externalID: try row.string("external_id"),
-            storage: PhotoStorage(rawValue: try row.string("storage")) ?? .materialized,
-            dealSeq: dealSeq
-        )
-    }
 }
+

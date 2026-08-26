@@ -76,20 +76,34 @@ public struct Source: Sendable, Equatable, Identifiable {
     public let addedAt: Date
     public let scannedAt: Date?
 
-    init(row: Row) throws {
-        id = try row.int64("id")
-        uuid = try row.string("uuid")
-        kind = SourceKind(try row.string("kind"))
-        locator = try row.string("locator")
-        bookmark = try row.optionalData("bookmark")
-        stampUUID = try row.optionalString("stamp_uuid")
-        enabled = try row.bool("enabled")
-        recursive = try row.optionalInt("recursive").map { $0 != 0 }
-        available = try row.bool("available")
-        unavailableReason = try row.optionalString("unavailable_reason")
-        unavailableAt = try row.optionalDate("unavailable_at")
-        addedAt = try row.date("added_at")
-        scannedAt = try row.optionalDate("scanned_at")
+    public init(
+        id: Int64,
+        uuid: String,
+        kind: SourceKind,
+        locator: String,
+        bookmark: Data? = nil,
+        stampUUID: String? = nil,
+        enabled: Bool = true,
+        recursive: Bool? = nil,
+        available: Bool = true,
+        unavailableReason: String? = nil,
+        unavailableAt: Date? = nil,
+        addedAt: Date,
+        scannedAt: Date? = nil
+    ) {
+        self.id = id
+        self.uuid = uuid
+        self.kind = kind
+        self.locator = locator
+        self.bookmark = bookmark
+        self.stampUUID = stampUUID
+        self.enabled = enabled
+        self.recursive = recursive
+        self.available = available
+        self.unavailableReason = unavailableReason
+        self.unavailableAt = unavailableAt
+        self.addedAt = addedAt
+        self.scannedAt = scannedAt
     }
 }
 

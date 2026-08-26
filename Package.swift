@@ -13,6 +13,17 @@ let package = Package(
         .iOS("27.0"),
     ],
     products: [
+        // What a client needs to talk to the agent, and nothing about how the
+        // agent does its work. Preferences (which is how anything finds the
+        // floating service port), where this deployment's container lives, the
+        // value types the wire is made of, and the one file question the app is
+        // better placed to answer than a round trip is.
+        //
+        // **It exists so the app can stop linking the kit.** The kit owns the
+        // database, the cache, the deck, and — from Phase 2 — PhotoKit; none of
+        // that belongs in a process whose entire job is drawing what it is
+        // handed. See `Apple Photos Plan.md`.
+        .library(name: "PhotoGoRoundAgentAPI", targets: ["PhotoGoRoundAgentAPI"]),
         .library(name: "PhotoGoRoundKit", targets: ["PhotoGoRoundKit"]),
         // What a surface needs to show a picture: the client that asks for
         // one, and the geometry of drawing it. Separate from the kit because
@@ -28,12 +39,18 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "PhotoGoRoundAgentAPI",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
             name: "PhotoGoRoundKit",
+            dependencies: ["PhotoGoRoundAgentAPI"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "PhotoGoRoundDisplay",
-            dependencies: ["PhotoGoRoundKit"],
+            // The client, not the kit: all it wants is the published port.
+            dependencies: ["PhotoGoRoundAgentAPI"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // Terminal output, shared by the two executables and by nothing else.
@@ -46,14 +63,14 @@ let package = Package(
         ),
         .executableTarget(
             name: "photogoroundd",
-            dependencies: ["PhotoGoRoundKit", "Console"],
+            dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit", "Console"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The rig. A separate binary because the service has exactly one job
         // and answering questions is not it.
         .executableTarget(
             name: "pgr_ctl",
-            dependencies: ["PhotoGoRoundKit", "Console"],
+            dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit", "Console"],
             // Consumed by the linker below, not copied into a bundle.
             exclude: ["Info.plist"],
             swiftSettings: [.swiftLanguageMode(.v6)],
@@ -73,22 +90,22 @@ let package = Package(
         ),
         .testTarget(
             name: "PhotoGoRoundKitTests",
-            dependencies: ["PhotoGoRoundKit"],
+            dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "PhotoGoRoundDisplayTests",
-            dependencies: ["PhotoGoRoundDisplay"],
+            dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundDisplay"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "photogorounddTests",
-            dependencies: ["photogoroundd"],
+            dependencies: ["PhotoGoRoundAgentAPI", "photogoroundd"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "pgr_ctlTests",
-            dependencies: ["pgr_ctl"],
+            dependencies: ["PhotoGoRoundAgentAPI", "pgr_ctl"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

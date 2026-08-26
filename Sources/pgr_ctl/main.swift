@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 // The rig.
 //
@@ -82,7 +83,7 @@ do {
         try PreferenceCommands.set(key: key, value: value, environment: hostEnvironment(options))
 
     case .notify(let topic):
-        try NotifyCommand.run(topic: topic)
+        try NotifyCommand.run(topic: topic, environment: hostEnvironment(options))
 
     case .log:
         try LogCommand.run(follow: options.follow, last: options.lastInterval)

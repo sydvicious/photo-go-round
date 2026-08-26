@@ -289,3 +289,103 @@ private actor Gate {
         waiting.removeAll()
     }
 }
+
+/// What a completion line is entitled to say about the backlog.
+///
+/// Observed live on 2026-08-25: the agent's console ended on `CACHE: … fetched,
+/// 450103 bytes, back on the queue — 1 waiting` and stayed there. Nothing was
+/// waiting. The count is read from inside the fetch closure, which runs *before*
+/// `CacheQueue` retires the item, so the last fetch of a burst reports its own
+/// download as though it were still queued behind itself.
+@Suite("What a finished fetch reports")
+struct FinishedFetchReportingTests {
+
+    /// A box the fetch closure writes to, standing in for the log line
+    /// `PhotoCache` emits at exactly this moment.
+    private final class Seen: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [Int] = []
+        func record(_ value: Int) {
+            lock.lock()
+            values.append(value)
+            lock.unlock()
+        }
+        var all: [Int] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
+        }
+    }
+
+    @Test("The only fetch in flight reports an empty backlog, not itself")
+    func theLastFetchReportsNothingWaiting() async throws {
+        let pending = CacheQueue.Pending()
+        let seen = Seen()
+        let queue = CacheQueue(
+            concurrency: 4,
+            // Exactly where `PhotoCache` logs `.cached`: inside the fetch, an
+            // instant before the queue lets the item go.
+            fetch: { _ in
+                seen.record(pending.backlog)
+                return true
+            },
+            log: { _ in },
+            pending: pending
+        )
+
+        await queue.request(1)
+        while await queue.isBusy { await Task.yield() }
+
+        #expect(seen.all == [0], "a completion line would have printed \(seen.all) waiting")
+        #expect(pending.count == 0)
+        #expect(pending.backlog == 0)
+    }
+
+    /// Holds the lanes still so the backlog can be built up behind a running
+    /// fetch. Without it the first request's lane can drain before the second
+    /// arrives, and what the first fetch sees is a scheduling accident.
+    private actor Gate {
+        private var open = false
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            guard !open else { return }
+            await withCheckedContinuation { waiting.append($0) }
+        }
+
+        func release() {
+            open = true
+            for continuation in waiting { continuation.resume() }
+            waiting.removeAll()
+        }
+    }
+
+    @Test("A backlog behind the running fetch is reported, and shrinks to nothing")
+    func aRealBacklogIsStillCounted() async throws {
+        // The fix must not simply report zero: a fetch with work stacked behind
+        // it should say so, which is the whole reason the number is printed.
+        let pending = CacheQueue.Pending()
+        let seen = Seen()
+        let gate = Gate()
+        let queue = CacheQueue(
+            concurrency: 1,
+            fetch: { _ in
+                seen.record(pending.backlog)
+                await gate.wait()
+                return true
+            },
+            log: { _ in },
+            pending: pending
+        )
+
+        for id in Int64(1)...3 { await queue.request(id) }
+        await gate.release()
+        while await queue.isBusy { await Task.yield() }
+
+        // The first lane's reading depends on how much of the batch had landed
+        // when it started, which is not something to pin. The two behind it are
+        // exact: one still queued, then none — and never counting itself.
+        #expect(seen.all.count == 3)
+        #expect(Array(seen.all.suffix(2)) == [1, 0], "reported \(seen.all)")
+    }
+}

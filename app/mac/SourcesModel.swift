@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import os
-import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// What the Settings panel knows and does, with no view in it.
 ///

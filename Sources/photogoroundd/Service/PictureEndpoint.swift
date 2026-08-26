@@ -2,6 +2,7 @@ import Console
 import Foundation
 import PhotoGoRoundKit
 import UniformTypeIdentifiers
+import PhotoGoRoundAgentAPI
 
 /// The one endpoint that matters.
 ///

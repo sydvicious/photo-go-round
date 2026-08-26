@@ -27,6 +27,14 @@ public struct Preferences: @unchecked Sendable {
     /// read-modify-write leaves open.
     private let onReadingSources: (@Sendable () -> Void)?
 
+    /// Which library's bells to ring when something here changes.
+    ///
+    /// **Nil rings nothing**, which is what a `Preferences` built by hand in a
+    /// test wants: `notify_post` is machine-wide, so a test that announced a
+    /// source change would be telling every agent on the Mac to go and rescan.
+    /// `MacHostEnvironment` attaches the right ones.
+    public var doorbells: DarwinNotification.Doorbells?
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.domain = nil
@@ -173,7 +181,7 @@ public struct Preferences: @unchecked Sendable {
     /// a folder, and a politeness limit to revisit when the Photos and Google
     /// providers make it a request against somebody else's service.
     public var downloadConcurrency: Int {
-        integer(.downloadConcurrency, default: CacheQueue.defaultConcurrency, in: 1...32)
+        integer(.downloadConcurrency, default: CacheSettings.defaultConcurrency, in: 1...32)
     }
 
     /// How many cards to keep queued. A target, not a ceiling.
@@ -269,7 +277,7 @@ public struct Preferences: @unchecked Sendable {
 
     private func write(_ specs: [SourceSpec], keeping unreadable: [Any]) {
         defaults.set(specs.map(\.propertyList) + unreadable, forKey: Key.sources.rawValue)
-        DarwinNotification.post(.sourcesChanged)
+        doorbells?.post(.sourcesChanged)
     }
 
     /// Reads the list, lets `edit` change it, and writes it back — **checking
@@ -419,14 +427,14 @@ public struct Preferences: @unchecked Sendable {
     /// Says where to find the service. The agent's to call, nobody else's.
     public func publishServicePort(_ port: UInt16) {
         defaults.set(Int(port), forKey: Key.servicePort.rawValue)
-        DarwinNotification.post(.preferencesChanged)
+        doorbells?.post(.preferencesChanged)
     }
 
     /// Withdraws it on the way out, so nothing points at a service that has
     /// stopped.
     public func withdrawServicePort() {
         defaults.removeObject(forKey: Key.servicePort.rawValue)
-        DarwinNotification.post(.preferencesChanged)
+        doorbells?.post(.preferencesChanged)
     }
 
     // MARK: - Writing
@@ -437,17 +445,17 @@ public struct Preferences: @unchecked Sendable {
     /// depends on them knowing it.
     public func set(_ key: Key, to value: Double) {
         defaults.set(value, forKey: key.rawValue)
-        DarwinNotification.post(.preferencesChanged)
+        doorbells?.post(.preferencesChanged)
     }
 
     public func set(_ key: Key, to value: Int) {
         defaults.set(value, forKey: key.rawValue)
-        DarwinNotification.post(.preferencesChanged)
+        doorbells?.post(.preferencesChanged)
     }
 
     public func remove(_ key: Key) {
         defaults.removeObject(forKey: key.rawValue)
-        DarwinNotification.post(.preferencesChanged)
+        doorbells?.post(.preferencesChanged)
     }
 
     /// Forces a re-read of the backing store.

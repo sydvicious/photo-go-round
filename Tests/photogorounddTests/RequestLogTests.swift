@@ -3,6 +3,7 @@ import Testing
 
 @testable import PhotoGoRoundKit
 @testable import photogoroundd
+@testable import PhotoGoRoundAgentAPI
 
 /// What the service says it did.
 ///

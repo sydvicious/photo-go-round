@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotoGoRoundKit
+@testable import PhotoGoRoundAgentAPI
 
 /// The source list in preferences, audited.
 ///

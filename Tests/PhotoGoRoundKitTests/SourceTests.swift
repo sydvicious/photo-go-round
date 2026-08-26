@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotoGoRoundKit
+@testable import PhotoGoRoundAgentAPI
 
 @Suite("Sources")
 struct SourceTests {
@@ -215,15 +216,15 @@ struct SourceTests {
         // because "/" prefixes everything — and the difference is what tells
         // the user to plug the drive back in rather than that their photos are
         // gone.
-        #expect(FileClassifier.volumeIsMounted(path: "/Volumes/Backup/photos", mountPoints: mounts))
-        #expect(!FileClassifier.volumeIsMounted(path: "/Volumes/Ejected/photos", mountPoints: mounts))
+        #expect(PathAvailability.volumeIsMounted(path: "/Volumes/Backup/photos", mountPoints: mounts))
+        #expect(!PathAvailability.volumeIsMounted(path: "/Volumes/Ejected/photos", mountPoints: mounts))
 
         // A missing path on the boot volume really is a missing path.
-        #expect(FileClassifier.volumeIsMounted(path: "/Users/syd/Pictures", mountPoints: mounts))
+        #expect(PathAvailability.volumeIsMounted(path: "/Users/syd/Pictures", mountPoints: mounts))
 
         // Prefix matching is on path components, not characters: a volume named
         // "Backup2" must not satisfy a lookup for "Backup".
-        #expect(!FileClassifier.volumeIsMounted(path: "/Volumes/Backup2/x", mountPoints: ["/", "/Volumes/Backup"]))
+        #expect(!PathAvailability.volumeIsMounted(path: "/Volumes/Backup2/x", mountPoints: ["/", "/Volumes/Backup"]))
     }
 
     // MARK: - Single files

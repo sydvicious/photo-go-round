@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// A directory on disk, optionally walked recursively.
 ///
@@ -30,7 +31,7 @@ public struct FolderSourceProvider: SourceProvider {
                     atPath: root.path(percentEncoded: false), isDirectory: &isDirectory
                 ), isDirectory.boolValue
             else {
-                return .unavailable(reason: FileClassifier.unavailableReason(for: root))
+                return .unavailable(reason: PathAvailability.unavailableReason(for: root))
             }
 
             // `.producesRelativePathURLs` is the whole reason this walk has no
@@ -147,13 +148,13 @@ public struct FolderSourceProvider: SourceProvider {
     }
 
     /// The three states, for anything backed by a path — which is
-    /// `FileClassifier.availability(of:)`, shared with every other caller that
+    /// `PathAvailability.availability(of:)`, shared with every other caller that
     /// needs the same answer about the same path.
     static func fileAvailability(
         of source: Source, using fileAccess: any FileAccess
     ) -> SourceAvailability {
         do {
-            return try fileAccess.withSourceURL(source) { FileClassifier.availability(of: $0) }
+            return try fileAccess.withSourceURL(source) { PathAvailability.availability(of: $0) }
         } catch {
             // Could not even ask. That is not evidence of anything.
             return .offline(reason: String(describing: error))
@@ -183,7 +184,7 @@ public struct FolderSourceProvider: SourceProvider {
             }
             guard sourceIsThere else {
                 return .unknown(
-                    reason: FileClassifier.unavailableReason(for: URL(filePath: source.locator)))
+                    reason: PathAvailability.unavailableReason(for: URL(filePath: source.locator)))
             }
             // The source is right there and the photo is not. It is gone.
             return .absent
@@ -238,7 +239,7 @@ public struct FileSourceProvider: SourceProvider {
         return try await fileAccess.withSourceURL(source, performing: { fileURL in
             let values = try? fileURL.resourceValues(forKeys: Set(FileClassifier.resourceKeys))
             guard values?.isRegularFile == true else {
-                return .unavailable(reason: FileClassifier.unavailableReason(for: fileURL))
+                return .unavailable(reason: PathAvailability.unavailableReason(for: fileURL))
             }
             guard let mediaType = FileClassifier.mediaType(of: fileURL, values: values),
                 mediaType == .image

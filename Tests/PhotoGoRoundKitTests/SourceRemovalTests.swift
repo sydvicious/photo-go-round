@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotoGoRoundKit
+@testable import PhotoGoRoundAgentAPI
 
 /// What happens to a photograph's *bytes* when the photograph stops belonging
 /// to its source.

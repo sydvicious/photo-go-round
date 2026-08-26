@@ -4,6 +4,7 @@ import Testing
 
 @testable import PhotoGoRoundKit
 @testable import photogoroundd
+@testable import PhotoGoRoundAgentAPI
 
 /// Reading a request body, over a real socket.
 ///

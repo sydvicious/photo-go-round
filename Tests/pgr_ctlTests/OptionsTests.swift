@@ -3,6 +3,7 @@ import Testing
 
 @testable import PhotoGoRoundKit
 @testable import pgr_ctl
+@testable import PhotoGoRoundAgentAPI
 
 @Suite("pgr_ctl command line")
 struct OptionsTests {

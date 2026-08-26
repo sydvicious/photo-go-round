@@ -3,6 +3,7 @@ import Testing
 
 @testable import PhotoGoRoundKit
 @testable import pgr_ctl
+@testable import PhotoGoRoundAgentAPI
 
 /// `refresh` asks the agent and returns; it does not walk anything.
 ///

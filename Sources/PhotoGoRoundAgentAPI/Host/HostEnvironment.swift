@@ -22,6 +22,9 @@ public protocol HostEnvironment: Sendable {
     /// `WidgetCenter.reloadTimelines` on iOS: same method, unrelated
     /// implementations.
     func announce(_ topic: DarwinNotification.Topic)
+
+    /// This library's bells, scoped so that another library's do not ring here.
+    var doorbells: DarwinNotification.Doorbells { get }
 }
 
 /// Which library a run is talking to.
@@ -69,6 +72,7 @@ public struct MacHostEnvironment: HostEnvironment {
     /// Which rung of the ladder supplied the roots. Logged at `.notice` on
     /// startup, because "why is it writing there" should never need a debugger.
     public let origin: ContainerOrigin
+    public let doorbells: DarwinNotification.Doorbells
 
     /// User-facing name, hyphenated. The hyphens never appear in an identifier.
     public static let directoryName = "Photo-Go-Round"
@@ -110,10 +114,17 @@ public struct MacHostEnvironment: HostEnvironment {
         // read and write the real source list. Two of the three are obviously
         // per-deployment and the third silently is not, which is exactly why one
         // flag moves all three.
-        preferences = Preferences(
+        // Keyed on the database rather than the container: the two can be
+        // pointed apart, and the library a process belongs to is the one it has
+        // open.
+        doorbells = DarwinNotification.Doorbells(database: databaseURL)
+
+        var resolvedPreferences = Preferences(
             suiteName: environment["PGR_PREFS_SUITE"].flatMap { $0.isEmpty ? nil : $0 }
                 ?? Self.preferenceDomain(for: deployment)
         )
+        resolvedPreferences.doorbells = doorbells
+        preferences = resolvedPreferences
     }
 
     /// Flags beat environment beats App Group beats Application Support.
@@ -213,7 +224,7 @@ public struct MacHostEnvironment: HostEnvironment {
     }
 
     public func announce(_ topic: DarwinNotification.Topic) {
-        DarwinNotification.post(topic)
+        doorbells.post(topic)
     }
 
     /// Creates the directories the agent is about to write into, and says where

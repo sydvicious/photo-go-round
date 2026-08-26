@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// Adding and removing a source, which is a write to *preferences* followed by
 /// a reconcile — never a write to the `source` table.

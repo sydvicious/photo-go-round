@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// Vends a usable `URL` for a source's item, for the duration of a closure.
 ///

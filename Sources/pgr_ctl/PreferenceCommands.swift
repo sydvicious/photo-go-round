@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// Reading and writing preferences, in the domain the agent actually reads.
 ///
@@ -96,21 +97,18 @@ enum PreferenceCommands {
 /// bug and look identical from the outside.
 enum NotifyCommand {
 
-    static let topics: [(name: String, topic: DarwinNotification.Topic)] = [
-        ("prefs", .preferencesChanged),
-        ("deck", .deckAdvanced),
-        ("sources", .sourcesChanged),
-        ("cache", .cacheChanged),
-    ]
-
-    static func run(topic name: String) throws {
-        guard let match = topics.first(where: { $0.name == name }) else {
-            Console.failure(
-                "unknown topic \(name). One of: \(topics.map(\.name).joined(separator: ", "))")
+    static func run(topic name: String, environment: MacHostEnvironment) throws {
+        guard let topic = DarwinNotification.Topic(rawValue: name) else {
+            let known = DarwinNotification.Topic.allCases.map(\.rawValue).joined(separator: ", ")
+            Console.failure("unknown topic \(name). One of: \(known)")
             throw ExitCode(1)
         }
-        DarwinNotification.post(match.topic)
-        Console.recovered("posted \(match.topic.rawValue)")
+        // **The scoped name, not the topic.** Doorbells are keyed on the
+        // database, so the whole point of ringing one by hand is knowing which
+        // library's bell just rang — and whether it is the one the agent you are
+        // watching is listening to.
+        environment.doorbells.post(topic)
+        Console.recovered("posted \(environment.doorbells.name(topic))")
     }
 }
 

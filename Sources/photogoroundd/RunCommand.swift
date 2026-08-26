@@ -1,6 +1,7 @@
 import Console
 import Foundation
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// The agent loop.
 ///
@@ -91,7 +92,9 @@ struct RunCommand {
                     sources: SourceStore(database: database, bytes: store),
                     store: store)
                 filler.log = Self.speak
-                filler.pendingCaches = { pendingCaches.count }
+                // The backlog, not the total: this closure logs from inside
+                // the fetch, before the queue lets the finishing item go.
+                filler.pendingCaches = { pendingCaches.backlog }
                 let fetched = (try? await filler.cache(photoID: photoID)) ?? false
                 if fetched { environment.announce(.cacheChanged) }
                 return fetched
@@ -218,7 +221,7 @@ struct RunCommand {
         // and cross-process UserDefaults observation is unreliable — so the
         // doorbell is what tells us to re-read.
         let preferencesChanged = Flag()
-        let preferences_ = DarwinNotification.observe(.preferencesChanged, on: .global()) {
+        let preferences_ = environment.doorbells.observe(.preferencesChanged, on: .global()) {
             preferencesChanged.raise()
         }
 
@@ -227,7 +230,7 @@ struct RunCommand {
         // happening is the wrong first impression, and the doorbell exists
         // precisely so it does not have to be waited out.
         let sourcesChanged = Flag()
-        let sources_ = DarwinNotification.observe(.sourcesChanged, on: .global()) {
+        let sources_ = environment.doorbells.observe(.sourcesChanged, on: .global()) {
             sourcesChanged.raise()
         }
         defer {

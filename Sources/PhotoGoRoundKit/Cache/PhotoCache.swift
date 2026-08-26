@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// The bounded window of actual image files.
 ///
@@ -40,6 +41,10 @@ public struct PhotoCache {
     /// How many photographs are waiting to be fetched, so a `CACHE:` line
     /// written from here says the same thing as one written by the queue.
     public var pendingCaches: @Sendable () -> Int = { 0 }
+
+    /// Which library's bells this cache rings. Nil rings nothing, so a cache
+    /// built in a test cannot tell every agent on the Mac that its deck moved.
+    public var doorbells: DarwinNotification.Doorbells?
 
     /// How long one request may spend walking the queue before it answers
     /// nothing.
@@ -617,7 +622,7 @@ public struct PhotoCache {
             if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
             // The deck moved, so anything mirroring its position — a diagnostic
             // panel, another surface's idea of what is next — should go and look.
-            DarwinNotification.post(.deckAdvanced)
+            doorbells?.post(.deckAdvanced)
             return ServedPhoto(
                 card: DeckCard(
                     id: card.id, uuid: card.uuid, sourceID: card.sourceID,

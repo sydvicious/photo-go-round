@@ -4,7 +4,7 @@ import Foundation
 import ImageIO
 import Observation
 import PhotoGoRoundDisplay
-import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// Asks the agent for a picture, decodes it, and holds the one on screen.
 ///

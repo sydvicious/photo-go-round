@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// The global pool: every photo the system knows about, from every source.
 ///

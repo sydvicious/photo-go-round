@@ -2,6 +2,7 @@ import Console
 import Foundation
 import Network
 import PhotoGoRoundKit
+import PhotoGoRoundAgentAPI
 
 /// A minimal HTTP/1.1 listener, on `Network.framework` and nothing else.
 ///

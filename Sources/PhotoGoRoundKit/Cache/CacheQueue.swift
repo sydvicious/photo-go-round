@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// The queue of pictures to cache.
 ///
@@ -31,16 +32,6 @@ public actor CacheQueue {
 
     /// How many fetches run at once when nothing says otherwise.
     ///
-    /// Enough to keep a provider's latency covered without turning a warm-up
-    /// into a thundering herd against one disk. Four is the number every package
-    /// manager settled on, for the same reason: fetching is nearly all latency.
-    ///
-    /// **It is one number across every source, not one per source.** That is
-    /// fine for folders, where it is a throughput knob against your own disk. It
-    /// will not be once the Photos and Google providers exist, where it is a
-    /// politeness limit against somebody else's service.
-    public static let defaultConcurrency = 4
-
     private let concurrency: Int
     private let fetch: @Sendable (Int64) async -> Bool
     private let log: @Sendable (QueueEvent) -> Void
@@ -50,7 +41,7 @@ public actor CacheQueue {
     private let describe: @Sendable (Int64) -> (photo: String, source: Int64?)
 
     public init(
-        concurrency: Int = CacheQueue.defaultConcurrency,
+        concurrency: Int = CacheSettings.defaultConcurrency,
         fetch: @escaping @Sendable (Int64) async -> Bool,
         describe: @escaping @Sendable (Int64) -> (photo: String, source: Int64?) = {
             ("photo \($0)", nil)
@@ -78,21 +69,42 @@ public actor CacheQueue {
     /// it. It is a bare counter because the lines written while a photograph
     /// is being fetched come from `PhotoCache`, which is not an actor and
     /// cannot await one.
+    /// Two numbers, because two different questions are asked of them and
+    /// answering both with one produced a line that read as a stuck fetch.
     public final class Pending: @unchecked Sendable {
         private let lock = NSLock()
         private var value = 0
+        private var queued = 0
 
         public init() {}
 
+        /// Waiting **plus in flight**. What the gauge wants: a card out being
+        /// fetched still counts as the queue's when deciding whether to deal,
+        /// or one that vanished mid-download would be dealt a cold replacement.
         public var count: Int {
             lock.lock()
             defer { lock.unlock() }
             return value
         }
 
-        func set(_ new: Int) {
+        /// Waiting only — **what "waiting" means in a log line**.
+        ///
+        /// The completion messages are emitted from inside the fetch closure,
+        /// which runs before the queue retires the item, so reading `count`
+        /// there counts the finishing download as though it were still queued
+        /// behind itself. The last fetch of a burst then prints "1 waiting" and,
+        /// with nothing following it, sits at the bottom of the console looking
+        /// exactly like a fetch that never returned. Observed 2026-08-25.
+        public var backlog: Int {
             lock.lock()
-            value = new
+            defer { lock.unlock() }
+            return queued
+        }
+
+        func set(waiting: Int, executing: Int) {
+            lock.lock()
+            queued = waiting
+            value = waiting + executing
             lock.unlock()
         }
     }
@@ -126,7 +138,7 @@ public actor CacheQueue {
         }
         guard known.insert(photoID).inserted else { return }
         waiting.append(photoID)
-        pending.set(waiting.count + executing)
+        pending.set(waiting: waiting.count, executing: executing)
         let it = describe(photoID)
         log(.cacheRequested(photo: it.photo, source: it.source, pending: waiting.count))
         start()
@@ -145,7 +157,7 @@ public actor CacheQueue {
     private func drain() async {
         while let photoID = next() {
             let it = describe(photoID)
-            log(.caching(photo: it.photo, source: it.source, pending: pending.count))
+            log(.caching(photo: it.photo, source: it.source, pending: pending.backlog))
             _ = await fetch(photoID)
             finished(photoID)
         }
@@ -156,13 +168,17 @@ public actor CacheQueue {
         guard !waiting.isEmpty else { return nil }
         let photoID = waiting.removeFirst()
         executing += 1
-        pending.set(waiting.count + executing)
+        pending.set(waiting: waiting.count, executing: executing)
         return photoID
     }
 
     private func finished(_ photoID: Int64) {
         known.remove(photoID)
         executing -= 1
-        pending.set(waiting.count + executing)
+        pending.set(waiting: waiting.count, executing: executing)
     }
+
+    /// Anything queued, taken, or running. For tests that need to wait for the
+    /// lanes to settle without sleeping.
+    var isBusy: Bool { running > 0 || executing > 0 || !waiting.isEmpty }
 }
