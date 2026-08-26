@@ -232,6 +232,47 @@ struct OptionsTests {
         #expect(options.databaseOverride?.path(percentEncoded: false) == "/tmp/d/lib.sqlite")
     }
 
+    // MARK: - The Photos spike
+
+    @Test("The spike takes a count and an album, and defaults to neither")
+    func photosSpikeParses() throws {
+        #expect(try command(["photos-spike"]) == .photosSpike)
+        #expect(try parse(["photos-spike"]).albumIdentifier == nil)
+
+        let aimed = try parse(["photos-spike", "-n", "20", "--album", "Favorites"])
+        #expect(aimed.command == .photosSpike)
+        #expect(aimed.count == 20)
+        #expect(aimed.albumIdentifier == "Favorites")
+    }
+
+    @Test("The availability probe has its own sample size, separate from the pulls")
+    func probeCountIsSeparate() throws {
+        // They measure different things: `-n` fetches originals and costs
+        // minutes, `--probe` only asks whether they are here and costs
+        // milliseconds. One number for both would price the cheap one like the
+        // expensive one.
+        #expect(try parse(["photos-spike"]).probeCount == 200)
+        #expect(try parse(["photos-spike"]).listAlbums == false)
+        #expect(try parse(["photos-spike", "--albums"]).listAlbums)
+
+        let both = try parse(["photos-spike", "-n", "6", "--probe", "500"])
+        #expect(both.count == 6)
+        #expect(both.probeCount == 500)
+    }
+
+    @Test("An album identifier survives the slashes PhotoKit puts in one")
+    func albumIdentifiersAreOpaque() throws {
+        // `PHAssetCollection.localIdentifier` has the form `UUID/L0/040`. It is
+        // an opaque string here and nothing may treat it as a path.
+        let identifier = "A1B2C3D4-0000-1111-2222-333344445555/L0/040"
+        #expect(try parse(["photos-spike", "--album", identifier]).albumIdentifier == identifier)
+    }
+
+    @Test("`--album` without a value is an error rather than a silent default")
+    func albumNeedsAValue() {
+        #expect(throws: (any Error).self) { try parse(["photos-spike", "--album"]) }
+    }
+
     // MARK: - Documentation
 
     @Test("Every command word appears in the usage text")
@@ -240,7 +281,8 @@ struct OptionsTests {
         let words = [
             "status", "sources add", "sources list", "sources remove", "sources enable",
             "refresh", "pool stats", "queue peek", "queue fill", "deck stats",
-            "cache status", "cache evict", "cache clear", "shuffle-test", "get", "set",
+            "cache status", "cache evict", "cache clear", "shuffle-test", "photos-spike",
+            "get", "set",
             "notify", "log", "register", "unregister", "service-status",
         ]
         for word in words {
@@ -253,7 +295,9 @@ struct OptionsTests {
         let flags = [
             "--prod", "--container", "--database", "--cache-root", "--folder", "--file",
             "--recursive", "--source", "--unavailable", "--yes", "--count", "--no-default-values",
-            "--window", "--deals", "--photos", "--follow", "--last", "--help",
+            "--window", "--deals", "--photos", "--album", "--albums", "--probe", "--follow",
+            "--last",
+            "--help",
         ]
         for flag in flags {
             #expect(Options.usage.contains(flag), "\(flag) is missing from the usage text")

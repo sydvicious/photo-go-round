@@ -22,6 +22,7 @@ struct Options {
         case deckStats
         case cache(CacheAction)
         case shuffleTest
+        case photosSpike
         case getPreferences(key: String?)
         case setPreference(key: String, value: String)
         case notify(topic: String)
@@ -78,6 +79,9 @@ struct Options {
     var repeatWindowFraction = DeckSettings.defaultRepeatWindowFraction
     var deals = 50_000
     var photos = 4_000
+    var albumIdentifier: String?
+    var probeCount = 200
+    var listAlbums = false
     var noDefaultValues = false
     var follow = false
     var lastInterval = "1h"
@@ -171,6 +175,14 @@ struct Options {
                 options.deals = try nextInt(argument)
             case "--photos":
                 options.photos = try nextInt(argument)
+            case "--albums":
+                options.listAlbums = true
+            case "--probe":
+                options.probeCount = try nextInt(argument)
+            case "--album":
+                // Identifier or title, so a spike aimed at one album does not
+                // need the identifier copied out of the listing above it.
+                options.albumIdentifier = try next(argument)
 
             case "--no-default-values":
                 options.noDefaultValues = true
@@ -294,6 +306,9 @@ struct Options {
         case "shuffle-test":
             return .shuffleTest
 
+        case "photos-spike":
+            return .photosSpike
+
         case "get":
             return .getPreferences(key: verb(1))
 
@@ -356,6 +371,11 @@ struct Options {
           shuffle-test [--deals <n>] [--photos <n>] [-w <f>]
                                     The statistical assertions, against a
                                     throwaway library. Never touches yours
+          photos-spike [-n <n>] [--probe <n>] [--album <id|title>] [--albums]
+                                    Measure PhotoKit against the system Photos
+                                    library: albums and their subtypes, fetch
+                                    laziness, resource lists, and N originals
+                                    pulled and checked. Read-only
           get [<key>] [--no-default-values]
           set <key> <value>         Preferences, in the domain the agent reads
           notify <topic>            Ring a doorbell by hand: prefs, deck,
@@ -382,6 +402,12 @@ struct Options {
           -w, --window <0-1>      Repeat window fraction for shuffle-test. Default: 0.5
               --deals <n>         Cards to deal in shuffle-test. Default: 50000
               --photos <n>        Library size for shuffle-test. Default: 4000
+              --albums            List every collection with its identifier,
+                                  rather than a summary by subtype
+              --probe <n>         How many assets photos-spike asks about local
+                                  availability without fetching. Default: 200
+              --album <id|title>  Which album photos-spike works on. Default:
+                                  the largest, hidden photos excluded
           -f, --follow            Stream the log rather than printing it
               --last <time>       How far back to read. Default: 1h
           -h, --help              This
@@ -401,6 +427,7 @@ struct Options {
                               --folder ~/Pictures/Wallpaper
           pgr_ctl status
           pgr_ctl shuffle-test --deals 50000 --photos 4000
+          pgr_ctl photos-spike -n 20 --album Favorites
         """
 }
 

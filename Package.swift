@@ -54,7 +54,22 @@ let package = Package(
         .executableTarget(
             name: "pgr_ctl",
             dependencies: ["PhotoGoRoundKit", "Console"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            // Consumed by the linker below, not copied into a bundle.
+            exclude: ["Info.plist"],
+            swiftSettings: [.swiftLanguageMode(.v6)],
+            // A bare Mach-O has no Info.plist, and TCC denies a Photos request
+            // from a process that carries no usage string — instantly, with no
+            // prompt, which reads exactly like a refusal the user typed. The
+            // section is how a command-line tool gets one. `photos-spike` is
+            // the only thing here that needs it.
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/pgr_ctl/Info.plist",
+                ])
+            ]
         ),
         .testTarget(
             name: "PhotoGoRoundKitTests",

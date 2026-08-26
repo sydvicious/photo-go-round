@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.sydpolk.photogoround.pgr-ctl</string>
+    <key>CFBundleName</key>
+    <string>pgr_ctl</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>pgr_ctl photos-spike measures how PhotoKit behaves against your photo library: it lists albums, copies a few originals to a temporary directory to check their size, and deletes them. It never writes to the library.</string>
+</dict>
+</plist>

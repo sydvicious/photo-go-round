@@ -8,13 +8,14 @@ The window is showing a test folder. Every architectural claim this project has 
 
 # Phases
 
-- **Phase 1 — the spike.** `pgr_ctl photos-spike`, and no change to the kit at all. PhotoKit stays out of `PhotoGoRoundKit` until the measurements say the approach holds.
-  - Request `.readOnly` authorization; list albums and smart albums with identifier, title, subtype, and image count.
+- **Phase 1 — the spike.** — **run 2026-08-25. The approach holds; four things in this document do not.** `pgr_ctl photos-spike`, and no change to the kit at all. PhotoKit stays out of `PhotoGoRoundKit` until the measurements say the approach holds.
+  - Request authorization; list albums and smart albums with identifier, title, subtype, and image count.
   - Time the fetch against the largest album, with `phys_footprint` sampled, so laziness is observed rather than assumed.
   - Pull N originals and compare each written file's `CGImageSource` pixel dimensions against `PHAsset.pixelWidth`/`pixelHeight`.
   - Classify each asset local or iCloud-optimized by attempting `isNetworkAccessAllowed = false` first, then retrying with `true`.
   - Print an edited photo's `.photo` and `.fullSizePhoto` side by side; print a Live Photo's whole resource list.
   - **Exit gate: the numbers exist and say the design works.** A written original that matches the asset's own pixel dimensions on an iCloud-optimized asset, a throughput figure split into local and downloaded, and a peak footprint that does not track the largest file pulled.
+  - **Met.** Every written file matched its asset's dimensions, including downloaded ones. Footprint moved 16 kB writing 3.4 MB and nothing at all writing 2.9 MB — it does not track file size. Latency does not follow size either, but what governs it is not yet established. Numbers in *What Phase 1 measured*.
 - **Phase 2 — the provider.** `PhotosCollectionSourceProvider` in the kit for `SourceKind.photosCollection`, behind a `PhotoLibrary` protocol seam the way `FolderSourceProvider` sits behind `FileAccess`.
   - `enumerate`, streaming; `existence`; `availability` from authorization status; `materialize` via `PHAssetResourceManager`.
   - Tests against a fake `PhotoLibrary`, so provider logic is exercised with no library and no TCC grant.
@@ -40,11 +41,22 @@ The window is showing a test folder. Every architectural claim this project has 
 - **The agent owns the Photos grant, and the app never links PhotoKit.** `Scripts/make-agent-bundle.sh` already writes `NSPhotoLibraryUsageDescription` into `com.sydpolk.photogoround.server` and says why. One bundle, one consent, one entry in the Settings privacy list.
 - **The album list comes over HTTP, for that reason and no other.** It would be trivial for the app to fetch its own `PHAssetCollection`s, and doing so would be a second TCC grant on a second bundle — which is the thing `PLAN.md`'s *TCC: unsandboxed does not mean unrestricted* decided against.
 - **The spike changes nothing in the kit.** A measurement that requires a schema, a provider, and a registration to run is not a spike, it is Phase 2 with a worse name.
-- **`.readOnly` authorization.** We never write to the library. Asking for `.readWrite` would be asking for something we would then have to explain.
-- **Storage is always `.materialized`.** There is no path to reference. A Photos asset's bytes are ours only once we have copied them.
+- **`.readWrite` authorization, because there is no read-only level.** `PHAccessLevel` has exactly `.addOnly` and `.readWrite`, and `.addOnly` grants writing only. Reading an album requires `.readWrite`; the usage string is where the asymmetry gets explained.
+- **Storage is always `.materialized`.** There is no path to reference. A Photos asset's bytes are ours only once we have copied them. **Re-examined after the spike found that Photos retains downloaded originals, and upheld: the double storage cost is worth paying.**
 - **A collection that stops resolving is `.offline`, never `.gone`.** `PLAN.md` is explicit: switching system libraries fails every stored identifier at once, and answering `.gone` would delete a library over it.
-- **`.fullSizePhoto` when present, `.photo` otherwise, and never `.pairedVideo`.** The first is the edited render, the second the original; taking a Live Photo's paired video would put a movie in a cache that cannot display one. The spike prints both so the choice is made against evidence.
+- **`.fullSizePhoto` when present, `.photo` otherwise, matched on exact resource type.** The first is the edited render, the second the original. Measured against a real Live Photo, the resource to avoid is **`.fullSizePairedVideo`** rather than `.pairedVideo`: it sits immediately before `.fullSizePhoto` in the list and is called `FullSizeRender.mov` against the photo's `FullSizeRender.heic`, so any prefix, position, or filename heuristic takes a movie.
 - **Videos are excluded at the fetch**, by `PHFetchOptions.predicate` on `mediaType == PHAssetMediaType.image.rawValue`, so they never enter the row set at all.
+- **`requestData` rather than `writeData` for materialize.** Both stream. Only `requestData` returns a request id and can be cancelled — an abandoned `writeData` keeps running in the daemon and may still deliver its file, so a source that times out repeatedly accumulates work we can neither see nor stop.
+- **A fetch may stall for five minutes, and that is designed around rather than explained.** Three of five downloads paid a fixed 300-second toll before transferring normally. The cause is not pursued; every decision below assumes it can happen to any asset at any time.
+- **No materialize timeout below 305 seconds.** A bound that sounds generous — sixty seconds, two minutes — would have failed three of the five measured downloads, each of which then succeeded at 301.5 s. The bound exists to stop a fetch holding a slot forever, not to make it quick.
+- **`downloadConcurrency` above one for Photos, whether or not stalls overlap.** With one in flight, a single stalled asset idles the whole source for five minutes and nothing says why. Several in flight keeps the queue moving past it, which holds even if `photosd` serialises the work.
+- **A stalled asset goes to the back of the queue, not into a retry.** There are thousands of others and some fraction of them are in the fast mode.
+- **The panel never estimates time remaining for a Photos fill.** The distribution is bimodal — the measured mean of 181.5 s described no fetch that actually happened. Progress is reported as a count.
+- **A Photos photo enters the pool at scan time and the deck only once its bytes are cached.** The rule videos already follow. It deletes the skip-and-re-deal machinery, and gives the deck the invariant that everything in it can be served now.
+- **A dealt card that cannot be served burns its place in the pass.** It is not returned. Gating deck membership on the cache keeps that population near zero, which is what makes burning affordable.
+- **The album list is not counted by fetch on every request.** 439 collections cost 34 seconds, at a flat ~78 ms each regardless of size, and `estimatedAssetCount` is `NSNotFound` for every smart album. Neither documented route survives this library.
+- **The allowlist has a size test as well as a usefulness test.** At ~3 MB an original, Favorites is 25 GB against a 50 GB ceiling and Recents is 288 GB. An album that cannot fit would churn the cache — though **corrected on the second run**: that churn costs disk, not latency, because a Photos eviction is a 3 ms re-materialize and not a network fetch.
+- **`requestData`, cancelled on its first chunk, is the availability probe.** 13.9 ms median, and right about all six assets that were then fetched. `PHImageResultIsInCloudKey` answers about a rendition rather than the original resource, and disagreed 3 times in 45 across two albums — every one in the same direction.
 - **A `PhotoLibrary` seam, mirroring `FileAccess`.** PhotoKit cannot be exercised in a unit test without a real library and a TCC grant, so the provider's logic goes behind a protocol and the PhotoKit binding stays thin enough to read in one sitting.
 - **Albums and smart albums only, for now.** Favorites is a smart album, so the kind the user actually asks for is covered. Pinned assets and a whole-library source are additions rather than completions, and both are argued below.
 - **Photos joins the existing single list in the panel.** Sections are a real improvement and a separate piece of work; making this feature depend on reworking rows that already work would be the third time scope discipline got spent on presentation.
@@ -59,6 +71,250 @@ The scaffolding, however, is all there and has been since the first commit. `Sou
 The app is a client and stays one: it reads `servicePort` from preferences, asks the agent, and draws the answer. It is unsandboxed and links the kit, which is why it can answer *where a folder source stands* without a round trip — and precisely why it cannot answer the same question about an album, which `app/mac/FEATURES.md` records as the reason the source endpoint is not going away.
 
 # Detailed discussions
+
+## What Phase 1 measured
+
+_Three runs, 2026-08-25, against a 95,901-photo library on one Mac: `-n 6` at 16:42; `-n 6 --probe 30` five hours later at 22:12; and `-n 1 --probe 10 --album "Live Photos"` at 22:19. Small samples, one library, one connection, one day; read every number that way. What is **not** yet measured is listed at the end._
+
+### The exit gate is met
+
+Every one of the six written files matched the pixel dimensions its `PHAsset` reported, **including the five that had to be downloaded**. `PHAssetResourceManager.writeData` returns true originals for iCloud-optimized assets, which is the claim the whole design rests on and the one that could have invalidated it. The fallback to `PHImageManager.requestImageDataAndOrientation` is not needed.
+
+### `.readOnly` authorization does not exist
+
+`PHAccessLevel` has two values, `PHAccessLevelAddOnly = 1` and `PHAccessLevelReadWrite = 2`. There is no read-only level: `.addOnly` grants saving into the library and nothing else, so reading an album at all requires `.readWrite`. The Design Decision that said otherwise could not be implemented as written. `NSPhotoLibraryUsageDescription` remains the right key, and the usage string is the only place the asymmetry can be explained to the person being asked.
+
+### A command-line tool cannot raise a TCC prompt without an embedded `Info.plist`
+
+The first attempt to run the spike returned `denied` **instantly, with no prompt**, which on a console is indistinguishable from a user clicking Don't Allow. A bare Mach-O carries no `Info.plist` and therefore no usage string, and TCC refuses rather than prompting. `Package.swift` now `-sectcreate`s one into `__TEXT,__info_plist`.
+
+The responsible-process question is sharper than this plan anticipated. TCC attributes the request to whatever launched the tool, so the grant lands on Terminal — or on whatever other application's shell it was run from, which in practice made the difference between the request being promptable and not. The Phase 4 check against the installed agent bundle is not a formality.
+
+### Listing albums costs half a minute, and the cost is per album
+
+439 collections took **34,005 ms** to count, and **31,392 ms** on the second run five hours later — so this reproduces, and it is a property of the library rather than of a moment. The cost is flat and has nothing to do with album size:
+
+| collection | photos | counted in |
+|---|---|---|
+| Recents | 95,901 | 116.8 ms |
+| Favorites | 8,477 | 31.3 ms |
+| any `albumRegular` | 1 to 3,071 | ~78–90 ms |
+| any `albumCloudShared` | 10 to 4,804 | ~50 ms |
+| most smart albums | — | 2–6 ms |
+
+A one-photograph album costs 80.6 ms and a 95,901-photograph album costs 116.8 ms, so this is not a scan. It is a fixed toll paid ~440 times, which points at a round trip rather than computation.
+
+**And the documented cheap answer is unavailable exactly where it is needed.** `PHAssetCollection.estimatedAssetCount` returned `NSNotFound` for *every* smart album — Recents, Favorites, Live Photos, all of them — and a usable number only for `albumRegular` and `albumCloudShared`. Favorites is the album a person actually asks for, and it is in the half with no estimate.
+
+So `GET /v1/photos/albums` cannot count on demand by either documented route. Whatever Phase 4 does, it is not this.
+
+### Enumeration is lazy on the fetch and not on the walk
+
+```
+fetch  111.6 ms    footprint 23.1 MB   (+0 bytes)
+walk   3,281.4 ms  footprint 165.7 MB  (+142.7 MB)  · 95,901 assets
+```
+
+`PHAsset.fetchAssets` returns in milliseconds and costs nothing, exactly as documented and as `PLAN.md`'s *Cold start* assumes. Walking the result retained **142.7 MB** — about 1.5 kB per asset — and did not give it back.
+
+It scales linearly and reproduces: 141.5 MB over 95,901 assets is 1.48 kB each, and a separate walk of the 6,898-asset Live Photos album retained 12.1 MB, or 1.75 kB each. This is per-asset retention, not a fixed cost.
+
+This lands on `PLAN.md` rather than on this document. The constant-memory scanner does not survive a full walk of a large album as written. Whether the retention is `PHFetchResult`'s own object cache or undrained autoreleased objects is **not measured**, and the two have different fixes: batched `enumerateObjects` over index ranges in the first case, a drain per batch in the second. Guessing between them is exactly what a spike exists to prevent.
+
+### The resource-selection rule holds, and the trap is not the one named
+
+In an ordinary album:
+
+```
+edited     .photo (014_14.JPG) · .adjustmentData (Adjustments.plist) · .fullSizePhoto (FullSizeRender.jpeg)
+unedited   .photo (IMG_0023.JPG)
+```
+
+`.fullSizePhoto` appeared only alongside `.adjustmentData`, so it does track a real edit.
+
+A third run aimed at the `smartAlbumLivePhotos` album reached the case the rule most needed to survive. An **edited** Live Photo carries five resources, two of them QuickTime movies, in this order:
+
+```
+.photo                public.heic                 IMG_2650.HEIC
+.adjustmentData       com.apple.property-list     Adjustments.plist
+.pairedVideo          com.apple.quicktime-movie   IMG_2650.MOV
+.fullSizePairedVideo  com.apple.quicktime-movie   FullSizeRender.mov
+.fullSizePhoto        public.heic                 FullSizeRender.heic
+```
+
+An **unedited** one carries two, `.photo` (`IMG_3309.JPG`) and `.pairedVideo` (`IMG_3309.MOV`).
+
+The rule picks correctly — the pull returned `.fullSizePhoto`, 1.7 MB, 4032×3024, matching the asset's dimensions — but **the hazard this document names is the wrong one**. `.pairedVideo` is easy to avoid. `.fullSizePairedVideo` is not:
+
+- It sits **immediately before** `.fullSizePhoto`, so scanning for a "full size" variant and taking the first match yields the movie.
+- It is named **`FullSizeRender.mov`** against the photo's **`FullSizeRender.heic`**, so a filename heuristic yields the movie too.
+- Two of the five resources are movies, and the one that most resembles what we want is one of them.
+
+Matching on exact `PHAssetResourceType` is the only formulation that survives this. The symptom of getting it wrong is the one this document already describes — photographs vanishing three deals at a time — and the near-miss is far closer than "never `.pairedVideo`" implies.
+
+**Originals are a mix of HEIC and JPEG.** `.photo` was `public.heic` on the edited asset and `public.jpeg` on the unedited one, so the cache holds both. `CGImageSource` read the HEIC without special handling, which the dimension check confirms.
+
+### `writeData` streams
+
+| file | peak footprint | retained |
+|---|---|---|
+| 76 kB | +246 kB | +246 kB |
+| 596 kB | 0 | −49 kB |
+| 1.9 MB | 0 | 0 |
+| 2.7 MB | +49 kB | +49 kB |
+| 2.9 MB | 0 | 0 |
+| 3.4 MB | +16 kB | +16 kB |
+
+Across a 45× range of file sizes the footprint does not follow the file. A 2.9 MB original was written with **no measurable change at all**. The 246 kB against the first pull is `PHAssetResourceManager` waking up for the first time in the process, which is why the verdict excludes the first pull — the spike's original rule judged on the worst *ratio*, which is dominated by fixed costs on the smallest file, and it duly reported "buffered" against data that says the opposite.
+
+The second run, with every asset local, is cleaner still: **the largest write moved the footprint by nothing at all while writing 3.4 MB** — 0.000× the file, and zero was also the worst of any write in the run.
+
+`PLAN.md`'s case for `PHAssetResourceManager` over `requestImageDataAndOrientation` — that a large original is never held whole in the agent's address space — holds, and now holds on evidence from both directions: the streaming write costs nothing, and the alternative was measured costing 3.6 MB.
+
+One incidental confirmation. A 596 kB original reported **full resolution (rotated)**: 3264×2448 written against an asset reporting the axes the other way round. The spike counts a swap as a match, and without that it would have been flagged as a downscale and chased.
+
+Peak footprint across the whole run was 172.2 MB, essentially all of it the enumeration walk above rather than anything the writes did.
+
+### iCloud latency does not follow file size, and is not yet explained
+
+| file | pixels | elapsed |
+|---|---|---|
+| 76 kB | 640×480 | 301,456.5 ms |
+| 3.4 MB | 3504×2336 | 301,588.4 ms |
+| 2.7 MB | 2336×3504 | 1,530.2 ms |
+
+Across all five downloads — 11.5 MB in 907.5 s, min 1.5 s, median 301.5 s, max 301.6 s — the outcomes are **bimodal, not distributed**: approximately 1.5 s, 1.4 s, 301.5 s, 301.5 s, 301.6 s. Nothing lands in between, and the slow mode is the fast mode plus 300.0 s to within a tenth of a second. Three of five fetches paid it.
+
+So the picture is a ~1.5 s transfer with a fixed five-minute stall in front of it, taken or not taken. `writeData`'s `progressHandler` on the slow ones reported 70% and 90% in the same second the transfer completed: dead wait, then an instant transfer.
+
+**The aggregate rate is meaningless and should never be quoted.** "13 kB/s across five assets" describes the stall, not the network; when bytes actually move they move at ~1.8 MB/s.
+
+**What decides whether a fetch pays the toll is not established**, and it is now the most consequential open question in this plan, because it is the difference between a first fill of hours and one of weeks:
+
+| assumption | Favorites, 8,477 originals, serial |
+|---|---|
+| every fetch fast (1.5 s) | ~3.5 hours |
+| measured mean (181.5 s) | ~17.8 days |
+
+Candidates, none tested: that the stall is shared rather than per-asset; that it is an artifact of an unbundled process talking to `cloudphotod`; that the preceding `isNetworkAccessAllowed = false` probe provokes it; or that `requestData` behaves differently from `writeData` here.
+
+One of them can be argued down from the data already in hand. The slow fetches were not front-loaded — the first download paid the toll, the second ran in 1.5 s, and slow ones recurred after it. A shared resource waking up would produce one slow fetch and then a fast tail. **The stall is per-asset, not per-session.**
+
+**Decided: the cause is not pursued.** Divining it would mean instrumenting somebody else's daemon to explain behaviour that may not survive the next OS release, and the design has to tolerate the stall whether or not we understand it. It is recorded as a constraint, and the Design Decisions above are what tolerating it costs:
+
+- no timeout below 305 s, because a shorter one converts the slow mode into a failure;
+- `requestData`, because a bound on an uncancellable `writeData` buys back only our own control;
+- more than one fetch in flight, so a stalled asset does not idle the source;
+- stalled assets to the back of the queue rather than into a retry;
+- and no time estimates anywhere, because the mean of a bimodal distribution describes neither mode.
+
+What makes all of this survivable is a decision taken before the stall was known about: deck membership is gated on the bytes being cached, so nothing a person is looking at ever waits on a fetch.
+
+The classification probe itself works. `isNetworkAccessAllowed = false` succeeded in 2.6 ms on a genuinely local asset and failed in about 2.5 s on a remote one, so the two-call scheme in *Classifying without private API* is sound.
+
+**Downloads persist.** An asset fetched in one run came back `local` in 2.6 ms in the next, which means the spike is not repeatable in the direction that matters: re-running over the same album converges to all-local and the latency figures evaporate.
+
+### Photos retains downloaded originals, and our cache is a second copy
+
+The second run re-pulled the identical six assets five hours later. **Every one came back local, at full resolution, in 1.8–3.7 ms** — including a 5712×4284 original. Photos keeps what it downloads, and keeps the original rather than a derivative, which was the failure mode that would have been easiest to miss.
+
+The probe's wider sample is the control, and it rules out the obvious confound. The Mac's own wallpaper and screensaver were running from Photos throughout those five hours, so "all six are local" could have meant the system had warmed the library generally. It had not:
+
+- **8 of 35 assets already here, 27 in iCloud.**
+- Six of those eight are the ones we downloaded.
+- So of the 29 nobody has touched, **two are local — about 7%**, against 100% of the six we fetched.
+
+Retention is ours, not ambient. Incidentally that 7% is also the first honest estimate of how cloud-optimized this library is, and it makes first fill a mostly-download proposition rather than a mixed one.
+
+**This corrects a Design Decision made earlier the same day.** Eviction from *our* cache does not cost a network fetch, because Photos still has the original; it costs a 3 ms re-materialize. The churn argument behind the allowlist's size test survives only as an argument about disk space.
+
+### Retention reopened the storage decision, and it was upheld
+
+*Storage is always `.materialized`* was decided before any of this was measured, on the reasoning that a Photos asset's bytes are ours only once copied. The retention finding genuinely complicates that: if Photos holds the original locally and hands it over in single-digit milliseconds, a Photos asset resembles a `.referenced` file — bytes that live elsewhere, cheaply checked, fetched when wanted — more than it resembles something that must be copied. Not copying would save a second copy of a 25 GB album.
+
+**Decided: we copy anyway, and the double storage cost is worth paying.** The reasons, in the order they matter:
+
+**Photos' retention is not a promise.** "Optimize Mac Storage" evicts local originals under disk pressure, with no notification and no change to the asset's identifier. A `.referenced` Photos source could therefore go dark in bulk at a moment of the system's choosing — the same shape of failure as the library switch that `.offline` exists for, but arriving quietly and partially.
+
+**It would put the probe in the serving path.** Deck membership is gated on the bytes being cached precisely so that everything in the deck can be served now. If the bytes are Photos' rather than ours, that invariant becomes a 13.9 ms question asked per deal, on an answer that can have changed since enumeration — which is the skip-and-re-deal machinery this plan already deleted once.
+
+**Renderings have to be cached regardless.** The cache exists for them whatever happens to originals, so `.referenced` would not remove a mechanism, only shrink what passes through it.
+
+**`.referenced` means something narrower than "the bytes exist somewhere".** In `PLAN.md` it means a stable path on a volume that can be `stat`ed. A Photos local identifier is not that, and stretching the mode to cover it would put a second meaning inside one storage value.
+
+The cost is real and should be stated plainly: a 25 GB Favorites album occupies about 25 GB in the Photos library and about 25 GB again in our cache, against a 50 GB ceiling. That makes the allowlist's size test load-bearing rather than cautionary, and it is the strongest argument this plan has for a Photos source needing a reserved cache floor.
+
+### The availability probe, measured
+
+Thirty-five assets, both probes on each:
+
+| probe | median | what it answers |
+|---|---|---|
+| `requestData`, cancelled on first chunk | **13.9 ms** | is the original resource here |
+| `requestImageDataAndOrientation` | 4.9 ms | is *a rendition* here |
+
+`requestData` was right about every asset subsequently fetched. Across two albums the two probes disagreed **3 times in 45**, every one in the same direction: `requestData` found the original present while `PHImageResultIsInCloudKey` was set. That is the rendition-versus-resource distinction showing up in real data, and it decides the choice.
+
+The rate was higher in the Live Photos album — 2 of 10 against 1 of 35 — which is what one would expect if a Live Photo's components can differ in availability, the still being here while the paired video is not. That would make `PHImageManager`'s answer true about the asset and useless to us, since the only resource we ever fetch is the still. The probe asking about the resource we would actually take is not incidental to the choice; it is the whole of it.
+
+Extrapolated at 13.9 ms:
+
+| album | assets | probing cost |
+|---|---|---|
+| Favorites | 8,477 | ~2 minutes |
+| Recents | 95,901 | ~22 minutes |
+
+Affordable for an agent on a timer, impossible for a picker, which is the same shape as every other per-asset cost here.
+
+The cheaper probe also put a number on the thing `PLAN.md` rejected it for: **`requestImageDataAndOrientation` held up to 3.6 MB of a single asset in our address space**. On a local asset it hands back the whole original as `Data`. Real, and measured.
+
+### Subtypes this document does not know about
+
+Six subtypes fell outside the documented enumeration, two of them large:
+
+| raw | name | photos |
+|---|---|---|
+| 1000000218 | Recently Saved | 37,550 |
+| 1000000220 | Captured by Me | 8,797 |
+| 219 | Spatial | 0 |
+| 220 | Screen Recordings | 0 |
+| 1000000219 | Recovered | 0 |
+| 221 | Dual Capture | 0 |
+
+The allowlist has to say something about the first two, and cannot do it by naming a `PHAssetCollectionSubtype` case that does not exist in the SDK.
+
+### Album titles are not unique
+
+"VHS Band 2024-2025" exists twice — once `albumRegular` at 3,071 photographs and once `albumCloudShared` at 4,804 — and a dozen other titles repeat the same way. The Phase 5 picker will show visible duplicates with nothing to tell them apart, and any lookup by title silently takes the first match.
+
+### The cache ceiling is an allowlist constraint
+
+At roughly 3 MB an original — thin, from this run's two largest files, and low, since the cache holds renderings as well — against the 50 GB `byteCeiling`:
+
+| album | photos | originals |
+|---|---|---|
+| Favorites | 8,477 | ~25 GB |
+| Captured by Me | 8,797 | ~26 GB |
+| Recently Saved | 37,550 | ~113 GB |
+| Recents | 95,901 | ~288 GB |
+
+A curated album fits with room. The large smart albums do not, and under cache-gated deck membership an album that cannot fit thrashes: download, deal, evict, download again. For a folder source an eviction costs a millisecond re-read; for a Photos source it costs a network fetch. The largest offender is `smartAlbumUserLibrary`, which this document already excludes on other grounds.
+
+### A Swift 6 trap the provider will hit
+
+The second run crashed on its first probe, before any of the above existed to be measured: `dispatch_assert_queue` → `_swift_task_checkIsolatedSwift`, inside `PHAssetResourceRequest`'s data handler.
+
+PhotoKit invokes these blocks on a dispatch queue of its own. Written as bare closures inside actor-isolated code, against block parameters the importer does not mark sendable, Swift infers them as isolated to the enclosing actor and emits an isolation assertion into each — which trips the moment PhotoKit calls back off-main. A hard crash on the first chunk of the first fetch, not a warning.
+
+`PhotosCollectionSourceProvider` will live in `PhotoGoRoundKit`, which builds in Swift 6 language mode, and will call these same APIs from isolated code. **No test against a fake `PhotoLibrary` would catch it**, because a fake never delivers a callback from a dispatch queue. The fix is to annotate each handler's type `@Sendable` explicitly, which removes the inference rather than suppressing the check. Which imported blocks the compiler happens to treat as sendable is not something to rely on: `writeData`'s single completion never tripped it and `requestData`'s two-block form did.
+
+### Still unmeasured
+
+_The 300-second stall is deliberately not on this list. Its distribution is measured and its cause is closed as a constraint rather than a question — see above._
+
+- **Whether the walk's per-asset retention is a fetch-result cache or undrained autoreleases.** Confirmed linear across two album sizes; the mechanism is still a guess, and the two have different fixes.
+- **Everything about TCC from the installed agent bundle**, which is Phase 4's and was always going to be.
+- **How long Photos' retention lasts.** Five hours, confirmed. What "Optimize Mac Storage" does to it under real disk pressure is the question a `.referenced` design would rest on.
 
 ## Why the spike is the whole of the first phase
 
@@ -246,6 +502,7 @@ Recorded rather than acted on — `PLAN.md` and `app/mac/FEATURES.md` are Syd's,
 - `Sources/PhotoGoRoundKit/Sources/SourceProvider.swift` — the four operations, and the contracts on `existence` and `availability`.
 - `Sources/PhotoGoRoundKit/Sources/SourceStore+Editing.swift` — `EditFailure.unsupportedKind`, and the all-or-none batch rule.
 - `Sources/PhotoGoRoundKit/Sources/SourceRequest.swift` — `resolve`, and the trailing-slash rule.
+- `Sources/pgr_ctl/PhotosSpike.swift` — the spike itself, and the measurements' provenance.
 - `Sources/photogoroundd/Service/SourceEndpoint.swift` — the five source routes and the `Wire` shape.
 - `app/mac/SourceService.swift` — the client's reading of the wire, and `Source.name`.
 - `PHAssetResourceManager.writeData(for:toFile:options:)` and `PHAssetResourceRequestOptions.isNetworkAccessAllowed`.

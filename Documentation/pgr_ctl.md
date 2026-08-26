@@ -15,6 +15,7 @@ pgr_ctl queue {peek [-n <count>] | fill [-n <rounds>]}
 pgr_ctl deck stats
 pgr_ctl cache {status | evict | clear [--source <id>] [--unavailable] [--yes]}
 pgr_ctl shuffle-test [--deals <n>] [--photos <n>] [-w <fraction>]
+pgr_ctl photos-spike [-n <count>] [--probe <count>] [--album <id|title>] [--albums]
 pgr_ctl get [<key>] | set <key> <value>
 pgr_ctl notify <topic>
 pgr_ctl log [-f] [--last <time>]
@@ -110,6 +111,21 @@ Repeat window fraction for `shuffle-test`. Default: 0.5.
 
 `--deals <n>`, `--photos <n>`
 The size of the `shuffle-test` run. Defaults: 50000 deals across 4000 photos.
+
+`--albums`
+Make `photos-spike` list every collection with its local identifier instead of
+summarising them by subtype. Several hundred collections is a thousand lines, so
+it is off by default; reach for it when you need a particular album's
+identifier.
+
+`--probe <n>`
+How many assets `photos-spike` asks about local availability without fetching
+them. Separate from `-n` because the two cost wildly different amounts: a probe
+is milliseconds, a pull can be minutes. Default: 200.
+
+`--album <id|title>`
+Which album `photos-spike` measures, by local identifier or by title. Default:
+the largest album that is not `smartAlbumAllHidden`.
 
 `-f`, `--follow`, `--last <time>`
 Stream the log rather than printing it, and how far back to read. Default: 1h.
@@ -219,6 +235,22 @@ shuffle order (_internal testing only_).
 Test the shuffle algorithms against a dummy library of empty files and an in-memory
 database (_internal testing only_).
 
+`photos-spike`
+Measure PhotoKit against the system Photos library: every album and smart album
+summarised by subtype, how lazy `PHFetchResult` is, the resource
+lists of an edited photograph and a Live Photo, whether `--probe` assets are
+already on this machine and what asking costs, and `-n` originals pulled,
+classified local or iCloud-optimized, and checked against the dimensions their
+asset claims. It reads the library and never writes to it; the originals it
+copies out go to a temporary directory and are deleted once measured.
+
+It asks for `.readWrite` authorization, because `PHAccessLevel` has no read-only
+level — `.addOnly` grants writing and nothing else. Run from a terminal the
+grant lands on Terminal rather than on the agent's bundle, which is fine for
+measuring and is why the same request has to be made again from the installed
+agent before any of this is believed about the product (_internal testing
+only_).
+
 `get [<key>]`
 Reads preferences. With no key it lists every setting with its stored value, or
 `(default)` where nothing is stored. With a key it prints that value alone, for
@@ -306,6 +338,7 @@ Run the deck's correctness checks:
 ```
 pgr_ctl shuffle-test --deals 50000 --photos 4000
 pgr_ctl shuffle-test --deals 50000 --photos 4000 -w 1.0
+pgr_ctl photos-spike -n 20 --album Favorites
 ```
 
 ## SEE ALSO

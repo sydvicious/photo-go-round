@@ -35,6 +35,10 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - Photos and Google Photos get their own sections when those providers arrive; each kind's section carries whatever that kind needs.
   - **Supersedes collapsing per-file sources into one row.** Sections do the same job — keeping two hundred pinned photographs from being two hundred undifferentiated rows — without inventing the batch identifier the data does not have.
   - Removing several at once wants a batch `DELETE`, or the panel makes a request, a preference write, and a doorbell *per row*. `POST` takes an array for exactly this reason and `DELETE` does not yet.
+- *The sources panel resizes* — a list that is always the same height is the wrong height twice: once for a single folder, and again for two hundred pinned files.
+  - The window can be resized vertically. Horizontally it stays as it is; the row has an icon, a name, a count, and a path, and none of them are waiting for width.
+  - It opens tall enough for what is actually configured, bounded by the screen, rather than opening at a fixed height and being dragged out again on every visit.
+  - **This meets *Sources by kind, in sections***, which fixes each section at five rows before it scrolls. Whether the sections divide the available height between them or keep their own count is unsettled, and belongs to whichever of the two is built second.
 - *Saying the agent is not there* — **done.** The window title becomes `Photo-Go-Round - No agent`, and the photograph dims behind a flat grey at three-tenths.
   - Nothing is written on the picture: a badge would have to stay legible against whatever is behind it, and `PLAN.md`'s *Showing unavailability* forbids annotating a photograph to report a problem elsewhere. A title has its own background.
   - The picture stays visible rather than being taken down, so what is on screen is still a photograph — veiled, and unmistakably not being replaced.

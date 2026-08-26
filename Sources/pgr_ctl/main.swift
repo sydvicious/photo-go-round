@@ -68,6 +68,11 @@ do {
             photos: options.photos, deals: options.deals,
             fraction: options.repeatWindowFraction)
 
+    case .photosSpike:
+        try await PhotosSpike.run(
+            count: options.count, probing: options.probeCount,
+            album: options.albumIdentifier, listing: options.listAlbums)
+
     case .getPreferences(let key):
         try PreferenceCommands.get(
             key: key, showDefaults: !options.noDefaultValues,
