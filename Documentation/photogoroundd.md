@@ -319,12 +319,12 @@ without restarting it and without any cooperation:
 | key | meaning | default |
 | --- | --- | --- |
 | `sources` | array of `{kind, locator, recursive, enabled}`; `recursive` is per source and defaults off | none |
-| `repeatWindowFraction` | how much of the library must pass before a photo repeats | 0.5 |
-| `queueSize` | cards to keep queued. A target, not a ceiling | 20 |
-| `queueRefreshIntervalSeconds` | how often to seed an empty queue; a merely short one is topped up by serving | 5 |
+| `repeatWindowFraction` | how much of what *can be shown* must pass before a photo repeats. That is the cache plus whatever is read in place, not the whole library | 0.5 |
+| `queueSize` | cards to keep queued. A target, not a ceiling. Also sets the cache's download allowance, which is twice it | 20 |
+| `queueRefreshIntervalSeconds` | how often to top the queue up; serving tops it up too | 5 |
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
 | `maintenanceIntervalSeconds` | how often to evict at the byte ceiling | 30 |
-| `downloadConcurrency` | fetches in flight, across all sources | 4 |
+| `downloadConcurrency` | fetches running at once, across all sources | 4 |
 | `cacheByteCeiling` | bytes of cached photographs and renderings to keep | 50 GB |
 | `cacheMinimumFreeBytes` | stop fetching below this much free space | 5 GB |
 | `cacheCriticalFreeBytes` | evict ahead of the ceiling below this much | 2 GB |
@@ -344,9 +344,12 @@ Copied photograph bytes, and the renderings made from them. Only photographs on
 volumes that can disappear are copied; anything on the boot volume is read where
 it lies, though renderings of it are still kept.
 
-Nothing in the database describes what is here. The service walks this directory
-at startup and rebuilds its index from the filenames, so the two cannot disagree
-— and a file the database does not claim is deleted rather than adopted.
+The service walks this directory at startup and rebuilds its index from the
+filenames, and a file the database does not claim is deleted rather than adopted.
+**The filesystem is the truth**; the database records which photographs are held
+so that the deck can ask for them in a query, and that record is reconciled
+against this walk at every launch. A disagreement is settled in the disk's
+favour, always.
 
 |                | storage root | cache root |
 | --- | --- | --- |

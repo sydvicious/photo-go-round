@@ -79,10 +79,9 @@ struct QueueTopUpTests {
 
     private func toppingUpToTarget(
         _ table: Table, target: @escaping @Sendable () -> Int,
-        inFlight: @escaping @Sendable () -> Int = { 0 }
     ) -> QueueFiller {
         QueueFiller(
-            isShort: { table.depth + inFlight() < target() }, produce: { table.deal() })
+            isShort: { table.depth < target() }, produce: { table.deal() })
     }
 
     /// The agent's loop: serve a picture, then top up once.
@@ -122,26 +121,5 @@ struct QueueTopUpTests {
 
         await serveAndTopUp(table, times: 10) { toppingUpToTarget(table, target: { 20 }) }
         #expect(table.depth == 20)
-    }
-
-    @Test("A card out being fetched still counts as the queue's")
-    func inFlightCardsCountTowardTheTarget() async throws {
-        // The other half, and the reason the fix is not simply "fill to
-        // nominal". A skipped card has left the table and is coming back;
-        // dealing to cover the gap replaces a card that is about to return, and
-        // the queue overshoots by exactly the number of fetches — the churn that
-        // pacing the deal to serving exists to remove.
-        let table = try Table(photos: 200, nominal: 20)
-        for _ in 0..<20 { _ = table.deal() }
-        for _ in 0..<5 { _ = try await table.queue.serve() }
-        #expect(table.depth == 15)
-
-        await serveAndTopUp(table, times: 1) {
-            toppingUpToTarget(table, target: { 20 }, inFlight: { 5 })
-        }
-
-        // One picture served, so one card dealt to replace it — and the five in
-        // flight are not replaced, because they are coming back.
-        #expect(table.depth == 15, "dealt cards to cover fetches that were about to return")
     }
 }

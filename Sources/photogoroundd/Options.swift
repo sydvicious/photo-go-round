@@ -227,6 +227,9 @@ enum OptionsError: Error, CustomStringConvertible {
     case misplacedRecursive
     case missingValue(flag: String)
     case badValue(flag: String, value: String)
+    /// `--add-folder` alongside a relocated container, with the preference
+    /// domain left where it was. See `RunCommand.run`.
+    case addFolderWouldEditRealPreferences
 
     var description: String {
         switch self {
@@ -234,6 +237,9 @@ enum OptionsError: Error, CustomStringConvertible {
         case .misplacedRecursive: "--recursive belongs between --add-folder and its path"
         case .missingValue(let flag): "\(flag) needs a value"
         case .badValue(let flag, let value): "\(flag) does not accept \(value)"
+        case .addFolderWouldEditRealPreferences:
+            "--add-folder with a relocated container would edit the real source list; "
+                + "set PGR_PREFS_SUITE to move the preferences too"
         }
     }
 }

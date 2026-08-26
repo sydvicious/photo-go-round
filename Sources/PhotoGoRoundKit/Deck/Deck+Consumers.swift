@@ -91,137 +91,37 @@ extension Deck {
 
 extension Deck {
 
-    /// One photo from this source that is worth adding to the queue, **claimed
-    /// so that nobody else picks it while its bytes are being fetched**.
+    /// The next card for the deck, chosen from what can be shown right now.
     ///
-    /// This is what a provider answers with when the queue asks it for a
-    /// picture. The shuffle rules still apply — the pass, the repeat window, the
-    /// random offset — but they apply *within* the source being asked, because
-    /// the caller is asking this source specifically.
+    /// **It takes no claim, and that is a correction rather than an omission.**
+    /// A claim exists because a fetch happens between choosing a photograph and
+    /// storing it — which is true of the cache and false of the deck, whose
+    /// bytes are already here. Left in, it would have been worse than useless:
+    /// `nextRemoteCandidate` *does* exclude claimed rows, so a claim taken here
+    /// would hide a photograph from the cache for the length of the timeout.
     ///
-    /// Photos already queued are excluded, so asking twice in a row does not
-    /// offer the same picture twice.
+    /// What stops two fillers dealing the same card is the queue. Appending
+    /// ignores a photograph already queued, and the candidate predicate
+    /// excludes anything the queue holds.
     ///
-    /// **Selecting and claiming are one transaction, and that is the point.**
-    /// A fetch happens between selection and queuing, so without the claim two
-    /// producers asking the same source could pick the same picture and both
-    /// download it — reachable rather than theoretical, since a source runs
-    /// several fetches at once. Under `BEGIN IMMEDIATE` the loser sees the
-    /// winner's claim and picks something else.
-    ///
-    /// The caller must release the claim when it is done with the picture,
-    /// whatever the outcome; `PhotoCache.produce` does it in a `defer`. A caller
-    /// that dies first releases nothing, which is why the claim expires — see
-    /// `claimTimeout`.
-    /// **One order over every photograph we know about**, whatever state its
-    /// source is in. Whether a card can actually be shown is not asked here and
-    /// is not knowable here: it is found out by trying to show it, which is what
-    /// serving does.
-    /// **Choosing is reading; only the claim writes.**
-    ///
-    /// This used to run entirely inside one `BEGIN IMMEDIATE`, so every count,
-    /// every piece of pass arithmetic, and the candidate select all held the
-    /// database's single writer — for work that wrote nothing at all until the
-    /// last statement. The cost is not theoretical: while a refresh inserts
-    /// thousands of rows across its own connections, a deal cannot so much as
-    /// begin, and `PhotoCache.deal` then reports the busy error as a deck with
-    /// nothing left in it. Serving was measured at 122 seconds for a single
-    /// request on 2026-08-25 for the same reason.
-    ///
-    /// So the lock is taken when there is something to write and not before.
+    /// **Choosing is reading; nothing here writes.** This used to run inside
+    /// one `BEGIN IMMEDIATE`, so every count and every piece of pass arithmetic
+    /// held the database's single writer for work that wrote nothing — and
+    /// while a refresh inserted thousands of rows, a deal could not begin, and
+    /// the busy error was reported as a deck with nothing left in it. Serving
+    /// was measured at 122 seconds for one request on 2026-08-25 for that
+    /// reason.
     public func nextCandidate(
         settings: DeckSettings = .default,
         now: Date = Date()
     ) throws -> DeckCard? {
-        // **Losing the claim race means somebody took *that* card, not that
-        // there are none.** Choosing happens outside any transaction now, so two
-        // producers can land on the same row; the loser must choose again rather
-        // than report nothing, because "nothing" travels all the way up to a
-        // queue that stops filling.
-        //
-        // The loop terminates because a card that was claimed is excluded from
-        // every subsequent choice — each turn round costs exactly one competitor.
-        // The cap is a backstop against a pathology nobody has seen, and is far
-        // above the number of producers this process runs.
-        for _ in 0..<Self.claimAttempts {
-            guard let card = try chooseCandidate(settings: settings, now: now) else { return nil }
-
-            // The one write, and the only place the writer is held.
-            if try claim(card, now: now) { return card }
-        }
-        Log.deck.notice("gave up claiming a card after \(Self.claimAttempts, privacy: .public) attempts")
-        return nil
+        try chooseCandidate(settings: settings, now: now)
     }
 
     /// How many times a chooser will try again after losing a claim.
     static let claimAttempts = 32
 
-    /// A candidate that can be **shown right now** — no fetch, no wait.
-    ///
-    /// Two ways a photograph qualifies. It is `referenced`, meaning it lives on
-    /// the boot volume and is read in place rather than copied, so there is
-    /// nothing to fetch at all. Or its original is already in the cache, which
-    /// `resident` carries because that index lives in memory rather than in the
-    /// database.
-    ///
-    /// **This exists for the first tick after launch and nothing else.** A cold
-    /// start deals a perfectly good queue of twenty cards and then cannot serve
-    /// one of them, because every card's bytes are still coming over the wire —
-    /// observed on 2026-08-25 as `out of cards, walked 20` with a full pool and
-    /// an empty cache. Preferring what is already here turns that into a
-    /// picture immediately.
-    ///
-    /// **Startup only, deliberately.** As a standing rule it would be a bias
-    /// with no end: a local folder would crowd out every network source for
-    /// ever, and the deck's single shuffle over the whole library would quietly
-    /// stop being true. The ordinary candidate is what runs from the second tick
-    /// onward.
-    func nextServableCandidate(
-        settings: DeckSettings = .default,
-        now: Date = Date(),
-        resident: Set<String>
-    ) throws -> DeckCard? {
-        try withServableSet(resident) {
-            for _ in 0..<Self.claimAttempts {
-                guard
-                    let card = try chooseCandidate(
-                        settings: settings, now: now, servableOnly: true)
-                else { return nil }
-                if try claim(card, now: now) { return card }
-            }
-            return nil
-        }
-    }
-
-    /// Holds the resident set in a temp table for the duration of `body`.
-    ///
-    /// A temp table rather than a bound list because the set is as large as the
-    /// cache — eight hundred entries on a warm restart — and because it is per
-    /// connection, so two refreshers cannot see each other's.
-    private func withServableSet<T>(_ resident: Set<String>, _ body: () throws -> T) throws -> T {
-        try database.run(
-            """
-            CREATE TEMP TABLE IF NOT EXISTS servable_now (
-              uuid TEXT PRIMARY KEY
-            );
-            """
-        )
-        try database.run("DELETE FROM servable_now;")
-        if !resident.isEmpty {
-            try database.transaction(.immediate) {
-                for uuid in resident {
-                    try database.run(
-                        "INSERT OR IGNORE INTO servable_now (uuid) VALUES (:uuid);",
-                        ["uuid": .text(uuid)]
-                    )
-                }
-            }
-        }
-        defer { try? database.run("DELETE FROM servable_now;") }
-        return try body()
-    }
-
-    /// The claim, shared by both candidate paths.
+    /// The claim: taken by the cache before a fetch, and by nothing else.
     private func claim(_ card: DeckCard, now: Date) throws -> Bool {
         try database.transaction(.immediate) {
             try database.run(
@@ -247,14 +147,12 @@ extension Deck {
     /// property this split exists to provide.
     func chooseCandidate(
         settings: DeckSettings = .default,
-        now: Date = Date(),
-        servableOnly: Bool = false
+        now: Date = Date()
     ) throws -> DeckCard? {
         let pool = try poolSize()
         guard pool > 0 else { return nil }
 
         let window = settings.repeatWindow(poolSize: pool)
-        let claimedBefore = now.addingTimeInterval(-Self.claimTimeout)
 
         do {
             let state = try state()
@@ -262,8 +160,7 @@ extension Deck {
                 seq: state.dealSeq, passStartSeq: state.passStartSeq, window: window
             )
 
-            var eligible = try countCandidates(
-                threshold: threshold, claimedBefore: claimedBefore, servableOnly: servableOnly)
+            var eligible = try countCandidates(threshold: threshold)
             if eligible == 0 {
                 // Nothing eligible is three states, and only one of them ends
                 // the pass. Queued and claimed photographs are staged, not used
@@ -286,11 +183,9 @@ extension Deck {
                 // are not part of that population: they cannot cycle, and a
                 // mostly-blacklisted library must reshuffle rather than wait
                 // for a release that cannot come.
-                let unconstrained = try countCandidates(
-                    threshold: state.dealSeq, claimedBefore: claimedBefore,
-                    servableOnly: servableOnly)
+                let unconstrained = try countCandidates(threshold: state.dealSeq)
                 guard unconstrained > 0 else { return nil }
-                guard try dealablePopulation(servableOnly: servableOnly) <= window + 1
+                guard try dealablePopulation() <= window + 1
                 else { return nil }
                 threshold = state.dealSeq
                 if threshold != state.passStartSeq {
@@ -308,17 +203,14 @@ extension Deck {
                         "deck reshuffled; new pass begins at ordinal \(threshold, privacy: .public)"
                     )
                 }
-                eligible = try countCandidates(
-                    threshold: threshold, claimedBefore: claimedBefore,
-                    servableOnly: servableOnly)
+                eligible = try countCandidates(threshold: threshold)
             }
             guard eligible > 0 else { return nil }
 
             return try database.first(
-                servableOnly ? Self.servableCandidateSQL : Self.candidateSQL,
+                Self.candidateSQL,
                 [
                     "threshold": .int(threshold),
-                    "claimExpiry": SQLValue(claimedBefore),
                     "offset": .int(Int64(randomOffset(eligible))),
                 ]
             ) { try DeckCard(row: $0, dealSeq: nil) }
@@ -406,13 +298,9 @@ extension Deck {
         )
     }
 
-    func countCandidates(
-        threshold: Int64, claimedBefore: Date, servableOnly: Bool = false
-    ) throws -> Int {
+    func countCandidates(threshold: Int64) throws -> Int {
         try database.scalarInt(
-            servableOnly ? Self.servableCandidateCountSQL : Self.candidateCountSQL,
-            ["threshold": .int(threshold), "claimExpiry": SQLValue(claimedBefore)]
-        ) ?? 0
+            Self.candidateCountSQL, ["threshold": .int(threshold)]) ?? 0
     }
 
     /// The photographs that can actually cycle: dealable, and not retired.
@@ -421,19 +309,8 @@ extension Deck {
     /// window is measured against this number, because a photograph that can
     /// never be dealt again can never be freed by waiting either.
     ///
-    /// **`servableOnly` narrows it to the ones with bytes, and that is the
-    /// whole of the 2026-08-26 wedge.** The pass fires when the population is
-    /// small enough that waiting can never free anybody, and *which* population
-    /// depends on what is being asked for. Asked for a servable card while
-    /// measuring the library, the deck saw 445 against a 223 window, concluded
-    /// that serving would open the window shortly, and waited — while the 133
-    /// photographs that had bytes were every one of them inside it. Nothing
-    /// served, so the ordinal never advanced, so the window never opened.
-    /// Waiting is only ever the answer for a population that can actually free
-    /// someone.
-    func dealablePopulation(servableOnly: Bool = false) throws -> Int {
-        try database.scalarInt(
-            servableOnly ? Self.servablePopulationSQL : Self.dealablePopulationSQL) ?? 0
+    func dealablePopulation() throws -> Int {
+        try database.scalarInt(Self.dealablePopulationSQL) ?? 0
     }
 
     /// Marks a photo as shown. **This is the deal**: the ordinal advances,
@@ -516,43 +393,99 @@ extension Deck {
         )
     }
 
+    // MARK: - The cache's draw
+
+    /// A remote asset, drawn uniformly at random and claimed.
+    ///
+    /// **Residency is deliberately not in the predicate.** The cache draws from
+    /// the whole remote catalogue and finds out afterwards whether it already
+    /// holds what it picked — see `CacheRefresher` for why that is the design
+    /// rather than a shortcut. Filtering here would make the draw depend on a
+    /// column the in-memory index is the truth for, and would answer a question
+    /// the store answers better.
+    ///
+    /// Claimed for the same reason the deck's candidate is: a fetch happens
+    /// between choosing this and storing it, so two lanes drawing at once must
+    /// not land on the same photograph and both download it.
+    public func nextRemoteCandidate(now: Date = Date()) throws -> DeckCard? {
+        let claimedBefore = now.addingTimeInterval(-Self.claimTimeout)
+        for _ in 0..<Self.claimAttempts {
+            let available = try database.scalarInt(
+                Self.remoteCountSQL, ["claimExpiry": SQLValue(claimedBefore)]) ?? 0
+            guard available > 0 else { return nil }
+
+            let drawn = try database.first(
+                Self.remoteCandidateSQL,
+                [
+                    "claimExpiry": SQLValue(claimedBefore),
+                    "offset": .int(Int64(randomOffset(available))),
+                ]
+            ) { try DeckCard(row: $0, dealSeq: nil) }
+            guard let card = drawn else { return nil }
+
+            // Losing the race means somebody took *that* photograph, not that
+            // there are none — so draw again rather than reporting nothing.
+            if try claim(card, now: now) { return card }
+        }
+        return nil
+    }
+
+    /// How many remote assets are not held.
+    ///
+    /// The refresher's stop condition, and the one question in this design that
+    /// genuinely wants `cached_at` rather than the in-memory index: it is a
+    /// count over the whole library, which a set membership test would have to
+    /// walk row by row to answer.
+    public func unheldRemoteCount() throws -> Int {
+        try database.scalarInt(Self.unheldRemoteCountSQL) ?? 0
+    }
+
+    /// Everything that is not read in place: the population the cache draws
+    /// from. Retired photographs are excluded — fetching one again cannot help.
+    private static let remotePredicate = """
+        p.source_enabled = 1
+          AND p.media_type = 'image'
+          AND p.storage = 'materialized'
+          AND p.render_failures < \(Deck.renderFailureLimit)
+        """
+
+    static let remoteCountSQL = """
+        SELECT COUNT(*) FROM photo p
+         WHERE \(remotePredicate)
+           AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry);
+        """
+
+    static let remoteCandidateSQL = """
+        SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
+          FROM photo p JOIN source s ON s.id = p.source_id
+         WHERE \(remotePredicate)
+           AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry)
+         LIMIT 1 OFFSET :offset;
+        """
+
+    static let unheldRemoteCountSQL = """
+        SELECT COUNT(*) FROM photo p
+         WHERE \(remotePredicate) AND p.cached_at IS NULL;
+        """
+
+    /// **No claim check, and that is load-bearing rather than tidy.**
+    ///
+    /// `claimed_at` belongs to the cache now: a fetch happens between drawing a
+    /// remote asset and storing it, and the claim is what stops two lanes
+    /// downloading the same photograph. Nothing like that happens between
+    /// dealing a card and serving it — the bytes are already here.
+    ///
+    /// Leaving the check in would be actively wrong. `PhotoCache.refreshOnce`
+    /// claims *before* it asks whether it already holds the photograph, so a
+    /// perfectly servable card is briefly claimed on its way to being skipped.
+    /// A deck that excluded claimed rows would refuse to deal it.
     private static let candidatePredicate = """
         p.source_enabled = 1
           AND p.media_type = 'image'
+          AND \(Deck.servableStorage)
           AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold)
-          AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry)
           AND p.render_failures < \(Deck.renderFailureLimit)
           AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.photo_id = p.id)
-        """
-
-    /// Servable *now*: read in place, or its original already cached.
-    static let servablePredicate = """
-        \(candidatePredicate)
-          AND (p.storage = 'referenced'
-               OR EXISTS (SELECT 1 FROM servable_now s WHERE s.uuid = p.uuid))
-        """
-
-    /// The servable half of `dealablePopulationSQL`: what can cycle *and* has
-    /// bytes. Deliberately ignores the window and the claim, because it answers
-    /// "how many could ever be freed", not "how many are free now".
-    static let servablePopulationSQL = """
-        SELECT COUNT(*) FROM photo p
-         WHERE p.source_enabled = 1 AND p.media_type = 'image'
-           AND p.render_failures < \(Deck.renderFailureLimit)
-           AND (p.storage = 'referenced'
-                OR EXISTS (SELECT 1 FROM servable_now s WHERE s.uuid = p.uuid));
-        """
-
-    static let servableCandidateCountSQL = """
-        SELECT COUNT(*) FROM photo p WHERE \(servablePredicate);
-        """
-
-    static let servableCandidateSQL = """
-        SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
-          FROM photo p JOIN source s ON s.id = p.source_id
-         WHERE \(servablePredicate)
-         ORDER BY p.shuffle_key
-         LIMIT 1 OFFSET :offset;
         """
 
     static let candidateCountSQL = """
@@ -562,6 +495,7 @@ extension Deck {
     static let dealablePopulationSQL = """
         SELECT COUNT(*) FROM photo p
          WHERE p.source_enabled = 1 AND p.media_type = 'image'
+           AND \(Deck.servableStorage)
            AND p.render_failures < \(Deck.renderFailureLimit);
         """
 

@@ -147,13 +147,16 @@ struct ColdStartSeedTests {
             )
         }
 
+        // The pool a restart deals from is the cache it still holds, so these
+        // are photographs whose bytes survived the last run.
+        try database.run("UPDATE photo SET cached_at = 1;")
+
         #expect(try PhotoQueue(database: database, nominalSize: 20).size() == 0)
 
         let box = FillerBox()
         let cacheRoot = directory.appending(path: "cache")
         box.configure(
-            databasePath: path, cacheRoot: cacheRoot, store: PhotoStore(root: cacheRoot),
-            pending: nil)
+            databasePath: path, cacheRoot: cacheRoot, store: PhotoStore(root: cacheRoot))
         let preferences = Preferences(
             defaults: UserDefaults(suiteName: "pgr.coldstart.\(UUID())")!)
         let round = await box.topUpIfShort(preferences: preferences)

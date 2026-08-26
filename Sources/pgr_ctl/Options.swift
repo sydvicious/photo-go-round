@@ -77,6 +77,13 @@ struct Options {
     var cacheOverride: URL?
 
     var count = 10
+    /// Whether `-n` was actually typed.
+    ///
+    /// **`count` is shared by three commands**, so its default cannot be moved
+    /// without changing what the other two do — dropping it to nought would
+    /// turn `queue fill`'s ten rounds into one. `queue peek` wants the whole
+    /// deck when nobody asked for a number, and this is how it can tell.
+    var countWasGiven = false
     var repeatWindowFraction = DeckSettings.defaultRepeatWindowFraction
     var deals = 50_000
     var photos = 4_000
@@ -182,6 +189,7 @@ struct Options {
 
             case "--count", "-n":
                 options.count = try nextInt(argument)
+                options.countWasGiven = true
             case "--window", "-w":
                 let raw = try next(argument)
                 guard let fraction = Double(raw), (0...1).contains(fraction) else {
@@ -377,7 +385,7 @@ struct Options {
           sources enable <id> | disable <id>
           refresh                   Ask the agent to re-enumerate its sources
           pool stats                Rows per source, storage, cache residency
-          queue peek [-n <n>]       What is ready to serve, in order
+          queue peek [-n <n>]       The deck, head first. All of it unless -n
           queue fill [-n <rounds>]  Ask every source for a picture, synchronously
           deck stats                Showing counts, pass position, recent events
           cache status              Resident, referenced, bytes, free space

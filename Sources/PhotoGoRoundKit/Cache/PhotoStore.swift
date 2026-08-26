@@ -309,6 +309,22 @@ public final class PhotoStore: @unchecked Sendable {
         return mine.values.reduce(0) { $0 + $1.byteCount }
     }
 
+    /// One entry, bytes and index together.
+    ///
+    /// For a caller undoing its own half-finished work — bytes adopted, the
+    /// bookkeeping that records them failed — where `remove(photoUUID:)` would
+    /// be too broad: it would take renderings that were never in question.
+    @discardableResult
+    public func remove(_ key: Key) -> Int64 {
+        lock.lock()
+        let entry = entries.removeValue(forKey: key)
+        lock.unlock()
+
+        guard let entry else { return 0 }
+        try? FileManager.default.removeItem(at: entry.url)
+        return entry.byteCount
+    }
+
     /// One source's whole directory, which is why the layout has that level.
     @discardableResult
     public func removeSource(_ sourceUUID: String) -> Int64 {
@@ -338,37 +354,71 @@ public final class PhotoStore: @unchecked Sendable {
     public struct Eviction: Sendable, Equatable {
         public let evicted: Int
         public let bytesFreed: Int64
-        /// Entries over the ceiling that were left alone because their
-        /// photograph is queued.
-        public let protected: Int
+        /// Photographs whose **original** went, so the caller can clear their
+        /// `cached_at`. Renderings are not residency — a photograph that keeps
+        /// a rendering and loses its original is no longer held, and one that
+        /// loses only a rendering still is.
+        public let releasedOriginals: Set<String>
+
+        init(evicted: Int, bytesFreed: Int64, releasedOriginals: Set<String> = []) {
+            self.evicted = evicted
+            self.bytesFreed = bytesFreed
+            self.releasedOriginals = releasedOriginals
+        }
     }
 
-    /// FIFO by creation time, over `(photo, resolution)` entries rather than
-    /// over photographs — so a photograph can outlive its own original while a
-    /// rendering of it survives.
+    /// Evicts in the order the caller gives, until the ceiling is met.
     ///
-    /// That is a feature rather than a defect: a rendering is a fraction of the
-    /// bytes, so the same budget holds far more display-ready pictures, and a
-    /// client asking again at a size already held never needs the original back.
-    /// It costs only when a size nobody has rendered is asked for.
+    /// **Least-recently-viewed first, and nothing is exempt.** `order` is
+    /// photographs oldest-first by `COALESCE(last_shown_at, cached_at)`, which
+    /// only the database can answer — `Entry.createdAt` is a file's
+    /// modification date and says nothing about when anybody looked at the
+    /// photograph.
+    ///
+    /// A photograph that has never been shown counts as of the moment it
+    /// arrived, so it is the *newest* thing in the cache and the last to go. It
+    /// moves up the queue on its own as everything around it is shown; a
+    /// download nobody ever picks is eventually evicted on the same rule, with
+    /// no special case for it.
+    ///
+    /// **The `protecting:` set is gone.** It held back photographs the deck was
+    /// carrying, which made the ceiling unreachable: set `byteCeiling` low, or
+    /// let the volume fill from outside, and we sat over the limit holding
+    /// entries we were forbidden to touch. It was also unnecessary — the
+    /// endpoint opens the file before it writes any header, so unlinking a file
+    /// mid-serve does not disturb the transfer, and the deck's cards are among
+    /// the most-recently-shown entries anyway.
+    ///
+    /// Within one photograph the **original goes before its renderings**. A
+    /// rendering is a fraction of the bytes and is display-ready, so the same
+    /// budget holds far more pictures that can be served without a decode; an
+    /// original whose rendering survives can still answer a client asking at
+    /// that size.
     @discardableResult
-    public func evictIfNeeded(protecting protectedPhotos: Set<String> = []) -> Eviction {
+    public func evictIfNeeded(inOrder order: [String]) -> Eviction {
         lock.lock()
         var total = entries.values.reduce(Int64(0)) { $0 + $1.byteCount }
         guard total > byteCeiling else {
             lock.unlock()
-            return Eviction(evicted: 0, bytesFreed: 0, protected: 0)
+            return Eviction(evicted: 0, bytesFreed: 0)
+        }
+
+        var rank: [String: Int] = [:]
+        for (index, uuid) in order.enumerated() { rank[uuid] = index }
+
+        // A photograph the caller did not rank has no row claiming it, so
+        // nothing will miss it: it goes first.
+        let queue = entries.sorted { left, right in
+            let leftRank = rank[left.key.photoUUID] ?? -1
+            let rightRank = rank[right.key.photoUUID] ?? -1
+            if leftRank != rightRank { return leftRank < rightRank }
+            // Original before rendering, within one photograph.
+            return (left.key.size == nil ? 0 : 1) < (right.key.size == nil ? 0 : 1)
         }
 
         var going: [(Key, Entry)] = []
-        var protectedCount = 0
-        for (key, entry) in entries.sorted(by: { $0.value.createdAt < $1.value.createdAt }) {
+        for (key, entry) in queue {
             guard total > byteCeiling else { break }
-            // Anything queued is about to be shown, whatever its age.
-            guard !protectedPhotos.contains(key.photoUUID) else {
-                protectedCount += 1
-                continue
-            }
             going.append((key, entry))
             entries.removeValue(forKey: key)
             total -= entry.byteCount
@@ -385,7 +435,9 @@ public final class PhotoStore: @unchecked Sendable {
                 "evicted \(going.count, privacy: .public) cache entries, freeing \(freed, privacy: .public) bytes"
             )
         }
-        return Eviction(evicted: going.count, bytesFreed: freed, protected: protectedCount)
+        return Eviction(
+            evicted: going.count, bytesFreed: freed,
+            releasedOriginals: Set(going.lazy.filter { $0.0.size == nil }.map(\.0.photoUUID)))
     }
 
     // MARK: - What it holds

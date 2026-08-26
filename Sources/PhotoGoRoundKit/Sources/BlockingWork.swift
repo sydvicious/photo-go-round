@@ -32,7 +32,7 @@ enum BlockingWork {
 
     /// Concurrent, and deliberately unbounded by us: Dispatch's own thread
     /// ceiling is the backstop. A width of our own choosing would be a second
-    /// cap to keep in step with `CacheQueue`'s, and the two would disagree.
+    /// cap to keep in step with `FetchDeadline`'s, and the two would disagree.
     private static let queue = DispatchQueue(
         label: "com.sydpolk.photogoround.blocking",
         qos: .utility,

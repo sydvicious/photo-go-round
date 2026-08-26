@@ -587,8 +587,11 @@ struct SourceTests {
         #expect(stats.claimed == 0)
 
         // A claim taken at selection is visible, which is what makes a stuck
-        // producer something you can see rather than something you infer.
-        _ = try library.deck.nextCandidate()
+        // fetch something you can see rather than something you infer. The
+        // claim belongs to the cache's draw now — dealing takes none, because
+        // its bytes are already here.
+        try library.database.run("UPDATE photo SET cached_at = NULL;")
+        _ = try library.deck.nextRemoteCandidate()
         stats = try pool.stats(forSource: source)
         #expect(stats.claimed == 1)
 

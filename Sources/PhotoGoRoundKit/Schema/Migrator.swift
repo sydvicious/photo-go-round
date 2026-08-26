@@ -17,6 +17,8 @@ public enum Migrator {
         Migration(version: 4, name: "cache leaves the database", sql: SchemaV4.sql),
         Migration(version: 5, name: "count what reached a client", sql: SchemaV5.sql),
         Migration(version: 6, name: "the queue is not a queue", sql: SchemaV6.sql),
+        Migration(version: 7, name: "residency is the deck's pool", sql: SchemaV7.sql),
+        Migration(version: 8, name: "the queue is a queue again", sql: SchemaV8.sql),
     ]
 
     /// The version a fully migrated database reports.

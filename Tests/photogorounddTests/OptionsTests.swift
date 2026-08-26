@@ -285,3 +285,34 @@ struct OptionsTests {
         #expect(try parse([]).once == false)
     }
 }
+
+/// `--add-folder` writes through to preferences, and `--container` does not move
+/// them. That combination reads as an isolated run and edits the real source
+/// list instead.
+///
+/// **Found in the App Group domain on 2026-08-26**, as a folder under a session
+/// scratch directory that had not existed for months — outliving the run, the
+/// directory it named, and any memory of how it got there.
+@Suite("Adding a folder cannot edit a source list the run is not using")
+struct AddFolderGuardTests {
+
+    @Test("A run whose storage is where preferences say may configure them")
+    func ordinaryRunsWriteThrough() {
+        #expect(RunCommand.mayWriteFoldersThrough(origin: .production, prefsPinned: false))
+        #expect(RunCommand.mayWriteFoldersThrough(origin: .development, prefsPinned: false))
+    }
+
+    @Test("A relocated container may not, because the preferences did not move with it")
+    func relocatedStorageIsRefused() {
+        #expect(!RunCommand.mayWriteFoldersThrough(origin: .explicitOverride, prefsPinned: false))
+        #expect(!RunCommand.mayWriteFoldersThrough(origin: .environment, prefsPinned: false))
+    }
+
+    @Test("Moving the preferences as well makes it safe again")
+    func pinningThePreferencesAllowsIt() {
+        // `PGR_PREFS_SUITE` is the third thing `--container` does not move, and
+        // naming it is what makes a scratch run genuinely isolated.
+        #expect(RunCommand.mayWriteFoldersThrough(origin: .explicitOverride, prefsPinned: true))
+        #expect(RunCommand.mayWriteFoldersThrough(origin: .environment, prefsPinned: true))
+    }
+}

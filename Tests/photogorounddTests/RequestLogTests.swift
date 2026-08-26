@@ -137,3 +137,49 @@ struct RequestLogTests {
         #expect(entry.summary == "anonymous · 0.1ms")
     }
 }
+
+extension RequestLogTests {
+
+    /// **`miss of 5.17 GB` read as though 5.17 GB had been missed.** They are
+    /// two unrelated facts — how these pixels were produced, and how much the
+    /// cache holds altogether — and joining them with "of" invented a
+    /// relationship between them.
+    ///
+    /// The logs are the first place a problem shows itself, so a line that has
+    /// to be decoded before it can be read is a real cost.
+    @Test("What produced the pixels and what the cache holds are separate fields")
+    func cacheStateAndCacheSizeDoNotRunTogether() {
+        let entry = PictureEndpoint.Served(
+            status: 200,
+            detail: "2018 Rice Homecoming.jpeg",
+            consumer: "app",
+            width: "1570",
+            height: "1066",
+            card: 41,
+            deal: 3205,
+            sourceID: 12,
+            bytes: 87_000,
+            milliseconds: 56,
+            cache: .miss,
+            cacheBytes: 5_170_000_000,
+            queued: 19
+        )
+
+        #expect(!entry.summary.contains("of 5.17 GB"))
+        #expect(entry.summary.contains("· miss ·"))
+        #expect(entry.summary.contains("· cache 5.17 GB ·"))
+    }
+
+    @Test("A request that asked for no size reports neither field")
+    func noSizeMeansNoCacheFields() {
+        // Nothing was decoded and nothing was kept, so there is no state to
+        // report — the original went out as it is.
+        let entry = PictureEndpoint.Served(
+            status: 200, detail: "a.jpg", consumer: "cli",
+            bytes: 100, milliseconds: 1
+        )
+
+        #expect(!entry.summary.contains("miss"))
+        #expect(!entry.summary.contains("cache "))
+    }
+}

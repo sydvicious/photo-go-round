@@ -77,7 +77,14 @@ struct SourceStateTests {
             try #require(try store.source(id: source.id))
         }
 
-        var pooled: Int { (try? library.deck.poolSize()) ?? 0 }
+        /// **How many photographs the library still has**, not how many the
+        /// deck can deal. These tests are about whether a row survived a
+        /// failure, and `Deck.poolSize` stopped answering that in v2 — it
+        /// counts what is servable, so a photograph that is kept but uncached
+        /// is absent from it and present here.
+        var pooled: Int {
+            (try? library.database.scalarInt("SELECT COUNT(*) FROM photo;")) ?? 0
+        }
         var held: Int64 { (try? cache.status())?.bytesOnDisk ?? 0 }
 
         /// Everything the queue will give up, in order.

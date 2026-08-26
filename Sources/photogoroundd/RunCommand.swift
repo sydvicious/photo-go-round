@@ -65,82 +65,104 @@ struct RunCommand {
         // rather than stacking with it, so calling this on every served picture
         // cannot outrun what the providers are willing to do.
         let databasePath = environment.databaseURL.path(percentEncoded: false)
-        // Created here rather than beside the cache queue below, because the
-        // gauge needs it too: a card out being fetched still counts as the
-        // queue's when deciding whether to deal.
-        let pendingCaches = CacheQueue.Pending()
         filler.configure(
-            databasePath: databasePath, cacheRoot: environment.cacheRoot, store: store,
-            pending: pendingCaches)
+            databasePath: databasePath, cacheRoot: environment.cacheRoot, store: store)
         let filler = self.filler
-        let topUp: @Sendable () -> Void = {
-            Task { await filler.servedOne(preferences: environment.preferences) }
+
+        // **The cache refreshes itself.** It draws a remote asset at random,
+        // skips it if it already holds it, and spends a credit when it does
+        // not — twice the deck's maximum size at launch, one back per card
+        // drawn. Nothing asks it for a particular photograph, and it does not
+        // wait for a client: that is what makes the cold start impossible to
+        // deadlock rather than something a bridge has to rescue.
+        //
+        // Its closures build their own `PhotoCache` from the path, because a
+        // `Database` belongs to one isolation domain and this one runs on
+        // whichever thread the round happens to be on.
+        // One bench for the process. A source that stops answering is left
+        // alone for a while, and the bench is what bounds work that never
+        // returns — see `FetchDeadline`, which deliberately has no cap of its
+        // own.
+        let bench = SourceBench()
+        // Rebuilt per use rather than shared: a `Database` belongs to one
+        // isolation domain, and these run on whichever lane reaches them.
+        let cacheForRefresh: @Sendable () -> PhotoCache? = {
+            guard let database = try? Database(path: databasePath) else { return nil }
+            var cache = PhotoCache(
+                database: database, root: environment.cacheRoot,
+                settings: environment.preferences.cacheSettings,
+                sources: SourceStore(database: database, bytes: store),
+                store: store)
+            cache.log = Self.speak
+            cache.bench = bench
+            return cache
         }
 
-        // The queue of pictures to cache. Serving puts photographs on it when
-        // their bytes are not local and does not wait; this is what drains it,
-        // and its width is the only bound on how many fetches run at once.
-        // Read by the fetch itself, which is not an actor and cannot await the
-        // queue it was started by, and by the gauge above.
-        let cacheQueue = CacheQueue(
+        let refresher = CacheRefresher(
+            budget: { 2 * environment.preferences.queueSize },
+            unheldCount: {
+                guard let database = try? Database(path: databasePath) else { return 0 }
+                return (try? Deck(database: database).unheldRemoteCount()) ?? 0
+            },
+            attempt: {
+                guard let cache = cacheForRefresh() else { return .blocked }
+                switch cache.nextToFetch() {
+                case .blocked: return .blocked
+                case .exhausted: return .exhausted
+                case .alreadyHeld: return .alreadyHeld
+                case .benched: return .benched
+
+                case .fetch(let card, let limit):
+                    // Said before the wait, not after it. See `QueueEvent.caching`.
+                    Self.speak(
+                        .caching(photo: card.externalID, source: card.sourceID, within: limit))
+                    // **The lane comes back whatever the provider does.** The
+                    // fetch is let go of rather than waited for: a read blocked
+                    // waiting for an iCloud file to materialise answers neither
+                    // cancellation nor this deadline, and a structured child
+                    // would be awaited at scope exit — which is the wait this
+                    // exists to escape.
+                    let landed = Flag()
+                    let answered = await FetchDeadline.run(
+                        within: limit,
+                        work: {
+                            guard let worker = cacheForRefresh() else { return }
+                            if await worker.fetchDrawn(card) { landed.raise() }
+                            // Whatever happened, the claim must not outlive the
+                            // work: a photograph left claimed is sidelined for
+                            // the whole timeout for no reason.
+                            worker.finishFetch(card, landed: true)
+                        },
+                        whenAbandoned: {
+                            Log.cache.notice(
+                                "fetch for photo \(card.id, privacy: .public) returned after it was given up on"
+                            )
+                        })
+
+                    guard answered else {
+                        cache.fetchTimedOut(card, after: limit)
+                        return .failed
+                    }
+                    let ok = landed.lower()
+                    cache.finishFetch(card, landed: ok)
+                    if ok { environment.announce(.cacheChanged) }
+                    return ok ? .fetched : .failed
+                }
+            },
+            // **Lanes, so a slow source cannot stop a fast one.** A single-lane
+            // refresher spends its round waiting on whichever provider it drew.
             concurrency: preferences.downloadConcurrency,
-            fetch: { photoID in
-                guard let database = try? Database(path: databasePath) else { return false }
-                var filler = PhotoCache(
-                    database: database, root: environment.cacheRoot,
-                    settings: environment.preferences.cacheSettings,
-                    sources: SourceStore(database: database, bytes: store),
-                    store: store)
-                filler.log = Self.speak
-                // The backlog, not the total: this closure logs from inside
-                // the fetch, before the queue lets the finishing item go.
-                filler.pendingCaches = { pendingCaches.backlog }
-                let fetched = (try? await filler.cache(photoID: photoID)) ?? false
-                if fetched { environment.announce(.cacheChanged) }
-                return fetched
-            },
-            // **Per photograph, because the providers differ by an order of
-            // magnitude.** One scalar query rather than a cached table: this
-            // runs twice per fetch, against a database the process already has
-            // open elsewhere, and a stale answer here would be a bound applied
-            // to the wrong kind of source.
-            deadline: { photoID in
-                guard let database = try? Database(path: databasePath),
-                    let kind = try? database.scalarString(
-                        """
-                        SELECT s.kind FROM photo p
-                          JOIN source s ON s.id = p.source_id
-                         WHERE p.id = :id;
-                        """,
-                        ["id": .int(photoID)])
-                else { return CacheSettings.fileFetchLimit }
-                return SourceKind(kind).isFileBacked
-                    ? CacheSettings.fileFetchLimit : CacheSettings.libraryFetchLimit
-            },
-            // **Put back, not retried.** Whatever was not ready a moment ago is
-            // still not ready, and a card left queued would be asked for again
-            // on the next look-ahead and hang the next lane the same way. Out
-            // of the queue it goes back to being an ordinary undealt
-            // photograph, and gets another turn when the shuffle reaches it.
-            abandoned: { photoID in
-                guard let database = try? Database(path: databasePath) else { return }
-                try? database.run(
-                    "DELETE FROM queue WHERE photo_id = :id;", ["id": .int(photoID)])
-                Log.deck.notice(
-                    "fetch timed out for photo \(photoID, privacy: .public); put back in the pool")
-            },
-            describe: { photoID in
-                guard let database = try? Database(path: databasePath),
-                    let card = (try? Deck(database: database).card(photoID: photoID)) ?? nil
-                else { return ("photo \(photoID)", nil) }
-                return (card.externalID, card.sourceID)
-            },
-            log: Self.speak,
-            pending: pendingCaches
+            log: { Console.event($0) }
         )
-        let wantsCaching: @Sendable (Int64) -> Void = { photoID in
-            Task { await cacheQueue.request(photoID) }
+
+        // **A card drawn is the other of the two things that start a round.**
+        // Topping the deck up and buying the cache a credit are the same event
+        // — a picture reached somebody — so they are rung together.
+        let topUp: @Sendable () -> Void = {
+            Task { await filler.servedOne(preferences: environment.preferences) }
+            Task { await refresher.cardDrawn() }
         }
+
         filler.reporting(to: Self.speak)
 
         let endpoint = PictureEndpoint(
@@ -149,16 +171,18 @@ struct RunCommand {
             preferences: preferences,
             store: store,
             queueRanShort: topUp,
-            // **What is already on disk, not more of the same.** An empty walk
-            // means every card on hand needs bytes that are not here; dealing
-            // uniformly would hand back another cold one and the next walk
-            // would answer `204` too. This deals from what the cache holds,
-            // which is the same preference the launch bridge makes and for the
-            // same reason — it was simply fenced behind a launch-only flag.
-            queueCameUpEmpty: {
-                Task { await filler.dealWhatIsAlreadyHere(preferences: environment.preferences) }
+            // **An empty answer refills the deck and pays the cache nothing.**
+            // The heartbeat would eventually do the first, but it runs behind
+            // the refresh — so a source removed while a slow share is being
+            // walked leaves the window blank for the length of that walk. The
+            // filler has its own connection on its own thread, so this does not
+            // wait for the loop.
+            deckCameUpEmpty: {
+                Task { await filler.topUpIfShort(preferences: environment.preferences) }
             },
-            wantsCaching: wantsCaching,
+            // A card whose bytes turn out to be gone hands the cache back the
+            // credit it spent on that photograph.
+            creditReturned: { refresher.bank() },
             speak: Self.speak
         )
         // Sources are managed over the same listener, because a client cannot
@@ -239,12 +263,47 @@ struct RunCommand {
         // first run is configured from the outside and every run after that is
         // configured from preferences — without the launcher having to know
         // which case it is in.
+        //
+        // **Except when the storage has been relocated and the preferences have
+        // not**, which is a trap rather than a mistake. `--container` and
+        // `--database` move where the library lives; neither moves the
+        // preference domain, so `--container /scratch --add-folder /scratch`
+        // reads as an isolated run and quietly edits the real source list. A
+        // scratch folder written that way outlives the run, the directory it
+        // names, and any memory of how it got there — found in the App Group
+        // domain on 2026-08-26, months after the session that put it there.
+        //
+        // Refused rather than ignored, with the fix named: `PGR_PREFS_SUITE`
+        // moves the third thing.
+        // **Asked of the environment this run resolved, not of the process.**
+        // A caller that injects `PGR_PREFS_SUITE` rather than exporting it — a
+        // test, or anything embedding the agent — is just as isolated, and
+        // reading `ProcessInfo` would refuse it.
+        if !foldersToAdd.isEmpty,
+            !Self.mayWriteFoldersThrough(
+                origin: environment.origin, prefsPinned: environment.preferencesArePinned)
+        {
+            Console.alert(
+                "refusing --add-folder: storage is relocated but preferences are not, so this "
+                    + "would write \(foldersToAdd.count) folder(s) into the real source list")
+            Console.note(
+                "set PGR_PREFS_SUITE to isolate preferences too, or drop --container/--database")
+            throw OptionsError.addFolderWouldEditRealPreferences
+        }
+
         for folder in foldersToAdd {
             let path = folder.url.standardizedFileURL.path(percentEncoded: false)
             if preferences.addSource(.folder(path, recursive: folder.recursive)) {
                 Console.recovered("added source: \(path)")
             }
         }
+
+        // Launch grants a full allowance and the fetcher starts immediately,
+        // in the background: an agent with no client attached still stocks the
+        // cache, and one whose library is entirely referenced finds nothing to
+        // do and stops. Detached because a slow first fetch must not hold up
+        // the loop that serves pictures.
+        Task { await refresher.begin() }
 
         // Preferences are the truth; the source table is a projection of them.
         // A database that was deleted rebuilds itself here.
@@ -286,6 +345,21 @@ struct RunCommand {
         // waiting out a network walk. See `Heartbeat.order(launching:)`.
         var launching = true
         var lastStatus = ""
+        // **The launch grant waits for the library to exist.** Firing it before
+        // the first scan asks an empty `photo` table how much is un-held, gets
+        // nought, and ends the round on the spot — so nothing is ever fetched
+        // and, on a library with no referenced photographs in it, nothing can
+        // ever be drawn to start another one. That is precisely the cold start
+        // this design removes, reintroduced by doing the right thing in the
+        // wrong order. Found by running it, 2026-08-26.
+        var grantedLaunchAllowance = false
+        /// One refresh pass at a time. Distinct from `Self.refreshing`, which
+        /// admits one walk per *source*: this is one walk of the whole list.
+        let refreshPass = Latch()
+        /// Raised by a pass when it finishes, so the loop — which owns the
+        /// heartbeat — can stamp it on the next tick rather than the pass
+        /// reaching across for it.
+        let refreshFinished = Flag()
 
         repeat {
             let now = Date()
@@ -315,6 +389,19 @@ struct RunCommand {
                 if rang { Self.speak(.configurationChanged(what: "preferences re-read")) }
             }
 
+            // A pass that finished since the last tick. Stamped here because
+            // the heartbeat belongs to this loop and to nothing else.
+            if refreshFinished.lower() {
+                heartbeat.finished(.refresh, at: Date())
+                // Now the library is known, so the cache can be told to stock
+                // itself — before this, it would ask an empty table how much is
+                // un-held and end its round on the spot.
+                if !grantedLaunchAllowance {
+                    grantedLaunchAllowance = true
+                    Task { await refresher.begin() }
+                }
+            }
+
             let scanInterval = scanIntervalOverride ?? preferences.scanInterval
             let asked = sourcesChanged.lower()
 
@@ -335,10 +422,36 @@ struct RunCommand {
                         heartbeat.isDue(
                             .refresh, every: scanInterval, at: now, forced: asked || once)
                     else { continue }
-                    try await runRefresh(
-                        environment: environment, sources: sources,
-                        localFirst: heartbeat.lastFinished(.refresh) == nil)
-                    heartbeat.finished(.refresh, at: Date())
+                    // **The loop does not wait for the walk.** Every source
+                    // was walked inside the tick, so nothing else in the loop
+                    // ran meanwhile — no maintenance, no eviction, no
+                    // preference re-read. That read as solved when the
+                    // `walk_seen` diff took a 5,093-photograph source from
+                    // eighty-five minutes to 1.1 seconds; a network share of
+                    // 4,510 put it back to **30.9 seconds** on 2026-08-26.
+                    //
+                    // A one-pass run still waits, because it has nothing else
+                    // to do and must not exit before it has scanned.
+                    let firstPass = heartbeat.lastFinished(.refresh) == nil
+                    if once {
+                        await Self.runRefresh(
+                            databasePath: databasePath, bytes: store, localFirst: firstPass)
+                        heartbeat.finished(.refresh, at: Date())
+                        if !grantedLaunchAllowance {
+                            grantedLaunchAllowance = true
+                            await refresher.begin()
+                        }
+                    } else if refreshPass.tryEnter() {
+                        // **`isDue` keeps saying yes while this runs**, because
+                        // it reads the last *finish*. The gate is what stops a
+                        // tick starting a second pass over the first.
+                        Task {
+                            await Self.runRefresh(
+                                databasePath: databasePath, bytes: store, localFirst: firstPass)
+                            refreshPass.leave()
+                            refreshFinished.raise()
+                        }
+                    }
                     // A ring that lands mid-refresh stays raised and is honoured
                     // on the next tick. Every ring on this topic is now somebody
                     // else changing the durable list — a refresh announces
@@ -422,16 +535,20 @@ struct RunCommand {
     ///
     /// Capped, because fifty sources should not mean fifty simultaneous
     /// directory walks competing for the same disk.
-    private func runRefresh(
-        environment: MacHostEnvironment, sources: SourceStore, localFirst: Bool = false
-    ) async throws {
-        let due = localFirst ? Self.localFirst(try sources.enabled()) : try sources.enabled()
+    /// **Static, and takes nothing that is not `Sendable`.** The pass runs off
+    /// the loop now, which means it is captured by a detached task — and a
+    /// `SourceStore` holds a `Database`, which belongs to one isolation domain
+    /// and cannot cross. It builds its own from the path, exactly as each
+    /// per-source task below already did.
+    static func runRefresh(
+        databasePath: String, bytes: PhotoStore, localFirst: Bool = false
+    ) async {
+        guard let database = try? Database(path: databasePath) else { return }
+        let sources = SourceStore(database: database, bytes: bytes)
+        guard let enabled = try? sources.enabled() else { return }
+        let due = localFirst ? Self.localFirst(enabled) : enabled
         guard !due.isEmpty else { return }
 
-        let databasePath = environment.databaseURL.path(percentEncoded: false)
-        // The refresh is where photographs leave a source, so each task carries
-        // the process's byte index and frees what it removes.
-        let bytes = sources.bytes
         let cap = min(Self.maximumConcurrentRefreshes, due.count)
         let reported = Reporter()
 
@@ -487,6 +604,21 @@ struct RunCommand {
         // a churning source, such as a folder mid-copy, drove a refresh loop
         // at the tick rate for as long as the copy ran. Notifications flow
         // from the outside world to the service, never back.
+    }
+
+    /// Whether `--add-folder` may edit the preference domain this run is reading.
+    ///
+    /// Lifted out so the rule can be asserted without standing up an agent. See
+    /// the call site for what it prevents.
+    static func mayWriteFoldersThrough(origin: ContainerOrigin, prefsPinned: Bool) -> Bool {
+        switch origin {
+        // The storage is where the preferences say it is, so writing to them is
+        // configuring the library the run belongs to.
+        case .production, .development: true
+        // Storage was relocated. Writing through would edit a source list this
+        // run is not otherwise using — unless the preferences were moved too.
+        case .explicitOverride, .environment: prefsPinned
+        }
     }
 
     /// Sources on the boot volume first, everything else after, each keeping its
@@ -562,11 +694,7 @@ struct RunCommand {
         // anybody asking for a picture, so an idle agent spends its idle time
         // getting the next few ready rather than discovering at the last moment
         // that they need fetching.
-        if filler.isBridging() {
-            await filler.seedServableFirst(preferences: preferences)
-        } else {
-            await filler.topUpIfShort(preferences: preferences)
-        }
+        await filler.topUpIfShort(preferences: preferences)
     }
 
     private func runMaintenance(
@@ -582,8 +710,6 @@ struct RunCommand {
         if eviction.evicted > 0 {
             Console.event(
                 "evicted \(eviction.evicted) cache entries, freed \(Self.bytes(eviction.bytesFreed))"
-                    + (eviction.protectedFromEviction > 0
-                        ? " (\(eviction.protectedFromEviction) queued)" : "")
             )
             environment.announce(.cacheChanged)
         }
@@ -682,21 +808,13 @@ final class FillerBox: @unchecked Sendable {
     private var cacheRoot = URL(filePath: "/")
     private var filler: QueueFiller?
 
-    func configure(
-        databasePath: String, cacheRoot: URL, store: PhotoStore,
-        pending: CacheQueue.Pending? = nil
-    ) {
+    func configure(databasePath: String, cacheRoot: URL, store: PhotoStore) {
         lock.lock()
         defer { lock.unlock() }
         self.databasePath = databasePath
         self.cacheRoot = cacheRoot
         self.store = store
-        self.pending = pending
     }
-
-    /// How many photographs are out being fetched. Read by the gauge, because a
-    /// card in flight is still the queue's — see `Gauge.isShort`.
-    private var pending: CacheQueue.Pending?
 
     private var store: PhotoStore?
 
@@ -749,11 +867,8 @@ final class FillerBox: @unchecked Sendable {
         let bytes = store
         let report = self.log
         lock.unlock()
-        let pending = self.pending
         let built = QueueFiller(
-            isShort: {
-                gauge.isShort(nominalSize: sizes.queueSize, inFlight: pending?.count ?? 0)
-            },
+            isShort: { gauge.isShort(nominalSize: sizes.queueSize) },
             produce: { [dealing] in
                 // **On the dealing connection's own thread, and errors travel.**
                 //
@@ -821,43 +936,19 @@ final class FillerBox: @unchecked Sendable {
             database = try? Database(path: databasePath)
         }
 
-        /// **Cards out for fetching still count as the queue's.**
-        ///
-        /// A card skipped while its bytes are fetched has left the table and is
-        /// coming back, so the depth alone understates the queue by however many
-        /// are in flight. Dealing to cover that dip would replace cards that are
-        /// about to return, and the queue would overshoot by exactly the number
-        /// of fetches — which is the churn that pacing the deal to serving
-        /// exists to remove.
-        /// **An empty queue is short whatever is in flight, and that exception is
-        /// the whole of this method's history.**
-        ///
-        /// The accounting above is right about *pacing* and wrong about
-        /// starvation, because it reasons as though a card in flight were
-        /// interchangeable with one on the queue. It is not: a card in flight
-        /// cannot be served. On a cold library over a slow link every card is
-        /// skipped for want of bytes, so the depth falls to zero while the
-        /// in-flight count climbs to nominal — and `depth + inFlight < nominal`
-        /// then answers *not short* about a queue with nothing in it.
-        ///
-        /// Nothing dealing can do makes that false statement true again. Only a
-        /// *fetch* landing does, so the outage lasts as long as the slowest
-        /// outstanding download — observed at several minutes over a hotel
-        /// network on 2026-08-25, with 2.3 GB of perfectly good cached
-        /// photographs that were never dealt because no card could be added to
-        /// ask for them.
-        ///
-        /// So: a queue at zero is always short. Dealing one card at a time from
-        /// there is deliberate rather than grudging — each one is tried, and a
-        /// photograph whose bytes are already held is served on the spot, which
-        /// is how the system walks out of the hole instead of waiting in it.
-        func isShort(nominalSize: Int, inFlight: Int) -> Bool {
+        /// Short is short. **The whole of this method's history was about
+        /// cards that had left the queue to be fetched** — they still counted
+        /// as the queue's for pacing, except when the queue was empty, where
+        /// counting them said *not short* about a queue with nothing in it and
+        /// only a landing fetch could make it false again. Cards do not leave
+        /// to be fetched any more: a card is dealt because its bytes are
+        /// already here.
+        func isShort(nominalSize: Int) -> Bool {
             lock.lock()
             defer { lock.unlock() }
             guard let database else { return false }
             let depth = (try? PhotoQueue(database: database, nominalSize: nominalSize).size()) ?? 0
-            guard depth > 0 else { return true }
-            return depth + inFlight < nominalSize
+            return depth < nominalSize
         }
     }
 
@@ -878,149 +969,9 @@ final class FillerBox: @unchecked Sendable {
     /// fine.
     @discardableResult
     func servedOne(preferences: Preferences) async -> QueueFiller.Round {
-        // While the bridge is in force this is the path that matters: a `204`
-        // rings it, and that happens long before the heartbeat's next tick.
-        if isBridging() { return await seedServableFirst(preferences: preferences) }
         let filler = makeFiller()
         sizes?.update(preferences)
         return await filler.fill()
-    }
-
-    /// How many immediately-servable cards the startup bridge deals.
-    ///
-    /// **Deliberately a handful, not a queueful.** Filling all twenty from the
-    /// one local folder would put twenty consecutive pictures from a single
-    /// source on the screen, which is precisely the opposite of the shuffle
-    /// being in force. Three is enough that a request right now succeeds and
-    /// that the next couple do too, which is all the time the ordinary cards
-    /// need for their fetches to land.
-    static let servableBridge = 3
-
-    /// The startup bridge: a few pictures that can be shown *now*, then the
-    /// ordinary shuffle.
-    ///
-    /// **A cold start deals a full queue it cannot serve.** Every card's bytes
-    /// are still arriving, so the walk goes through all twenty and answers
-    /// `204` — seen on 2026-08-25 as `out of cards, walked 20` against a full
-    /// pool and an empty cache. Photographs already here need no fetch:
-    /// `referenced` files are read in place, and a warm restart still holds
-    /// whatever was cached.
-    ///
-    /// **It keeps preferring until the queue is actually full**, rather than
-    /// firing once. The first tick after a deleted database has an empty pool
-    /// and nothing to prefer; what makes the bridge work is that it is still in
-    /// force a moment later, once the first sources have been walked.
-    /// Deals cards that can be shown without fetching anything, **whatever the
-    /// queue's depth**.
-    ///
-    /// `seedServableFirst` stops once the queue holds a handful, which is right
-    /// at launch: the queue is empty and the point is to get a few pictures on
-    /// screen. It is exactly wrong when a walk has just come up empty, because
-    /// the queue is then *full* — of cards whose bytes are not here. Observed
-    /// 2026-08-26: twenty queued cards, eighty-eight originals in the cache,
-    /// and every walk answering `nothing to show — out of cards`.
-    ///
-    /// **It fills the queue, where the bridge deals a handful.** The bridge's
-    /// argument against filling is a good one *at launch*: twenty consecutive
-    /// pictures from the one local folder that happens to be warm is the
-    /// opposite of the shuffle being in force, and the ordinary cards are only
-    /// seconds away.
-    ///
-    /// It does not hold here. This runs when a walk has already come up with
-    /// nothing, so the alternative is not a slightly biased queue but a blank
-    /// wall — and dealing three meant *empty answer, three pictures, empty
-    /// again*, every cycle of which is an interval with nothing on screen.
-    /// Measured 2026-08-26 with iCloud Drive wedged: fifteen pictures served
-    /// against thirty-two empty answers.
-    @discardableResult
-    func dealWhatIsAlreadyHere(preferences: Preferences) async -> QueueFiller.Round {
-        let (path, root) = paths()
-        let (bytes, report) = storeAndLog()
-        guard let database = try? Database(path: path), let bytes else { return .alreadyRunning }
-
-        var dealer = PhotoCache(
-            database: database, root: root, settings: preferences.cacheSettings,
-            sources: SourceStore(database: database),
-            queueSize: preferences.queueSize, store: bytes)
-        dealer.log = report
-
-        let resident = bytes.residentPhotoUUIDs
-        let queue = PhotoQueue(database: database, nominalSize: preferences.queueSize)
-        var dealt = 0
-        // Bounded by attempts as well as by depth: `dealServable` answering
-        // true for a card already queued would otherwise spin.
-        for _ in 0..<preferences.queueSize {
-            guard ((try? queue.size()) ?? 0) < preferences.queueSize else { break }
-            guard
-                let more = try? dealer.dealServable(
-                    settings: preferences.deckSettings, resident: resident), more
-            else { break }
-            dealt += 1
-        }
-        return QueueFiller.Round(produced: dealt, exhausted: dealt == 0, skipped: false)
-    }
-
-    @discardableResult
-    func seedServableFirst(preferences: Preferences) async -> QueueFiller.Round {
-        let (path, root) = paths()
-        let (bytes, report) = storeAndLog()
-
-        if let database = try? Database(path: path), let bytes {
-            var dealer = PhotoCache(
-                database: database, root: root, settings: preferences.cacheSettings,
-                sources: SourceStore(database: database),
-                queueSize: preferences.queueSize, store: bytes)
-            dealer.log = report
-            let resident = bytes.residentPhotoUUIDs
-            let queue = PhotoQueue(database: database, nominalSize: preferences.queueSize)
-            var dealt = 0
-            while (try? queue.size()) ?? 0 < min(Self.servableBridge, preferences.queueSize) {
-                guard
-                    let more = try? dealer.dealServable(
-                        settings: preferences.deckSettings, resident: resident), more
-                else { break }
-                dealt += 1
-            }
-            if dealt > 0 {
-                Console.event(
-                    "bridged \(dealt) picture\(dealt == 1 ? "" : "s") that need no fetching")
-                Log.deck.notice(
-                    "launch bridge queued \(dealt, privacy: .public) immediately servable photographs"
-                )
-            }
-        }
-
-        // The rest of the queue is the ordinary shuffle, so the fetches those
-        // cards need start now rather than a tick from now.
-        let round = await topUpIfShort(preferences: preferences, force: true)
-
-        // **The shuffle takes over the moment the queue is full.** The bridge is
-        // for the gap at launch and for nothing else; left in force it would be
-        // a standing bias towards whichever source happens to be local.
-        if let database = try? Database(path: path),
-            let size = try? PhotoQueue(database: database, nominalSize: preferences.queueSize)
-                .size(), size >= preferences.queueSize
-        {
-            stopBridging()
-        }
-        return round
-    }
-
-    /// True until the queue has been filled once. See `seedServableFirst`.
-    private var bridging = true
-
-    func isBridging() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return bridging
-    }
-
-    private func stopBridging() {
-        lock.lock()
-        let was = bridging
-        bridging = false
-        lock.unlock()
-        if was { Log.deck.notice("launch bridge finished; the shuffle is in force") }
     }
 
     /// Fills a queue that is short of its target, and leaves a full one alone.
@@ -1040,20 +991,16 @@ final class FillerBox: @unchecked Sendable {
     /// alone, because claiming cards nobody is going to see was the churn the
     /// earlier design was right to avoid.
     @discardableResult
-    func topUpIfShort(
-        preferences: Preferences, force: Bool = false
-    ) async -> QueueFiller.Round {
+    func topUpIfShort(preferences: Preferences) async -> QueueFiller.Round {
         let filler = makeFiller()
         sizes?.update(preferences)
 
-        if !force {
-            let (path, _) = paths()
-            guard let database = try? Database(path: path),
-                let size = try? PhotoQueue(database: database, nominalSize: preferences.queueSize)
-                    .size(),
-                size < preferences.queueSize
-            else { return .alreadyRunning }
-        }
+        let (path, _) = paths()
+        guard let database = try? Database(path: path),
+            let size = try? PhotoQueue(database: database, nominalSize: preferences.queueSize)
+                .size(),
+            size < preferences.queueSize
+        else { return .alreadyRunning }
 
         return await filler.fill()
     }
@@ -1121,6 +1068,35 @@ final class Reporter: @unchecked Sendable {
         Console.note(
             "refreshed #\(result.sourceID)  \(counts)  in \(Self.seconds(took))"
                 + (result.bytesFreed > 0 ? "  (freed \(RunCommand.bytes(result.bytesFreed)))" : ""))
+
+        // **A source that scanned clean and found nothing says so.**
+        //
+        // `+0 -0 =0` is what a healthy scan of an empty folder looks like and
+        // also what a scan of four and a half thousand photographs looks like
+        // when they are all one directory further down than the source reaches.
+        // The two are indistinguishable on the line above, and the second is
+        // silent for ever: the source is enabled, available, freshly scanned,
+        // and contributes nothing. Found on 2026-08-26 on a network share whose
+        // 4,517 photographs were in three subdirectories of a source that was
+        // not recursive.
+        //
+        // Said on every scan rather than on the transition, because the
+        // condition is a standing one and the reason somebody is reading the
+        // log is to find out why nothing is appearing.
+        guard Self.scannedEmpty(result) else { return }
+        Console.alert(
+            "source \(result.sourceID) is empty — it scanned cleanly and holds no photographs")
+    }
+
+    /// A scan that reached its source and came back with nothing.
+    ///
+    /// `added + unchanged` is the population the walk actually saw, so this is
+    /// true both for a folder that has always been empty and for one whose
+    /// last photograph has just been removed. Unavailable sources are excluded:
+    /// they report zero because nothing could be counted, which is a different
+    /// fact and is already reported as unavailability.
+    static func scannedEmpty(_ result: ScanResult) -> Bool {
+        !result.sourceUnavailable && result.added + result.unchanged == 0
     }
 
     private static func seconds(_ duration: Duration) -> String {
@@ -1149,6 +1125,37 @@ extension RunCommand {
             source.resume()
             return source
         }
+    }
+}
+
+/// Admits one holder at a time and turns everyone else away.
+///
+/// `Flag` is raise-and-read, which cannot express *test and set* — two ticks
+/// could both see it lowered and both start a pass. This is the smaller thing
+/// `QueueFiller` and `CacheRefresher` each build inline for their own rounds.
+final class Latch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held = false
+
+    /// True when the caller now holds it and must `leave`.
+    func tryEnter() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !held else { return false }
+        held = true
+        return true
+    }
+
+    func leave() {
+        lock.lock()
+        held = false
+        lock.unlock()
+    }
+
+    var isHeld: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return held
     }
 }
 

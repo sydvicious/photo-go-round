@@ -116,18 +116,36 @@ enum InspectCommands {
 
     // MARK: - Queue
 
-    static func queuePeek(count: Int, environment: MacHostEnvironment) throws {
+    /// The deck, head first: what will be shown, in the order it will be shown.
+    ///
+    /// **`source <id>`, the same words the served line uses.** A path here
+    /// would be friendlier read on its own and worse read alongside anything
+    /// else: the console says `source 12` on every picture it serves, and two
+    /// names for one thing means translating between them at exactly the moment
+    /// somebody is trying to correlate a deck with a log. `pgr_ctl sources list`
+    /// is where an id becomes a path, and it is the only place that job belongs.
+    static func queuePeek(
+        count: Int, all: Bool = false, environment: MacHostEnvironment
+    ) throws {
         let context = try Library.context(environment)
-        let ready = try context.cache.queue.peek(count)
+        // The whole deck unless a number was asked for. It is twenty cards, so
+        // the lot is what somebody looking at it wants; `-n` is for when it is
+        // not.
+        let ready = try context.cache.queue.peek(all ? Int.max : count)
         guard !ready.isEmpty else {
-            Console.note("queue is empty — nothing has been produced yet")
+            Console.note("deck is empty — nothing can be shown yet")
             return
         }
+
+        let widest = ready.count.description.count
         for (index, card) in ready.enumerated() {
+            let number = String(repeating: " ", count: max(0, widest - String(index + 1).count))
+                + String(index + 1)
             Console.note(
-                "\(index + 1). \(card.externalID)  [source \(card.sourceID), \(card.storage)]")
+                "\(number). \(card.externalID)  [source \(card.sourceID), \(card.storage)]")
         }
-        Console.note("\(try context.cache.queue.size()) queued in total")
+        Console.note("\(try context.cache.queue.size()) in the deck, of a possible "
+            + "\((try? context.deck.poolSize()) ?? 0) that can be shown right now")
     }
 
     /// Asks every enabled source for a picture, synchronously, and says what
@@ -169,11 +187,27 @@ enum InspectCommands {
     /// spread of one to three across a library is a healthy fraction below 1.0,
     /// and a spread of three to four hundred is the starvation bug this deck was
     /// rewritten to remove.
+    /// Photographs read in place, which are in the pool without the cache
+    /// having done anything for them.
+    private static func referencedCount(_ context: Library.Context) -> Int {
+        (try? context.database.scalarInt(
+            "SELECT COUNT(*) FROM photo WHERE storage = 'referenced' AND source_enabled = 1;"))
+            .flatMap { $0 } ?? 0
+    }
+
     static func deckStats(environment: MacHostEnvironment) throws {
         let context = try Library.context(environment)
         let stats = try context.deck.stats(settings: context.preferences.deckSettings)
 
-        Console.note("pool          \(stats.dealablePhotos) dealable of \(stats.totalPhotos)")
+        // **The pool is what can be shown, not what exists**, so a number far
+        // below the library is the ordinary state of a library the cache has
+        // not finished stocking — not a fault. The line below says how much is
+        // still waiting, because without it the first number is alarming and
+        // unexplained.
+        Console.note("pool          \(stats.dealablePhotos) servable of \(stats.totalPhotos)")
+        let waiting = (try? context.deck.unheldRemoteCount()) ?? 0
+        Console.note("cache         \(stats.dealablePhotos - referencedCount(context)) held, "
+            + "\(waiting) remote still waiting to be fetched")
         Console.note("window        \(stats.repeatWindow) cards "
             + "(fraction \(context.preferences.deckSettings.repeatWindowFraction))")
         Console.note("deal ordinal  \(stats.currentDealSeq)")
@@ -231,9 +265,7 @@ enum InspectCommands {
             return
         }
         Console.recovered(
-            "evicted \(result.evicted) photos, freed \(Library.bytes(result.bytesFreed))"
-                + (result.protectedFromEviction > 0
-                    ? " (\(result.protectedFromEviction) left alone because they are queued)" : ""))
+            "evicted \(result.evicted) photos, freed \(Library.bytes(result.bytesFreed))")
         environment.announce(.cacheChanged)
     }
 

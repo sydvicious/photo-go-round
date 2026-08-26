@@ -60,13 +60,20 @@ struct TestLibrary {
         return database.lastInsertRowID
     }
 
+    /// **`servable` defaults to true, and that is the v2 default for a reason.**
+    ///
+    /// The deck's pool is what can be shown right now, so a photograph with no
+    /// bytes is one the deck cannot see. A test about dealing, consumers, or
+    /// the queue wants photographs the deck *can* deal; a test about the pool
+    /// boundary itself passes `false` and says so.
     @discardableResult
     func addPhotos(
         _ count: Int,
         to sourceID: Int64,
         mediaType: MediaType = .image,
         sourceEnabled: Bool = true,
-        namePrefix: String = "photo"
+        namePrefix: String = "photo",
+        servable: Bool = true
     ) throws -> [Int64] {
         var ids: [Int64] = []
         try database.transaction {
@@ -88,6 +95,10 @@ struct TestLibrary {
                     ]
                 )
                 ids.append(database.lastInsertRowID)
+            }
+            if servable {
+                try database.run(
+                    "UPDATE photo SET cached_at = 1 WHERE cached_at IS NULL;")
             }
         }
         return ids
@@ -199,23 +210,29 @@ final class Mutex<Value>: @unchecked Sendable {
     }
 }
 
-/// Filling a queue the way the agent does, in the two steps it now takes.
+/// Filling a queue the way the agent does, **in the order v2 does it**.
 ///
-/// Dealing and fetching used to be one operation — `produce` picked a card *and*
-/// downloaded it, so nothing reached the queue until its bytes were local. They
-/// are separate now: the queue holds cards, and bytes arrive because serving
-/// asked for them. A test that wants "a full queue with the bytes to match"
-/// therefore does both, and this is that.
+/// The two steps swapped places. Dealing and fetching were once one operation,
+/// then they were separated — deal a card, and the bytes arrive because serving
+/// asked for them. Now the cache goes first: the deck's pool *is* what the
+/// cache holds, so dealing before fetching deals nothing at all.
+///
+/// So this stocks the cache the way the refresher would, then deals from it.
 extension PhotoCache {
-    /// Deals until the deck offers nothing, then fetches the bytes for
-    /// everything dealt. Answers how many cards are queued.
+    /// Fetches until nothing remote is left un-held, then deals until the deck
+    /// offers nothing. Answers how many cards are queued.
     @discardableResult
     func fillCompletely(limit: Int = 500) async throws -> Int {
+        // Bounded by attempts as well as by the population: a draw that lands
+        // on something already held is free and legitimate, so a loop that only
+        // counted fetches could run a long time on a nearly-full cache.
+        var attempts = 0
+        while try unheldRemoteCount() > 0, attempts < limit * 4 {
+            attempts += 1
+            if await refreshOnce() == .blocked { break }
+        }
         var dealt = 0
         while dealt < limit, try deal() { dealt += 1 }
-        for card in try queue.peek(Int.max) {
-            _ = try await cache(photoID: card.id)
-        }
         return try queue.size()
     }
 }

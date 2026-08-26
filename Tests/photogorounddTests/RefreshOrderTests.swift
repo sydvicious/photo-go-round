@@ -103,3 +103,103 @@ struct RefreshOrderTests {
         #expect(RunCommand.isOnBootVolume(source))
     }
 }
+
+/// A source that scans cleanly and holds nothing.
+///
+/// `+0 -0 =0` is what an empty folder looks like, and also what four and a half
+/// thousand photographs look like when they are one directory below a source
+/// that is not recursive. The second is silent for ever — enabled, available,
+/// freshly scanned, contributing nothing — which is how it went unnoticed on a
+/// real library until somebody asked why no pictures were appearing from it.
+@Suite("Noticing a source that found nothing")
+struct EmptySourceTests {
+
+    private func result(
+        added: Int, removed: Int, unchanged: Int, unavailable: Bool = false
+    ) -> ScanResult {
+        ScanResult(
+            sourceID: 13, added: added, removed: removed, unchanged: unchanged,
+            sourceUnavailable: unavailable, reason: unavailable ? "not mounted" : nil,
+            bytesFreed: 0)
+    }
+
+    @Test("A walk that saw no photographs is empty")
+    func nothingSeenIsEmpty() {
+        #expect(Reporter.scannedEmpty(result(added: 0, removed: 0, unchanged: 0)))
+    }
+
+    @Test("A source whose last photograph just went is empty too")
+    func emptiedIsEmpty() {
+        // The interesting transition, and the one a count of `added` alone
+        // would miss.
+        #expect(Reporter.scannedEmpty(result(added: 0, removed: 12, unchanged: 0)))
+    }
+
+    @Test("A source with photographs is not, however little changed")
+    func populatedIsNot() {
+        #expect(!Reporter.scannedEmpty(result(added: 0, removed: 0, unchanged: 4517)))
+        #expect(!Reporter.scannedEmpty(result(added: 1, removed: 0, unchanged: 0)))
+    }
+
+    @Test("An unreachable source is not called empty")
+    func unavailableIsADifferentFact() {
+        // It reports zero because nothing could be counted, not because there
+        // is nothing there — and unavailability is already reported on its own.
+        #expect(!Reporter.scannedEmpty(result(added: 0, removed: 0, unchanged: 0, unavailable: true)))
+    }
+}
+
+/// A refresh pass runs off the loop.
+///
+/// **Every source was walked inside the tick**, so nothing else in the loop ran
+/// meanwhile. That read as solved when the `walk_seen` diff took a
+/// 5,093-photograph source from eighty-five minutes to 1.1 seconds — and a
+/// network share of 4,510 put it back to 30.9 seconds on 2026-08-26, during
+/// which a removed source left the deck empty and the window blank.
+@Suite("One refresh pass at a time")
+struct RefreshPassTests {
+
+    @Test("A second tick cannot start a pass over the first")
+    func onePassAtATime() {
+        let pass = Latch()
+
+        #expect(pass.tryEnter(), "the first tick must get in")
+        #expect(!pass.tryEnter(), "a tick started a second pass over a running one")
+        #expect(pass.isHeld)
+
+        pass.leave()
+        #expect(pass.tryEnter(), "a finished pass must let the next one in")
+    }
+
+    @Test("Finishing is reported to the loop rather than stamped by the pass")
+    func finishingIsHandedBack() {
+        // The heartbeat belongs to the loop, so a detached pass raises a flag
+        // and the loop stamps it on the next tick. Read-and-clear, so one
+        // finished pass is stamped exactly once.
+        let finished = Flag()
+        #expect(!finished.lower())
+
+        finished.raise()
+        #expect(finished.lower())
+        #expect(!finished.lower(), "one pass was stamped twice")
+    }
+
+    @Test("A pass that is still running leaves the heartbeat saying it is due")
+    func aRunningPassDoesNotStampItself() {
+        // `isDue` reads the last *finish*, so it keeps saying yes for as long as
+        // a pass runs. The latch is the only thing standing between that and a
+        // new pass every tick — which is why it is a latch and not a flag.
+        var heartbeat = Heartbeat()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let pass = Latch()
+
+        #expect(heartbeat.isDue(.refresh, every: .seconds(300), at: now))
+        #expect(pass.tryEnter())
+        // Ten ticks go by while the walk runs.
+        for tick in 1...10 {
+            let later = now.addingTimeInterval(Double(tick))
+            #expect(heartbeat.isDue(.refresh, every: .seconds(300), at: later))
+            #expect(!pass.tryEnter(), "tick \(tick) started a second pass")
+        }
+    }
+}

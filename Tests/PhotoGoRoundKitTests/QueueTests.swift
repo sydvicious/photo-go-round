@@ -15,50 +15,19 @@ struct QueueTests {
 
     // MARK: - Serving
 
-    @Test("Running for a long time does not collapse the keys into a FIFO")
-    func keysDoNotCollapse() throws {
-        // **The bug this pins, and it is not a slow one.** A card is placed at a
-        // key drawn between the lowest and the highest currently queued. The
-        // highest therefore never rises, and the lowest rises every time a card
-        // is served — so the interval only ever shrinks. Modelled, a queue of
-        // twenty reaches a span of *exactly zero* in about a thousand cycles,
-        // which at ten seconds a picture is under three hours. Once keys tie,
-        // ordering falls back to `position` and the queue is silently a FIFO
-        // again, with random placement gone and nothing saying so.
-        let library = try TestLibrary()
-        let source = try library.addSource()
-        let ids = try library.addPhotos(25, to: source)
-        let queue = PhotoQueue(database: library.database, nominalSize: 20)
-        for id in ids.prefix(20) { try queue.append(photoID: id, sourceID: source) }
-
-        // Serve the head and put it straight back, which is what a fetched card
-        // does — a thousand times.
-        for _ in 0..<1000 {
-            let card = try #require(try queue.serve())
-            try queue.append(photoID: card.id, sourceID: source)
-        }
-
-        let span = try #require(
-            try library.database.first("SELECT MAX(sort_key) - MIN(sort_key) AS span FROM queue;") {
-                try $0.double("span")
-            })
-        let distinct =
-            try library.database.scalarInt("SELECT COUNT(DISTINCT sort_key) FROM queue;") ?? 0
-
-        #expect(span >= 1.0, "the key interval collapsed to \(span)")
-        #expect(distinct == 20, "keys have tied, so ordering has fallen back to insertion order")
-    }
-
-    @Test("A card is inserted at a random position, not at the end")
-    func appendingIsRandomlyPlaced() async throws {
-        // **Every insertion is random, dealt and returned alike.** At the tail, a
-        // card waits a whole traversal before it is looked at — which for a
-        // returned card means its bytes were paid for and then sat for eight
-        // minutes, and for a newly dealt one means a source added now is
-        // invisible until the queue has turned over once. At the head, the order
-        // pictures appear in becomes the order they were *fetched* in, and the
-        // fastest source owns the front. Random is the placement that has
-        // neither fault.
+    @Test("Cards come out in the order the deck dealt them")
+    func theQueueIsFirstInFirstOut() throws {
+        // **This replaces three tests about random placement**, whose subject
+        // was deleted with `sort_key` in migration 8. They existed because two
+        // things arrived here wanting opposite ends of a FIFO: a freshly dealt
+        // card, and a card returning from a completed fetch. A fetch completing
+        // puts nothing on the deck now — it makes a photograph eligible and the
+        // deck picks it up on its own terms — so there is one arrival, one end,
+        // and no arrangement left to randomise.
+        //
+        // The old suite also had to prove the keys did not silently collapse
+        // back into a FIFO, which took about a thousand cycles. That is the
+        // stated behaviour now rather than a failure mode.
         let library = try TestLibrary()
         let source = try library.addSource()
         let ids = try library.addPhotos(60, to: source)
@@ -67,52 +36,12 @@ struct QueueTests {
         for id in ids { try queue.append(photoID: id, sourceID: source) }
 
         let order = try queue.peek(Int.max).map(\.id)
-        #expect(order.count == 60)
-        #expect(Set(order) == Set(ids), "every card is still there, exactly once")
+        #expect(order == ids, "the queue reordered cards the deck had already shuffled")
 
-        // Sixty cards landing in insertion order by chance is 1/60!, so this
-        // says the placement is not the tail without asserting any particular
-        // arrangement.
-        #expect(order != ids, "cards were appended in order, so nothing was randomised")
-
-        // And not merely reversed or otherwise fixed. A key is drawn strictly
-        // inside the existing span — a tie with the head sorts after it by
-        // position, and the draw never reaches the tail — so the last card
-        // inserted is at best second and never last, deterministically.
-        let lastInserted = try #require(ids.last)
-        let where_ = try #require(order.firstIndex(of: lastInserted))
-        #expect(where_ != 0)
-        #expect(where_ != order.count - 1)
-    }
-
-    @Test("Placement is spread across the queue rather than clustered at one end")
-    func placementIsSpread() async throws {
-        // The distributional claim, which the test above deliberately does not
-        // make. A card inserted into a queue of fifty lands in the first third,
-        // the middle third, and the last third with roughly equal frequency —
-        // the property that both of the rejected placements fail.
-        let library = try TestLibrary()
-        let source = try library.addSource()
-        let ids = try library.addPhotos(60 * 21, to: source)
-        var thirds = [0, 0, 0]
-
-        for trial in 0..<60 {
-            let queue = PhotoQueue(
-                database: library.database, nominalSize: 1000)
-            // A fresh queue of twenty per trial, then one more card.
-            try library.database.run("DELETE FROM queue;")
-            let batch = Array(ids[(trial * 21)..<(trial * 21 + 20)])
-            for id in batch { try queue.append(photoID: id, sourceID: source) }
-            let newcomer = ids[trial * 21 + 20]
-            try queue.append(photoID: newcomer, sourceID: source)
-
-            let at = try #require(try queue.peek(Int.max).map(\.id).firstIndex(of: newcomer))
-            thirds[min(2, at * 3 / 21)] += 1
-        }
-
-        // Twenty expected per third over sixty trials. Loose bounds, because
-        // this is a randomness check and a flaky test is worse than a coarse one.
-        #expect(thirds.allSatisfy { $0 >= 5 }, "clustered at one end: \(thirds)")
+        // And serving takes them in that order.
+        var served: [Int64] = []
+        while let card = try queue.serve() { served.append(card.id) }
+        #expect(served == ids)
     }
 
     @Test("The card at the top is not starved by the ones queued after it")

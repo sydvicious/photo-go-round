@@ -20,7 +20,11 @@ struct FillerBoxTests {
         let databasePath: String
         let database: Database
 
-        init(photos: Int) throws {
+        /// `servable` is what the deck's pool means in v2: a photograph with
+        /// bytes on hand. These tests are about *filling*, not about where the
+        /// bytes came from, so the cache is simply declared to be holding them
+        /// — which is the state the refresher would have produced.
+        init(photos: Int, servable: Bool = true) throws {
             directory = URL.temporaryDirectory.appending(path: "pgr-filler-\(UUID().uuidString)")
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
@@ -51,6 +55,9 @@ struct FillerBoxTests {
                         "key": .double(Double.random(in: 0..<1)),
                     ]
                 )
+            }
+            if servable {
+                try database.run("UPDATE photo SET cached_at = 1;")
             }
         }
 
@@ -125,30 +132,36 @@ struct FillerBoxTests {
         #expect(again.produced == 0)
     }
 
-    @Test("The last resort fills the queue, rather than dealing a handful")
+    // MARK: - What a walk that found nothing asks for
+    //
+    // These three used to name `dealWhatIsAlreadyHere`, a second fallback that
+    // preferred photographs the cache already held. There is nothing left to
+    // prefer — the deck deals nothing else — so the fallback is the ordinary
+    // top-up, forced past the short-check because a walk that came up empty has
+    // already established there is nothing. The properties are unchanged, which
+    // is why these are rewritten rather than deleted.
+
+    @Test("A walk that found nothing fills the queue, rather than dealing a handful")
     func theLastResortFillsTheQueue() async throws {
-        // **The bridge deals three; this deals a queueful, and the difference
-        // is what is on screen in between.** The bridge runs at launch, where
-        // the ordinary cards are seconds away and twenty consecutive pictures
-        // from one warm folder would be the opposite of a shuffle. This runs
-        // when a walk has already found nothing, so the alternative is a blank
-        // wall — and dealing three produced *empty answer, three pictures,
-        // empty again*. Measured 2026-08-26 against a wedged iCloud Drive:
-        // fifteen served, thirty-two empty.
+        // **Dealing a handful produced *empty answer, three pictures, empty
+        // again*.** Measured 2026-08-26 against a wedged iCloud Drive: fifteen
+        // served against thirty-two empty. Every one of those empties is an
+        // interval with nothing on screen, which is the one thing that outranks
+        // everything else here.
         let fixture = try Fixture(photos: 200)
-        // Referenced photographs need no fetch, so every one of them is
-        // servable without the cache holding anything.
+        // Referenced photographs need no fetch, so every one is servable
+        // without the cache holding anything.
         try fixture.database.run("UPDATE photo SET storage = 'referenced';")
         let box = fixture.box()
         let preferences = Self.preferences()
 
-        let round = await box.dealWhatIsAlreadyHere(preferences: preferences)
+        let round = await box.topUpIfShort(preferences: preferences)
 
         #expect(try fixture.queueSize() == preferences.queueSize)
         #expect(round.produced == preferences.queueSize)
     }
 
-    @Test("It stops when the cache runs out, rather than spinning")
+    @Test("It stops when the pool runs out, rather than spinning")
     func theLastResortTerminates() async throws {
         // Slow is acceptable; endless is not. With fewer servable photographs
         // than the queue wants, it deals what there is and returns.
@@ -156,7 +169,7 @@ struct FillerBoxTests {
         try fixture.database.run("UPDATE photo SET storage = 'referenced';")
         let box = fixture.box()
 
-        let round = await box.dealWhatIsAlreadyHere(preferences: Self.preferences())
+        let round = await box.topUpIfShort(preferences: Self.preferences())
 
         #expect(try fixture.queueSize() == 5)
         #expect(round.produced == 5)
@@ -165,11 +178,13 @@ struct FillerBoxTests {
     @Test("With nothing servable at all it answers nothing, and says so")
     func theLastResortCanBeEmpty() async throws {
         // Every photograph materialized and none cached: there is genuinely
-        // nothing to show, and inventing something would be worse.
-        let fixture = try Fixture(photos: 5)
+        // nothing to show, and inventing something would be worse. In v2 this
+        // is not a fallback failing — it is the deck correctly reporting an
+        // empty pool, and the answer to it is the refresher.
+        let fixture = try Fixture(photos: 5, servable: false)
         let box = fixture.box()
 
-        let round = await box.dealWhatIsAlreadyHere(preferences: Self.preferences())
+        let round = await box.topUpIfShort(preferences: Self.preferences())
 
         #expect(try fixture.queueSize() == 0)
         #expect(round.produced == 0)
@@ -191,8 +206,8 @@ struct FillerBoxTests {
         #expect(round.produced == 1, "the steady state deals exactly the card that was served")
     }
 
-    @Test("The gauge counts a card out for fetching as the queue's")
-    func gaugeCountsInFlight() throws {
+    @Test("The gauge is the depth against the target, and nothing else")
+    func gaugeIsJustTheDepth() throws {
         let fixture = try Fixture(photos: 3)
         let rows = try fixture.database.all("SELECT id, source_id FROM photo;") { row in
             (id: try row.int64("id"), source: try row.int64("source_id"))
@@ -203,10 +218,15 @@ struct FillerBoxTests {
         }
 
         let gauge = FillerBox.Gauge(databasePath: fixture.databasePath)
-        // Three queued. A fetch in flight fills the queue's dip, so dealing to
-        // cover it would be the churn pacing-by-serving exists to remove.
-        #expect(gauge.isShort(nominalSize: 5, inFlight: 1))
-        #expect(!gauge.isShort(nominalSize: 4, inFlight: 1))
-        #expect(!gauge.isShort(nominalSize: 3, inFlight: 0))
+        // **Three queued, and no third number.** This used to take an in-flight
+        // count, because a card skipped for want of bytes had left the queue
+        // and was coming back — so the depth alone understated it. That cannot
+        // happen now: a card is only dealt once its bytes are here, so it never
+        // leaves to be fetched, and the exception that had to be written into
+        // this method for an empty queue goes with the rest of it.
+        #expect(gauge.isShort(nominalSize: 5))
+        #expect(gauge.isShort(nominalSize: 4))
+        #expect(!gauge.isShort(nominalSize: 3))
+        #expect(!gauge.isShort(nominalSize: 2))
     }
 }

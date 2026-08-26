@@ -204,18 +204,36 @@ worth knowing.
 
 `pool stats`
 Rows per source, split by what explains everything else — referenced against
-materialized, how much has bytes, and how much is claimed by a producer that is
-fetching it right now.
+materialized, how much has bytes, and how much is claimed by a lane that is
+fetching it right now. **Referenced plus held is the deck's pool**: a
+materialized photograph the cache has not got is not something the deck can
+deal, so it is absent from every number the deck reports.
 
 `queue peek`
-What is ready to serve, in order, head first. Takes `-n` for how many to show,
-and reports the total. Peeking consumes nothing.
+The deck, head first: which photographs will be shown, in the order they will be
+shown, each with the source it came from and whether it is read in place or
+copied. **The whole deck unless `-n` narrows it** — it is twenty cards, so
+showing part of it by default answered a question nobody asked.
+
+The trailing line is the deck's depth against the pool it was dealt from, which
+is what can be shown right now rather than the size of the library. Peeking
+consumes nothing.
+
+Sources are numbered, not named — `source 12`, the same words the agent's
+served line uses. `sources list` is where an id becomes a path, and keeping that
+job in one place is what lets a deck and a log be read against each other
+without translating.
 
 `queue fill`
-Does the agent's topping-up by hand: asks every enabled source for a picture,
-synchronously, and reports what each round produced. Takes `-n` for how many
-rounds, and stops early when a round produces nothing. This is the only way to
-fill a queue with no agent running.
+Does the agent's topping-up by hand: deals cards from what can be shown right
+now, synchronously, and reports what each round produced. Takes `-n` for how
+many rounds, and stops early when a round produces nothing. This is the only way
+to fill a queue with no agent running.
+
+**It fetches nothing.** Dealing reads a row and writes a row; the bytes are the
+cache's business and the cache stocks itself. A round that produces nothing on a
+library of remote photographs means the cache has not got to them yet, not that
+the deck is broken.
 
 `deck stats`
 Where the shuffle stands, plus the distribution of showing counts. `times_shown`
@@ -223,16 +241,30 @@ is a statistic and nothing orders by it, which is what makes it the honest
 measure: a spread of one to three across a library is a healthy fraction below
 1.0, and a spread of three to four hundred is starvation.
 
+**The pool it reports is what can be shown, not what exists**, and the `cache`
+line beneath it says how much of the library is still waiting to be fetched. On
+a library of remote photographs with a cold cache the pool is nought, and that is
+the honest answer — the deck deals nothing it cannot serve.
+
+The number to watch beside them is the remote half's share of the showing
+histogram: it should match that half's share of the library, and falling below
+means the fetches are not keeping up.
+
 `cache status`
 Originals held, renderings held, how many photographs are referenced in place
 rather than copied, how many are waiting for bytes, what is on disk against the
-byte ceiling, and what is free on the volume. Also the number of queued pictures,
-which are the ones eviction will not touch whatever their age.
+byte ceiling, and what is free on the volume. Also the number of queued
+pictures.
 
 `cache evict`
 Runs an eviction pass now rather than waiting for the agent's maintenance
-interval. Reports what went and what it freed, and says how many were left alone
-because they are queued.
+interval. Reports what went and what it freed.
+
+**Longest-unseen first, and nothing is exempt.** A photograph that has never been
+shown counts as of the moment it arrived, so it is the newest thing in the cache
+and the last to go rather than the first. Nothing is held back — an exemption is
+a ceiling that cannot be reached, which matters when the ceiling is set low or
+the volume fills from outside the agent.
 
 `cache clear`
 Discards cached bytes, optionally scoped by `--source` or to

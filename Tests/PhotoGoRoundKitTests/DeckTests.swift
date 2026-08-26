@@ -452,15 +452,20 @@ struct DeckTests {
         let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
         let deck = library.deck
 
-        let first = try #require(try deck.nextCandidate())
-        let second = try #require(try deck.nextCandidate())
+        // **The claim is the cache's, so this asks the cache's draw.** Dealing
+        // takes no claim: its bytes are already here, so there is no gap
+        // between choosing and storing for anything to race in.
+        try library.database.run("UPDATE photo SET cached_at = NULL;")
+
+        let first = try #require(try deck.nextRemoteCandidate())
+        let second = try #require(try deck.nextRemoteCandidate())
         #expect(first.id != second.id)
         #expect(Set([first.id, second.id]) == Set(ids))
 
-        // Both are claimed and neither is queued or shown, so there is nothing
-        // left to offer. Without the claim this would hand out a third card
-        // that another producer was already downloading.
-        #expect(try deck.nextCandidate() == nil)
+        // Both are claimed and neither has landed, so there is nothing left to
+        // offer. Without the claim this would hand out a third draw for a
+        // photograph another lane is already downloading.
+        #expect(try deck.nextRemoteCandidate() == nil)
     }
 
     @Test("Releasing a claim puts the photo straight back in contention")
@@ -469,11 +474,13 @@ struct DeckTests {
         let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
         let deck = library.deck
 
-        let card = try #require(try deck.nextCandidate())
-        #expect(try deck.nextCandidate() == nil)
+        try library.database.run("UPDATE photo SET cached_at = NULL;")
+
+        let card = try #require(try deck.nextRemoteCandidate())
+        #expect(try deck.nextRemoteCandidate() == nil)
 
         try deck.releaseClaim(photoID: card.id)
-        #expect(try deck.nextCandidate()?.id == card.id)
+        #expect(try deck.nextRemoteCandidate()?.id == card.id)
     }
 
     @Test("A claim expires, so a producer that died mid-fetch sidelines nothing")
@@ -482,12 +489,17 @@ struct DeckTests {
         let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
         let deck = library.deck
 
+        try library.database.run("UPDATE photo SET cached_at = NULL;")
+
         let start = Date(timeIntervalSince1970: 1_000_000)
-        let card = try #require(try deck.nextCandidate(now: start))
+        let card = try #require(try deck.nextRemoteCandidate(now: start))
         // Still inside the window: the claim holds.
-        #expect(try deck.nextCandidate(now: start.addingTimeInterval(Deck.claimTimeout - 1)) == nil)
+        #expect(
+            try deck.nextRemoteCandidate(now: start.addingTimeInterval(Deck.claimTimeout - 1))
+                == nil)
         // Past it: nobody is coming back for this one, so it competes again.
-        let again = try deck.nextCandidate(now: start.addingTimeInterval(Deck.claimTimeout + 1))
+        let again = try deck.nextRemoteCandidate(
+            now: start.addingTimeInterval(Deck.claimTimeout + 1))
         #expect(again?.id == card.id)
     }
 
@@ -515,17 +527,20 @@ struct DeckTests {
         try library.addPhotos(400, to: source)
         let path = TestLibrary.path(in: directory)
 
-        // Selection and the fetch that follows it are separated in time, so the
-        // claim is what stops two producers spending two downloads on one
-        // picture. Nothing is released here, which is the point: 400 selections
-        // against 400 photos must be 400 distinct photos.
+        // **The claim moved to the cache, so this now asks the cache's draw.**
+        // Selection and the fetch that follows it are separated in time, which
+        // is what the claim is for — and that is true of downloading and false
+        // of dealing, whose bytes are already here. Nothing is released, which
+        // is the point: 400 draws against 400 photographs must be 400 distinct
+        // photographs, or two lanes have spent two downloads on one picture.
+        try library.database.run("UPDATE photo SET cached_at = NULL;")
         let collected = Mutex<[Int64]>([])
         DispatchQueue.concurrentPerform(iterations: 4) { _ in
             guard let database = try? Database(path: path) else { return }
             let deck = Deck(database: database)
             var mine: [Int64] = []
             for _ in 0..<100 {
-                guard let card = (try? deck.nextCandidate()) ?? nil else { break }
+                guard let card = (try? deck.nextRemoteCandidate()) ?? nil else { break }
                 mine.append(card.id)
             }
             collected.withLock { $0.append(contentsOf: mine) }

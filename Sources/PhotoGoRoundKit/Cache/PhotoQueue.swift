@@ -1,12 +1,21 @@
 import Foundation
 import PhotoGoRoundAgentAPI
 
-/// Pictures that are ready to be served, in an order nothing chose.
+/// Pictures that are ready to be served, in the order the deck dealt them.
 ///
-/// **Not first-in-first-out.** Every card is placed at a random point among the
-/// cards already here — see `append` for why both of the orderly alternatives
-/// are worse. "The head" below means the card with the smallest `sort_key`,
-/// which is a position no caller can predict or rely on.
+/// **First-in-first-out, and honestly so.** It was not, between migrations 6
+/// and 8: cards were placed at a random point among those already queued,
+/// because two things arrived here and wanted opposite ends. A card freshly
+/// dealt from a new source was invisible for a whole traversal at the tail; a
+/// card returning from a completed fetch was warm and waited the same span.
+/// Putting either at the head was worse — the order pictures appeared in became
+/// the order they were *fetched* in, so the fastest source owned the front
+/// whatever its share of the library.
+///
+/// Only one thing arrives now. A fetch completing does not put anything here;
+/// it makes a photograph eligible, and the deck picks it up on its own terms.
+/// With one arrival there is one sensible end, and `position` — monotonic since
+/// the first schema — is the order.
 ///
 /// The whole design is demand-driven and non-blocking:
 ///
@@ -15,13 +24,9 @@ import PhotoGoRoundAgentAPI
 ///   only thing that can notice it has run low. Dealing is paced to pictures
 ///   served, so the top-up rides serving; the heartbeat only seeds an empty
 ///   queue.
-/// - A card returning from a completed fetch is appended too, at a random
-///   position like any other. Nothing is evicted when an entry arrives.
 ///
 /// **The size is nominal, not a ceiling.** Nothing is evicted to shorten the
-/// queue and a returning card is never refused, so the depth floats around the
-/// target rather than being held at it — blocking an append, or throwing away
-/// work already done, would both be worse than a number that floats.
+/// queue, so the depth floats around the target rather than being held at it.
 public struct PhotoQueue {
     public let database: Database
     /// The size to top up toward. Not a maximum.
@@ -52,7 +57,7 @@ public struct PhotoQueue {
               FROM queue q
               JOIN photo p ON p.id = q.photo_id
               JOIN source s ON s.id = p.source_id
-             ORDER BY q.sort_key, q.position
+             ORDER BY q.position
              LIMIT :limit;
             """,
             ["limit": .int(Int64(count))]
@@ -61,39 +66,19 @@ public struct PhotoQueue {
 
     // MARK: - Filling
 
-    /// Adds one entry, **at a random place in the queue**.
+    /// Adds one entry at the tail.
     ///
-    /// Not a queue in the first-in-first-out sense, and deliberately so. The two
-    /// things that arrive here want opposite ends of a FIFO and neither should
-    /// get one: a card returning from a completed fetch is warm and would wait a
-    /// whole traversal at the tail, and a card freshly dealt from a new source
-    /// would be invisible for the same span. Putting either at the head instead
-    /// makes the order pictures appear in the order they were *fetched* in, so
-    /// the fastest source owns the front whatever its share of the library.
+    /// `position` is `INTEGER PRIMARY KEY AUTOINCREMENT`, so the insert places
+    /// the card and nothing else has to be computed or renumbered. What this
+    /// replaces — a key drawn uniformly between the lowest and highest queued,
+    /// widened by an average gap so the region above the top was reachable, and
+    /// a respacing pass because the interval only ever shrank and reached zero
+    /// in about a thousand cycles — was all in service of a second arrival that
+    /// no longer exists.
     ///
-    /// The key is drawn uniformly across the cards present, **including the gap
-    /// above the highest of them**, which places the card without moving any.
-    /// An empty queue spans nothing, so it gets `[0, 1)`; a queue of one has no
-    /// interval either, so the new card is offset past it rather than tying.
-    ///
-    /// **That gap above the top is not decoration.** Inserting among *n* cards
-    /// has *n+1* gaps — before the first, between each pair, and after the last
-    /// — and a draw bounded above by the maximum reaches only the first *n*.
-    /// The card holding the top key is then a fixed point: every arrival sorts
-    /// below it, serving takes the lowest first, and `respaceIfCollapsing`
-    /// renumbers in order, so it stays on top forever. One slot of twenty dies,
-    /// one photograph is never shown, its bytes stay pinned, and nothing says
-    /// so. Found live on 2026-08-25 with a card that had held the top key for
-    /// six and a half hours. Widening the span by one average gap — `n / (n-1)`
-    /// — makes the region above the top exactly as likely as any other gap.
-    ///
-    /// It also relieves the collapse `respaceIfCollapsing` exists for, since
-    /// `hi` can now rise rather than only `lo`. That is a side effect and not a
-    /// replacement: respacing stays as the backstop.
-    ///
-    /// Nothing is evicted, nothing is capped, and an entry already queued is not
-    /// added twice — a provider re-offering a picture we are already holding is
-    /// answering honestly, it just has nothing new to contribute.
+    /// Nothing is evicted, nothing is capped, and an entry already queued is
+    /// not added twice: the deck re-offering a picture we are already holding
+    /// is answering honestly, it just has nothing new to contribute.
     @discardableResult
     public func append(photoID: Int64, sourceID: Int64, at now: Date = Date()) throws -> Bool {
         try database.transaction(.immediate) {
@@ -105,66 +90,13 @@ public struct PhotoQueue {
 
             try database.run(
                 """
-                INSERT INTO queue (photo_id, source_id, queued_at, sort_key)
-                SELECT :photo, :source, :now,
-                       CASE
-                         WHEN lo IS NULL THEN :r
-                         WHEN hi > lo    THEN lo + :r * (hi - lo) * n / (n - 1.0)
-                         ELSE lo + :r
-                       END
-                  FROM (
-                    SELECT MIN(sort_key) AS lo, MAX(sort_key) AS hi, COUNT(*) AS n FROM queue
-                  );
+                INSERT INTO queue (photo_id, source_id, queued_at)
+                VALUES (:photo, :source, :now);
                 """,
-                [
-                    "photo": .int(photoID), "source": .int(sourceID), "now": SQLValue(now),
-                    "r": .double(Double.random(in: 0..<1)),
-                ]
+                ["photo": .int(photoID), "source": .int(sourceID), "now": SQLValue(now)]
             )
-            try respaceIfCollapsing()
             return true
         }
-    }
-
-    /// The smallest key interval worth working in.
-    ///
-    /// Anything above zero would do for correctness; one is chosen because it
-    /// leaves gaps of `1 / count` between neighbours, which is a colossal margin
-    /// against the ~1e-16 relative spacing of a `Double` and needs no thought.
-    private static let minimumSpan = 1.0
-
-    /// Spreads the keys back out to `1…n`, keeping the order exactly.
-    ///
-    /// **The interval only ever shrinks, and fast.** A new key is drawn between
-    /// the lowest and highest currently queued, so the highest never rises,
-    /// while the lowest rises every time a card is served. Modelled over a queue
-    /// of twenty, the span reaches *exactly zero* in about a thousand cycles —
-    /// under three hours at ten seconds a picture. Keys then tie, ordering falls
-    /// back to `position`, and the queue is quietly a FIFO again with random
-    /// placement gone and nothing announcing it. That silent reversion is the
-    /// reason this exists rather than the arithmetic.
-    ///
-    /// Renumbering rather than rescaling, because it is the same one statement
-    /// either way and integers are what a person reading the table wants to see.
-    /// Costs one `UPDATE` over a queue's worth of rows, roughly once every sixty
-    /// cards dealt.
-    private func respaceIfCollapsing() throws {
-        let span =
-            try database.first("SELECT MAX(sort_key) - MIN(sort_key) AS span FROM queue;") {
-                try $0.double("span")
-            } ?? 0
-        guard span < Self.minimumSpan else { return }
-
-        try database.run(
-            """
-            WITH ordered AS (
-              SELECT position, ROW_NUMBER() OVER (ORDER BY sort_key, position) AS rank
-                FROM queue
-            )
-            UPDATE queue
-               SET sort_key = (SELECT rank * 1.0 FROM ordered WHERE ordered.position = queue.position);
-            """
-        )
     }
 
     /// Removes and returns the head.
@@ -202,7 +134,7 @@ public struct PhotoQueue {
               FROM queue q
               JOIN photo p ON p.id = q.photo_id
               JOIN source s ON s.id = p.source_id
-             ORDER BY q.sort_key, q.position
+             ORDER BY q.position
              LIMIT 1;
             """
         ) { row in

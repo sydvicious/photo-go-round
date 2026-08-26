@@ -327,3 +327,33 @@ struct OptionsTests {
         }
     }
 }
+
+/// `queue peek` shows the whole deck unless a number is asked for.
+///
+/// `count` is shared with `queue fill` and the shuffle test, so its default
+/// cannot be moved to mean "all" without changing what those do — dropping it
+/// to nought would turn ten fill rounds into one. Whether `-n` was typed is
+/// what separates them.
+@Suite("How many to show")
+struct PeekCountTests {
+
+    @Test("With no -n, nothing was asked for")
+    func noNumberMeansTheWholeDeck() throws {
+        let options = try Options.parse(["queue", "peek"])
+        #expect(!options.countWasGiven)
+    }
+
+    @Test("With -n, that is the number")
+    func aNumberIsHonoured() throws {
+        let options = try Options.parse(["queue", "peek", "-n", "3"])
+        #expect(options.countWasGiven)
+        #expect(options.count == 3)
+    }
+
+    @Test("The shared default is untouched, so queue fill still runs ten rounds")
+    func theSharedDefaultDidNotMove() throws {
+        let options = try Options.parse(["queue", "fill"])
+        #expect(options.count == 10)
+        #expect(!options.countWasGiven)
+    }
+}

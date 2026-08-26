@@ -45,7 +45,9 @@ do {
         try InspectCommands.poolStats(environment: hostEnvironment(options))
 
     case .queuePeek:
-        try InspectCommands.queuePeek(count: options.count, environment: hostEnvironment(options))
+        try InspectCommands.queuePeek(
+            count: options.count, all: !options.countWasGiven,
+            environment: hostEnvironment(options))
 
     case .queueFill:
         try await InspectCommands.queueFill(

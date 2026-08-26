@@ -417,15 +417,15 @@ struct EndpointCacheTests {
 
         let records = library.log.all.suffix(3)
         #expect(records.map(\.cache) == [.miss, .hit, nil])
-        // The size of the cache beside the hit or miss: a miss is ordinary while
-        // it is filling and worth looking at once it is not, and the two are
-        // only readable together.
-        // The cache size beside the hit or miss, and how deep the queue was —
-        // a miss is ordinary while the cache fills, and the queue depth says
-        // whether the walk is outrunning the deck.
+        // The cache size sits beside the hit or miss, and the queue depth
+        // beside both: a miss is ordinary while the cache fills and worth a
+        // second look once it is not, and the depth says whether the deck is
+        // keeping up. **Separate fields**, because `miss of 5.17 GB` read as
+        // though 5.17 GB had been missed.
         #expect(try #require(records.first).cacheBytes != nil)
         #expect(try #require(records.first).queued != nil)
-        #expect(try #require(records.first).summary.contains("miss of "))
+        #expect(try #require(records.first).summary.contains("· miss ·"))
+        #expect(try #require(records.first).summary.contains("· cache "))
         #expect(try #require(records.first).summary.contains(" queued"))
         // A miss is the one worth reading, so it has to be in the words a
         // person sees rather than only in the header a client sees.
@@ -664,17 +664,29 @@ struct EndpointCacheTests {
 }
 
 
-/// Filling a queue the way the agent does, in the two steps it now takes: deal
-/// the cards, then fetch the bytes for what was dealt. A copy of the kit tests'
-/// helper, because a test target cannot see another test target's code.
+/// Filling a queue the way the agent does, **in the order v2 does it**.
+///
+/// The two steps swapped places. Dealing and fetching were once one operation,
+/// then they were separated — deal a card, and the bytes arrive because serving
+/// asked for them. Now the cache goes first: the deck's pool *is* what the
+/// cache holds, so dealing before fetching deals nothing at all.
+///
+/// So this stocks the cache the way the refresher would, then deals from it.
 extension PhotoCache {
+    /// Fetches until nothing remote is left un-held, then deals until the deck
+    /// offers nothing. Answers how many cards are queued.
     @discardableResult
     func fillCompletely(limit: Int = 500) async throws -> Int {
+        // Bounded by attempts as well as by the population: a draw that lands
+        // on something already held is free and legitimate, so a loop that only
+        // counted fetches could run a long time on a nearly-full cache.
+        var attempts = 0
+        while try unheldRemoteCount() > 0, attempts < limit * 4 {
+            attempts += 1
+            if await refreshOnce() == .blocked { break }
+        }
         var dealt = 0
         while dealt < limit, try deal() { dealt += 1 }
-        for card in try queue.peek(Int.max) {
-            _ = try await cache(photoID: card.id)
-        }
         return try queue.size()
     }
 }

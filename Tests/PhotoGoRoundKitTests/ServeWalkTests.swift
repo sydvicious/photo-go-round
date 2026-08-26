@@ -16,7 +16,7 @@ import Testing
 /// because everything that used to be decided in advance — is this source
 /// mounted, are these bytes held — is now decided by trying, one card at a time,
 /// with the queue moving underneath.
-@Suite("Serving walks the queue")
+@Suite("Serving")
 struct ServeWalkTests {
 
     /// Collects what the two queues said, in order, so a test can assert on the
@@ -57,6 +57,14 @@ struct ServeWalkTests {
                 ids.append(id)
                 lock.unlock()
             }
+        }
+
+        /// A credit handed back, which is what a vanished card now produces
+        /// where it used to produce a fetch request.
+        func credit() {
+            lock.lock()
+            ids.append(0)
+            lock.unlock()
         }
 
         var all: [Int64] {
@@ -106,23 +114,25 @@ struct ServeWalkTests {
                 try library.database.run("UPDATE photo SET storage = 'materialized';")
             }
             cache.log = heard.log
-            cache.wantsCaching = asked.want
+            cache.creditReturned = asked.credit
         }
 
-        /// Cards on the queue, bytes nowhere.
+        /// **Bytes first, then cards.** The deck's pool is what the cache
+        /// holds, so dealing before fetching deals nothing at all. This is the
+        /// refresher's job, done synchronously.
+        func cacheAll() async throws {
+            var attempts = 0
+            while try cache.unheldRemoteCount() > 0, attempts < 200 {
+                attempts += 1
+                if await cache.refreshOnce() == .blocked { break }
+            }
+        }
+
         @discardableResult
         func dealAll() throws -> Int {
             var dealt = 0
             while try cache.deal() { dealt += 1 }
             return dealt
-        }
-
-        /// Fetches the bytes for everything queued, the way the cache queue's
-        /// worker would.
-        func cacheAll() async throws {
-            for card in try cache.queue.peek(Int.max) {
-                _ = try await cache.cache(photoID: card.id)
-            }
         }
 
         func goOffline() throws {
@@ -131,18 +141,35 @@ struct ServeWalkTests {
                 ["l": "/Volumes/NotMounted/photos", "id": .int(source.id)])
         }
 
+        /// The one photograph a single-photo fixture has, straight from the
+        /// row. What the cache's random draw would have landed on.
+        func firstPhoto() throws -> DeckCard? {
+            let first = try library.database.first(
+                "SELECT id FROM photo ORDER BY id LIMIT 1;"
+            ) { try $0.int64("id") }
+            guard let id = first else { return nil }
+            return try library.deck.card(photoID: id)
+        }
+
         var queued: Int { (try? cache.queue.size()) ?? 0 }
-        var pooled: Int { (try? library.deck.poolSize()) ?? 0 }
+        /// **How many photographs the library still has**, not how many the
+        /// deck can deal. These tests are about whether a row survived a
+        /// failure, and `Deck.poolSize` stopped answering that in v2 — it
+        /// counts what is servable, so a photograph that is kept but uncached
+        /// is absent from it and present here.
+        var pooled: Int {
+            (try? library.database.scalarInt("SELECT COUNT(*) FROM photo;")) ?? 0
+        }
         var resident: Int { (try? cache.status())?.residentCount ?? 0 }
     }
 
-    // MARK: - 1. In the cache, so serve it
+    // MARK: - The head of the deck is the picture
 
     @Test("A card whose bytes are here is the picture")
     func cachedCardIsServed() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
         try await fixture.cacheAll()
+        try fixture.dealAll()
 
         let served = try #require(try await fixture.cache.serve())
         #expect(served.card.externalID == "a.png")
@@ -160,8 +187,8 @@ struct ServeWalkTests {
     @Test("Serving takes it off the queue, so the next request is a different picture")
     func servingConsumesTheCard() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        try fixture.dealAll()
         try await fixture.cacheAll()
+        try fixture.dealAll()
         #expect(fixture.queued == 2)
 
         let first = try #require(try await fixture.cache.serve())
@@ -170,191 +197,33 @@ struct ServeWalkTests {
         #expect(fixture.queued == 0)
     }
 
-    // MARK: - 2. Not in the cache: ask, drop, move on
 
-    @Test("An uncached card is asked for, dropped, and the next one is served instead")
-    func uncachedCardIsSkippedAndRequested() async throws {
+
+    // MARK: - Nothing to show
+
+    @Test("An empty pool deals nothing, and serving says so")
+    func anEmptyPoolSaysSo() async throws {
+        // **This used to be about running out of *time*.** The walk had a
+        // two-second budget because a cold queue on a network volume could take
+        // a minute to go through, and telling the two apart mattered. Neither
+        // exists now: a card is only dealt once its bytes are here, so there is
+        // nothing slow to walk past and nothing to time.
+        //
+        // What is left is the honest cold start — every photograph remote, the
+        // cache holding none of them, so the deck has nothing to deal and
+        // serving has nothing to take.
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        try fixture.dealAll()
 
-        // Bytes for exactly one of them. Whichever comes up first, the walk must
-        // end on the one that is here.
-        let queue = try fixture.cache.queue.peek(Int.max)
-        let cached = try #require(queue.last)
-        _ = try await fixture.cache.cache(photoID: cached.id)
-
-        let served = try #require(try await fixture.cache.serve())
-
-        #expect(served.card.id == cached.id)
-        // The one it passed over was handed to the other queue, exactly once.
-        #expect(fixture.asked.all == [try #require(queue.first).id])
-        #expect(fixture.heard.lines.contains { $0.hasPrefix("SERVE:") && $0.contains("not cached yet") })
-        // Both left the queue: one served, one dropped pending its bytes.
-        #expect(fixture.queued == 0)
-    }
-
-    @Test("The request does not wait for the fetch it asked for")
-    func servingNeverWaitsForBytes() async throws {
-        let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-
-        // Nothing cached, so this must come back at once rather than fetching.
+        #expect(try fixture.dealAll() == 0)
         #expect(try await fixture.cache.serve() == nil)
-        #expect(fixture.asked.all.count == 1)
-        // And the photograph is untouched: it is waiting for bytes, not gone.
-        #expect(fixture.pooled == 1)
-    }
-
-    @Test("A referenced photograph is never asked for, because there is nothing to fetch")
-    func referencedPhotographsAreNotQueuedForCaching() async throws {
-        // Referenced means the file on the source *is* the picture; we never
-        // hold a copy. If it cannot be read, fetching would not help.
-        let fixture = try await Fixture(photos: ["a.png"], materialized: false)
-        try fixture.dealAll()
-        fixture.folder.remove("a.png")
-
-        #expect(try await fixture.cache.serve() == nil)
-        #expect(fixture.asked.all.isEmpty, "asked for bytes that could never be fetched")
-    }
-
-    // MARK: - Looking ahead
-
-    @Test("Serving asks for the bytes of the cards behind the one it served")
-    func servingLooksAheadAndPrefetches() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png", "d.png"])
-        try fixture.dealAll()
-        let queued = try fixture.cache.queue.peek(Int.max)
-        let head = try #require(queued.first)
-        _ = try await fixture.cache.cache(photoID: head.id)
-
-        let served = try #require(try await fixture.cache.serve())
-        #expect(served.card.id == head.id)
-
-        // **The walk stopped at the first card, and that is the problem this
-        // solves.** Warming used to happen only as a side effect of walking
-        // *past* uncached cards, so a source whose photographs are always
-        // servable — anything referenced — meant the walk stopped immediately
-        // and the uncached cards behind it were never asked for. A healthy
-        // source starved the sick ones.
-        #expect(Set(fixture.asked.all) == Set(queued.dropFirst().map(\.id)))
-
-        // And looking ahead reads the queue rather than consuming it: those
-        // three are still there to be served when their bytes land.
-        #expect(fixture.queued == 3)
-    }
-
-    @Test("Looking ahead does not ask for what is already here")
-    func lookAheadSkipsWhatIsCached() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        try fixture.dealAll()
-        try await fixture.cacheAll()
-
-        _ = try #require(try await fixture.cache.serve())
-
-        // Both were cached, so the one behind needs nothing. Asking anyway would
-        // cost a fetch that the cache queue only discards when it comes off.
-        #expect(fixture.asked.all.isEmpty)
-    }
-
-    @Test("Looking ahead is bounded, so one request cannot ask for the whole queue")
-    func lookAheadIsBounded() async throws {
-        let names = (0..<40).map { "p\($0).png" }
-        let fixture = try await Fixture(photos: names)
-        try fixture.dealAll()
-        let head = try #require(try fixture.cache.queue.peek(1).first)
-        _ = try await fixture.cache.cache(photoID: head.id)
-
-        _ = try #require(try await fixture.cache.serve())
-
-        // A cap matters for its own sake: when the Photos and Google providers
-        // arrive, an unbounded look-ahead is a request that asks somebody else's
-        // service for a queue's worth of originals at once.
-        #expect(fixture.asked.all.count == PhotoCache.lookAheadDepth)
-    }
-
-    // MARK: - 3. Round the whole queue, then no picture
-
-    @Test("A queue with nothing cached answers no picture, having asked for all of it")
-    func aColdQueueAnswersNothing() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png", "d.png"])
-        try fixture.dealAll()
-        #expect(fixture.queued == 4)
-
-        #expect(try await fixture.cache.serve() == nil)
-
-        // Every one of them is now somebody else's problem, and the queue is
-        // empty because each left as it was passed over.
-        #expect(Set(fixture.asked.all).count == 4)
-        #expect(fixture.queued == 0)
-        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 4"))
-    }
-
-    @Test("The walk gives up on time as well as on cards, and says which")
-    func theWalkIsBoundedByTime() async throws {
-        // A cold queue of four. One cycle would walk all of them; a budget that
-        // is already spent stops after the first.
-        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png", "d.png"])
-        try fixture.dealAll()
-        #expect(fixture.queued == 4)
-
-        // **Zero, not a short sleep.** The bound is what is being tested, and a
-        // test that waits for a real deadline is a test that is slow when it
-        // passes and hangs when it breaks.
-        #expect(try await fixture.cache.serve(within: .zero) == nil)
-
-        // One card was still tried. Answering "no photo" without looking at a
-        // single card would turn a slow moment into a blank screen.
-        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of time, walked 1"))
-        #expect(fixture.queued == 3)
-        // And the walking it *did* do was not wasted: the card it passed over
-        // has been asked for, so the next request is likelier to find it.
-        #expect(fixture.asked.all.count == 1)
-    }
-
-    @Test("Running out of cards says so, and is not reported as running out of time")
-    func runningOutOfCardsSaysSo() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        try fixture.dealAll()
-
-        #expect(try await fixture.cache.serve(within: .seconds(60)) == nil)
-        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 2"))
-    }
-
-    @Test("A servable card inside the budget is still served")
-    func theBudgetDoesNotCostAServableCard() async throws {
-        let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        try await fixture.cacheAll()
-
-        let served = try #require(try await fixture.cache.serve(within: .seconds(2)))
-        #expect(served.card.externalID == "a.png")
-    }
-
-    @Test("Skipping an uncached card never asks its source anything")
-    func skippingCostsNoSourceCheck() async throws {
-        // Four cards, no bytes for any of them. Every one is going to be skipped
-        // and handed to the cache queue.
-        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png", "d.png"])
-        try fixture.dealAll()
-        fixture.counting.reset()
-
-        #expect(try await fixture.cache.serve(within: .seconds(60)) == nil)
-
-        // **Zero, not four.** Asking a source whether a photograph is still
-        // there is the single most expensive thing the walk can do — against a
-        // network volume it is most of a second each — and it buys nothing for a
-        // card whose bytes are not here, because the card is being skipped
-        // whatever the answer. The check is a guarantee about what is *shown*,
-        // so it belongs to the card being handed over and to no other.
-        #expect(fixture.counting.checks == 0)
-        #expect(fixture.asked.all.count == 4, "all four were still handed to the cache queue")
+        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 0"))
     }
 
     @Test("The card actually served is still checked against its source")
     func theServedCardIsStillVerified() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
         try await fixture.cacheAll()
+        try fixture.dealAll()
         fixture.counting.reset()
 
         _ = try #require(try await fixture.cache.serve())
@@ -364,44 +233,6 @@ struct ServeWalkTests {
         #expect(fixture.counting.checks == 1)
     }
 
-    @Test("The walk is bounded by one cycle, so it cannot chase its own tail")
-    func theWalkIsBounded() async throws {
-        // On disk rather than in memory, because the point is a *second*
-        // connection putting cards back while the walk is going — which is what
-        // a fetch finishing instantly looks like, and what would make an
-        // unbounded walk run for ever.
-        let directory = URL.temporaryDirectory.appending(path: "pgr-bound-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let library = try TestLibrary.onDisk(at: directory)
-        let path = TestLibrary.path(in: directory)
-
-        let folder = TemporaryFolder(name: "pgr-bound-src")
-        folder.write("a.png")
-        folder.write("b.png")
-
-        let bytes = PhotoStore(root: directory.appending(path: "cache"))
-        let store = SourceStore(database: library.database, bytes: bytes)
-        var cache = PhotoCache(
-            database: library.database, root: directory.appending(path: "cache"),
-            sources: store, store: bytes)
-        try cache.prepare()
-        let source = try await store.add(kind: .folder, locator: folder.path)
-        _ = await store.refresh(source)
-        try library.database.run("UPDATE photo SET storage = 'materialized';")
-        while try cache.deal() {}
-
-        let sourceID = source.id
-        cache.wantsCaching = { photoID in
-            guard let database = try? Database(path: path) else { return }
-            _ = try? PhotoQueue(database: database).append(photoID: photoID, sourceID: sourceID)
-        }
-
-        #expect(try await cache.serve() == nil)
-        #expect(
-            try cache.queue.size() == 2,
-            "the cards came straight back, which is exactly the case the bound is for")
-    }
-
     @Test("An empty queue answers no picture without walking anything")
     func anEmptyQueueAnswersNothing() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
@@ -409,7 +240,7 @@ struct ServeWalkTests {
         #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 0"))
     }
 
-    // MARK: - 4. Fetched, and back on the queue
+    // MARK: - Fetching, and what a failure means about the photograph
 
     /// **Reversed 2026-08-24.** This suite used to assert the opposite — that a
     /// finished fetch left the queue alone and the photograph waited to be dealt
@@ -425,8 +256,11 @@ struct ServeWalkTests {
     @Test("Asking for a photograph already cached costs a skip, not a second fetch")
     func cachingSomethingAlreadyHeldDoesNothing() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        let card = try #require(try fixture.cache.queue.peek().first)
+        // **Not via the queue.** These are about fetching a photograph the
+        // cache does not hold, and a photograph the cache does not hold is not
+        // in the deck's pool — so there is no card to peek at. The row is what
+        // the refresher would have drawn.
+        let card = try #require(try fixture.firstPhoto())
         #expect(try await fixture.cache.cache(photoID: card.id))
 
         // The second request comes off the queue, finds the bytes already here,
@@ -439,8 +273,11 @@ struct ServeWalkTests {
     @Test("A fetch that fails from an online source removes the photograph")
     func aFailedFetchFromAnOnlineSourceRemovesIt() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        let card = try #require(try fixture.cache.queue.peek().first)
+        // **Not via the queue.** These are about fetching a photograph the
+        // cache does not hold, and a photograph the cache does not hold is not
+        // in the deck's pool — so there is no card to peek at. The row is what
+        // the refresher would have drawn.
+        let card = try #require(try fixture.firstPhoto())
 
         // The source is right there and the file is not, so it is gone.
         fixture.folder.remove("a.png")
@@ -451,8 +288,11 @@ struct ServeWalkTests {
     @Test("A fetch that fails from an offline source keeps everything")
     func aFailedFetchFromAnOfflineSourceKeepsIt() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        let card = try #require(try fixture.cache.queue.peek().first)
+        // **Not via the queue.** These are about fetching a photograph the
+        // cache does not hold, and a photograph the cache does not hold is not
+        // in the deck's pool — so there is no card to peek at. The row is what
+        // the refresher would have drawn.
+        let card = try #require(try fixture.firstPhoto())
         try fixture.goOffline()
 
         #expect(try await fixture.cache.cache(photoID: card.id) == false)
@@ -464,8 +304,11 @@ struct ServeWalkTests {
     @Test("A fetch that cannot land in the cache keeps the photograph")
     func aFailedAdoptKeepsThePhotograph() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        let card = try #require(try fixture.cache.queue.peek().first)
+        // **Not via the queue.** These are about fetching a photograph the
+        // cache does not hold, and a photograph the cache does not hold is not
+        // in the deck's pool — so there is no card to peek at. The row is what
+        // the refresher would have drawn.
+        let card = try #require(try fixture.firstPhoto())
 
         // The cache root refuses writes — a condition entirely on our side that
         // says nothing about the photograph. The staging directory pre-exists
@@ -490,8 +333,11 @@ struct ServeWalkTests {
     @Test("A fetch that fails while the file is confirmed present keeps the photograph")
     func aFailedFetchOfAPresentFileKeepsIt() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        let card = try #require(try fixture.cache.queue.peek().first)
+        // **Not via the queue.** These are about fetching a photograph the
+        // cache does not hold, and a photograph the cache does not hold is not
+        // in the deck's pool — so there is no card to peek at. The row is what
+        // the refresher would have drawn.
+        let card = try #require(try fixture.firstPhoto())
 
         // Unreadable is not absent: the provider can see the file and cannot
         // read it. Removal is earned only by a confirmed absence, so the row
@@ -509,45 +355,21 @@ struct ServeWalkTests {
         #expect(fixture.pooled == 1, "an unreadable-but-present file was deleted")
     }
 
-    // MARK: - 4. Fetched, and back on the queue
-
-    @Test("A fetched photograph goes back on the queue, so the fetch is not wasted")
-    func fetchingReturnsTheCardToTheQueue() async throws {
-        let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-
-        // Cold: the walk skips it, asks for it, and the card leaves the queue.
-        #expect(try await fixture.cache.serve() == nil)
-        #expect(fixture.queued == 0)
-        let wanted = try #require(fixture.asked.all.first)
-
-        _ = try await fixture.cache.cache(photoID: wanted)
-
-        // **Back, and now servable.** Without this the bytes are paid for and
-        // the photograph is not shown — it has to be dealt again, which is a
-        // uniform draw from the whole library. Fetching one picture improves the
-        // odds of the next draw by one over the library size, so a cache built
-        // that way never catches up: measured overnight as two sources of 5,899
-        // photographs going from 123 pictures shown in an hour to zero for five
-        // hours, while a source needing no fetch took every turn.
-        #expect(fixture.queued == 1)
-        let served = try #require(try await fixture.cache.serve())
-        #expect(served.card.externalID == "a.png")
-    }
+    // MARK: - Fetching, and what a failure means about the photograph
 
     @Test("A fetch that fails does not put the card back")
     func aFailedFetchDoesNotReturnTheCard() async throws {
+        // **Nothing serving does asks for a fetch any more**, so the fetch is
+        // started the way the refresher starts one: from the row.
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        #expect(try await fixture.cache.serve() == nil)
-        let wanted = try #require(fixture.asked.all.first)
+        let wanted = try #require(try fixture.firstPhoto()).id
 
         // The source is gone by the time the fetch runs.
         try fixture.goOffline()
         _ = try await fixture.cache.cache(photoID: wanted)
 
-        // Nothing was gained, so nothing goes back — otherwise a photograph that
-        // cannot be fetched circulates for ever, being skipped and re-requested.
+        // Nothing was gained, so nothing goes on the deck — a photograph that
+        // cannot be fetched must not circulate as a card that cannot be shown.
         #expect(fixture.queued == 0)
     }
 
@@ -556,10 +378,11 @@ struct ServeWalkTests {
     @Test("An offline source serves what we hold and skips what we do not")
     func offlineServesWhatIsHeld() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        // Exactly one of the two fetched, so the deck's pool is that one and
+        // the other is still a remote asset as far as dealing is concerned.
+        #expect(await fixture.cache.refreshOnce() == .fetched)
         try fixture.dealAll()
-        let queue = try fixture.cache.queue.peek(Int.max)
-        let held = try #require(queue.first)
-        _ = try await fixture.cache.cache(photoID: held.id)
+        let held = try #require(try fixture.cache.queue.peek().first)
 
         // The drive goes away *after* one of them was fetched. This is the case
         // that used to fail: the copy we hold could not be reached, because
@@ -574,8 +397,8 @@ struct ServeWalkTests {
     @Test("A photograph deleted from a source that is right there is dropped, not skipped")
     func deletedPhotographsAreDropped() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        try fixture.dealAll()
         try await fixture.cacheAll()
+        try fixture.dealAll()
         #expect(fixture.resident == 2)
 
         fixture.folder.remove("a.png")
@@ -593,8 +416,8 @@ struct ServeWalkTests {
     @Test("A source that is gone takes its photographs with it as they come up")
     func goneSourcesAreDropped() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        try fixture.dealAll()
         try await fixture.cacheAll()
+        try fixture.dealAll()
 
         // The folder is deleted while its volume stays — which is *gone*, not
         // offline, and the opposite answer.
@@ -607,33 +430,6 @@ struct ServeWalkTests {
 
     // MARK: - What it says while doing it
 
-    @Test("Both queues say what they did, and each line names which queue it was")
-    func everyDecisionIsSaid() async throws {
-        let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
-        _ = try await fixture.cache.serve()
-        let card = try #require(fixture.asked.all.first)
-        _ = try await fixture.cache.cache(photoID: card)
-        // The fetch put the card back on the queue, so this deal finds
-        // nothing new to add — the card is already there.
-        try fixture.dealAll()
-        _ = try await fixture.cache.serve()
-
-        let lines = fixture.heard.lines
-        #expect(lines.contains { $0.hasPrefix("DEAL: a.png (source ") })
-        #expect(lines.contains { $0.hasPrefix("SERVE: a.png (source ") && $0.contains(" skipped") })
-        #expect(lines.contains { $0.hasPrefix("SERVE: nothing to show") })
-        #expect(
-            lines.contains { $0.hasPrefix("CACHE: a.png (source ") && $0.contains("original cached") })
-        #expect(lines.contains { $0.hasPrefix("SERVE: a.png (source ") && $0.contains(" is here") })
-        // Every line names what it belongs to, so several interleaved on one
-        // console stay readable and each can be filtered out on its own.
-        #expect(
-            lines.allSatisfy {
-                $0.hasPrefix("DEAL: ") || $0.hasPrefix("SERVE: ") || $0.hasPrefix("CACHE: ")
-            })
-    }
-
     @Test("Keeping a resize says what was resized and to what size, and nothing else")
     func keepingAResizeIsSaid() async throws {
         // **This used to be two tests**, one for a referenced photograph and one
@@ -643,8 +439,8 @@ struct ServeWalkTests {
         // rendering being kept, and carrying both in one sentence made neither
         // easy to find on a console. One line, one event.
         let fixture = try await Fixture(photos: ["a.png"])
-        try fixture.dealAll()
         try await fixture.cacheAll()
+        try fixture.dealAll()
         let served = try #require(try await fixture.cache.serve())
 
         _ = try fixture.cache.keep(

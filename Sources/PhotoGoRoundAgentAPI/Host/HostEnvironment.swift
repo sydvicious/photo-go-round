@@ -72,6 +72,13 @@ public struct MacHostEnvironment: HostEnvironment {
     /// Which rung of the ladder supplied the roots. Logged at `.notice` on
     /// startup, because "why is it writing there" should never need a debugger.
     public let origin: ContainerOrigin
+    /// Whether `PGR_PREFS_SUITE` named the preference domain, rather than it
+    /// following from the deployment.
+    ///
+    /// **The third thing `--container` does not move.** A caller that relocated
+    /// the storage has to know whether the preferences came with it before it
+    /// writes anything to them — see `RunCommand.mayWriteFoldersThrough`.
+    public let preferencesArePinned: Bool
     public let doorbells: DarwinNotification.Doorbells
 
     /// User-facing name, hyphenated. The hyphens never appear in an identifier.
@@ -119,9 +126,10 @@ public struct MacHostEnvironment: HostEnvironment {
         // open.
         doorbells = DarwinNotification.Doorbells(database: databaseURL)
 
+        let pinnedDomain = environment["PGR_PREFS_SUITE"].flatMap { $0.isEmpty ? nil : $0 }
+        preferencesArePinned = pinnedDomain != nil
         var resolvedPreferences = Preferences(
-            suiteName: environment["PGR_PREFS_SUITE"].flatMap { $0.isEmpty ? nil : $0 }
-                ?? Self.preferenceDomain(for: deployment)
+            suiteName: pinnedDomain ?? Self.preferenceDomain(for: deployment)
         )
         resolvedPreferences.doorbells = doorbells
         preferences = resolvedPreferences

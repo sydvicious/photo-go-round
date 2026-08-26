@@ -408,15 +408,17 @@ struct RenderCacheTests {
         try store.store(
             Data(count: 500), for: .init(photoUUID: photo), sourceUUID: source,
             pathExtension: "heic")
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date(timeIntervalSince1970: 1)],
-            ofItemAtPath: store.url(for: .init(photoUUID: photo))!.path(percentEncoded: false))
         try store.store(
             Data(count: 400), for: .init(photoUUID: photo, size: size), sourceUUID: source,
             pathExtension: "jpeg")
         _ = store.rebuild(photos: [photo: source])
 
-        let result = store.evictIfNeeded()
+        // **The original goes before its own renderings**, which used to be an
+        // accident of write order — the file was backdated here to force it —
+        // and is now the stated rule. A rendering is a fraction of the bytes
+        // and is display-ready, so the same budget holds more pictures that can
+        // be served without a decode.
+        let result = store.evictIfNeeded(inOrder: [photo])
         #expect(result.evicted == 1)
         // The rendering is still serviceable on its own: a client asking at that
         // size never needs the original back.

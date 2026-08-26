@@ -52,10 +52,8 @@ struct CacheTests {
         /// Asks the source for pictures until it stops offering them.
         @discardableResult
         func produceAll(limit: Int = 200) async throws -> Int {
-            // Two steps now: deal the cards, then fetch the bytes for what was
-            // dealt. Dealing alone leaves a queue of cards with nothing behind
-            // them, which is a state the agent has but a test asserting on
-            // *cached* pictures does not want.
+            // Two steps, and the cache goes first: the deck's pool is what
+            // the cache holds, so dealing before fetching deals nothing.
             try await cache.fillCompletely(limit: limit)
         }
     }
@@ -99,23 +97,27 @@ struct CacheTests {
     @Test("Dealing queues a card and fetches nothing")
     func dealingDoesNotFetch() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
+        // One photograph in the cache, so the deck has exactly one card it can
+        // deal and every other row is invisible to it.
+        _ = await fixture.cache.refreshOnce()
+        let residentBefore = try fixture.cache.status().residentCount
+        #expect(residentBefore == 1)
 
         #expect(try fixture.cache.deal())
 
-        // The queue holds cards, not bytes. Nothing was downloaded, and that is
-        // the inversion: whether this picture can be shown is found out by
-        // trying to show it.
+        // Dealing reads a row and writes a row. **It is the cache that fetches**,
+        // on its own initiative and before any of this — which is the whole of
+        // v2 in one assertion.
         #expect(try fixture.cache.queue.size() == 1)
-        #expect(try fixture.cache.status().residentCount == 0)
+        #expect(try fixture.cache.status().residentCount == residentBefore)
     }
 
     @Test("Each deal yields a different picture, and running out is an ordinary answer")
     func dealingDoesNotRepeat() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
+        // Stocks the cache and deals from it, which is the order v2 works in.
+        try await fixture.produceAll()
 
-        var dealt = 0
-        while try fixture.cache.deal() { dealt += 1 }
-        #expect(dealt == 3)
         #expect(try fixture.cache.queue.size() == 3)
         #expect(Set(try fixture.cache.queue.peek(10).map(\.id)).count == 3)
 
@@ -123,19 +125,22 @@ struct CacheTests {
         #expect(try fixture.cache.deal() == false)
     }
 
-    @Test("Caching is what stops rather than filling the volume; dealing is unaffected")
-    func lowDiskStopsCachingNotDealing() async throws {
+    @Test("A volume at its floor stops the cache, and the deck empties behind it")
+    func lowDiskStopsCaching() async throws {
         let fixture = try await Fixture(
             photos: ["a.png", "b.png"],
             settings: CacheSettings(minimumFreeBytes: .max, criticalFreeBytes: .max)
         )
 
-        // Dealing writes a row and costs no space, so the floor has nothing to
-        // say about it. Fetching bytes is where the volume can fill up.
-        #expect(try fixture.cache.deal())
-        let queued = try #require(try fixture.cache.queue.peek().first)
-        #expect(try await fixture.cache.cache(photoID: queued.id) == false)
+        // **"Dealing is unaffected" used to be the point of this test and is
+        // now false.** Dealing wrote a row whatever the disk was doing, because
+        // a card could be dealt before its bytes existed. The deck's pool is
+        // the cache now, so a cache that cannot grow is a deck that stays
+        // empty — degrading into *fewer pictures*, which is the intended shape,
+        // rather than into a full volume.
+        #expect(await fixture.cache.refreshOnce() == .blocked)
         #expect(try fixture.cache.status().residentCount == 0)
+        #expect(try fixture.cache.deal() == false)
     }
 
     @Test("A disabled source is not dealt from")
@@ -243,30 +248,30 @@ struct CacheTests {
 
     // MARK: - Eviction
 
-    /// Eviction is FIFO by write time — nothing connects write order to
-    /// display order any more, and the policy is kept because a shuffle has no
-    /// hot set for anything cleverer to protect. The test ages the files by
-    /// hand because a produce loop finishes in microseconds and every one
-    /// would otherwise share a timestamp.
-    private func age(_ fixture: Fixture, oldestFirst uuids: [String]) throws {
-        for (index, uuid) in uuids.enumerated() {
-            guard let url = fixture.cache.store.url(for: PhotoStore.Key(photoUUID: uuid))
-            else { continue }
-            try FileManager.default.setAttributes(
-                [.modificationDate: Date(timeIntervalSince1970: Double(1000 + index))],
-                ofItemAtPath: url.path(percentEncoded: false))
-        }
-        try fixture.cache.indexCache()
-    }
-
     private func uuidsByID(_ fixture: Fixture) throws -> [String] {
         try fixture.library.database.all("SELECT uuid FROM photo ORDER BY id;") {
             try $0.string("uuid")
         }
     }
 
-    @Test("Eviction is FIFO by the order entries were written")
-    func evictionIsFIFO() async throws {
+    /// Records that these photographs were shown, oldest first.
+    ///
+    /// **This replaces ageing the files by hand.** Eviction used to be FIFO by
+    /// write time, so a test had to backdate modification dates because a
+    /// produce loop finishes in microseconds and every file shared a timestamp.
+    /// The order is `COALESCE(last_shown_at, cached_at)` now, which is a fact
+    /// about the photograph rather than about its file — so the test states it
+    /// directly.
+    private func shown(_ fixture: Fixture, oldestFirst uuids: [String]) throws {
+        for (index, uuid) in uuids.enumerated() {
+            try fixture.library.database.run(
+                "UPDATE photo SET last_shown_at = :at WHERE uuid = :uuid;",
+                ["at": .int(Int64(1000 + index)), "uuid": .text(uuid)])
+        }
+    }
+
+    @Test("Eviction takes the longest-unseen first")
+    func evictionIsLeastRecentlyViewed() async throws {
         let fixture = try await Fixture(
             photos: (0..<10).map { "photo-\($0).png" },
             settings: CacheSettings(byteCeiling: 10_000)
@@ -274,42 +279,80 @@ struct CacheTests {
         try await fixture.produceAll()
 
         let uuids = try uuidsByID(fixture)
-        // Nothing queued, so nothing is protected.
-        try fixture.library.database.run("DELETE FROM queue;")
-        try age(fixture, oldestFirst: uuids)
+        try shown(fixture, oldestFirst: uuids)
 
-        fixture.cache.store.byteCeiling = 400
-        let result = fixture.cache.store.evictIfNeeded()
+        // Through a cache whose *settings* carry the tight ceiling: the
+        // eviction order comes from the database, so it has to go through
+        // `PhotoCache`, and that reasserts the store's ceiling from its own
+        // settings every time.
+        let tight = PhotoCache(
+            database: fixture.library.database, root: fixture.cache.root,
+            settings: CacheSettings(byteCeiling: 400), sources: fixture.store,
+            store: fixture.cache.store
+        )
+        let result = try tight.evictIfNeeded()
         #expect(result.evicted == 6)
 
-        // The four newest survive; the six oldest are the ones the deck is
-        // furthest from reaching again.
+        // The four most recently seen survive. **Nothing is queued-protected**:
+        // every one of these is on the deck, and the ceiling is reached anyway.
         let held = uuids.filter {
             fixture.cache.store.url(for: PhotoStore.Key(photoUUID: $0)) != nil
         }
         #expect(held == Array(uuids.suffix(4)))
     }
 
-    @Test("A queued picture is never evicted, however old")
-    func queuedPicturesAreProtected() async throws {
+    @Test("A photograph that has never been shown is the last to go, not the first")
+    func neverShownSortsNewest() async throws {
+        // The whole of the `COALESCE`. Read literally, "most recently viewed"
+        // makes a photograph nobody has viewed infinitely old — so the cache
+        // would reach its ceiling and then discard every download on arrival,
+        // freezing on whatever happened to be resident at that moment.
+        let fixture = try await Fixture(
+            photos: (0..<6).map { "photo-\($0).png" },
+            settings: CacheSettings(byteCeiling: 10_000)
+        )
+        try await fixture.produceAll()
+
+        let uuids = try uuidsByID(fixture)
+        // Five have been seen; the sixth has only just landed.
+        try shown(fixture, oldestFirst: Array(uuids.prefix(5)))
+        let fresh = try #require(uuids.last)
+
+        let tight = PhotoCache(
+            database: fixture.library.database, root: fixture.cache.root,
+            settings: CacheSettings(byteCeiling: 200), sources: fixture.store,
+            store: fixture.cache.store
+        )
+        #expect(try tight.evictIfNeeded().evicted > 0)
+
+        #expect(
+            fixture.cache.store.url(for: PhotoStore.Key(photoUUID: fresh)) != nil,
+            "the cache evicted the photograph it had just paid for")
+    }
+
+    @Test("Nothing is exempt, so the ceiling is always reachable")
+    func theCeilingIsAlwaysReachable() async throws {
+        // **The protection that used to be here made the ceiling unreachable.**
+        // Everything cached was also queued, so eviction could free nothing at
+        // all — set `byteCeiling` low, or let the volume fill from outside the
+        // agent, and we sat over the limit holding entries we were forbidden to
+        // touch.
         let fixture = try await Fixture(
             photos: (0..<10).map { "photo-\($0).png" },
             settings: CacheSettings(byteCeiling: 10_000)
         )
         try await fixture.produceAll()
+        #expect(try fixture.cache.queue.size() == 10, "every photograph is on the deck")
 
-        try age(fixture, oldestFirst: try uuidsByID(fixture))
-
-        // Everything is queued, so nothing may be evicted — these are about to
-        // be shown.
         let tighter = PhotoCache(
             database: fixture.library.database, root: fixture.cache.root,
             settings: CacheSettings(byteCeiling: 300), sources: fixture.store,
             store: fixture.cache.store
         )
         let result = try tighter.evictIfNeeded()
-        #expect(result.evicted == 0)
-        #expect(result.protectedFromEviction > 0)
+
+        #expect(result.evicted > 0)
+        #expect(fixture.cache.store.totals.byteCount <= 300)
     }
 
     @Test("The byte ceiling evicts early even when the count is fine")
@@ -413,17 +456,18 @@ struct CacheTests {
         #expect(try fixture.cache.queue.size() == 2)
     }
 
-    @Test("A card dealt before its bytes exist survives a restart")
+    @Test("Cards survive a restart, and so does what the cache holds for them")
     func dealtCardsSurviveARestart() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
 
-        // Dealt and nothing more: no bytes were fetched, which is the ordinary
-        // state of a materialized card. Reaching the head uncached is *how* a
-        // photograph's bytes come to be asked for.
-        while try fixture.cache.deal() {}
+        // **The premise changed and the property did not.** This used to deal
+        // cards with no bytes behind them, because that was the ordinary state
+        // of a materialized card. It cannot be now — so the cache is stocked
+        // first, and what a restart must not do is throw the queue away.
+        try await fixture.produceAll()
         let dealt = try fixture.cache.queue.size()
         #expect(dealt == 2)
-        #expect(try fixture.cache.status().residentCount == 0)
+        #expect(try fixture.cache.status().residentCount == 2)
 
         // A restart rebuilds the byte index from the disk, and must leave the
         // queue alone. Dropping every card whose bytes are absent discards
@@ -466,7 +510,15 @@ struct CacheTests {
         #expect(result.cleared == 3)
         #expect(try fixture.cache.status().residentCount == 0)
         #expect(try fixture.deck.currentDealSeq() == seqBefore)
-        #expect(try fixture.deck.poolSize() == 3)
+
+        // **The rows are all still there; the pool is not.** Clearing is still
+        // a storage operation and never a shuffle one — deal ordinals, shuffle
+        // keys and last-shown times are untouched, which is what `seqBefore`
+        // above holds down. What changes in v2 is that the deck's pool *is* the
+        // cache, so discarding the bytes empties it until the refresher fills
+        // it again. The rotation survives; the pictures come back cold.
+        #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 3)
+        #expect(try fixture.deck.poolSize() == 0)
     }
 
     @Test("Clearing one source frees its bytes and leaves every other source alone")
@@ -489,8 +541,11 @@ struct CacheTests {
         #expect(try fixture.cache.status().residentCount == 3, "the other source lost bytes too")
 
         // Rows and shuffle history are untouched: clearing is a storage
-        // operation, never a shuffle operation.
-        #expect(try fixture.deck.poolSize() == 5)
+        // operation, never a shuffle operation. The *pool* is exactly the three
+        // photographs the other source still has bytes for — which is the point
+        // of clearing one source rather than everything.
+        #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 5)
+        #expect(try fixture.deck.poolSize() == 3)
     }
 
     @Test("Clearing unavailable sources frees only what can never be fetched again")
@@ -515,9 +570,12 @@ struct CacheTests {
         let result = try fixture.cache.clear(.unavailableSources)
         #expect(result.cleared == 2)
         #expect(result.bytesFreed == 200)
-        // The reachable source keeps everything.
+        // The reachable source keeps everything, and its two photographs are
+        // the whole of the deck's pool: the cleared ones kept their rows and
+        // lost the bytes that made them dealable.
         #expect(try fixture.cache.status().residentCount == 2)
-        #expect(try fixture.deck.poolSize() == 4)
+        #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 4)
+        #expect(try fixture.deck.poolSize() == 2)
     }
 
     @Test("An explicit clear states its price before charging it")
@@ -593,5 +651,162 @@ struct CacheTests {
         )
         #expect(try healthy.evictIfNeeded().evicted == 0)
         #expect(try healthy.status().bytesOnDisk == 1000)
+    }
+}
+
+/// Eviction on a library that lives on the boot volume.
+///
+/// **The ordinary case, and the one the eviction order first got wrong.** A
+/// referenced photograph is read in place and never copied, so it has no
+/// `cached_at` — but the cache still holds *renderings* for it, and those are
+/// the only thing it ever holds for one. An eviction order built from
+/// `cached_at` cannot see them, and an entry the order does not rank is the
+/// first thing out.
+@Suite("Eviction on the boot volume")
+struct ReferencedEvictionTests {
+
+    private struct Fixture {
+        let folder: TemporaryFolder
+        let cacheRoot: TemporaryFolder
+        let library: TestLibrary
+        let sources: SourceStore
+        let cache: PhotoCache
+
+        init(photos: Int, byteCeiling: Int64) async throws {
+            folder = TemporaryFolder(name: "pgr-ref-evict")
+            cacheRoot = TemporaryFolder(name: "pgr-ref-evict-cache")
+            for i in 0..<photos { folder.write("photo-\(i).png", bytes: 64) }
+
+            library = try TestLibrary()
+            sources = SourceStore(database: library.database)
+            cache = PhotoCache(
+                database: library.database,
+                root: cacheRoot.url.appending(path: "cache"),
+                settings: CacheSettings(byteCeiling: byteCeiling),
+                sources: sources
+            )
+            try cache.prepare()
+            let source = try await sources.add(
+                kind: .folder, locator: folder.path, recursive: true)
+            await sources.refresh(source)
+            // Everything in a temporary directory really is on the boot volume,
+            // so this is what the classifier decides on its own.
+            try library.database.run("UPDATE photo SET storage = 'referenced';")
+        }
+
+        /// Keeps a rendering for each photograph, which is the only thing the
+        /// cache ever holds for a referenced one.
+        func render(_ uuids: [String], bytes: Int) throws {
+            let size = PhotoStore.Size(width: 100, height: 100)
+            for uuid in uuids {
+                try cache.store.store(
+                    Data(count: bytes), for: PhotoStore.Key(photoUUID: uuid, size: size),
+                    sourceUUID: "src", pathExtension: "jpeg")
+            }
+        }
+
+        func uuids() throws -> [String] {
+            try library.database.all("SELECT uuid FROM photo ORDER BY id;") {
+                try $0.string("uuid")
+            }
+        }
+
+        func held(_ uuid: String) -> Bool {
+            cache.store.url(
+                for: PhotoStore.Key(
+                    photoUUID: uuid, size: PhotoStore.Size(width: 100, height: 100))) != nil
+        }
+    }
+
+    @Test("A referenced photograph's rendering is evicted by recency, not first")
+    func referencedRenderingsAreRanked() async throws {
+        let fixture = try await Fixture(photos: 6, byteCeiling: 250)
+        let uuids = try fixture.uuids()
+        try fixture.render(uuids, bytes: 100)
+
+        // Shown oldest-first, so the last two are the ones worth keeping.
+        for (index, uuid) in uuids.enumerated() {
+            try fixture.library.database.run(
+                "UPDATE photo SET last_shown_at = added_at + :at WHERE uuid = :uuid;",
+                ["at": .int(Int64(1000 + index)), "uuid": .text(uuid)])
+        }
+
+        #expect(try fixture.cache.evictIfNeeded().evicted > 0)
+
+        // The two most recently shown must survive. Ordering the whole cache by
+        // a column referenced photographs never have puts every one of them
+        // ahead of everything else, so the ones just displayed go first.
+        #expect(fixture.held(uuids[5]), "evicted the rendering shown most recently")
+        #expect(fixture.held(uuids[4]), "evicted the rendering shown second most recently")
+        #expect(!fixture.held(uuids[0]), "kept the rendering nobody has looked at in longest")
+    }
+
+    @Test("A referenced photograph nobody has shown still ranks, and ranks oldest")
+    func neverShownReferencedRanksOldest() async throws {
+        // The third `COALESCE` term. A referenced photograph that has never
+        // been displayed has no `last_shown_at` and no `cached_at` — only
+        // `added_at`. Without that term it is unranked, which is to say first
+        // out, and a rendering made for it is thrown away before anything that
+        // has actually been looked at.
+        let fixture = try await Fixture(photos: 4, byteCeiling: 250)
+        let uuids = try fixture.uuids()
+        try fixture.render(uuids, bytes: 100)
+
+        // Two shown; two never shown at all. **Relative to `added_at`**, not an
+        // arbitrary small number: these columns are all real timestamps on the
+        // same scale, and a photograph cannot be shown before it was added.
+        // Writing 5000 here made the shown ones sort oldest and the test failed
+        // against correct code — worth saying, because it is an easy way to
+        // write a test that lies.
+        for uuid in uuids.suffix(2) {
+            try fixture.library.database.run(
+                """
+                UPDATE photo SET last_shown_at = added_at + 1000 WHERE uuid = :uuid;
+                """,
+                ["uuid": .text(uuid)])
+        }
+
+        #expect(try fixture.cache.evictIfNeeded().evicted > 0)
+
+        // The two that were displayed survive; the two nobody has looked at go.
+        #expect(fixture.held(uuids[2]) && fixture.held(uuids[3]))
+    }
+
+    @Test("Local and remote photographs compete for the ceiling on one rule")
+    func aMixedLibraryRanksOnOneOrder() async throws {
+        // **The case the whole design turns on**, and the one no unit test
+        // reached until now: a library with both kinds in it. A referenced
+        // photograph's rendering and a fetched original are both bytes under
+        // the same ceiling, and the order that decides between them has to be
+        // one order — not "everything remote, then everything local".
+        let fixture = try await Fixture(photos: 6, byteCeiling: 250)
+        let uuids = try fixture.uuids()
+        try fixture.render(uuids, bytes: 100)
+
+        // Half the library is remote and its originals have landed.
+        for uuid in uuids.prefix(3) {
+            try fixture.library.database.run(
+                """
+                UPDATE photo SET storage = 'materialized', cached_at = 2000
+                 WHERE uuid = :uuid;
+                """,
+                ["uuid": .text(uuid)])
+        }
+
+        // Interleaved by recency, deliberately alternating the two kinds: the
+        // most recently shown is remote, the next is local, and so on.
+        let order = [uuids[0], uuids[3], uuids[1], uuids[4], uuids[2], uuids[5]]
+        for (index, uuid) in order.enumerated() {
+            try fixture.library.database.run(
+                "UPDATE photo SET last_shown_at = added_at + :at WHERE uuid = :uuid;",
+                ["at": .int(Int64(1000 + index)), "uuid": .text(uuid)])
+        }
+
+        #expect(try fixture.cache.evictIfNeeded().evicted > 0)
+
+        // The survivors are the most recently shown *whatever kind they are*.
+        #expect(fixture.held(uuids[5]), "a local rendering lost to recency it should have won")
+        #expect(fixture.held(uuids[2]), "a remote rendering lost to recency it should have won")
+        #expect(!fixture.held(uuids[0]), "the longest-unseen was kept")
     }
 }

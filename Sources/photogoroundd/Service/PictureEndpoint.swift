@@ -34,21 +34,24 @@ struct PictureEndpoint {
     /// that shortens the queue and therefore the only thing that can notice it
     /// has run low. The host decides what to do about it; this just says so.
     let queueRanShort: @Sendable () -> Void
-    /// Called when a walk went through every card and none could be served.
+    /// Called when a request found nothing to show.
     ///
-    /// **A different event from the queue running short, and it wants a
-    /// different answer.** Running short means deal more, and dealing draws
-    /// uniformly from the whole library. Coming up empty means the cards on
-    /// hand all need bytes that are not here — so dealing uniformly hands back
-    /// another cold one, and the walk answers `204` again. Observed 2026-08-26
-    /// with eighty-eight originals in the cache and a queue of twenty that
-    /// could not produce one of them.
+    /// **A different event from the deck running short, and it wants a
+    /// different answer.** Running short follows a picture reaching somebody,
+    /// which also buys the cache a download credit. Coming up empty means no
+    /// picture reached anybody — so the deck must be refilled and the cache must
+    /// *not* be paid, or a stalled agent would mint credits for pictures nobody
+    /// saw.
     ///
-    /// The host's answer is to deal from what is already on disk.
-    var queueCameUpEmpty: @Sendable () -> Void = {}
-    /// Where a picture whose bytes are not local goes. Serving asks for it and
-    /// moves on, so a miss costs this request a skip rather than a wait.
-    var wantsCaching: @Sendable (Int64) -> Void = { _ in }
+    /// Without this the deck can only be refilled by a picture being served or
+    /// by the heartbeat, and the heartbeat runs behind the refresh. Removing a
+    /// source on 2026-08-26 emptied the deck by cascade and left it empty for
+    /// thirty seconds — the length of a network source's walk — with 592
+    /// servable photographs in the cache and the window blank throughout.
+    var deckCameUpEmpty: @Sendable () -> Void = {}
+    /// Hands the cache back a credit when a card's bytes turn out to be gone.
+    /// The cache paid for that photograph and no longer has it.
+    var creditReturned: @Sendable () -> Void = {}
     /// Where the queue's decisions are said. Separate from the served-request
     /// log above it, which records what a *client* was handed.
     var speak: @Sendable (QueueEvent) -> Void = { $0.report() }
@@ -118,10 +121,14 @@ struct PictureEndpoint {
             if let width, let height { parts.append("\(width)x\(height)") }
             if let deal { parts.append("deal #\(deal)") }
             if bytes > 0 { parts.append(RunCommand.bytes(bytes)) }
-            if let cache {
-                parts.append(
-                    cache.rawValue + (cacheBytes.map { " of \(RunCommand.bytes($0))" } ?? ""))
-            }
+            // **Two facts, two fields.** These were one — `miss of 5.17 GB` —
+            // which reads as though 5.17 GB had been missed. The first says
+            // whether the pixels came from a rendering already held at this
+            // size; the second is how much the whole cache is holding, which is
+            // beside it because a miss is ordinary while the cache is filling
+            // and worth a second look once it is not.
+            if let cache { parts.append(cache.rawValue) }
+            if let cacheBytes { parts.append("cache \(RunCommand.bytes(cacheBytes))") }
             if let queued { parts.append("\(queued) queued") }
             parts.append(milliseconds.formatted(.number.precision(.fractionLength(1))) + "ms")
             return parts.joined(separator: " · ")
@@ -171,7 +178,7 @@ struct PictureEndpoint {
                 store: store
         )
         cache.log = speak
-        cache.wantsCaching = wantsCaching
+        cache.creditReturned = creditReturned
         return (cache, deck)
     }
 
@@ -416,27 +423,13 @@ struct PictureEndpoint {
                 }
             }
 
-            // Ordinary, not an error. A fresh install answers this way until
-            // downloads land, and every surface has an empty state already.
-            //
-            // **And it asks for more, which reverses what this comment used to
-            // say.**
-            //
-            // The old reasoning was that the cards this walk passed over are all
-            // out being fetched and will come back, so dealing here buys a fresh
-            // cold card in place of a warm one already paid for. That is sound
-            // about a walk that *passed over* cards. It says nothing about a
-            // walk that found none — `walked 0`, an empty queue — where nothing
-            // was skipped, nothing is coming back, and tying the deal to
-            // pictures actually served makes the one event that could restart
-            // dealing the one event that cannot happen.
-            //
-            // Observed 2026-08-25: an empty queue answering 204 every three
-            // seconds for minutes with a full pool behind it. So a 204 rings the
-            // filler. The overshoot the old note worried about is prevented
-            // where it belongs — `FillerBox.Gauge.isShort` still counts cards in
-            // flight as the queue's the moment the queue has anything at all.
-            queueCameUpEmpty()
+            // Ordinary, not an error, and it now means one thing only: the
+            // deck's pool is empty, because the deck deals nothing it cannot
+            // show. There is no second interpretation to distinguish and
+            // nothing useful to ask for — the cache is already refreshing
+            // itself, and a client that asks again in a few seconds will find
+            // whatever landed in between.
+            deckCameUpEmpty()
             report(request, status: 204, detail: "no photos available")
             return .noContent()
         } catch {
@@ -447,15 +440,18 @@ struct PictureEndpoint {
     }
 
     /// A card whose bytes disappeared between the index saying held and the
-    /// open — the eviction race's one remaining door. The card is skipped
-    /// exactly as one whose bytes were never there, and a materialized
-    /// photograph is asked for again so the bytes come back.
+    /// open — the eviction race's one remaining door.
+    ///
+    /// `PhotoCache.serve` already handles the ordinary case, where the bytes
+    /// are gone before it looks. This is the narrower one where they go between
+    /// its look and this open. Skipped the same way; the record is corrected
+    /// and the credit returned by the next request that draws the card, or by
+    /// the launch walk, whichever comes first.
     private func vanished(_ served: PhotoCache.ServedPhoto, context: (cache: PhotoCache, deck: Deck)) {
         Console.event(
             "\(served.card.externalID) vanished between the index and the open; skipping it")
         Log.deck.notice(
             "photo \(served.card.id, privacy: .public) vanished before its bytes could be opened")
-        if served.card.storage == .materialized { wantsCaching(served.card.id) }
     }
 
     /// The box the client asked to fill, or nil when it asked for the original.

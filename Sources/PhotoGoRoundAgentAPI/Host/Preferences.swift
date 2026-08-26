@@ -208,19 +208,22 @@ public struct Preferences: @unchecked Sendable {
     /// about whether a picture is ready, only how long a newly dealt card waits
     /// and how faithfully the queue samples the library at any instant.
     ///
-    /// Twenty because it equals `PhotoCache.lookAheadDepth`. At that depth every
-    /// card is inside the look-ahead window from the moment it is dealt, which
-    /// makes arriving at the head without bytes structurally impossible rather
-    /// than merely unobserved. Below it, a source holding a few per cent of the
-    /// library is absent from the queue most of the time — at ten, a source with
-    /// 7.9% of the photographs held none at all when sampled.
+    /// Twenty is where two things meet: turning over quickly, and sampling the
+    /// library faithfully at any instant. Below it a source holding a few per
+    /// cent of the library is absent from the queue most of the time — at ten,
+    /// a source with 7.9% of the photographs held none at all when sampled.
     ///
-    /// **This number does not survive a slow provider**, and the arithmetic that
-    /// breaks it is written up beside the caps: the lead a cold photograph gets
-    /// is `lookAheadDepth × dwell`, and it has to exceed the time the fetch
-    /// backlog takes to drain. Against an SMB share at a second a fetch there is
-    /// forty times the headroom. Against Photos or Google Photos there will not
-    /// be, and both this and `lookAheadDepth` will have to rise together.
+    /// **It no longer decides whether a card arrives without its bytes.** That
+    /// used to be the governing constraint, and the number was chosen to equal
+    /// `PhotoCache.lookAheadDepth` so every card was inside the look-ahead
+    /// window from the moment it was dealt. There is no look-ahead now and no
+    /// card without bytes: the deck deals only what the cache already holds, so
+    /// arriving at the head unservable is impossible by construction rather
+    /// than by arithmetic.
+    ///
+    /// **What it does decide, beyond the sampling, is the cache's fetch rate.**
+    /// The refresher's allowance is twice this number at launch and one credit
+    /// per card drawn, so raising it raises the burst a cold start pulls down.
     ///
     /// Read afresh every time the queue is topped up, so changing it takes
     /// effect at the next refresh rather than at the next launch. Raising it

@@ -66,11 +66,19 @@ public struct Deck {
     // MARK: - State
 
     /// Photos the deck could offer, ignoring the pass and the window: enabled
-    /// source, still image.
+    /// source, still image, **and servable right now**.
     ///
-    /// Cache residency is deliberately *not* part of this. A picture is selected
-    /// before its bytes are fetched, so requiring resident bytes here would mean
-    /// nothing could ever be selected in the first place.
+    /// Residency *is* part of this, which reverses what it used to say. A card
+    /// was once selected before its bytes were fetched, so requiring resident
+    /// bytes would have meant nothing could ever be selected. The cache fills
+    /// itself now, so the reverse holds: a photograph with no bytes is not the
+    /// deck's business, and dealing one would only produce a card that cannot
+    /// be shown.
+    ///
+    /// **The repeat window is a fraction of this number**, so it now measures
+    /// against what could be shown rather than against everything that exists.
+    /// That is a change a person will feel on a library much larger than its
+    /// cache — see the plan's *Two-level fairness*.
     public func poolSize() throws -> Int {
         try database.scalarInt(Self.poolSizeSQL) ?? 0
     }
@@ -240,17 +248,36 @@ public struct DeckStats: Sendable, Equatable {
 
 extension Deck {
 
+    /// **What the deck can show right now**, which is the whole of v2.
+    ///
+    /// A photograph qualifies two ways and they are not the same thing. It is
+    /// `referenced` — it lives where it can be read in place, so there is
+    /// nothing to fetch and there never was. Or its original is held, which
+    /// `cached_at` records. Everything else is a remote asset the cache has not
+    /// got to yet, and the deck does not know it exists.
+    ///
+    /// **This is why there is no longer a servable-only twin of every query.**
+    /// The deck used to deal from the whole library and find out by trying,
+    /// which meant a second population, a second count, a second candidate
+    /// statement, and a temp table shipped in on every deal to hold the answer.
+    /// One predicate replaces all of it.
+    static let servableStorage = """
+        (p.cached_at IS NOT NULL OR p.storage = 'referenced')
+        """
+
     /// v1 selects still images only. The exclusion is a named predicate rather
     /// than an absence of video code, which is the difference between 2.0 being
     /// a feature and being an excavation.
     static let poolSizeSQL = """
         SELECT COUNT(*) FROM photo p
-         WHERE p.source_enabled = 1 AND p.media_type = 'image';
+         WHERE p.source_enabled = 1 AND p.media_type = 'image'
+           AND \(servableStorage);
         """
 
     static let unusedCountSQL = """
         SELECT COUNT(*) FROM photo p
          WHERE p.source_enabled = 1 AND p.media_type = 'image'
+           AND \(servableStorage)
            AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold);
         """
 }
