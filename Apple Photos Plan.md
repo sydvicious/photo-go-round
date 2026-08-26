@@ -16,17 +16,19 @@ The window is showing a test folder. Every architectural claim this project has 
   - Print an edited photo's `.photo` and `.fullSizePhoto` side by side; print a Live Photo's whole resource list.
   - **Exit gate: the numbers exist and say the design works.** A written original that matches the asset's own pixel dimensions on an iCloud-optimized asset, a throughput figure split into local and downloaded, and a peak footprint that does not track the largest file pulled.
   - **Met.** Every written file matched its asset's dimensions, including downloaded ones. Footprint moved 16 kB writing 3.4 MB and nothing at all writing 2.9 MB — it does not track file size. Latency does not follow size either, but what governs it is not yet established. Numbers in *What Phase 1 measured*.
-- **Phase 2 — the provider.** `PhotosCollectionSourceProvider` in the kit for `SourceKind.photosCollection`, behind a `PhotoLibrary` protocol seam the way `FolderSourceProvider` sits behind `FileAccess`.
+- **Phase 2 — the provider. Done 2026-08-26.** `PhotosCollectionSourceProvider` in the kit for `SourceKind.photosCollection`, behind a `PhotoLibrary` protocol seam the way `FolderSourceProvider` sits behind `FileAccess`. `SystemPhotoLibrary` is the only file that imports PhotoKit, and the seam vends values rather than `PHAsset`s so the provider's logic is exercised with no library and no grant.
   - `enumerate`, streaming; `existence`; `availability` from authorization status; `materialize` via `PHAssetResourceManager`.
   - Tests against a fake `PhotoLibrary`, so provider logic is exercised with no library and no TCC grant.
-  - **Exit gate: `pgr_ctl` adds an album and the pool fills from it.**
-- **Phase 3 — admitting a source that is not a path.** The only part of this work that is not additive.
+  - **Exit gate: `pgr_ctl` adds an album and the pool fills from it. Met** — `pgr_ctl sources add --album "167F1595-…/L0/040"` produced `#11 photos_collection 1 photos [ok]`, enumerated under Terminal's grant.
+- **Phase 3 — done, 2026-08-26.** **Admitting a source that is not a path.** The only part of this work that is not additive.
   - `SourceStore.add` stops refusing every kind that is not `isFileBacked`.
   - `SourceRequest.resolve` gains a branch that validates a collection identifier by asking the provider, inside the same all-or-none batch rule.
   - `SourceSpec.init` stops appending a trailing slash to things that are not paths.
-  - **Exit gate: a bad album identifier is refused at the door, naming itself, and changes nothing.**
+  - **Exit gate: a bad album identifier is refused at the door, naming itself, and changes nothing. Met** — `EditFailure.locatorsNotFound` names it, under the same all-or-none rule as a mistyped path, and a library that cannot be read refuses too.
+  - Validation happens in `SourceStore.add` rather than through a validator passed into `SourceRequest.resolve`, as this plan proposed. `add` had to become `async` regardless, and `resolve` stays synchronous and free of any knowledge of providers.
 - **Phase 4 — the service surfaces.** What the app needs and cannot get for itself.
-  - `GET /v1/photos/albums` — identifier, title, subtype, image count.
+  - **Versioning, decided 2026-08-25.** Each version is a whole set of routes, not a patch on the one below. `/v1/sources` lists only file-backed kinds, because a v1 client draws a Photos album as `040` — the last path component of an identifier — which reads as a folder that is not there. `/v2/sources` carries every kind and the album's `localizedTitle`, and is where these routes live. **Built ahead of this phase**, since the app needed the v1 filtering the day the provider landed.
+  - `GET /v2/photos/albums` — identifier, title, subtype, image count.
   - `GET /v1/photos/authorization` and `POST /v1/photos/authorization` — read the state, and raise the prompt.
   - `SourceEndpoint.Wire` gains `title`, because a Photos locator has no last path component to name it by.
   - **Exit gate: `curl` lists the albums and adds one, and the agent is the only process that touched PhotoKit.**
@@ -38,7 +40,7 @@ The window is showing a test folder. Every architectural claim this project has 
 
 # Design Decisions
 
-- **The agent owns the Photos grant, and the app never links PhotoKit.** `Scripts/make-agent-bundle.sh` already writes `NSPhotoLibraryUsageDescription` into `com.sydpolk.photogoround.server` and says why. One bundle, one consent, one entry in the Settings privacy list.
+- **The agent owns the Photos grant, and the app never links PhotoKit.** `Scripts/make-agent-bundle.sh` writes `NSPhotoLibraryUsageDescription` into `com.sydpolk.photogoround.server` and says why. One bundle, one consent, one entry in the Settings privacy list. **Achieved differently than planned, 2026-08-26**: rather than a separate target for the PhotoKit binding, `PhotoGoRoundAgentAPI` was split out of the kit to carry preferences, the host environment, the wire's value types, and `SourceAvailability`. The app links that and no longer links `PhotoGoRoundKit` at all, so PhotoKit sits in the kit and reaches no client.
 - **The album list comes over HTTP, for that reason and no other.** It would be trivial for the app to fetch its own `PHAssetCollection`s, and doing so would be a second TCC grant on a second bundle — which is the thing `PLAN.md`'s *TCC: unsandboxed does not mean unrestricted* decided against.
 - **The spike changes nothing in the kit.** A measurement that requires a schema, a provider, and a registration to run is not a spike, it is Phase 2 with a worse name.
 - **`.readWrite` authorization, because there is no read-only level.** `PHAccessLevel` has exactly `.addOnly` and `.readWrite`, and `.addOnly` grants writing only. Reading an album requires `.readWrite`; the usage string is where the asymmetry gets explained.

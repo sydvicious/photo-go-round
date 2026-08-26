@@ -151,6 +151,11 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **The queue's size is a target, not a ceiling.** A card returning from a completed fetch is never refused, so the depth floats around the target rather than being held at it — refusing work already done would be worse than a number that floats. Nothing is evicted when an entry arrives; serving is the only thing that shortens the queue.
 - **Dealing happens whether or not anybody asked.** The heartbeat tops up a queue short of its target and leaves a full one alone. **Changed 2026-08-25, reversing an earlier decision made on evidence it did not have**: dealing used to be paced to pictures served, on the reasoning that a heartbeat filling a merely short queue was churn. That was affordable while every fetch was a local file read and a queue one card short stayed short for seconds. A Photos fetch can take five minutes, so the old rule leaves an idle agent doing nothing with the time it has most of, then makes the first picture after idle wait on a cold fetch.
 - **A deal follows a picture that reached somebody, not a request that arrived.** The filler is rung beside `markDelivered` — the endpoint with a 200 in hand — and nowhere else. Rung at selection instead, as it was until 2026-08-25, one request that walked past three unrenderable photographs bought four fresh cards, against this document's own rule that a skip buys nothing.
+- **Always show something, even a repeat.** When a walk finds nothing it can serve, the deck deals from what is already cached and fills the queue rather than answering *no photos*. Decided 2026-08-26 while iCloud Drive was wedged: a blank wall is worse than a photograph seen recently, and the repeat window exists to stop repeats being ordinary rather than to guarantee an empty screen.
+- **Blocking provider I/O never runs on the cooperative pool.** `BlockingWork` gives it threads of its own. A thread parked in a synchronous system call is one the runtime cannot use, and enough of them stop the process without any lock being held — twice now: four concurrent folder walks in August, then eleven `copyItem` calls against undownloaded iCloud Drive files.
+- **Every materialize runs against a deadline, and the lane comes back whether or not the work does.** Sixty seconds for a file, fifteen minutes for a photo library. The abandoned work is neither cancelled nor awaited — a blocked read answers neither — so what the deadline buys is the queue's own bookkeeping, not the provider's cooperation.
+- **A photograph is not fetched twice at once, and the dedup lasts as long as the work.** Releasing it with the lane let a timed-out copy still be writing when its card came round again; the two collided on one staging path.
+- **A source that keeps timing out is benched.** Four in a row, a minute, doubling each time it happens again, capped at an hour so a share that comes back is still noticed. Any success clears both the count and the backoff. Without it one bad source holds every fetch slot and the healthy ones are never asked.
 
 *Sources*
 
@@ -734,6 +739,28 @@ COMMIT;
 Counting the eligible pictures to draw the offset is a second statement. Against fifty thousand photos it is an index scan rather than a table scan, and it happens once per picture produced rather than once per photo.
 
 **`source_enabled` is denormalized onto `photo`.** The pool is the union of every *enabled* source, and joining `source` on every selection would cost the index that makes the ordering free. It is maintained in the same transaction that enables or disables a source — one write against that source's rows, on an operation nobody performs in a loop.
+
+## Surviving a source that will not answer
+
+Written 2026-08-26, the night an iCloud Drive folder of 436 album covers stopped answering at all — `bird` idle at 0% CPU, metadata served, content never delivered — while it was 98% of the library. Four separate faults, each of which stopped pictures reaching the screen, and each fixed differently.
+
+**A read that never returns held its lane for ever.** No provider had a timeout, because none had needed one. One undownloaded file left `executing` at 1, `FillerBox.Gauge.isShort` counts a card in flight as the queue's, and a nineteen-card queue therefore read as full against a target of twenty — for as long as the agent ran, silently. Fixed with a per-photograph deadline that releases the lane.
+
+**The abandoned work then ate the runtime.** A deadline cannot stop a blocking `copyItem`, so the freed lane started another while the first kept running. Eleven accumulated and took every thread in the cooperative pool: not a deadlock, nothing left to run on. Bounding the work fixed it and converted a starvation into a stall — correct, and useless. `BlockingWork` is the real answer, and only once it existed could the bound be removed.
+
+**The deck then refused to repeat.** `chooseCandidate` ends a pass only when the population is small enough that waiting can never free anybody, on the sound reasoning that serving keeps advancing the ordinal. Asked for a *servable* card it measured the whole library — 445 against a 223 window — concluded that waiting would work, and waited. The photographs with bytes were 133, every one inside the window, and nothing was serving, so the ordinal never moved. **The population a question is asked about has to be the population it is answered from**; `dealablePopulation(servableOnly:)` is that fix, and it is the one most likely to be undone by someone reading only the existing comment about waiting being the answer.
+
+**And the last resort trickled.** Dealing three cards produced *empty answer, three pictures, empty again*; measured at fifteen served against thirty-two empty. It fills the queue now. The launch bridge still deals a handful, and should: at launch the ordinary cards are seconds away and twenty consecutive pictures from one warm folder is not a shuffle.
+
+### Two questions this left open
+
+Neither is decided, and both are deliberately not decided — recorded so the next person does not have to rediscover them.
+
+**Sixty seconds is too short for iCloud Drive, and it is not obvious what the right number is.** Measured 2026-08-26 while the service was merely slow rather than dead: 5–15 MB files landing at about seventy-five seconds against a sixty-second bound. They time out, their card goes back to the pool, and the fetch then completes anyway and re-queues the photograph — so the bytes are not wasted, but the deck churns for nothing. `FileClassifier.isUbiquitous` already tells the folder provider which files are iCloud-backed, so the deadline could ask the same question and give those a longer one. **Left alone on purpose**: raising the number would have hidden the resilience question behind it, and the night suggests the backoff matters more than the bound does. What is not known is whether seventy-five seconds is typical or was that afternoon's weather.
+
+**`enumerate` is still on the cooperative pool.** `materialize` moved to `BlockingWork`; the folder walk did not, and it blocks in exactly the same way — `FileAccess`'s own comment records four concurrent walks stopping the agent from answering picture requests in August, which is the same failure from the other end. It is not a straight wrapper: the walk pushes into an `async` sink that writes to the database, so moving it wants the sink and the walk to end up on the right sides of the boundary. Nothing has forced the issue yet because refreshes are rarer than fetches, and a wedged share would.
+
+What the night established, beyond the fixes: **the design survived a total dependency failure**. With 98% of the library unreachable the agent went on serving from local bytes, without wedging, without a restart, and degraded in cadence rather than stopping. That is the property the whole cache-and-queue architecture exists for, and it had never been tested against anything worse than a slow disk.
 
 ## Consumers, and how a picture reaches one
 
