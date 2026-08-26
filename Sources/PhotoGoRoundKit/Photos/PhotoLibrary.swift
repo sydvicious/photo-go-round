@@ -23,6 +23,50 @@ public protocol PhotoLibrary: Sendable {
     /// design avoids. Asking is the service surface's job.
     var authorization: LibraryAuthorization { get async }
 
+    /// Raises the consent prompt, and answers with whatever came back.
+    ///
+    /// **The only place in this project that asks**, which is why `authorization`
+    /// above is read-only and says so. A prompt raised from the scanner, on a
+    /// timer, in a background process is the unattributed prompt the whole
+    /// design avoids; a prompt raised because somebody just pressed a button in
+    /// the panel is the same call with an answer to "why is this happening".
+    ///
+    /// **Idempotent, and not a way to ask twice.** `PHPhotoLibrary` prompts only
+    /// while the status is `notDetermined`; once somebody has decided, this
+    /// returns their decision without showing them anything. A person who said
+    /// no is changed only in System Settings, and nothing here can reopen it.
+    func requestAuthorization() async -> LibraryAuthorization
+
+    /// Every collection in the library, uncounted, ungrouped, and unsorted.
+    ///
+    /// **Cheap, and deliberately not counted.** Fetching the collections
+    /// themselves is a handful of milliseconds; asking each one how many images
+    /// it holds is ~78 ms apiece and 34 seconds across a real library. See
+    /// `LibraryCollection.count`, and `imageCount(ofCollection:)` for the other
+    /// half.
+    ///
+    /// Grouping and ordering are not done here — `LibrarySectionGroup.grouped`
+    /// is where those rules live, so they can be exercised without a library.
+    func collections() async -> [LibraryCollection]
+
+    /// Where each collection sits in the library's folder tree: identifier to
+    /// the folder names containing it, outermost first.
+    ///
+    /// **Cheap, unlike counting.** This walks the folders rather than the
+    /// collections, and a library with 439 collections has a handful of
+    /// folders — one fetch per folder rather than one per album.
+    ///
+    /// A collection absent from the map is at the top level. Smart albums are
+    /// always absent, because PhotoKit does not put them in folders.
+    func folderPaths() async -> [String: [String]]
+
+    /// How many images one collection holds, or nil if it does not resolve.
+    ///
+    /// **Videos are excluded**, by the same predicate `enumerateImages` uses, so
+    /// this is how many photographs would actually reach the pool rather than
+    /// how many items Photos shows.
+    func imageCount(ofCollection identifier: String) async -> Int?
+
     /// The collection's title, or nil if it does not resolve.
     ///
     /// **Nil is not "deleted".** It is equally what a switched system library

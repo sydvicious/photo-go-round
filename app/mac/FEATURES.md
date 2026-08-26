@@ -26,6 +26,14 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - Remove a selected source.
   - Configure a selected folder — the button, the context menu, or a double-click — showing the full path and the one option it has.
   - The list is re-read at launch, when the panel appears, and every few seconds while it is open.
+- *Choosing Photos collections* — **done 2026-08-26.** `Select Collections…` opens a picker over the agent's `/v2/photos/albums`.
+  - Its own resizable `Window`, not a sheet: several hundred rows have to be resizable and a macOS sheet is not.
+  - An outline of Photos' four sections, with folders nested inside them and albums under the folder that holds them.
+  - A checkbox per album; three-state checkboxes on folders, which are never sources themselves.
+  - Favorites pinned above the headings, in the heading's weight.
+  - Counts arrive as the agent counts — absent is not zero, and the footer says `Counting 343 of 439…` so blanks are explained.
+  - The unauthorized state lives here: an Allow button while undecided, a pointer to System Settings after.
+  - Done applies it: one `POST` for what was ticked, a `DELETE` each for what was unticked, adds first.
 - *Navigation in the picture window* — say "next" by hand.
   - Chevron on hover at the right edge; keys: space, →, ↓, page down.
   - One rule: no request sooner than `advanceIntervalSeconds` after the current picture was drawn.
@@ -70,6 +78,9 @@ Building the first of them forced a decision that is **not** app-specific: the d
 - **A `Window` scene of the app's own, not SwiftUI's `Settings` scene. Changed 2026-08-26.** `Settings` gives the menu item and ⌘, for free and will not yield a resizable window at any price — `.windowResizability(.contentMinSize)` declared on it is ignored. `CommandGroup(replacing: .appSettings)` buys both back in two lines.
 - **Apple Photos is a panel, not a row and not a section.** There is one Photos library and there always will be, so what Settings holds is one standing statement of which collections are in play. It also gives authorization somewhere permanent to live, which a picker that exists only while it is open cannot.
 - **The lower list is everything that is *not* a Photos collection**, rather than folders and files by name, so a kind the panel has not been taught about appears somewhere it can be seen and removed instead of being configured and invisible.
+- **The picker is a chooser, not an adder.** What is ticked when you press Done *is* the set of Photos sources — so it opens showing what is already true, and unticking removes a source. There is one Photos library and it does not get added to twice.
+- **Apple has no collection picker, and this is not a gap we filled reluctantly.** `PHPickerResult` carries an asset identifier and an item provider; `PHPickerCapabilitiesCollectionNavigation` lets somebody browse *into* an album and still returns photographs. Checked against the macOS 27.0 SDK.
+- **One window telling another is not a doorbell.** The agent rings `.sourcesChanged` for every edit and this app does not listen. What the picker announces is narrower: a change *this app* just made, which another of its own windows is displaying. Waiting a minute to redraw something we did ourselves reads as a panel that has broken.
 - **The word is "photo", not "photograph."** It matches the product's own name. Prose in these documents is not bound by it.
 - **One source per file, collapsed in the UI later.** The deck already treats a pinned photograph and a folder of ten thousand alike; changing that to tidy a list would be a schema change.
 - **"Add contents of contained folders", not "Recursive."** Read by people who have never heard the word. Per folder, default off, not sticky.
@@ -128,6 +139,20 @@ It holds three things: the chosen collections comma-separated, capped at three l
 **What the shape buys that a picker alone could not** is somewhere for authorization to live. A dialog that exists only while it is open has nowhere to say *this app has not been given access to your photo library*, and nowhere to put the button that asks. That state is not built yet and now has a home waiting for it.
 
 **What it costs** is that the panel is present even for someone who never uses Photos, saying "No collections selected." That is the right trade: it is one line, and it is also the only place the feature announces that it exists.
+
+## The picker, and the three shapes it went through
+
+The first sketch was a popup menu of album names, one at a time. The second was a modal picker opened from `+`. The third is what shipped, and the two before it were wrong in the same way: they treated a Photos collection as *a source*, one of a growing list you add to.
+
+It is not. There is one Photos library and there always will be, which is why the panel holds a standing statement of what is in play rather than a list you append to, and why the picker is a chooser rather than an adder.
+
+**It is an outline because Photos has real folders.** Four flat sections lost them, and with them the only thing that tells two same-named albums apart: a measured library of 439 collections had 31 titles used more than once. Twenty-two of those spanned sections and were already distinguishable by their heading; the remaining nine were separated by their counts, which was luck — counts arrive late and two albums can be the same size. The tree removes the luck.
+
+**Folders get three-state checkboxes and are never sources.** A folder holds albums, not photographs. Its checkbox summarises what is beneath it and is derived on every draw, so there is no folder state anywhere that could drift out of step with the albums. It is a real `NSButton` with `allowsMixedState` rather than an approximation drawn from SF Symbols, because a control that looks *nearly* like the system's is worse than the system's.
+
+**A search field was built and removed.** Three hundred and fifty-three albums is not browsable as one list, and a search box is the obvious answer — but collapsing the three sections you are not looking in does the same job with a control that is already there for its own reasons.
+
+**Favorites is pinned above the headings.** Technically an album; not one in any other sense. Library and Recents have the same argument and were deliberately left where they are, because ticking Library is 95,904 photographs in a single click.
 
 ## The beat between asking and knowing
 

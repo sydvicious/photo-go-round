@@ -349,8 +349,28 @@ public struct SourceStore {
         var removed = 0
         var freed: Int64 = 0
         for source in existing where !wanted.contains(source.locator) {
-            freed += try remove(id: source.id)
-            removed += 1
+            // **One source failing must not strand the rest of the batch.**
+            // Removing several at once is one preferences write and one loop,
+            // and `remove` takes the writer — so a busy database, or a scan of
+            // one of these sources still in flight, throws part way and used to
+            // abandon every source after it. Preferences had already forgotten
+            // them, so they were gone from the panel with their rows and their
+            // bytes still on disk, waiting for a reconcile that only came at
+            // the next launch. Found on 2026-08-26 by counting cache
+            // directories against sources: 28 of them had been left behind.
+            //
+            // Nothing is swallowed. The source stays in the table, so the next
+            // reconcile tries it again — which is what makes continuing safe
+            // rather than merely tidier.
+            do {
+                freed += try remove(id: source.id)
+                removed += 1
+            } catch {
+                let reason = String(describing: error)
+                Log.sources.error(
+                    "could not remove source \(source.id, privacy: .public) (\(source.locator, privacy: .public)): \(reason, privacy: .public) — leaving it for the next reconcile"
+                )
+            }
         }
 
         let result = Reconciliation(

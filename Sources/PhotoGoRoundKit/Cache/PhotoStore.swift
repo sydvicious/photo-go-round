@@ -109,7 +109,9 @@ public final class PhotoStore: @unchecked Sendable {
     /// the whole database rebuilt — and there is nothing left that could name it
     /// correctly, so it goes.
     @discardableResult
-    public func rebuild(photos: [String: String]) -> (kept: Int, discarded: Int, bytes: Int64) {
+    public func rebuild(
+        photos: [String: String]
+    ) -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
         index(photos: photos, discardingUnclaimed: true)
     }
 
@@ -120,21 +122,27 @@ public final class PhotoStore: @unchecked Sendable {
     /// library the agent is using, and a read-only question must not delete a
     /// file because this process happens to disagree about what is claimed.
     @discardableResult
-    public func index(photos: [String: String]) -> (kept: Int, discarded: Int, bytes: Int64) {
+    public func index(
+        photos: [String: String]
+    ) -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
         index(photos: photos, discardingUnclaimed: false)
     }
 
     private func index(
         photos: [String: String], discardingUnclaimed: Bool
-    ) -> (kept: Int, discarded: Int, bytes: Int64) {
+    ) -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
         var found: [Key: Entry] = [:]
         var discarded = 0
         var bytes: Int64 = 0
 
         let manager = FileManager.default
+        var emptied = 0
         for sourceDirectory in (try? manager.contentsOfDirectory(
-            at: root, includingPropertiesForKeys: nil)) ?? []
+            at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
         {
+            // Files kept from this one source, so a directory left holding
+            // nothing can be recognised below.
+            var keptHere = 0
             for sizeDirectory in (try? manager.contentsOfDirectory(
                 at: sourceDirectory, includingPropertiesForKeys: nil)) ?? []
             {
@@ -163,8 +171,24 @@ public final class PhotoStore: @unchecked Sendable {
                         createdAt: values?.contentModificationDate ?? .distantPast
                     )
                     bytes += byteCount
+                    keptHere += 1
                 }
             }
+
+            // **A source directory holding nothing goes with its contents.**
+            // `removeSource` unlinks the whole directory, so an *empty* one can
+            // only have come from this sweep taking its files on some earlier
+            // launch — which is how 28 husks accumulated in a real cache by
+            // 2026-08-26 while nothing was ever wrong enough to notice.
+            //
+            // Safe to take: a directory is created by the first file written
+            // into it, so an empty one is not a source waiting for bytes.
+            guard discardingUnclaimed, keptHere == 0 else { continue }
+            let isDirectory = (try? sourceDirectory.resourceValues(forKeys: [.isDirectoryKey]))?
+                .isDirectory ?? false
+            guard isDirectory else { continue }
+            try? manager.removeItem(at: sourceDirectory)
+            emptied += 1
         }
 
         lock.lock()
@@ -177,10 +201,15 @@ public final class PhotoStore: @unchecked Sendable {
                 "discarded \(discarded, privacy: .public) cached files that nothing claims"
             )
         }
+        if emptied > 0 {
+            Log.cache.notice(
+                "removed \(emptied, privacy: .public) cache directories holding nothing"
+            )
+        }
         Log.cache.notice(
             "cache index rebuilt: \(found.count, privacy: .public) entries, \(bytes, privacy: .public) bytes"
         )
-        return (found.count, discarded, bytes)
+        return (found.count, discarded, bytes, emptied)
     }
 
     /// Tells the store about a photograph it may not have seen, so a file

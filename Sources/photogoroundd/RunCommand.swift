@@ -55,7 +55,14 @@ struct RunCommand {
             queueSize: preferences.queueSize,
             store: store
         )
-        try cache.prepare()
+        let reclaimed = try cache.prepare()
+        // Only when there was something to reclaim, so a clean launch stays
+        // quiet and a launch that took 33 directories off the disk does not.
+        if reclaimed.discarded > 0 || reclaimed.emptied > 0 {
+            Console.event(
+                "reclaimed \(reclaimed.discarded) cached files nothing claimed"
+                    + ", \(reclaimed.emptied) empty source directories")
+        }
 
         // The service is the interface: clients ask for a picture and are handed
         // the bytes, and never open the database or the cache themselves.
@@ -190,10 +197,16 @@ struct RunCommand {
         // endpoint writes preferences on its behalf, which rings `.sourcesChanged`
         // — and this loop is already listening for it, so an added folder is
         // scanned within a tick rather than at the next scheduled pass.
+        // **One catalog for the agent's lifetime.** Counting the library costs
+        // about half a minute of round trips, and it is paid once by whoever
+        // opens a picker first — a catalog rebuilt per request would pay it
+        // again on every poll and never finish.
+        let catalog = PhotosCollectionCatalog(library: SystemPhotoLibrary())
         let router = Router(
             pictures: endpoint,
             sources: SourceEndpoint(
-                databasePath: databasePath, preferences: preferences, bytes: store)
+                databasePath: databasePath, preferences: preferences, bytes: store),
+            photos: PhotosEndpoint(catalog: catalog, library: SystemPhotoLibrary())
         )
         // Where the service is, written where every local client can find it:
         // a preference domain is a name rather than a path, which is the only

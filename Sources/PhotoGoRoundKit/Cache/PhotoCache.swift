@@ -69,7 +69,12 @@ public struct PhotoCache {
     /// Letting a backup copy tens of gigabytes of photos that are already in the
     /// Photos library or already in iCloud wastes the user's backup volume on
     /// data we can reconstruct.
-    public func prepare() throws {
+    /// Returns what the launch walk reclaimed, so the host can say so where a
+    /// person is actually reading. **The unified log is not that place** — the
+    /// sweep took 15 files and 33 directories on 2026-08-26 and said nothing
+    /// the agent's own console showed.
+    @discardableResult
+    public func prepare() throws -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
@@ -79,7 +84,7 @@ public struct PhotoCache {
         // index walk never looks inside — the name is neither `.original` nor
         // a size — so launch is the only place it can be reclaimed.
         try? FileManager.default.removeItem(at: root.appending(path: Self.stagingDirectory))
-        try indexCache()
+        return try indexCache()
     }
 
     /// Where a fetch writes before adopting into the store. Beside the source
@@ -95,7 +100,7 @@ public struct PhotoCache {
     /// it, and a file whose UUID is unknown has no owner left that could name it
     /// correctly.
     @discardableResult
-    public func indexCache() throws -> (kept: Int, discarded: Int, bytes: Int64) {
+    public func indexCache() throws -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
         var owners: [String: String] = [:]
         try database.query(
             """

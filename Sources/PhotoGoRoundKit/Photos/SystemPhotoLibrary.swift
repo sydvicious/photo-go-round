@@ -31,6 +31,12 @@ public struct SystemPhotoLibrary: PhotoLibrary {
         get async { Self.map(PHPhotoLibrary.authorizationStatus(for: .readWrite)) }
     }
 
+    /// `.readWrite` for the same reason reading does: PhotoKit has no
+    /// read-only level, and `.addOnly` grants writing and nothing else.
+    public func requestAuthorization() async -> LibraryAuthorization {
+        Self.map(await PHPhotoLibrary.requestAuthorization(for: .readWrite))
+    }
+
     static func map(_ status: PHAuthorizationStatus) -> LibraryAuthorization {
         switch status {
         case .notDetermined: .notDetermined
@@ -50,6 +56,126 @@ public struct SystemPhotoLibrary: PhotoLibrary {
     public func title(ofCollection identifier: String) async -> String? {
         guard let collection = collection(identifier) else { return nil }
         return collection.localizedTitle ?? ""
+    }
+
+    /// **Off the cooperative pool**, because this is 439 PhotoKit round trips
+    /// on a real library and every one of them blocks. Parking a cooperative
+    /// thread for that is how four concurrent walks stopped the agent answering
+    /// picture requests on 2026-08-25.
+    public func collections() async -> [LibraryCollection] {
+        (try? await BlockingWork.run { Self.everyCollection() }) ?? []
+    }
+
+    private static func everyCollection() -> [LibraryCollection] {
+        var found: [LibraryCollection] = []
+        for type in [PHAssetCollectionType.album, .smartAlbum] {
+            let fetched = PHAssetCollection.fetchAssetCollections(
+                with: type, subtype: .any, options: nil)
+            fetched.enumerateObjects { collection, _, _ in
+                found.append(
+                    LibraryCollection(
+                        identifier: collection.localIdentifier,
+                        // Empty rather than nil: a collection that resolves and
+                        // has no title is not the same as one that is missing.
+                        title: collection.localizedTitle ?? "",
+                        kind: Self.kind(of: collection)))
+            }
+        }
+        return found
+    }
+
+    /// Translation, and nothing else — what these cases *mean* is decided in
+    /// `LibraryCollection`, where a test can reach it.
+    ///
+    /// The `default` arms are not oversights. A subtype Apple adds after this
+    /// ships arrives as `.otherSmartAlbum` or `.userAlbum` and is listed, which
+    /// is the failure worth having: a collection somebody can see in Photos and
+    /// not here is a bug they cannot diagnose.
+    static func kind(of collection: PHAssetCollection) -> LibraryCollectionKind {
+        switch collection.assetCollectionType {
+        case .album:
+            switch collection.assetCollectionSubtype {
+            case .albumCloudShared: .sharedAlbum
+            case .albumMyPhotoStream: .photoStream
+            case .albumImported: .imported
+            case .albumSyncedEvent, .albumSyncedFaces, .albumSyncedAlbum: .syncedAlbum
+            default: .userAlbum
+            }
+        case .smartAlbum:
+            // **The list below is every smart-album subtype the SDK names, and
+            // a real library has more than that.** Measured 2026-08-26: subtypes
+            // 221 and the whole 1000000218–1000000220 range came back from a
+            // 439-collection library and appear nowhere in `PhotosTypes.h`. One
+            // of them is *Recently Saved*, holding 37,550 photographs, which
+            // Photos shows and PhotoKit will not name. They arrive as
+            // `.otherSmartAlbum` and are listed rather than dropped — an
+            // unnamed collection somebody can see in Photos is still theirs to
+            // choose.
+            switch collection.assetCollectionSubtype {
+            case .smartAlbumUserLibrary: .wholeLibrary
+            case .smartAlbumFavorites: .favorites
+            case .smartAlbumRecentlyAdded: .recentlyAdded
+            case .smartAlbumAllHidden: .hidden
+            case .smartAlbumUnableToUpload: .unableToUpload
+            case .smartAlbumPanoramas, .smartAlbumVideos, .smartAlbumTimelapses,
+                .smartAlbumBursts, .smartAlbumSlomoVideos, .smartAlbumSelfPortraits,
+                .smartAlbumScreenshots, .smartAlbumDepthEffect, .smartAlbumLivePhotos,
+                .smartAlbumAnimated, .smartAlbumLongExposures, .smartAlbumRAW,
+                .smartAlbumCinematic, .smartAlbumSpatial, .smartAlbumScreenRecordings:
+                .mediaType
+            default: .otherSmartAlbum
+            }
+        @unknown default: .otherSmartAlbum
+        }
+    }
+
+    public func folderPaths() async -> [String: [String]] {
+        (try? await BlockingWork.run { Self.walkFolders() }) ?? [:]
+    }
+
+    /// Descends the folder tree, recording where each album came out.
+    ///
+    /// **Folders are `PHCollectionList`; albums are `PHAssetCollection`.** Both
+    /// are `PHCollection`, and which one a child is is the whole of the
+    /// recursion: a list is descended into, anything else is a leaf and gets
+    /// the path that reached it.
+    private static func walkFolders() -> [String: [String]] {
+        var paths: [String: [String]] = [:]
+
+        func descend(into folder: PHCollectionList, at path: [String]) {
+            PHCollection.fetchCollections(in: folder, options: nil)
+                .enumerateObjects { child, _, _ in
+                    if let nested = child as? PHCollectionList {
+                        descend(into: nested, at: path + [nested.localizedTitle ?? ""])
+                    } else {
+                        paths[child.localIdentifier] = path
+                    }
+                }
+        }
+
+        // Top-level *user* collections: the only place folders can be, and the
+        // only collections that can be in one.
+        PHCollectionList.fetchTopLevelUserCollections(with: nil)
+            .enumerateObjects { item, _, _ in
+                guard let folder = item as? PHCollectionList else { return }
+                descend(into: folder, at: [folder.localizedTitle ?? ""])
+            }
+        return paths
+    }
+
+    /// ~78 ms per collection, measured, whatever its size — so this is called
+    /// deliberately and never in a loop that somebody is waiting on.
+    public func imageCount(ofCollection identifier: String) async -> Int? {
+        try? await BlockingWork.run {
+            guard let collection = Self.resolve(identifier) else { return nil }
+            return PHAsset.fetchAssets(in: collection, options: Self.imagesOnly()).count
+        }
+    }
+
+    private static func resolve(_ identifier: String) -> PHAssetCollection? {
+        PHAssetCollection.fetchAssetCollections(
+            withLocalIdentifiers: [identifier], options: nil
+        ).firstObject
     }
 
     private func collection(_ identifier: String) -> PHAssetCollection? {

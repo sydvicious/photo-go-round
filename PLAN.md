@@ -584,6 +584,16 @@ A walk of a large folder runs for minutes and writes in batches of five hundred.
 
 `refresh` now recognises the failure, confirms the source row is actually gone rather than assuming it, and abandons the scan quietly. Marking it unavailable was writing a status onto a row that is not there — and `unavailable` means *these photographs cannot be reached*, which is a claim about an unplugged drive and not about something the user has deleted.
 
+### Removing a source, and the bytes it used to leave behind
+
+`remove(id:)` deletes the row and unlinks the whole cache directory, keyed by the source's uuid. That part was right and tested. Two things around it were not, both found on 2026-08-26 by counting rather than by anything failing: a cache root holding **36 source directories for a library with 3 sources**, and 253 cached originals against 238 rows.
+
+**One source failing stranded the rest of its batch.** Reconciling removes every no-longer-listed source in a loop, and each removal takes the writer — so a busy database, or a scan of one of those sources still in flight, threw part way and abandoned everything after it. Preferences had already forgotten them, so they were gone from the panel with their rows and their bytes still on disk, waiting for a reconcile that only came at the next launch. Each removal is now wrapped: the failure is logged with which source and why, the loop carries on, and the source stays in the table so the next reconcile tries it again.
+
+**The launch sweep left the husks.** `PhotoStore.index(discardingUnclaimed:)` deletes files nothing claims and never touched directories, so every source cleaned up that way left an empty directory behind — twenty-eight of them had accumulated. The sweep now removes a source directory once it has taken the last file in it. An empty directory is not a source waiting for bytes: directories are created by the first file written into them.
+
+**And it said none of this out loud.** Both counts went to `Log.cache.notice` and `PhotoCache.prepare()` discarded the result, so the launch that reclaimed 15 files and 33 directories printed nothing where anybody was looking. `prepare()` returns what it reclaimed now, and the agent prints one line when there was anything to reclaim — silent on a clean launch.
+
 ## Rows versus bytes
 
 The single most important thing to keep straight in this design is that there are two populations, and only one of them is bounded.

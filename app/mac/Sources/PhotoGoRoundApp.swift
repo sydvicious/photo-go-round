@@ -70,5 +70,15 @@ struct PhotoGoRoundApp: App {
         // see forty.
         .windowResizability(.contentMinSize)
         .defaultPosition(.center)
+
+        // **Its own window, like Settings and for the same reason.** A list of
+        // several hundred collections has to be resizable, and a sheet on macOS
+        // is not. It asks the agent for the sources it needs rather than being
+        // handed them, so nothing has to be threaded through a scene.
+        Window("Choose Collections", id: CollectionPickerView.windowID) {
+            CollectionPickerView()
+        }
+        .windowResizability(.contentMinSize)
+        .defaultPosition(.center)
     }
 }

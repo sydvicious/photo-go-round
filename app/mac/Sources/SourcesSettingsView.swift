@@ -15,6 +15,8 @@ struct SourcesSettingsView: View {
     /// the `Settings` scene — see `PhotoGoRoundApp` for why it gave that up.
     static let windowID = "sources-settings"
 
+    @Environment(\.openWindow) private var openWindow
+
     @State private var model = SourcesModel()
     /// The row whose options are open. A value rather than a flag, so the sheet
     /// cannot be showing while nothing is selected.
@@ -48,6 +50,11 @@ struct SourcesSettingsView: View {
         .task { await model.load() }
         .onAppear { model.beginPolling() }
         .onDisappear { model.endPolling() }
+        // A change made in this app's own picker, rather than one the timer
+        // will find eventually. See `SourceChanges`.
+        .onChange(of: SourceChanges.shared.revision) {
+            Task { await model.load() }
+        }
         .sheet(item: $configuring) { source in
             ConfigureSourceView(source: source) { recursive in
                 Task { await model.setRecursive(recursive, of: source.uuid) }
@@ -72,11 +79,9 @@ struct SourcesSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Button("Select Collections…") {}
-                        // No picker yet. Shown rather than hidden, because its
-                        // absence is a fact about this build rather than about
-                        // the product.
-                        .disabled(true)
+                    Button("Select Collections…") {
+                        openWindow(id: CollectionPickerView.windowID)
+                    }
                 }
             }
             .padding(8)

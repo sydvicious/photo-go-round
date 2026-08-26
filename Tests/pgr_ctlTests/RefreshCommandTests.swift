@@ -49,6 +49,7 @@ struct RefreshCommandTests {
 
     @Test("Naming one source is refused rather than quietly ignored")
     func perSourceRefreshIsRefused() async throws {
+        _ = Refusals.installed
         let scratch = Scratch()
         // The doorbell carries no payload, so "only this one" cannot be said.
         // Accepting the flag and refreshing everything would be worse than
@@ -56,5 +57,10 @@ struct RefreshCommandTests {
         await #expect(throws: ExitCode.self) {
             try await SourceCommands.refresh(sourceID: 3, environment: scratch.environment)
         }
+
+        // **The refusal has to name the way out.** Being told no without being
+        // told what to do instead is where a person goes looking in the source.
+        #expect(Refusals.all.contains { $0.contains("Drop --source") })
+        #expect(Refusals.all.contains { $0.contains("#3") })
     }
 }

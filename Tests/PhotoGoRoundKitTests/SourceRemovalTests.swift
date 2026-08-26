@@ -167,6 +167,27 @@ struct SourceRemovalTests {
         #expect(fixture.held < before)
     }
 
+    /// **The disk, not the index.** `PhotoStore.removeSource` forgets the
+    /// entries *and* unlinks the whole directory, and only the second half
+    /// reclaims anything. Found on 2026-08-26 by counting: 253 originals on
+    /// disk against 238 rows, with the surplus sitting in directories whose
+    /// sources were long gone.
+    @Test("Removing a source takes its directory off the disk, not just its rows")
+    func removingASourceTakesItsDirectory() async throws {
+        let scratch = Scratch()
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        let source = try await fixture.add(to: scratch.preferences)
+        try await fixture.materialize(source)
+
+        let directory = fixture.cacheRoot.url
+            .appending(path: "cache").appending(path: source.uuid)
+        #expect(FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)))
+
+        _ = try fixture.store.remove(source, from: scratch.preferences)
+
+        #expect(!FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)))
+    }
+
     @Test("A refresh drops them too, without waiting for anyone to ask for a picture")
     func recursionOffIsAlsoNoticedByARefresh() async throws {
         let scratch = Scratch()

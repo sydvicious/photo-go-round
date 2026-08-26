@@ -103,7 +103,7 @@ struct SourceServiceTests {
 
         let request = try #require(wire.requests.first)
         #expect(request.httpMethod == "GET")
-        #expect(request.url?.path == "/v1/sources")
+        #expect(request.url?.path == "/v2/sources")
         #expect(request.url?.port == 9999)
 
         let source = try #require(sources.first)
@@ -162,7 +162,7 @@ struct SourceServiceTests {
         #expect(wire.requests.count == 1)
         let request = try #require(wire.requests.first)
         #expect(request.httpMethod == "POST")
-        #expect(request.url?.path == "/v1/sources")
+        #expect(request.url?.path == "/v2/sources")
 
         let sent = try #require(try body(of: request) as? [[String: Any]])
         #expect(sent.count == 2)
@@ -200,7 +200,7 @@ struct SourceServiceTests {
 
         let request = try #require(wire.requests.first)
         #expect(request.httpMethod == "PATCH")
-        #expect(request.url?.path == "/v1/sources/abc")
+        #expect(request.url?.path == "/v2/sources/abc")
         #expect(try body(of: request) as? [String: Bool] == ["recursive": false])
         #expect(updated.recursive == false)
     }
@@ -215,7 +215,7 @@ struct SourceServiceTests {
 
         let request = try #require(wire.requests.first)
         #expect(request.httpMethod == "DELETE")
-        #expect(request.url?.path == "/v1/sources/abc")
+        #expect(request.url?.path == "/v2/sources/abc")
         #expect(request.httpBody == nil)
     }
 

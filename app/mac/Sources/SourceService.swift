@@ -98,7 +98,79 @@ struct SourceService {
         case unreadable
     }
 
+    /// What is in the photo library, as the picker needs it.
+    ///
+    /// **Only the agent can answer this.** The app does not link PhotoKit and
+    /// holds no grant of its own; see `Apple Photos Plan.md`, *The agent owns
+    /// the Photos grant*.
+    struct Library: Decodable, Equatable, Sendable {
+        var authorization: String
+        var sections: [Section]
+        /// How far the agent's background count has got. Listing is
+        /// milliseconds and counting a real library is about half a minute, so
+        /// the names arrive first and the numbers follow.
+        var counted: Int
+        var total: Int
+
+        /// Whether the agent is allowed to look at all. Anything else is a
+        /// state to *show* — with the button that changes it — rather than an
+        /// error to report.
+        var isReadable: Bool { authorization == "authorized" || authorization == "limited" }
+        /// True while numbers are still arriving, so the picker can say so
+        /// instead of leaving blanks to be guessed at.
+        var isCounting: Bool { counted < total }
+
+        struct Section: Decodable, Equatable, Sendable, Identifiable {
+            var section: String
+            var title: String
+            var collections: [Collection]
+
+            var id: String { section }
+        }
+
+        struct Collection: Decodable, Equatable, Sendable, Identifiable {
+            /// What `POST /v2/sources` takes as a locator.
+            var identifier: String
+            var title: String
+            var kind: String
+            /// Absent until the agent's background pass reaches it, which is
+            /// not the same as zero.
+            var count: Int?
+            /// The folders containing it, outermost first; empty at the top
+            /// level of the library.
+            var folders: [String] = []
+
+            var id: String { identifier }
+
+            /// What Photos would call the path to it, for a row that has to
+            /// say which of two same-named albums it is.
+            var folderPath: String { folders.joined(separator: " › ") }
+        }
+    }
+
     // MARK: - Asking
+
+    func collections() async throws -> Library {
+        try await send(decoding: Library.self, "GET", "/v2/photos/albums")
+    }
+
+    /// Raises the consent prompt on the agent, and answers with what came back.
+    ///
+    /// **Only ever from a press.** The agent never asks on its own — see
+    /// `PhotoLibrary.requestAuthorization` — so this is the call that makes a
+    /// TCC dialog attributable to something the user just did.
+    @discardableResult
+    func requestPhotoAccess() async throws -> String {
+        struct Consent: Decodable { var authorization: String }
+        return try await send(
+            decoding: Consent.self, "POST", "/v2/photos/authorization", body: Data()
+        ).authorization
+    }
+
+    @discardableResult
+    func add(collections identifiers: [String]) async throws -> [Source] {
+        try await add(identifiers.map { ["kind": "photos_collection", "path": $0] })
+    }
 
     func list() async throws -> [Source] {
         try await send(decoding: [Source].self, "GET", "/v2/sources")

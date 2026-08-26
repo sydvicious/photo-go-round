@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Terminal output for the development modes.
 ///
@@ -86,7 +87,27 @@ public enum Console {
         print("\(timestamp)  \(paint(text, .grey))")
     }
 
+    /// Where `failure` writes, when something has redirected it.
+    ///
+    /// **Only tests redirect it.** A command that refuses by design still has
+    /// to say why, and a test exercising that refusal would otherwise print
+    /// `error:` into the output of a run where nothing went wrong — which
+    /// teaches whoever reads that output to skim past the word. Redirecting
+    /// also lets the test assert the wording, which is the part that matters
+    /// and was previously checked by nobody.
+    private static let redirect = Mutex<(@Sendable (String) -> Void)?>(nil)
+
+    /// Sends failures to `sink` instead of standard error, or back to standard
+    /// error when given nil.
+    public static func redirectFailures(to sink: (@Sendable (String) -> Void)?) {
+        redirect.withLock { $0 = sink }
+    }
+
     public static func failure(_ text: String) {
+        if let sink = redirect.withLock({ $0 }) {
+            sink(text)
+            return
+        }
         FileHandle.standardError.write(Data((paint("error: ", .red) + text + "\n").utf8))
     }
 }

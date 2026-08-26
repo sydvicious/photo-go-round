@@ -120,12 +120,18 @@ struct NotifyCommandTests {
 
     @Test("An unknown topic is refused rather than posted")
     func unknownTopicIsAnError() {
+        _ = Refusals.installed
         #expect(throws: (any Error).self) {
             try NotifyCommand.run(topic: "wallpaper", environment: environment)
         }
         #expect(throws: (any Error).self) {
             try NotifyCommand.run(topic: "", environment: environment)
         }
+
+        // **The refusal lists what would have worked.** A topic is a word the
+        // caller guessed at, and the set of right guesses is short enough to
+        // print.
+        #expect(Refusals.all.contains { $0.contains("One of: prefs, deck, sources, cache") })
     }
 }
 

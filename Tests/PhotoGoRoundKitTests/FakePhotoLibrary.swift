@@ -34,6 +34,15 @@ final class FakePhotoLibrary: PhotoLibrary, @unchecked Sendable {
     private let titles: [String: String]
     private let assets: [String: [LibraryAsset]]
     private let resourcesByAsset: [String: [LibraryResource]]
+    /// What `collections()` answers. Defaults to one `.userAlbum` per title, so
+    /// a test that only cares about enumeration says nothing about kinds.
+    private let collectionList: [LibraryCollection]?
+    /// What `requestAuthorization` answers. Defaults to the current state, so a
+    /// test that does not care about consent says nothing about it.
+    private let grantedOnRequest: LibraryAuthorization
+    /// Identifier to the folders containing it. Empty means a flat library,
+    /// which is what most tests want to say about folders.
+    private let folderTree: [String: [String]]
 
     /// Every resource written, so a test can assert *which* one was taken
     /// rather than only that something was.
@@ -44,17 +53,43 @@ final class FakePhotoLibrary: PhotoLibrary, @unchecked Sendable {
         authorization: LibraryAuthorization = .authorized,
         titles: [String: String] = [:],
         assets: [String: [LibraryAsset]] = [:],
-        resources: [String: [LibraryResource]] = [:]
+        resources: [String: [LibraryResource]] = [:],
+        collections: [LibraryCollection]? = nil,
+        grantedOnRequest: LibraryAuthorization? = nil,
+        folders: [String: [String]] = [:]
     ) {
+        self.grantedOnRequest = grantedOnRequest ?? authorization
+        self.folderTree = folders
         self.authorizationValue = authorization
         self.titles = titles
         self.assets = assets
         self.resourcesByAsset = resources
+        self.collectionList = collections
     }
 
     var authorization: LibraryAuthorization { get async { authorizationValue } }
 
+    /// Answers whatever the real one would after somebody decided, which a test
+    /// sets up front — there is no prompt to raise here.
+    func requestAuthorization() async -> LibraryAuthorization { grantedOnRequest }
+
     func title(ofCollection identifier: String) async -> String? { titles[identifier] }
+
+    func collections() async -> [LibraryCollection] {
+        if let collectionList { return collectionList }
+        return titles.map {
+            LibraryCollection(identifier: $0.key, title: $0.value, kind: .userAlbum)
+        }
+    }
+
+    /// Nil for a collection that does not resolve, which is the same absence
+    /// `title(ofCollection:)` reports and for the same reasons.
+    func folderPaths() async -> [String: [String]] { folderTree }
+
+    func imageCount(ofCollection identifier: String) async -> Int? {
+        guard titles[identifier] != nil else { return nil }
+        return assets[identifier]?.count ?? 0
+    }
 
     @discardableResult
     func enumerateImages(

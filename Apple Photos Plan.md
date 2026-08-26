@@ -26,19 +26,18 @@ The window is showing a test folder. Every architectural claim this project has 
   - `SourceSpec.init` stops appending a trailing slash to things that are not paths.
   - **Exit gate: a bad album identifier is refused at the door, naming itself, and changes nothing. Met** — `EditFailure.locatorsNotFound` names it, under the same all-or-none rule as a mistyped path, and a library that cannot be read refuses too.
   - Validation happens in `SourceStore.add` rather than through a validator passed into `SourceRequest.resolve`, as this plan proposed. `add` had to become `async` regardless, and `resolve` stays synchronous and free of any knowledge of providers.
-- **Phase 4 — the service surfaces.** What the app needs and cannot get for itself.
+- **Phase 4 — the service surfaces. Done 2026-08-26.** What the app needs and cannot get for itself.
   - **Versioning, decided 2026-08-25.** Each version is a whole set of routes, not a patch on the one below. `/v1/sources` lists only file-backed kinds, because a v1 client draws a Photos album as `040` — the last path component of an identifier — which reads as a folder that is not there. `/v2/sources` carries every kind and the album's `localizedTitle`, and is where these routes live. **Built ahead of this phase**, since the app needed the v1 filtering the day the provider landed.
-  - `GET /v2/photos/albums` — identifier, title, subtype, image count.
-  - `GET /v1/photos/authorization` and `POST /v1/photos/authorization` — read the state, and raise the prompt.
+  - `GET /v2/photos/albums` — the four sections, each sorted by name; identifier, title, kind, and an image count that is **absent until the background pass reaches it**. `authorization` travels in the same body, because "no albums" and "not allowed to look" must not arrive as the same empty array.
+  - `GET /v2/photos/authorization` and `POST /v2/photos/authorization` — read the state, and raise the prompt. **v2, not v1 as this plan first said:** v1 is the file-backed set, and a v1 client has no business with Photos consent because it cannot draw a Photos source at all.
   - `SourceEndpoint.Wire` gains `title`, because a Photos locator has no last path component to name it by.
-  - **`GET /v2/photos/albums` is the name this plan already gave it**, and it stands. Four sections, images-only counts.
-  - **Exit gate: `curl` lists the albums and adds one, and the agent is the only process that touched PhotoKit.**
-- **Phase 5 — the picker in the app. Reshaped 2026-08-26; the panel half is done.** Settings is two panels now, and the picker is what the upper one opens.
+  - **Exit gate: `curl` lists the albums and adds one, and the agent is the only process that touched PhotoKit. Met.** Against the real library: **200 in 68 ms**, `authorized`, 439 collections, `counted: 0` — names first, exactly as designed, against the 34 seconds counting on demand would have cost. Sections came back 353 Albums · 65 Sharing · 13 Media Types · 8 Utilities, summing to 439, so nothing fell through the classifier. The background count reached 439/439 in about forty seconds, matching Phase 1's estimate. Adding is covered too, including that a locator already listed is absorbed with **200 and an empty array** rather than refused — only a locator that does not *resolve* refuses the batch.
+- **Phase 5 — the picker in the app. Done 2026-08-26.** Settings is two panels, and the picker is what the upper one opens.
   - **Done.** An *Apple Photos* panel above the file-backed list: the chosen collections comma-separated, the total photo count, and a `Select Collections…` button, still disabled. The app moved to `/v2/sources` to get `title`, without which the panel would name an album `040`.
   - **Done.** Settings became a `Window` scene of the app's own, because the `Settings` scene would not yield a resizable window at any price. `CommandGroup(replacing: .appSettings)` buys the menu item and `⌘,` back.
-  - Remaining: the picker itself — scrolling sectioned list, a checkbox per collection, name, count; multiple selection; one `POST /v2/sources`.
-  - Remaining: the unauthorized state, which now has somewhere permanent to live.
-  - **Exit gate: a person who has never opened a terminal can put their Favorites on their screen.**
+  - **Done.** The picker: its own resizable `Window`, an outline of Photos' four sections with folders nested inside, a checkbox per album, counts arriving as the agent's background pass fills them, and three-state checkboxes on folders. Favorites is pinned above the headings. Applying is one `POST /v2/sources` for what was ticked and a `DELETE` each for what was unticked, adds first.
+  - **Done.** The unauthorized state: an Allow button while `notDetermined`, and a pointer to System Settings once somebody has decided, since nothing the app does can reopen that prompt.
+  - **Exit gate: a person who has never opened a terminal can put their Favorites on their screen. Met** — and it is one click, because Favorites is the first row in the box.
 - **Deliberately not here.** `PHPhotoLibraryChangeObserver`; pinned individual assets (`SourceKind.photosAsset`); the whole library as one source; the panel's per-kind sections. Each is argued below.
 
 # Design Decisions
@@ -52,19 +51,27 @@ The window is showing a test folder. Every architectural claim this project has 
 - **`.fullSizePhoto` when present, `.photo` otherwise, matched on exact resource type.** The first is the edited render, the second the original. Measured against a real Live Photo, the resource to avoid is **`.fullSizePairedVideo`** rather than `.pairedVideo`: it sits immediately before `.fullSizePhoto` in the list and is called `FullSizeRender.mov` against the photo's `FullSizeRender.heic`, so any prefix, position, or filename heuristic takes a movie.
 - **Videos are excluded at the fetch**, by `PHFetchOptions.predicate` on `mediaType == PHAssetMediaType.image.rawValue`, so they never enter the row set at all.
 - **`requestData` rather than `writeData` for materialize.** Both stream. Only `requestData` returns a request id and can be cancelled — an abandoned `writeData` keeps running in the daemon and may still deliver its file, so a source that times out repeatedly accumulates work we can neither see nor stop.
-- **A fetch may stall for five minutes, and that is designed around rather than explained.** Three of five downloads paid a fixed 300-second toll before transferring normally. The cause is not pursued; every decision below assumes it can happen to any asset at any time.
-- **No materialize timeout below 305 seconds.** A bound that sounds generous — sixty seconds, two minutes — would have failed three of the five measured downloads, each of which then succeeded at 301.5 s. The bound exists to stop a fetch holding a slot forever, not to make it quick.
-- **`downloadConcurrency` above one for Photos, whether or not stalls overlap.** With one in flight, a single stalled asset idles the whole source for five minutes and nothing says why. Several in flight keeps the queue moving past it, which holds even if `photosd` serialises the work.
+- **A fetch may stall for five minutes, and that is designed around rather than explained. Explained 2026-08-26: it was a wedged iCloud, not PhotoKit.** A re-run on a healthy machine moved the median from 301.5 s to 0.8 s with no fetch near the toll. The design still assumes a fetch can stall, because a provider can always behave badly — but it is no longer assuming it on this evidence, which was a sick machine measured once. See *iCloud latency does not follow file size*.
+- **No materialize timeout below 305 seconds. *The evidence for this is gone; the number has not been changed.*** It was chosen because three of five measured downloads would have failed a sixty-second bound, each succeeding at 301.5 s — and 2026-08-26 established that those three were a wedged iCloud rather than anything about PhotoKit. Against a healthy median of 0.8 s the Photos bound of 905 seconds is roughly a thousand times what a fetch takes. **Left as it stands deliberately**, because the bound's job is to stop a fetch holding a slot forever rather than to make it quick, and lowering it on one clean day's measurements would be repeating the mistake that set it. It wants a decision, not an edit.
+- **`downloadConcurrency` above one for Photos, whether or not stalls overlap.** With one in flight, a single stalled asset idles the whole source and nothing says why. Several in flight keeps the queue moving past it, which holds even if `photosd` serialises the work. The five-minute figure this was written against turned out to be a wedged iCloud, but the argument does not depend on the stall's size — only on there being one.
 - **A stalled asset goes to the back of the queue, not into a retry.** There are thousands of others and some fraction of them are in the fast mode.
 - **The panel never estimates time remaining for a Photos fill.** The distribution is bimodal — the measured mean of 181.5 s described no fetch that actually happened. Progress is reported as a count.
 - **A Photos photo enters the pool at scan time and the deck only once its bytes are cached.** The rule videos already follow. It deletes the skip-and-re-deal machinery, and gives the deck the invariant that everything in it can be served now.
 - **A dealt card that cannot be served burns its place in the pass.** It is not returned. Gating deck membership on the cache keeps that population near zero, which is what makes burning affordable.
+- **Listing and counting are separate operations, and the count arrives late.** Listing the collections is milliseconds; counting them is 34 seconds. So the route answers with names at once and a `count` that is absent until a background pass fills it, cached for the agent's lifetime. The panel already re-reads on a timer, so numbers appearing thirty seconds later need no push and no new mechanism.
+- **A count is taken once per agent lifetime and then goes stale.** An album gaining photographs afterwards reads low until the next launch. Accepted: it is a number beside a name in a chooser, nothing the deck reads, and keeping it current means re-paying 34 seconds of round trips on a schedule.
+- **A real library holds subtypes the SDK does not name.** Measured 2026-08-26: subtype 221 and the whole 1000000218–1000000220 range came back from a 439-collection library and appear nowhere in `PhotosTypes.h`. One of them is *Recently Saved*, holding 37,550 photographs. They are listed as `.otherSmartAlbum` under Utilities rather than matched on their raw values, because an undeclared number is an unowned one and a constant matching it would fail silently the day Apple moved it.
+- **Nothing is hidden from the picker, including smart albums this build has no opinion about.** The allowlist this plan once proposed is gone. A collection somebody can see in Photos and not here is a bug they cannot diagnose, and the sections plus an honest count already say which ones are worth choosing — a video-only smart album reads `0`.
 - **The album list is not counted by fetch on every request.** 439 collections cost 34 seconds, at a flat ~78 ms each regardless of size, and `estimatedAssetCount` is `NSNotFound` for every smart album. Neither documented route survives this library.
 - **The allowlist has a size test as well as a usefulness test.** At ~3 MB an original, Favorites is 25 GB against a 50 GB ceiling and Recents is 288 GB. An album that cannot fit would churn the cache — though **corrected on the second run**: that churn costs disk, not latency, because a Photos eviction is a 3 ms re-materialize and not a network fetch.
 - **`requestData`, cancelled on its first chunk, is the availability probe.** 13.9 ms median, and right about all six assets that were then fetched. `PHImageResultIsInCloudKey` answers about a rendition rather than the original resource, and disagreed 3 times in 45 across two albums — every one in the same direction.
 - **A `PhotoLibrary` seam, mirroring `FileAccess`.** PhotoKit cannot be exercised in a unit test without a real library and a TCC grant, so the provider's logic goes behind a protocol and the PhotoKit binding stays thin enough to read in one sitting.
 - **Albums and smart albums only, for now.** Favorites is a smart album, so the kind the user actually asks for is covered. Pinned assets and a whole-library source are additions rather than completions, and both are argued below.
 - **Photos gets its own panel above the file-backed list. Reversed 2026-08-26.** The argument for one list was that sections are a rework of rows that already work. What changed is the realisation that there is exactly one Photos library and there always will be, so this was never a *section* of a list of sources — it is one standing statement of which collections are in play. That shape costs nothing the old argument was protecting: no multiple selection, no second `+` and `−`, no batch `DELETE`. It also gives authorization somewhere permanent to live, which a picker that exists only while it is open cannot.
+- **The picker is an outline, not four flat lists. Decided 2026-08-26.** Photos has real nested folders, and flattening them was what made 31 titles in a 439-collection library indistinguishable. Folders nest inside their section, folders sort before albums at each level, and an album's place in the tree says where it lives instead of a path repeated on every row.
+- **Folders carry three-state checkboxes, and a folder is never a source.** It holds albums rather than photographs, so the checkbox summarises what is beneath it and is derived every time — there is no folder state stored anywhere to drift. A mixed folder fills rather than empties, which is the platform convention.
+- **Favorites is pinned above the headings.** It is an album by every technical measure and is not one by any other, and Photos puts it above its sidebar sections too. Library and Recents have the same argument and have not been moved: ticking Library is 95,904 photographs in one click, which should not be made easy by accident.
+- **No search field. Tried, built, and dropped 2026-08-26.** Collapsing the three sections you are not looking in does the same job with a control that is there for its own reasons.
 - **The picker groups collections into four sections, matching Photos' own sidebar.** Albums, Sharing, Media Types, Utilities. Three was the first instinct and it buries Live Photos, Panoramas and Screenshots under Utilities, which is not where anybody looks for them — and *Live Photos* is the album the spike was run against.
 - **Counts in the picker are images only**, matching what would actually be served. They will not agree with the numbers Photos shows for a collection holding videos, and the video-only smart albums read `0`.
 - **One photograph is one row across collections.** Overlap is the normal case once checking boxes is easy — a photograph is in Recents, in Favorites, and in its album. `SchemaV9` deduplicates on `localIdentifier` at intake; see `PLAN.md`, *One photograph, one row*.
@@ -114,7 +121,7 @@ A one-photograph album costs 80.6 ms and a 95,901-photograph album costs 116.8 m
 
 **And the documented cheap answer is unavailable exactly where it is needed.** `PHAssetCollection.estimatedAssetCount` returned `NSNotFound` for *every* smart album — Recents, Favorites, Live Photos, all of them — and a usable number only for `albumRegular` and `albumCloudShared`. Favorites is the album a person actually asks for, and it is in the half with no estimate.
 
-So `GET /v1/photos/albums` cannot count on demand by either documented route. Whatever Phase 4 does, it is not this.
+So `GET /v2/photos/albums` cannot count on demand by either documented route. Whatever Phase 4 does, it is not this — and what it did is *The service surfaces*, below: list on demand, count in the background.
 
 ### Enumeration is lazy on the fetch and not on the walk
 
@@ -183,7 +190,25 @@ One incidental confirmation. A 596 kB original reported **full resolution (rotat
 
 Peak footprint across the whole run was 172.2 MB, essentially all of it the enumeration walk above rather than anything the writes did.
 
-### iCloud latency does not follow file size, and is not yet explained
+### iCloud latency does not follow file size — and the stall was iCloud, not PhotoKit
+
+**Explained on 2026-08-26, and the explanation retires three decisions below.** The spike was re-run against the same library one day later, with iCloud healthy:
+
+| | 2026-08-25 | 2026-08-26 |
+|---|---|---|
+| min | 1.5 s | **0.5 s** |
+| median | 301.5 s | **0.8 s** |
+| max | 301.6 s | **1.0 s** |
+| mean | 181.5 s | **0.7 s** |
+
+Five downloads, 9.7 MB in 3.62 s, and **no fetch anywhere near the 300-second toll**. The fixed stall is not a property of PhotoKit, of iCloud-optimized assets, or of this library. It was a machine whose iCloud had gradually wedged itself — the same wedge that had an iCloud Drive *folder* source timing out all that evening and drove the whole source-benching design.
+
+What reproduced exactly is the cost that governs the picker: counting 439 collections took **33,504 ms** against the previous day's 34,005 ms. That number is real, stable, and is why listing and counting are separate operations.
+
+**What this does not retire.** Deadlines, off-pool fetching, and exponential source benching answer a hostile provider, and a provider does not stop being able to behave badly because one day's measurements were clean. What changes is a constant, not a mechanism — see *No materialize timeout below 305 seconds*, which no longer has the evidence it was written from.
+
+The original measurements are kept below, because the day they describe was real and the design that came out of it is still carrying weight.
+
 
 | file | pixels | elapsed |
 |---|---|---|
@@ -450,15 +475,19 @@ The shape that fits: `resolve` branches on whether the kind is file-backed, and 
 
 ### Browsing
 
-`GET /v1/photos/albums` returns what a picker needs: identifier, title, subtype, image count. Nothing about it is a source — this is the library, not the library's configuration, which is why it is not under `/v1/sources`.
+`GET /v2/photos/albums` returns what a picker needs. Nothing about it is a source — this is the library, not the library's configuration, which is why it is not under `/v2/sources`.
 
-Counting is the one cost. An album's image count is `PHAsset.fetchAssets(in:options:).count` with the image predicate, per album, which is a fetch per album on every request. For a library with a few dozen albums that is fine. For one with several hundred it may not be, and the answer if so is `PHAssetCollection.estimatedAssetCount` — which is documented as an estimate, includes videos, and can be `NSNotFound`. Worth measuring in the spike, since the spike is already listing every album and can time it for free.
+**Counting was the one cost, and it turned out to be prohibitive rather than merely notable.** This section used to say a fetch per album on every request "may not be" acceptable for several hundred albums, and to nominate `estimatedAssetCount` as the fallback. Phase 1 killed both: 439 collections cost 34 seconds at a flat ~78 ms apiece, and `estimatedAssetCount` is `NSNotFound` for *every* smart album — which is to say for Favorites, the one a person actually asks for.
 
-Smart albums need a decision the spike will inform: `PHAssetCollectionSubtype` has a couple of dozen values, and several are useless to us (`smartAlbumVideos`, `smartAlbumSlomoVideos`, `smartAlbumTimelapses`, `smartAlbumAllHidden`). Listing them would offer the user a source that can only ever be empty, and `smartAlbumAllHidden` would offer to put their hidden photos on the wall, which is a product decision nobody should make by omission. An allowlist is right; the spike printing every subtype with its count is how the allowlist gets chosen.
+So listing and counting are two operations. `PhotosCollectionCatalog` lists on demand, which is milliseconds, and counts in the background, one collection at a time, keeping what it learns for the agent's lifetime. The route answers immediately with names and whatever counts exist, plus `counted` and `total` so a client can say "still counting" without inferring it from the nulls. The first person to open a picker pays for the pass; an agent nobody opens one against never spends the 34 seconds at all.
+
+**The allowlist is gone.** This section argued for one, on the grounds that `smartAlbumVideos` and its siblings can only ever be empty for us and that `smartAlbumAllHidden` should not be offered by omission. What replaced it is sections and an honest count: a video-only smart album appears under *Media Types* reading `0`, which says more than hiding it would, and Hidden appears under *Utilities* where Photos puts it. The governing reason is that a collection somebody can see in Photos and not here is a bug they cannot diagnose — including any subtype Apple adds after this ships, which arrives as `.otherSmartAlbum` and is listed rather than dropped.
 
 ### Authorization
 
-`GET /v1/photos/authorization` reads the status and returns it. `POST` calls `PHPhotoLibrary.requestAuthorization(for: .readOnly)` and returns what the user decided.
+`GET /v2/photos/authorization` reads the status and returns it, and asks nobody — there is a test that sets up a library where asking *would* grant and asserts the read still reports `notDetermined`, because a read that silently prompts is the unattributed prompt this whole design avoids. `POST` calls `PHPhotoLibrary.requestAuthorization(for: .readWrite)` and returns what the user decided. **`.readWrite`, not `.readOnly` as first written here** — that level does not exist; see *`.readOnly` authorization does not exist*.
+
+`PhotoLibrary.requestAuthorization` is the only call in the project that can raise a prompt, which is why `authorization` beside it is read-only and says so in its own comment. It is also idempotent by PhotoKit's own rule: the prompt appears only while the status is `notDetermined`, so somebody who said no gets their refusal back rather than a second dialog. This route cannot become a way to nag, and there is a test holding it to that.
 
 The `POST` is the interesting one, because it is a request that blocks on a human. The panel's spinner-and-lockout convention already covers this — any action that goes to the agent disables the controls until it lands — but a TCC prompt can sit unanswered indefinitely, and `SourceService` sets `timeoutInterval = 15`. So the app must either raise its timeout for this one request or treat a timeout as "still deciding" rather than as a failure. The second is better: it keeps the timeout honest for everything else, and "still deciding" is a real state the sheet can show.
 
@@ -517,7 +546,7 @@ So the picker is ours to draw, which was already assumed. **The thing that follo
 - **`app/mac/FEATURES.md`, *Sources by kind, in sections*.** Said "Photos and Google Photos get their own sections when those providers arrive." Photos got a panel rather than a section, for the reason in *The panel, and what it became instead* — there is one Photos library and never a list of them. Google Photos is untouched by that argument and would still be a section, or a panel of its own, whenever it arrives.
 - **`PLAN.md`, *No deduplication in v1*.** Reversed. `SchemaV9` deduplicates strictly on identity, because a collection picker makes overlapping sources the normal case.
 - **`Deck and Queue v2.md`, *Eviction*.** Updated: eviction now stops at one servable file rather than emptying the cache, which is *Always have something to show* applied to the ceiling.
-- **`Documentation/photogoroundd.md`.** Would gain the two `/v1/photos` routes under SERVICE, and would need a line about the Photos authorization state. Not yet, since a man page describing something unbuilt is worse than one that is behind — which is the rule that document already follows.
+- **`Documentation/photogoroundd.md`.** **Now behind rather than correctly ahead.** Three routes exist as of 2026-08-26 — `GET /v2/photos/albums`, `GET /v2/photos/authorization`, `POST /v2/photos/authorization` — and SERVICE describes none of them. The rule that kept it silent was that a man page describing something unbuilt is worse than one that is behind; that rule no longer applies. Not edited here, because man pages are Syd's.
 
 # References
 
@@ -529,6 +558,6 @@ So the picker is ours to draw, which was already assumed. **The thing that follo
 - `Sources/PhotoGoRoundKit/Sources/SourceRequest.swift` — `resolve`, and the trailing-slash rule.
 - `Sources/pgr_ctl/PhotosSpike.swift` — the spike itself, and the measurements' provenance.
 - `Sources/photogoroundd/Service/SourceEndpoint.swift` — the five source routes and the `Wire` shape.
-- `app/mac/SourceService.swift` — the client's reading of the wire, and `Source.name`.
+- `app/mac/Sources/SourceService.swift` — the client's reading of the wire, and `Source.name`.
 - `PHAssetResourceManager.writeData(for:toFile:options:)` and `PHAssetResourceRequestOptions.isNetworkAccessAllowed`.
 - `PHFetchOptions.predicate` on `mediaType`; `PHAssetCollectionSubtype`; `PHAssetCollection.estimatedAssetCount`.
