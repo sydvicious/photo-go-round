@@ -81,7 +81,7 @@ struct DealPacingTests {
             let counter = asked
             endpoint = PictureEndpoint(
                 databasePath: path, cacheRoot: cacheRoot,
-                preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.deal.\(UUID())")!),
+                preferences: Preferences(defaults: scratchSuite("deal")),
                 store: store,
                 queueRanShort: { counter.bump(); onServed?() },
                 deckCameUpEmpty: { [emptied] in emptied.bump(); onEmpty?() },

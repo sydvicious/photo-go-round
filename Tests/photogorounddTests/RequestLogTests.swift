@@ -43,7 +43,7 @@ struct RequestLogTests {
         var endpoint = PictureEndpoint(
             databasePath: path,
             cacheRoot: cacheRoot,
-            preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.log.\(UUID())")!),
+            preferences: Preferences(defaults: scratchSuite("log")),
             store: PhotoStore(root: cacheRoot),
             queueRanShort: {}
         )

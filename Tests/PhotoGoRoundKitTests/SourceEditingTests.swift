@@ -14,20 +14,13 @@ import Testing
 struct SourceEditingTests {
 
     /// A throwaway defaults suite, so a test never writes into the preferences
-    /// of whoever is running it. Torn down all three ways, because emptying the
-    /// domain alone leaves a plist behind in `~/Library/Preferences`.
+    /// of whoever is running it.
     private final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("source-editing")
         var defaults: UserDefaults { UserDefaults(suiteName: name)! }
         var preferences: Preferences { Preferences(defaults: defaults) }
 
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            let file = URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist")
-            try? FileManager.default.removeItem(at: file)
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     // MARK: - Adding

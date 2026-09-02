@@ -14,7 +14,7 @@ import Testing
 struct PreferenceHandlingTests {
 
     private final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("prefs")
         var defaults: UserDefaults { UserDefaults(suiteName: name)! }
         var preferences: Preferences { Preferences(suiteName: name) }
 
@@ -24,13 +24,7 @@ struct PreferenceHandlingTests {
 
         func store(_ entries: [[String: Any]]) { defaults.set(entries, forKey: "sources") }
 
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     // MARK: - 1. An entry it cannot read is destroyed by the next write

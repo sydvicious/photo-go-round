@@ -16,7 +16,7 @@ struct RefreshCommandTests {
     /// A throwaway defaults suite, so a test never writes into the preferences
     /// of whoever is running it.
     private final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("refresh")
         var environment: MacHostEnvironment {
             MacHostEnvironment(
                 deployment: .development,
@@ -30,11 +30,7 @@ struct RefreshCommandTests {
 
         deinit {
             try? FileManager.default.removeItem(at: directory)
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
+            discardScratchSuite(name)
         }
     }
 

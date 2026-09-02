@@ -157,8 +157,7 @@ struct ColdStartSeedTests {
         let cacheRoot = directory.appending(path: "cache")
         box.configure(
             databasePath: path, cacheRoot: cacheRoot, store: PhotoStore(root: cacheRoot))
-        let preferences = Preferences(
-            defaults: UserDefaults(suiteName: "pgr.coldstart.\(UUID())")!)
+        let preferences = Preferences(defaults: scratchSuite("coldstart"))
         let round = await box.topUpIfShort(preferences: preferences)
 
         #expect(round.failure == nil, "seeding failed: \(round.failure ?? "")")

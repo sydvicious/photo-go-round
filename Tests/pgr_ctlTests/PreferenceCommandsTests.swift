@@ -12,17 +12,11 @@ struct PreferenceCommandsTests {
     /// of whoever is running it. Torn down all three ways, because emptying the
     /// domain alone leaves a plist behind in `~/Library/Preferences`.
     private final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("prefs-commands")
         var defaults: UserDefaults { UserDefaults(suiteName: name)! }
         var preferences: Preferences { Preferences(defaults: defaults) }
 
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            let file = URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist")
-            try? FileManager.default.removeItem(at: file)
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     private func value(

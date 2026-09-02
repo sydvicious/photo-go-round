@@ -50,7 +50,7 @@ struct SourceEndpointTests {
         let bytes: PhotoStore
         let preferences: Preferences
         let log = Collector()
-        private let suite = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        private let suite = scratchSuiteName("source-endpoint")
 
         init() throws {
             directory = URL.temporaryDirectory.appending(path: "pgr-src-\(UUID().uuidString)")
@@ -73,11 +73,7 @@ struct SourceEndpointTests {
 
         deinit {
             try? FileManager.default.removeItem(at: directory)
-            let defaults = UserDefaults(suiteName: suite)
-            defaults?.removePersistentDomain(forName: suite)
-            defaults?.removeSuite(named: suite)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(suite).plist"))
+            discardScratchSuite(suite)
         }
 
         // MARK: Asking

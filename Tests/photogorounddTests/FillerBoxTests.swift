@@ -80,7 +80,7 @@ struct FillerBoxTests {
 
     /// An empty suite, so every number read is the shipped default.
     private static func preferences() -> Preferences {
-        Preferences(suiteName: "com.sydpolk.photogoround.tests.filler-\(UUID().uuidString)")
+        Preferences(suiteName: scratchSuiteName("filler"))
     }
 
     @Test("The heartbeat fills a queue that is merely short, not only an empty one")

@@ -18,17 +18,11 @@ struct PhotosSourceEditingTests {
     /// A preference suite of its own, thrown away afterwards, so a test never
     /// writes into a domain a real agent reads.
     private final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("photos-source")
         var defaults: UserDefaults { UserDefaults(suiteName: name)! }
         var preferences: Preferences { Preferences(defaults: defaults) }
 
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            let file = URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist")
-            try? FileManager.default.removeItem(at: file)
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     private func store(_ database: Database, library: FakePhotoLibrary) -> SourceStore {

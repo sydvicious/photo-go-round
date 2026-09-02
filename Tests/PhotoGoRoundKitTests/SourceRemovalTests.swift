@@ -22,16 +22,10 @@ struct SourceRemovalTests {
     /// A throwaway defaults suite, so a test never writes into the preferences
     /// of whoever is running it.
     private final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("source-removal")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
 
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     /// A library whose photographs are materialized, so there really are bytes

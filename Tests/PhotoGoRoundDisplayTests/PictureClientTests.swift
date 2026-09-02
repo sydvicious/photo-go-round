@@ -1,5 +1,4 @@
 import Foundation
-import PhotoGoRoundKit
 import Synchronization
 import Testing
 
@@ -229,43 +228,13 @@ private enum Stub {
 /// A throwaway defaults suite, so a test never writes into the real preferences
 /// of whoever is running it.
 ///
-/// The same shape as `HostTests.Suite`, including the start-of-run sweep, which
-/// is there because `cfprefsd` flushes these files *after* the test process has
-/// exited and nothing inside the process can win that race. The full account is
-/// in PLAN.md under *A test that writes preferences cannot fully clean up after
-/// itself*.
+/// The same shape as `HostTests.Suite`. Teardown is `discardScratchSuite`, which
+/// is the whole of it — see that function for why the obvious companions to it
+/// are what used to leave the plists behind.
 private final class DefaultsSuite {
-    let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+    let name = scratchSuiteName("picture-client")
     var defaults: UserDefaults { UserDefaults(suiteName: name)! }
     var preferences: Preferences { Preferences(defaults: defaults) }
 
-    /// Only files older than this process are removed, so two test runs at once
-    /// cannot delete each other's live suites.
-    private static let sweep: Void = {
-        let directory = URL.homeDirectory.appending(path: "Library/Preferences")
-        let started = Date()
-        let files =
-            (try? FileManager.default.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        for file in files where file.lastPathComponent.hasPrefix("com.sydpolk.photogoround.tests.") {
-            let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate
-            if let modified, modified >= started { continue }
-            try? FileManager.default.removeItem(at: file)
-        }
-    }()
-
-    init() { _ = Self.sweep }
-
-    deinit {
-        let defaults = UserDefaults(suiteName: name)
-        defaults?.removePersistentDomain(forName: name)
-        defaults?.synchronize()
-        UserDefaults.standard.removeSuite(named: name)
-
-        let plist = URL.homeDirectory
-            .appending(path: "Library/Preferences")
-            .appending(path: "\(name).plist")
-        try? FileManager.default.removeItem(at: plist)
-    }
+    deinit { discardScratchSuite(name) }
 }

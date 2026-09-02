@@ -16,10 +16,8 @@ struct AgentLifecycleTests {
     /// A throwaway preference domain, torn down with the test.
     private final class Suite_ {
         let name: String
-        init() { name = "com.sydpolk.photogoround.tests.lifecycle-\(UUID().uuidString)" }
-        deinit {
-            UserDefaults(suiteName: name).map { $0.removePersistentDomain(forName: name) }
-        }
+        init() { name = scratchSuiteName("lifecycle") }
+        deinit { discardScratchSuite(name) }
     }
 
     @Test("A --once run never publishes or disturbs the published port")

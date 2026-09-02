@@ -75,7 +75,7 @@ struct EndpointCacheTests {
             let collector = log
             endpoint = PictureEndpoint(
                 databasePath: path, cacheRoot: cacheRoot,
-                preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.ep.\(UUID())")!),
+                preferences: Preferences(defaults: scratchSuite("ep")),
                 store: store, queueRanShort: {}, log: { collector.record($0) })
         }
 
@@ -287,7 +287,7 @@ struct EndpointCacheTests {
             databasePath: library.directory.appending(path: "photogoround.sqlite")
                 .path(percentEncoded: false),
             cacheRoot: library.cache.root,
-            preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.ep.\(UUID())")!),
+            preferences: Preferences(defaults: scratchSuite("ep")),
             store: store, queueRanShort: {}, log: { _ in })
         try PhotoCache(
             database: try Database(
@@ -647,7 +647,7 @@ struct EndpointCacheTests {
 
         let pictures = PictureEndpoint(
             databasePath: bogus, cacheRoot: directory,
-            preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.503.\(UUID())")!),
+            preferences: Preferences(defaults: scratchSuite("503")),
             store: PhotoStore(root: directory), queueRanShort: {}, log: { _ in })
         let picture = await pictures.route(
             try #require(HTTPListener.parse("GET /v1/next HTTP/1.1")))
@@ -655,7 +655,7 @@ struct EndpointCacheTests {
 
         let sources = SourceEndpoint(
             databasePath: bogus,
-            preferences: Preferences(defaults: UserDefaults(suiteName: "pgr.503.\(UUID())")!),
+            preferences: Preferences(defaults: scratchSuite("503")),
             bytes: PhotoStore(root: directory), log: { _ in })
         let list = await sources.route(
             try #require(HTTPListener.parse("GET /v1/sources HTTP/1.1")))

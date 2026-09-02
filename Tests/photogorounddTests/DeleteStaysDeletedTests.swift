@@ -21,7 +21,7 @@ struct DeleteStaysDeletedTests {
         let store: SourceStore
         let preferences: Preferences
         let folder: URL
-        private let suite = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        private let suite = scratchSuiteName("delete-stays")
 
         init() throws {
             directory = URL.temporaryDirectory.appending(path: "pgr-del-\(UUID().uuidString)")
@@ -46,11 +46,7 @@ struct DeleteStaysDeletedTests {
 
         deinit {
             try? FileManager.default.removeItem(at: directory)
-            let defaults = UserDefaults(suiteName: suite)
-            defaults?.removePersistentDomain(forName: suite)
-            defaults?.removeSuite(named: suite)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(suite).plist"))
+            discardScratchSuite(suite)
         }
 
         func post(_ json: String) async throws -> HTTPListener.Response {

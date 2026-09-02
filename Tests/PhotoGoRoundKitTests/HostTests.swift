@@ -10,58 +10,11 @@ struct HostTests {
     /// A throwaway defaults suite, so a test never writes into the real
     /// preferences of whoever is running it.
     private final class Suite {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("host")
         var defaults: UserDefaults { UserDefaults(suiteName: name)! }
         var preferences: Preferences { Preferences(defaults: defaults) }
 
-        /// Tearing a defaults suite down takes all three steps, and skipping any
-        /// of them leaves a plist in `~/Library/Preferences` for ever. This ran
-        /// with only the first for a while and had left five hundred behind.
-        ///
-        /// `removePersistentDomain` empties the domain, `removeSuite` detaches
-        /// it, and the file removal deals with `cfprefsd` having already flushed
-        /// — or flushing afterwards, which is why the file is checked rather
-        /// than assumed gone.
-        /// `cfprefsd` owns these files, writes them on its own schedule, and
-        /// will flush one back out *after* the test process has exited — so a
-        /// few survive `deinit` and an `atexit` handler cannot catch them
-        /// either. Nothing inside this process can win that race.
-        ///
-        /// So the sweep runs at the start instead, clearing what the previous
-        /// run left. Both hooks together bound the leak at one run's worth
-        /// rather than letting it accumulate; unswept, it had reached five
-        /// hundred files.
-        ///
-        /// Only files older than this process are removed, so two test runs at
-        /// once cannot delete each other's live suites.
-        private static let sweep: Void = {
-            let directory = URL.homeDirectory.appending(path: "Library/Preferences")
-            let started = Date()
-            let files =
-                (try? FileManager.default.contentsOfDirectory(
-                    at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-            for file in files
-            where file.lastPathComponent.hasPrefix("com.sydpolk.photogoround.tests.") {
-                let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey])
-                    .contentModificationDate
-                if let modified, modified >= started { continue }
-                try? FileManager.default.removeItem(at: file)
-            }
-        }()
-
-        init() { _ = Self.sweep }
-
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.synchronize()
-            UserDefaults.standard.removeSuite(named: name)
-
-            let plist = URL.homeDirectory
-                .appending(path: "Library/Preferences")
-                .appending(path: "\(name).plist")
-            try? FileManager.default.removeItem(at: plist)
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     // MARK: - Storage roots
@@ -218,14 +171,8 @@ struct HostTests {
             "moving the storage root moved the preference domain with it")
 
         // The environment form is the only thing that isolates the third rung.
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
-        defer {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
-        }
+        let name = scratchSuiteName("prefs-suite")
+        defer { discardScratchSuite(name) }
         let isolated = MacHostEnvironment(
             deployment: .development,
             containerOverride: URL(filePath: "/tmp/pgr-scratch"),
