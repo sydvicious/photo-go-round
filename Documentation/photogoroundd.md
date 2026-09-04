@@ -325,7 +325,7 @@ without restarting it and without any cooperation:
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
 | `maintenanceIntervalSeconds` | how often to evict at the byte ceiling | 30 |
 | `downloadConcurrency` | fetches running at once, across all sources | 4 |
-| `cacheByteCeiling` | bytes of cached photographs and renderings to keep | 50 GB |
+| `cacheByteCeiling` | bytes of cached photographs and renderings to keep | 10 GB |
 | `cacheMinimumFreeBytes` | stop fetching below this much free space | 5 GB |
 | `cacheCriticalFreeBytes` | evict ahead of the ceiling below this much | 2 GB |
 

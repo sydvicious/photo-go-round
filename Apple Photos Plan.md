@@ -63,7 +63,7 @@ The window is showing a test folder. Every architectural claim this project has 
 - **A real library holds subtypes the SDK does not name.** Measured 2026-08-26: subtype 221 and the whole 1000000218–1000000220 range came back from a 439-collection library and appear nowhere in `PhotosTypes.h`. One of them is *Recently Saved*, holding 37,550 photographs. They are listed as `.otherSmartAlbum` under Utilities rather than matched on their raw values, because an undeclared number is an unowned one and a constant matching it would fail silently the day Apple moved it.
 - **Nothing is hidden from the picker, including smart albums this build has no opinion about.** The allowlist this plan once proposed is gone. A collection somebody can see in Photos and not here is a bug they cannot diagnose, and the sections plus an honest count already say which ones are worth choosing — a video-only smart album reads `0`.
 - **The album list is not counted by fetch on every request.** 439 collections cost 34 seconds, at a flat ~78 ms each regardless of size, and `estimatedAssetCount` is `NSNotFound` for every smart album. Neither documented route survives this library.
-- **The allowlist has a size test as well as a usefulness test.** At ~3 MB an original, Favorites is 25 GB against a 50 GB ceiling and Recents is 288 GB. An album that cannot fit would churn the cache — though **corrected on the second run**: that churn costs disk, not latency, because a Photos eviction is a 3 ms re-materialize and not a network fetch.
+- **The allowlist has a size test as well as a usefulness test.** At ~3 MB an original, Favorites is 25 GB against a 10 GB ceiling and Recents is 288 GB. Nothing in the library fits, so every Photos album churns the cache — accepted, though **corrected on the second run**: that churn costs disk, not latency, because a Photos eviction is a 3 ms re-materialize and not a network fetch.
 - **`requestData`, cancelled on its first chunk, is the availability probe.** 13.9 ms median, and right about all six assets that were then fetched. `PHImageResultIsInCloudKey` answers about a rendition rather than the original resource, and disagreed 3 times in 45 across two albums — every one in the same direction.
 - **A `PhotoLibrary` seam, mirroring `FileAccess`.** PhotoKit cannot be exercised in a unit test without a real library and a TCC grant, so the provider's logic goes behind a protocol and the PhotoKit binding stays thin enough to read in one sitting.
 - **Albums and smart albums only, for now.** Favorites is a smart album, so the kind the user actually asks for is covered. Pinned assets and a whole-library source are additions rather than completions, and both are argued below.
@@ -275,7 +275,7 @@ Retention is ours, not ambient. Incidentally that 7% is also the first honest es
 
 **`.referenced` means something narrower than "the bytes exist somewhere".** In `PLAN.md` it means a stable path on a volume that can be `stat`ed. A Photos local identifier is not that, and stretching the mode to cover it would put a second meaning inside one storage value.
 
-The cost is real and should be stated plainly: a 25 GB Favorites album occupies about 25 GB in the Photos library and about 25 GB again in our cache, against a 50 GB ceiling. That makes the allowlist's size test load-bearing rather than cautionary, and it is the strongest argument this plan has for a Photos source needing a reserved cache floor.
+The cost is real and should be stated plainly: a 25 GB Favorites album occupies about 25 GB in the Photos library and, against a 10 GB ceiling, fills our cache outright with the rest churning through. That makes the allowlist's size test load-bearing rather than cautionary, and it is the strongest argument this plan has for a Photos source needing a reserved cache floor.
 
 ### The availability probe, measured
 
@@ -322,7 +322,7 @@ The allowlist has to say something about the first two, and cannot do it by nami
 
 ### The cache ceiling is an allowlist constraint
 
-At roughly 3 MB an original — thin, from this run's two largest files, and low, since the cache holds renderings as well — against the 50 GB `byteCeiling`:
+At roughly 3 MB an original — thin, from this run's two largest files, and low, since the cache holds renderings as well — against the 10 GB `byteCeiling`:
 
 | album | photos | originals |
 |---|---|---|
@@ -331,7 +331,7 @@ At roughly 3 MB an original — thin, from this run's two largest files, and low
 | Recently Saved | 37,550 | ~113 GB |
 | Recents | 95,901 | ~288 GB |
 
-A curated album fits with room. The large smart albums do not, and under cache-gated deck membership an album that cannot fit thrashes: download, deal, evict, download again. For a folder source an eviction costs a millisecond re-read; for a Photos source it costs a network fetch. The largest offender is `smartAlbumUserLibrary`, which this document already excludes on other grounds.
+Nothing fits — the curated albums are two and a half times the ceiling, the smart albums an order of magnitude past it — and under cache-gated deck membership an album that cannot fit thrashes: download, deal, evict, download again. For a folder source an eviction costs a millisecond re-read; for a Photos source the second run measured a 3 ms re-materialize rather than the network fetch the first run assumed, so the churn costs disk, not latency. The largest offender is `smartAlbumUserLibrary`, which this document already excludes on other grounds.
 
 ### A Swift 6 trap the provider will hit
 

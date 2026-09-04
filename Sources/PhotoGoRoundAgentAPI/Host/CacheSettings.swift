@@ -44,7 +44,7 @@ public struct CacheSettings: Sendable, Equatable {
     /// and 100 GB depending on whether they are phone JPEGs or ProRAW. Referenced
     /// photographs cost nothing here — they were never copied.
     ///
-    /// 50 GB is a starting point to be replaced by measurement.
+    /// 10 GB is a starting point to be replaced by measurement.
     public var byteCeiling: Int64
 
     /// Below this much free space, stop materializing and say why. Running out
@@ -59,7 +59,7 @@ public struct CacheSettings: Sendable, Equatable {
     public static let gigabyte: Int64 = 1_000_000_000
 
     public init(
-        byteCeiling: Int64 = 50 * CacheSettings.gigabyte,
+        byteCeiling: Int64 = 10 * CacheSettings.gigabyte,
         minimumFreeBytes: Int64 = 5 * CacheSettings.gigabyte,
         criticalFreeBytes: Int64 = 2 * CacheSettings.gigabyte
     ) {

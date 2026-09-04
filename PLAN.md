@@ -600,7 +600,7 @@ The single most important thing to keep straight in this design is that there ar
 
 **Rows are complete and cheap.** Every photo in every enabled source gets a row in `photo` — identifier, source, shuffle key, deal ordinal, a few timestamps. Call it 200 bytes. A 50,000-photo Favorites album is a 10 MB table, and SQLite does not care. Enumeration is cheap on both providers: `PHFetchResult` is lazy and returns identifiers without touching pixels, and a directory walk is I/O-bound but trivial next to reading the files.
 
-**Bytes are windowed and expensive.** The cache holds actual image files for a bounded number of bytes — `cacheByteCeiling`, 50 GB by default.
+**Bytes are windowed and expensive.** The cache holds actual image files for a bounded number of bytes — `cacheByteCeiling`, 10 GB by default.
 
 Keeping these separate is what makes the shuffle honest. If the database only held the 1000 photos that happen to be cached, the shuffle would be a shuffle of 1000 photos, and the other 49,000 would surface only through whatever refill policy pulled them in. With complete rows, the deck shuffles the entire library and the cache is purely a performance layer — a prediction about which photos are needed soon, wrong at worst, never a constraint on what can appear.
 
