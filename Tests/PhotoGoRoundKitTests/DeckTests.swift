@@ -169,7 +169,7 @@ struct DeckTests {
 
         // Serving removes the queue entry, which is the only thing that was
         // holding the photo out of the deck.
-        _ = try PhotoQueue(database: library.database).serve()
+        _ = try PhotoQueue(database: library.database).takeHead()
         let dealt = Set(try library.drawSequence(count: 10, settings: .default))
         #expect(dealt.contains(ids[0]))
     }
@@ -444,111 +444,90 @@ struct DeckTests {
         #expect(stats.unusedInCurrentPass == 6)
     }
 
-    // MARK: - Claiming at selection
+    // MARK: - The claim
 
-    @Test("Selecting claims the photo, so the next selection cannot pick it again")
-    func selectionClaimsItsCandidate() throws {
+    // **The claim belongs to the queue's fetcher.** A fetch happens between
+    // drawing a queued card and storing its bytes, and the claim is what stops
+    // two lanes downloading the same photograph. Dealing takes none.
+
+    @Test("A claimed photo cannot be claimed again until it is released")
+    func aClaimIsExclusive() throws {
         let (library, ids) = try TestLibrary.withPhotos(2)
-        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
         let deck = library.deck
 
-        // **The claim is the cache's, so this asks the cache's draw.** Dealing
-        // takes no claim: its bytes are already here, so there is no gap
-        // between choosing and storing for anything to race in.
-        try library.database.run("UPDATE photo SET cached_at = NULL;")
-
-        let first = try #require(try deck.nextRemoteCandidate())
-        let second = try #require(try deck.nextRemoteCandidate())
-        #expect(first.id != second.id)
-        #expect(Set([first.id, second.id]) == Set(ids))
-
-        // Both are claimed and neither has landed, so there is nothing left to
-        // offer. Without the claim this would hand out a third draw for a
-        // photograph another lane is already downloading.
-        #expect(try deck.nextRemoteCandidate() == nil)
+        #expect(try deck.claim(photoID: ids[0]))
+        #expect(try deck.claim(photoID: ids[0]) == false, "a second lane took the same photograph")
+        // Another photograph is another claim.
+        #expect(try deck.claim(photoID: ids[1]))
     }
 
     @Test("Releasing a claim puts the photo straight back in contention")
     func releasingAClaimRestoresThePhoto() throws {
-        let (library, _) = try TestLibrary.withPhotos(1)
-        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let (library, ids) = try TestLibrary.withPhotos(1)
         let deck = library.deck
 
-        try library.database.run("UPDATE photo SET cached_at = NULL;")
+        #expect(try deck.claim(photoID: ids[0]))
+        #expect(try deck.claim(photoID: ids[0]) == false)
 
-        let card = try #require(try deck.nextRemoteCandidate())
-        #expect(try deck.nextRemoteCandidate() == nil)
-
-        try deck.releaseClaim(photoID: card.id)
-        #expect(try deck.nextRemoteCandidate()?.id == card.id)
+        try deck.releaseClaim(photoID: ids[0])
+        #expect(try deck.claim(photoID: ids[0]))
     }
 
-    @Test("A claim expires, so a producer that died mid-fetch sidelines nothing")
+    @Test("A claim expires, so a lane that died mid-fetch sidelines nothing")
     func claimsExpire() throws {
-        let (library, _) = try TestLibrary.withPhotos(1)
-        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let (library, ids) = try TestLibrary.withPhotos(1)
         let deck = library.deck
 
-        try library.database.run("UPDATE photo SET cached_at = NULL;")
-
         let start = Date(timeIntervalSince1970: 1_000_000)
-        let card = try #require(try deck.nextRemoteCandidate(now: start))
+        #expect(try deck.claim(photoID: ids[0], now: start))
         // Still inside the window: the claim holds.
         #expect(
-            try deck.nextRemoteCandidate(now: start.addingTimeInterval(Deck.claimTimeout - 1))
-                == nil)
+            try deck.claim(photoID: ids[0], now: start.addingTimeInterval(Deck.claimTimeout - 1))
+                == false)
         // Past it: nobody is coming back for this one, so it competes again.
-        let again = try deck.nextRemoteCandidate(
-            now: start.addingTimeInterval(Deck.claimTimeout + 1))
-        #expect(again?.id == card.id)
+        #expect(try deck.claim(photoID: ids[0], now: start.addingTimeInterval(Deck.claimTimeout + 1)))
     }
 
     @Test("Showing a photo ends any claim on it")
     func markingShownClearsTheClaim() throws {
-        let (library, _) = try TestLibrary.withPhotos(1)
-        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        let (library, ids) = try TestLibrary.withPhotos(1)
         let deck = library.deck
 
-        let card = try #require(try deck.nextCandidate())
-        _ = try deck.markShown(photoID: card.id)
+        #expect(try deck.claim(photoID: ids[0]))
+        _ = try deck.markShown(photoID: ids[0])
         let claimed = try library.database.first(
-            "SELECT claimed_at FROM photo WHERE id = :id;", ["id": .int(card.id)]
+            "SELECT claimed_at FROM photo WHERE id = :id;", ["id": .int(ids[0])]
         ) { try $0.optionalInt64("claimed_at") }
         #expect(claimed == .some(nil))
     }
 
-    @Test("Concurrent producers against one source never pick the same picture")
-    func concurrentSelectionsNeverCollide() throws {
+    @Test("Concurrent lanes never both win the same claim")
+    func concurrentClaimsNeverCollide() throws {
         let directory = URL.temporaryDirectory.appending(path: "pgr-claim-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let library = try TestLibrary.onDisk(at: directory)
         let source = try library.addSource()
-        try library.addPhotos(400, to: source)
+        let ids = try library.addPhotos(400, to: source)
         let path = TestLibrary.path(in: directory)
 
-        // **The claim moved to the cache, so this now asks the cache's draw.**
-        // Selection and the fetch that follows it are separated in time, which
-        // is what the claim is for — and that is true of downloading and false
-        // of dealing, whose bytes are already here. Nothing is released, which
-        // is the point: 400 draws against 400 photographs must be 400 distinct
-        // photographs, or two lanes have spent two downloads on one picture.
-        try library.database.run("UPDATE photo SET cached_at = NULL;")
+        // Four lanes each try every photograph. Nothing is released, which is
+        // the point: 400 photographs must be 400 wins, one each, or two lanes
+        // have spent two downloads on one picture.
         let collected = Mutex<[Int64]>([])
         DispatchQueue.concurrentPerform(iterations: 4) { _ in
             guard let database = try? Database(path: path) else { return }
             let deck = Deck(database: database)
             var mine: [Int64] = []
-            for _ in 0..<100 {
-                guard let card = (try? deck.nextRemoteCandidate()) ?? nil else { break }
-                mine.append(card.id)
+            for id in ids where (try? deck.claim(photoID: id)) == true {
+                mine.append(id)
             }
             collected.withLock { $0.append(contentsOf: mine) }
         }
 
-        let picked = collected.withLock { $0 }
-        #expect(picked.count == 400)
-        #expect(Set(picked).count == picked.count, "two producers picked the same picture")
+        let won = collected.withLock { $0 }
+        #expect(won.count == 400)
+        #expect(Set(won).count == won.count, "two lanes won the same claim")
     }
 
     // MARK: - Photographs that will not render
@@ -630,18 +609,18 @@ struct DeckTests {
         for id in ids { try library.enqueue(id, sourceID: source) }
         let path = TestLibrary.path(in: directory)
 
-        // Atomicity lives in two places: the claim taken at selection, which
-        // keeps two producers off one picture, and this — the queue pop, where
-        // removing the entry under BEGIN IMMEDIATE means exactly one consumer
-        // can ever win it.
+        // Atomicity lives in two places: the claim, which keeps two fetch lanes
+        // off one picture, and this — the removal under BEGIN IMMEDIATE, where
+        // exactly one consumer sees a change and the other goes round again.
+        // Each thread does what serving does: choose the head, try to take it,
+        // and on losing the race look again.
         let collected = Mutex<[Int64]>([])
         DispatchQueue.concurrentPerform(iterations: 4) { _ in
             guard let database = try? Database(path: path) else { return }
             let queue = PhotoQueue(database: database)
             var mine: [Int64] = []
-            for _ in 0..<100 {
-                guard let card = (try? queue.serve()) ?? nil else { break }
-                mine.append(card.id)
+            while let head = (try? queue.peek().first) ?? nil {
+                if (try? queue.remove(photoID: head.id)) == true { mine.append(head.id) }
             }
             collected.withLock { $0.append(contentsOf: mine) }
         }

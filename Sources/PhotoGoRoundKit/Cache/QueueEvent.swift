@@ -49,16 +49,18 @@ public enum QueueEvent: Sendable, Equatable {
         photo: String, source: Int64?, rendering: Bool, unconfirmed: String?, queued: Int)
     /// Not here. The fetch is now somebody else's problem and the queue moves on.
     case skipped(photo: String, source: Int64?, because: String, queued: Int)
+    /// The head card's bytes are not here yet, and the request is waiting for
+    /// them. Said before the wait, with its bound, for the same reason a fetch
+    /// is announced before it runs: a request that says nothing for a minute
+    /// is indistinguishable from one that has hung.
+    case waiting(photo: String, source: Int64?, upTo: Duration, queued: Int)
     /// A photograph that is not supposed to be there at all: gone from a source
     /// that is right there, or from one that is itself gone.
     case dropped(photo: String, source: Int64?, because: String, queued: Int)
-    /// The walk ended with nothing to hand over, and why it ended.
-    ///
-    /// Two bounds stop it and they mean opposite things: `out of cards` is a
-    /// queue that is genuinely cold, and `out of time` is a queue whose cards
-    /// are mostly uncached and slow to check. Reading a console, the first
-    /// says wait for the cache to fill and the second says the request budget
-    /// is the thing being hit.
+    /// The request ended with nothing to hand over, and why. `out of cards`
+    /// is the only reason left: the queue is empty, or nothing on it has bytes
+    /// and the one wait this request had is spent. `walked` is how many cards
+    /// it skipped, waited on, or dropped on the way.
     case nothingToShow(walked: Int, because: String)
 
     // MARK: The queue of pictures to cache
@@ -72,9 +74,8 @@ public enum QueueEvent: Sendable, Equatable {
     /// long it was waited for. The bound is on the line because it is what says
     /// when to stop expecting an answer.
     case caching(photo: String, source: Int64?, within: Duration)
-    /// Drawn, and already held. **The commonest answer as the cache fills**,
-    /// and not a failure: the refresher picks a remote asset at random and does
-    /// nothing if it has it, so the miss rate rising is the throttle working.
+    /// Asked for, and already held. Not a failure: two paths can want one
+    /// photograph, and the second finds it here.
     case cacheUnnecessary(photo: String, source: Int64?)
     /// Fetched. **It does not go on the deck** — it makes the photograph
     /// eligible, and the deck picks it up on its own terms.
@@ -89,6 +90,10 @@ public enum QueueEvent: Sendable, Equatable {
     /// the same file timing out repeatedly is a different problem from a slow
     /// afternoon and needs to be told apart at a glance.
     case cacheTimedOut(photo: String, source: Int64?, after: Duration)
+    /// A card whose fetch did not produce bytes has left the queue. **Not red**:
+    /// the library did not change, and the photograph is back in the deck's
+    /// contention. Carries the depth, because the queue moved.
+    case cacheDropped(photo: String, source: Int64?, because: String, queued: Int)
     /// A source that produced nothing but timeouts, and is being left alone
     /// for a while.
     ///
@@ -140,6 +145,8 @@ public enum QueueEvent: Sendable, Equatable {
                 + " — \(queued) queued"
         case .skipped(let photo, let source, let because, let queued):
             "SERVE: \(Self.name(photo, source)) skipped — \(because), \(queued) queued"
+        case .waiting(let photo, let source, let upTo, let queued):
+            "SERVE: \(Self.name(photo, source)) is not here yet, waiting up to \(upTo) — \(queued) queued"
         case .dropped(let photo, let source, let because, let queued):
             "SERVE: \(Self.name(photo, source)) dropped — \(because), \(queued) queued"
         case .nothingToShow(let walked, let because):
@@ -157,7 +164,9 @@ public enum QueueEvent: Sendable, Equatable {
         case .cacheFailed(let photo, let source, let because):
             "CACHE: \(Self.name(photo, source)) failed — \(because)"
         case .cacheTimedOut(let photo, let source, let after):
-            "CACHE: \(Self.name(photo, source)) did not answer in \(after) — put back in the pool"
+            "CACHE: \(Self.name(photo, source)) did not answer in \(after)"
+        case .cacheDropped(let photo, let source, let because, let queued):
+            "CACHE: \(Self.name(photo, source)) dropped from the deck — \(because), \(queued) queued"
         case .sourcePaused(let source, let until):
             "CACHE: source \(source.map(String.init) ?? "?") paused for \(until)"
                 + " — it has stopped answering"

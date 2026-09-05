@@ -194,14 +194,28 @@ The agent listens on localhost, on the port `pgr_ctl status` prints — see
 `X-PGR-Pixels` the size produced when a box was asked for — original bytes
 carry no such header, since nothing was decoded to measure — and `X-PGR-Card`,
 `X-PGR-Deal`, `X-PGR-Source` and
-`X-PGR-Storage` describing the photograph and its place in the shuffle. `204 No Content` means the queue is empty,
-which is an ordinary answer rather than an error — a fresh library replies this
-way until the agent has produced something.
+`X-PGR-Storage` describing the photograph and its place in the shuffle. `204 No
+Content` means nothing could be served: the queue is empty, or nothing on it has
+its bytes yet and the request's one wait is spent. It is an ordinary answer
+rather than an error — a fresh library replies this way until the first fetch
+lands.
 
-**Serving pops the queue**, and it pops whether or not the download completes.
-There is no reservation and nothing to reclaim from a client that disappears
-mid-transfer; a failed download is a lost picture and the client asks again. Two
-clients asking at once therefore never receive the same picture.
+**Serving takes the head of the queue, and waits for its bytes if they are not
+here yet.** A card is dealt whether or not its photograph has been copied, and
+the queue fetches its own cards behind the screen, so by the time a card reaches
+the head its bytes are usually here. When they are not, the request waits up to
+`serveWaitSeconds` for them. If they land, that is the picture. If the wait runs
+out, the card is dropped — it was dealt but no bytes were served, and next time
+it is dealt maybe they will be — and the request takes the first queued card
+whose bytes are here, without waiting again. A card whose source has stopped
+answering is dropped without waiting.
+
+The card leaves the queue as it is handed over, and it leaves whether or not the
+download to the client completes. There is no reservation and nothing to reclaim
+from a client that disappears mid-transfer; a failed download is a lost picture
+and the client asks again. Two clients asking at once never receive the same
+picture: the removal runs under the database's write lock, so exactly one wins
+and the other looks again.
 
 **`w` and `h` are maximums.** No image returned will exceed either bound. What
 comes back is the largest that fits inside them with its aspect ratio intact,
@@ -233,8 +247,17 @@ decodes once. `X-PGR-Cache` says `hit` or `miss`. They survive a restart, and
 they are bounded by `cacheByteCeiling` along with the originals — a rendering is
 a fraction of an original's bytes, so the same budget holds far more of them.
 
-Serving is also what notices the queue has run short, and what asks the sources
-for more.
+Serving is also what notices the queue has run short, and what deals more. **Every
+card dealt is fetched by the queue's own fetcher**, head first and
+`downloadConcurrency` at a time. A new card is placed at random among the cards
+already queued — anywhere from second to last, never at the head — so a source
+added to a running agent appears within a picture or two rather than after a
+whole traversal, and a card has on average half the queue's worth of pictures
+for its bytes to arrive before its turn. A fetch that
+fails or does not answer within a minute drops its card from the queue; a source
+that keeps failing to answer is left alone for a while, doubling each time, so
+one dead share cannot hold every fetch lane. Nothing is fetched beyond the
+queue's cards.
 
 Every request is logged to the console with the consumer, the size asked for, the
 deal ordinal, the bytes, and the latency.
@@ -319,9 +342,10 @@ without restarting it and without any cooperation:
 | key | meaning | default |
 | --- | --- | --- |
 | `sources` | array of `{kind, locator, recursive, enabled}`; `recursive` is per source and defaults off | none |
-| `repeatWindowFraction` | how much of what *can be shown* must pass before a photo repeats. That is the cache plus whatever is read in place, not the whole library | 0.5 |
-| `queueSize` | cards to keep queued. A target, not a ceiling. Also sets the cache's download allowance, which is twice it | 20 |
+| `repeatWindowFraction` | how much of the library must pass before a photo repeats | 0.5 |
+| `queueSize` | cards to keep queued. A target, not a ceiling. Also how far ahead of the screen the cache fetches, since the queue fetches its own cards | 20 |
 | `queueRefreshIntervalSeconds` | how often to top the queue up; serving tops it up too | 5 |
+| `serveWaitSeconds` | how long a request waits for the head card's bytes before dropping that card and taking the first card that has bytes; 0 never waits | 60 |
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
 | `maintenanceIntervalSeconds` | how often to evict at the byte ceiling | 30 |
 | `downloadConcurrency` | fetches running at once, across all sources | 4 |
@@ -347,7 +371,8 @@ it lies, though renderings of it are still kept.
 The service walks this directory at startup and rebuilds its index from the
 filenames, and a file the database does not claim is deleted rather than adopted.
 **The filesystem is the truth**; the database records which photographs are held
-so that the deck can ask for them in a query, and that record is reconciled
+so that the queue's fetcher can find the cards that still need bytes and eviction
+can order what is held by when it was last seen, and that record is reconciled
 against this walk at every launch. A disagreement is settled in the disk's
 favour, always.
 

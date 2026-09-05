@@ -91,14 +91,13 @@ extension Deck {
 
 extension Deck {
 
-    /// The next card for the deck, chosen from what can be shown right now.
+    /// The next card for the deck, chosen from every available photograph —
+    /// whether or not its bytes are here. The queue fetches what it holds.
     ///
-    /// **It takes no claim, and that is a correction rather than an omission.**
-    /// A claim exists because a fetch happens between choosing a photograph and
-    /// storing it — which is true of the cache and false of the deck, whose
-    /// bytes are already here. Left in, it would have been worse than useless:
-    /// `nextRemoteCandidate` *does* exclude claimed rows, so a claim taken here
-    /// would hide a photograph from the cache for the length of the timeout.
+    /// **It takes no claim.** A claim exists because a fetch happens between
+    /// drawing a photograph and storing its bytes, and it belongs to the queue's
+    /// fetcher, which draws queued cards and downloads them. Dealing reads a row
+    /// and writes a row, with nothing in between for a claim to protect.
     ///
     /// What stops two fillers dealing the same card is the queue. Appending
     /// ignores a photograph already queued, and the candidate predicate
@@ -118,11 +117,10 @@ extension Deck {
         try chooseCandidate(settings: settings, now: now)
     }
 
-    /// How many times a chooser will try again after losing a claim.
-    static let claimAttempts = 32
-
-    /// The claim: taken by the cache before a fetch, and by nothing else.
-    private func claim(_ card: DeckCard, now: Date) throws -> Bool {
+    /// The claim: taken by the queue's fetcher before a fetch, and by nothing
+    /// else. True when this caller now holds it; false when another lane got
+    /// there first and its claim has not expired.
+    public func claim(photoID: Int64, now: Date = Date()) throws -> Bool {
         try database.transaction(.immediate) {
             try database.run(
                 """
@@ -132,7 +130,7 @@ extension Deck {
                    AND (claimed_at IS NULL OR claimed_at <= :expiry);
                 """,
                 [
-                    "now": SQLValue(now), "id": .int(card.id),
+                    "now": SQLValue(now), "id": .int(photoID),
                     "expiry": SQLValue(now.addingTimeInterval(-Self.claimTimeout)),
                 ]
             )
@@ -393,96 +391,32 @@ extension Deck {
         )
     }
 
-    // MARK: - The cache's draw
-
-    /// A remote asset, drawn uniformly at random and claimed.
-    ///
-    /// **Residency is deliberately not in the predicate.** The cache draws from
-    /// the whole remote catalogue and finds out afterwards whether it already
-    /// holds what it picked — see `CacheRefresher` for why that is the design
-    /// rather than a shortcut. Filtering here would make the draw depend on a
-    /// column the in-memory index is the truth for, and would answer a question
-    /// the store answers better.
-    ///
-    /// Claimed for the same reason the deck's candidate is: a fetch happens
-    /// between choosing this and storing it, so two lanes drawing at once must
-    /// not land on the same photograph and both download it.
-    public func nextRemoteCandidate(now: Date = Date()) throws -> DeckCard? {
-        let claimedBefore = now.addingTimeInterval(-Self.claimTimeout)
-        for _ in 0..<Self.claimAttempts {
-            let available = try database.scalarInt(
-                Self.remoteCountSQL, ["claimExpiry": SQLValue(claimedBefore)]) ?? 0
-            guard available > 0 else { return nil }
-
-            let drawn = try database.first(
-                Self.remoteCandidateSQL,
-                [
-                    "claimExpiry": SQLValue(claimedBefore),
-                    "offset": .int(Int64(randomOffset(available))),
-                ]
-            ) { try DeckCard(row: $0, dealSeq: nil) }
-            guard let card = drawn else { return nil }
-
-            // Losing the race means somebody took *that* photograph, not that
-            // there are none — so draw again rather than reporting nothing.
-            if try claim(card, now: now) { return card }
-        }
-        return nil
-    }
+    // MARK: - Reporting
 
     /// How many remote assets are not held.
     ///
-    /// The refresher's stop condition, and the one question in this design that
-    /// genuinely wants `cached_at` rather than the in-memory index: it is a
-    /// count over the whole library, which a set membership test would have to
-    /// walk row by row to answer.
+    /// For `pgr_ctl deck stats` and the panel. The cache's random draw, which
+    /// used this as its stop condition, went on 2026-09-05; what fetches now is
+    /// the queue, and it needs no count.
     public func unheldRemoteCount() throws -> Int {
         try database.scalarInt(Self.unheldRemoteCountSQL) ?? 0
     }
 
-    /// Everything that is not read in place: the population the cache draws
-    /// from. Retired photographs are excluded — fetching one again cannot help.
-    private static let remotePredicate = """
-        p.source_enabled = 1
-          AND p.media_type = 'image'
-          AND p.storage = 'materialized'
-          AND p.render_failures < \(Deck.renderFailureLimit)
-        """
-
-    static let remoteCountSQL = """
-        SELECT COUNT(*) FROM photo p
-         WHERE \(remotePredicate)
-           AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry);
-        """
-
-    static let remoteCandidateSQL = """
-        SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
-          FROM photo p JOIN source s ON s.id = p.source_id
-         WHERE \(remotePredicate)
-           AND (p.claimed_at IS NULL OR p.claimed_at <= :claimExpiry)
-         LIMIT 1 OFFSET :offset;
-        """
-
     static let unheldRemoteCountSQL = """
         SELECT COUNT(*) FROM photo p
-         WHERE \(remotePredicate) AND p.cached_at IS NULL;
+         WHERE p.source_enabled = 1
+           AND p.media_type = 'image'
+           AND p.storage = 'materialized'
+           AND p.render_failures < \(Deck.renderFailureLimit)
+           AND p.cached_at IS NULL;
         """
 
-    /// **No claim check, and that is load-bearing rather than tidy.**
-    ///
-    /// `claimed_at` belongs to the cache now: a fetch happens between drawing a
-    /// remote asset and storing it, and the claim is what stops two lanes
-    /// downloading the same photograph. Nothing like that happens between
-    /// dealing a card and serving it — the bytes are already here.
-    ///
-    /// Leaving the check in would be actively wrong. `PhotoCache.refreshOnce`
-    /// claims *before* it asks whether it already holds the photograph, so a
-    /// perfectly servable card is briefly claimed on its way to being skipped.
-    /// A deck that excluded claimed rows would refuse to deal it.
+    /// **No claim check.** A claimed photograph is one the queue's fetcher is
+    /// downloading, and it is already queued — which the `NOT EXISTS` below
+    /// excludes on its own. Nothing happens between dealing a card and serving
+    /// it that a claim would protect.
     private static let candidatePredicate = """
-        p.source_enabled = 1
-          AND p.media_type = 'image'
-          AND \(Deck.servableStorage)
+        \(Deck.availablePredicate)
           AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold)
           AND p.render_failures < \(Deck.renderFailureLimit)
           AND NOT EXISTS (SELECT 1 FROM queue q WHERE q.photo_id = p.id)
@@ -494,8 +428,7 @@ extension Deck {
 
     static let dealablePopulationSQL = """
         SELECT COUNT(*) FROM photo p
-         WHERE p.source_enabled = 1 AND p.media_type = 'image'
-           AND \(Deck.servableStorage)
+         WHERE \(Deck.availablePredicate)
            AND p.render_failures < \(Deck.renderFailureLimit);
         """
 

@@ -49,11 +49,10 @@ struct CacheTests {
 
         var deck: Deck { library.deck }
 
-        /// Asks the source for pictures until it stops offering them.
+        /// Deals every card the deck offers, then fetches their bytes — the
+        /// order the agent works in since 2026-09-05.
         @discardableResult
         func produceAll(limit: Int = 200) async throws -> Int {
-            // Two steps, and the cache goes first: the deck's pool is what
-            // the cache holds, so dealing before fetching deals nothing.
             try await cache.fillCompletely(limit: limit)
         }
     }
@@ -97,19 +96,132 @@ struct CacheTests {
     @Test("Dealing queues a card and fetches nothing")
     func dealingDoesNotFetch() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
-        // One photograph in the cache, so the deck has exactly one card it can
-        // deal and every other row is invisible to it.
-        _ = await fixture.cache.refreshOnce()
-        let residentBefore = try fixture.cache.status().residentCount
-        #expect(residentBefore == 1)
+        #expect(try fixture.cache.status().residentCount == 0)
 
         #expect(try fixture.cache.deal())
 
-        // Dealing reads a row and writes a row. **It is the cache that fetches**,
-        // on its own initiative and before any of this — which is the whole of
-        // v2 in one assertion.
+        // Dealing reads a row and writes a row. The bytes are the queue's
+        // business, fetched after the card is on it — see the fetch tests
+        // below.
         #expect(try fixture.cache.queue.size() == 1)
-        #expect(try fixture.cache.status().residentCount == residentBefore)
+        #expect(try fixture.cache.status().residentCount == 0)
+    }
+
+    // MARK: - The queue fetching its own cards
+
+    @Test("A dealt card is fetched, and the queue is walked head first")
+    func queuedCardsAreFetchedHeadFirst() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
+        while try fixture.cache.deal() {}
+        let order = try fixture.cache.queue.peek(3).map(\.id)
+        #expect(order.count == 3)
+
+        // Each step fetches the next cold card in queue order and says so.
+        let first = await fixture.cache.fetchQueuedOnce()
+        guard case .fetched(let p1) = first else { Issue.record("\(first)"); return }
+        let second = await fixture.cache.fetchQueuedOnce(after: p1)
+        guard case .fetched(let p2) = second else { Issue.record("\(second)"); return }
+        let third = await fixture.cache.fetchQueuedOnce(after: p2)
+        guard case .fetched(let p3) = third else { Issue.record("\(third)"); return }
+        #expect(p1 < p2 && p2 < p3)
+        #expect(await fixture.cache.fetchQueuedOnce(after: p3) == .drained)
+
+        // Three originals held, in the order the cards will be shown. The
+        // cards kept their places: nothing rejoined, nothing was reordered.
+        #expect(try fixture.cache.status().residentCount == 3)
+        #expect(try fixture.cache.queue.peek(3).map(\.id) == order)
+    }
+
+    @Test("A card that is already held is not fetched again, and is walked past")
+    func heldCardsAreWalkedPast() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        try await fixture.produceAll()
+        #expect(try fixture.cache.status().residentCount == 2)
+
+        // Everything queued has bytes: nothing to do, at once.
+        #expect(await fixture.cache.fetchQueuedOnce() == .drained)
+    }
+
+    @Test("A card whose fetch fails leaves the queue and keeps its row")
+    func failedFetchDropsTheCard() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        while try fixture.cache.deal() {}
+        #expect(try fixture.cache.queue.size() == 2)
+
+        // The drive goes away before anything is fetched. The provider cannot
+        // read either file and cannot confirm either gone, so the rows stay.
+        try fixture.library.database.run(
+            "UPDATE source SET locator = :locator WHERE id = :id;",
+            ["locator": "/Volumes/NotMounted/photos", "id": .int(fixture.source.id)]
+        )
+
+        let step = await fixture.cache.fetchQueuedOnce()
+        guard case .failed = step else { Issue.record("expected a failed fetch, got \(step)"); return }
+
+        // **Syd's rule: move on with the next card.** One card gone from the
+        // queue, its photograph still in the library and dealable again.
+        #expect(try fixture.cache.queue.size() == 1)
+        #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 2)
+        #expect(try fixture.deck.poolSize() == 2)
+        #expect(try fixture.cache.status().residentCount == 0)
+    }
+
+    @Test("A card whose file is gone from a present source is dropped from the library")
+    func absentFileIsRemovedByItsFetch() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        while try fixture.cache.deal() {}
+        let head = try #require(try fixture.cache.queue.peek().first)
+        fixture.folder.remove(head.externalID)
+
+        let step = await fixture.cache.fetchQueuedOnce()
+        guard case .failed = step else { Issue.record("expected a failed fetch, got \(step)"); return }
+
+        // The source is right there and says the file is gone, so the row goes
+        // and the card goes with it by cascade. The other card is untouched.
+        #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 1)
+        #expect(try fixture.cache.queue.size() == 1)
+    }
+
+    @Test("A benched source's cards are walked past and left in place")
+    func benchedCardsAreLeftForLater() async throws {
+        let fixture = try await Fixture(photos: ["a.png", "b.png"])
+        var cache = fixture.cache
+        let bench = SourceBench(pauseAfter: 1)
+        cache.bench = bench
+        while try cache.deal() {}
+
+        // One timeout benches the source outright.
+        bench.failed(fixture.source.id)
+
+        let step = await cache.fetchQueuedOnce()
+        guard case .benched(let position) = step else { Issue.record("\(step)"); return }
+        // The lane moves past it and finds only more of the same, then drains.
+        let next = await cache.fetchQueuedOnce(after: position)
+        guard case .benched(let position2) = next else { Issue.record("\(next)"); return }
+        #expect(await cache.fetchQueuedOnce(after: position2) == .drained)
+
+        // Nothing fetched, nothing dropped: the cards wait for the bench to end.
+        #expect(try cache.queue.size() == 2)
+        #expect(try cache.status().residentCount == 0)
+    }
+
+    @Test("Fetching a queued card takes the claim, and finishing releases it")
+    func fetchingClaimsAndReleases() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        while try fixture.cache.deal() {}
+
+        let step = fixture.cache.nextQueuedToFetch()
+        guard case .card(let card, _, _) = step else { Issue.record("\(step)"); return }
+        // Claimed: a second lane asking for the head gets nothing.
+        #expect(try fixture.deck.claim(photoID: card.id) == false)
+        guard case .drained = fixture.cache.nextQueuedToFetch() else {
+            Issue.record("a claimed card was handed to a second lane"); return
+        }
+
+        let landed = await fixture.cache.fetch(card)
+        #expect(landed)
+        fixture.cache.finishFetch(card, landed: landed)
+        #expect(try fixture.deck.claim(photoID: card.id) == true)
     }
 
     @Test("Each deal yields a different picture, and running out is an ordinary answer")
@@ -125,22 +237,23 @@ struct CacheTests {
         #expect(try fixture.cache.deal() == false)
     }
 
-    @Test("A volume at its floor stops the cache, and the deck empties behind it")
+    @Test("A volume at its floor stops the cache, and dealing is unaffected")
     func lowDiskStopsCaching() async throws {
         let fixture = try await Fixture(
             photos: ["a.png", "b.png"],
             settings: CacheSettings(minimumFreeBytes: .max, criticalFreeBytes: .max)
         )
 
-        // **"Dealing is unaffected" used to be the point of this test and is
-        // now false.** Dealing wrote a row whatever the disk was doing, because
-        // a card could be dealt before its bytes existed. The deck's pool is
-        // the cache now, so a cache that cannot grow is a deck that stays
-        // empty — degrading into *fewer pictures*, which is the intended shape,
-        // rather than into a full volume.
-        #expect(await fixture.cache.refreshOnce() == .blocked)
+        // **"Dealing is unaffected" is the point of this test again.** It was
+        // false from 2026-08-26 to 2026-09-05, when the deck's pool was the
+        // cache and a cache that could not grow was a deck that stayed empty.
+        // The deck deals every available photograph now, so a card is dealt
+        // whatever the disk is doing; what the floor stops is the fetch behind
+        // it, before any credit arithmetic and before the queue is looked at.
+        #expect(try fixture.cache.deal() == true)
+        #expect(await fixture.cache.fetchQueuedOnce() == .blocked)
         #expect(try fixture.cache.status().residentCount == 0)
-        #expect(try fixture.cache.deal() == false)
+        #expect(try fixture.cache.queue.size() == 1, "a blocked fetch is not a failed one")
     }
 
     @Test("A disabled source is not dealt from")
@@ -227,7 +340,7 @@ struct CacheTests {
         }
     }
 
-    @Test("Offline keeps its cached bytes, and keeps serving them")
+    @Test("Offline keeps its cached bytes, and keeps dealing and serving them")
     func offlineSourcesKeepServingFromCache() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
         try await fixture.produceAll()
@@ -240,7 +353,9 @@ struct CacheTests {
         )
         try fixture.store.markUnavailable(sourceID: fixture.source.id, reason: "volume not mounted")
 
-        // The cached copies are the most valuable thing we have now.
+        // The cached copies are the most valuable thing we have now, and they
+        // stay in the pool: a photograph is served out of the cache regardless
+        // of reachability, and reachability is not part of the deal at all.
         #expect(try await fixture.cache.serve() != nil)
         #expect(try fixture.deck.poolSize() == 3)
         #expect(try fixture.cache.status().residentCount == 3)
@@ -511,14 +626,15 @@ struct CacheTests {
         #expect(try fixture.cache.status().residentCount == 0)
         #expect(try fixture.deck.currentDealSeq() == seqBefore)
 
-        // **The rows are all still there; the pool is not.** Clearing is still
-        // a storage operation and never a shuffle one — deal ordinals, shuffle
+        // **The rows are all still there, and so is the pool.** Clearing is a
+        // storage operation and never a shuffle one — deal ordinals, shuffle
         // keys and last-shown times are untouched, which is what `seqBefore`
-        // above holds down. What changes in v2 is that the deck's pool *is* the
-        // cache, so discarding the bytes empties it until the refresher fills
-        // it again. The rotation survives; the pictures come back cold.
+        // above holds down. From 2026-08-26 to 2026-09-05 the pool was the
+        // cache and clearing emptied it; the deck deals every available
+        // photograph again, so the pictures are dealt cold and fetched by the
+        // queue.
         #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 3)
-        #expect(try fixture.deck.poolSize() == 0)
+        #expect(try fixture.deck.poolSize() == 3)
     }
 
     @Test("Clearing one source frees its bytes and leaves every other source alone")
@@ -541,11 +657,10 @@ struct CacheTests {
         #expect(try fixture.cache.status().residentCount == 3, "the other source lost bytes too")
 
         // Rows and shuffle history are untouched: clearing is a storage
-        // operation, never a shuffle operation. The *pool* is exactly the three
-        // photographs the other source still has bytes for — which is the point
-        // of clearing one source rather than everything.
+        // operation, never a shuffle operation, and since 2026-09-05 the pool
+        // is the rows rather than the bytes — so it is untouched too.
         #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 5)
-        #expect(try fixture.deck.poolSize() == 3)
+        #expect(try fixture.deck.poolSize() == 5)
     }
 
     @Test("Clearing unavailable sources frees only what can never be fetched again")
@@ -570,12 +685,12 @@ struct CacheTests {
         let result = try fixture.cache.clear(.unavailableSources)
         #expect(result.cleared == 2)
         #expect(result.bytesFreed == 200)
-        // The reachable source keeps everything, and its two photographs are
-        // the whole of the deck's pool: the cleared ones kept their rows and
-        // lost the bytes that made them dealable.
+        // The reachable source keeps everything. The cleared ones kept their
+        // rows too, and since 2026-09-05 rows are the pool: clearing is a
+        // storage operation, and reachability is not part of the deal.
         #expect(try fixture.cache.status().residentCount == 2)
         #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 4)
-        #expect(try fixture.deck.poolSize() == 2)
+        #expect(try fixture.deck.poolSize() == 4)
     }
 
     @Test("An explicit clear states its price before charging it")

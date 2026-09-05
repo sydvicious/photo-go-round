@@ -20,10 +20,17 @@ struct FillerBoxTests {
         let databasePath: String
         let database: Database
 
-        /// `servable` is what the deck's pool means in v2: a photograph with
-        /// bytes on hand. These tests are about *filling*, not about where the
-        /// bytes came from, so the cache is simply declared to be holding them
-        /// — which is the state the refresher would have produced.
+        /// `servable` records the photographs as held. Since 2026-09-05 the
+        /// deck deals whether or not the bytes are here, so filling no longer
+        /// depends on it; one test below passes `false` to prove exactly that.
+        /// Takes the head the way serving does — choose, then remove — since
+        /// `PhotoQueue` has no head-pop of its own.
+        func takeHead() throws {
+            let queue = PhotoQueue(database: database)
+            guard let head = try queue.peek().first else { return }
+            _ = try queue.remove(photoID: head.id)
+        }
+
         init(photos: Int, servable: Bool = true) throws {
             directory = URL.temporaryDirectory.appending(path: "pgr-filler-\(UUID().uuidString)")
             try FileManager.default.createDirectory(
@@ -106,7 +113,7 @@ struct FillerBoxTests {
         #expect(seeded.produced == 5)
         #expect(seeded.exhausted)
 
-        _ = try await PhotoQueue(database: fixture.database).serve()
+        try fixture.takeHead()
         #expect(try fixture.queueSize() == 4)
 
         let again = await box.topUpIfShort(preferences: preferences)
@@ -175,19 +182,19 @@ struct FillerBoxTests {
         #expect(round.produced == 5)
     }
 
-    @Test("With nothing servable at all it answers nothing, and says so")
-    func theLastResortCanBeEmpty() async throws {
-        // Every photograph materialized and none cached: there is genuinely
-        // nothing to show, and inventing something would be worse. In v2 this
-        // is not a fallback failing — it is the deck correctly reporting an
-        // empty pool, and the answer to it is the refresher.
+    @Test("With nothing cached at all it still fills: bytes are the queue's business")
+    func fillingDoesNotWaitForBytes() async throws {
+        // Every photograph materialized and none cached. Under v2 this filled
+        // nothing, because the pool was what the cache held. Since 2026-09-05
+        // the deck deals every available photograph and the queue fetches what
+        // it holds, so a cold library fills the queue like any other.
         let fixture = try Fixture(photos: 5, servable: false)
         let box = fixture.box()
 
         let round = await box.topUpIfShort(preferences: Self.preferences())
 
-        #expect(try fixture.queueSize() == 0)
-        #expect(round.produced == 0)
+        #expect(try fixture.queueSize() == 5)
+        #expect(round.produced == 5)
         #expect(round.exhausted)
     }
 
@@ -198,7 +205,7 @@ struct FillerBoxTests {
         let preferences = Self.preferences()
 
         _ = await box.topUpIfShort(preferences: preferences)
-        _ = try await PhotoQueue(database: fixture.database).serve()
+        try fixture.takeHead()
         #expect(try fixture.queueSize() == 4)
 
         let round = await box.servedOne(preferences: preferences)
@@ -221,9 +228,9 @@ struct FillerBoxTests {
         // **Three queued, and no third number.** This used to take an in-flight
         // count, because a card skipped for want of bytes had left the queue
         // and was coming back — so the depth alone understated it. That cannot
-        // happen now: a card is only dealt once its bytes are here, so it never
-        // leaves to be fetched, and the exception that had to be written into
-        // this method for an empty queue goes with the rest of it.
+        // happen now: a card being fetched stays on the queue while its bytes
+        // come, so the depth is the depth, and the exception that had to be
+        // written into this method for an empty queue goes with the rest of it.
         #expect(gauge.isShort(nominalSize: 5))
         #expect(gauge.isShort(nominalSize: 4))
         #expect(!gauge.isShort(nominalSize: 3))

@@ -148,12 +148,13 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **One deck, shared by every surface.** Wallpaper, screensaver, and widgets all deal from the same sequence, so the repeat window holds across every surface together — a photo just shown on one cannot immediately reappear on another. Dealing is therefore a cross-process atomic operation, and the cache must stay ahead of the *fastest* consumer, not the average one.
 - **The Watch app is a companion and requires the paired iPhone.** Not an independent watchOS app, even though the platform permits one. With no Photos framework and no sources of its own, an unpaired watch has nothing to show — so the dependency is declared up front rather than degraded into at runtime.
 - **One global queue of ready pictures, and consumers just take the head.** Producers fill it, clients drain it, and two displays get different pictures because serving *removes* the entry rather than because they were dealt disjoint sets in advance. There are no per-consumer reservations, no hand sizes, and nothing to reclaim from a display that goes away.
-- **The queue's size is a target, not a ceiling.** A card returning from a completed fetch is never refused, so the depth floats around the target rather than being held at it — refusing work already done would be worse than a number that floats. Nothing is evicted when an entry arrives; serving is the only thing that shortens the queue.
+- **The queue's size is a target, not a ceiling.** A card returning from a completed fetch is never refused, so the depth floats around the target rather than being held at it — refusing work already done would be worse than a number that floats. Nothing is evicted when an entry arrives; serving shortens the queue, and so does a card dropped because its bytes never came.
+- **A new card is placed at random among the cards present, never at the head. Decided 2026-09-05, reversing v2's FIFO.** An integer `rank` shifted on insert, migration 10, rather than v1's float key that needed respacing. A card dealt from a newly added source is shown within a picture or two instead of after a whole traversal, which is the immediate feedback that adding something to the set worked; a shorter queue would have bought the same and was declined, because a deep queue is what keeps pictures coming when the sources are hostile. see *Deal over everything, and the queue fetches its own cards*.
 - **Dealing happens whether or not anybody asked.** The heartbeat tops up a queue short of its target and leaves a full one alone. **Changed 2026-08-25, reversing an earlier decision made on evidence it did not have**: dealing used to be paced to pictures served, on the reasoning that a heartbeat filling a merely short queue was churn. That was affordable while every fetch was a local file read and a queue one card short stayed short for seconds. A Photos fetch can take five minutes, so the old rule leaves an idle agent doing nothing with the time it has most of, then makes the first picture after idle wait on a cold fetch.
 - **A deal follows a picture that reached somebody, not a request that arrived.** The filler is rung beside `markDelivered` — the endpoint with a 200 in hand — and nowhere else. Rung at selection instead, as it was until 2026-08-25, one request that walked past three unrenderable photographs bought four fresh cards, against this document's own rule that a skip buys nothing.
 - **Always show something, even a repeat.** When a walk finds nothing it can serve, the deck deals from what is already cached and fills the queue rather than answering *no photos*. Decided 2026-08-26 while iCloud Drive was wedged: a blank wall is worse than a photograph seen recently, and the repeat window exists to stop repeats being ordinary rather than to guarantee an empty screen.
 - **Blocking provider I/O never runs on the cooperative pool.** `BlockingWork` gives it threads of its own. A thread parked in a synchronous system call is one the runtime cannot use, and enough of them stop the process without any lock being held — twice now: four concurrent folder walks in August, then eleven `copyItem` calls against undownloaded iCloud Drive files.
-- **Every materialize runs against a deadline, and the lane comes back whether or not the work does.** Sixty seconds for a file, fifteen minutes for a photo library. The abandoned work is neither cancelled nor awaited — a blocked read answers neither — so what the deadline buys is the queue's own bookkeeping, not the provider's cooperation.
+- **Revised 2026-09-05: sixty seconds for every kind.** The fifteen-minute Photos deadline was set on a day everything touching iCloud on the machine was wedged, which was not known until later; the measurement described the machine, not the provider. **Every materialize runs against a deadline, and the lane comes back whether or not the work does.** Sixty seconds for a file, fifteen minutes for a photo library. The abandoned work is neither cancelled nor awaited — a blocked read answers neither — so what the deadline buys is the queue's own bookkeeping, not the provider's cooperation.
 - **A photograph is not fetched twice at once, and the dedup lasts as long as the work.** Releasing it with the lane let a timed-out copy still be writing when its card came round again; the two collided on one staging path.
 - **A source that keeps timing out is benched.** Four in a row, a minute, doubling each time it happens again, capped at an hour so a share that comes back is still noticed. Any success clears both the count and the backoff. Without it one bad source holds every fetch slot and the healthy ones are never asked.
 
@@ -175,8 +176,9 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 
 *Cache*
 
+- **The deck deals from every available photograph, and the queue fetches its own cards. Decided 2026-09-05, reversing v2's population.** One uniform draw over every row whose source is enabled and which has not been retired, whether or not its bytes are here and whether or not its source is reachable — a held photograph is served out of the cache regardless; a card goes on the queue regardless, the queue fetches the bytes of every card it holds and nothing beyond them, and serving *waits* for the head's fetch — a fetch that fails drops the card, and so does a wait that runs out; serving moves to the next card with bytes. No credit counter: at a queue of twenty the depth bounds fetching on its own. See *Deal over everything, and the queue fetches its own cards*.
 - **Reference in place on the internal volume; materialize from anywhere that can disappear.** A file on the boot volume is always there, so copying it is pure waste. A file on an external, removable, network, or iCloud Drive volume can vanish without notice, so it is copied into the cache. Whether a photo is referenced or materialized is a property of *where it lives*, not of which kind of source found it — and it describes the photo's original entry in the cache, since every rendering is a real file with nothing to point at.
-- **Dealing writes a card and fetches nothing; serving is what asks for bytes.** The queue holds cards dealt from one shuffle over the whole library, and a request that finds a card's bytes missing hands it to the queue of pictures to cache and moves on — a skip, never a wait. Serving also reads the next `lookAheadDepth` cards and asks for any bytes it does not hold, drained four fetches at a time across all sources (`downloadConcurrency` is one global number). **Serving is what notices the queue has run short**, and therefore what deals; a round already in progress absorbs the next request rather than stacking with it, and the heartbeat only seeds an empty queue. See *Deal over everything, and try at the moment of need*.
+- **Revised 2026-09-05:** the queue fetches every card it holds, not a look-ahead window, and serving waits for the head rather than skipping it; see *Deal over everything, and the queue fetches its own cards*. **Dealing writes a card and fetches nothing; serving is what asks for bytes.** The queue holds cards dealt from one shuffle over the whole library, and a request that finds a card's bytes missing hands it to the queue of pictures to cache and moves on — a skip, never a wait. Serving also reads the next `lookAheadDepth` cards and asks for any bytes it does not hold, drained four fetches at a time across all sources (`downloadConcurrency` is one global number). **Serving is what notices the queue has run short**, and therefore what deals; a round already in progress absorbs the next request rather than stacking with it, and the heartbeat only seeds an empty queue. See *Deal over everything, and try at the moment of need*.
 - **At launch, three immediately-servable cards go in first, then the ordinary shuffle.** A cold start otherwise deals a full queue whose every card is still being fetched and answers *no photos* to all twenty of them. A `referenced` file needs no fetch and a warm restart still holds whatever was cached, so a handful of those bridges the gap until the shuffled cards' bytes land; three rather than a queueful, because twenty from the one local folder is twenty consecutive pictures from one source. **It changes latency and nothing else** — shuffle keys, eligibility, the repeat window, and each source's share are all untouched. The bridge stops the moment the queue is full. Pairs with the first-pass source ordering under *Sources*.
 - **Every photo is dealt; whether it is *shown* turns on its bytes being local when its turn comes.** An unmounted drive stops referenced photos being shown immediately; a vanished Photos library does not, since those were materialized into our cache. Orphans then shuffle out gradually as FIFO evicts them — the cache's ordinary behavior is the garbage collector.
 - **The cache is clearable on demand, and guarded against a full disk.** `pgr_ctl cache clear`, optionally per source or restricted to unavailable ones, never touching deck history. Separately, free space is checked before every chunk, because a photo count cannot bound bytes.
@@ -643,7 +645,7 @@ Once cached, the entry is an ordinary materialized photo and the original is fre
 
 The naive shuffle — one random column, re-rolled when consumed — repeats photos almost immediately, because a fresh random value can land right back at the front. The fix is to make recency a filter rather than trusting the ordering alone.
 
-**In normal operation the deck is a circular queue that never runs dry.** A photo is eligible once more than *w* deals have gone by since it was last dealt, so at any moment `N − w − 1` of the pool's `N` photos are available to choose from — and since 2026-08-26 that pool is **what can be shown right now**, the cache plus whatever is read in place, rather than the whole library — a rotating window of candidates that refills itself as fast as it is consumed. Nothing ever ends; there is no boundary and no reshuffle.
+**In normal operation the deck is a circular queue that never runs dry.** A photo is eligible once more than *w* deals have gone by since it was last dealt, so at any moment `N − w − 1` of the pool's `N` photos are available to choose from — and since 2026-08-26 that pool is **what can be shown right now**, the cache plus whatever is read in place, rather than the whole library — **reversed 2026-09-05: the pool is every available photograph again**, see *Deal over everything, and the queue fetches its own cards* — a rotating window of candidates that refills itself as fast as it is consumed. Nothing ever ends; there is no boundary and no reshuffle.
 
 That holds for every fraction below 1.0 on a library of any real size. The **pass** is the floor underneath it, for the two cases where the window has no answer: at fraction 1.0, where `w` is the whole pool by construction, and on a library whose dealable population is within `w + 1`. Then, and only then, the deck reshuffles and a new pass begins.
 
@@ -707,7 +709,7 @@ Photos never dealt are eligible by definition, so a newly added photo joins the 
 
 ### The repeat window
 
-**Superseded 2026-08-26 by *Deck and Queue v2.md*.** **Still the algorithm, measured against a different population.** The pool is now what can be shown — the cache plus whatever is read in place — rather than the whole library, so on a library much larger than its cache a photograph comes back after half the *cache*.
+**Reversed 2026-09-05; see *Deal over everything, and the queue fetches its own cards*.** **Superseded 2026-08-26 by *Deck and Queue v2.md*.** **Still the algorithm, measured against a different population.** The pool is now what can be shown — the cache plus whatever is read in place — rather than the whole library, so on a library much larger than its cache a photograph comes back after half the *cache*.
 
 *w* is derived from a configurable fraction of the eligible pool: `w = round(fraction × pool_size)`, with **0.5 as the starting default** — a photo can come back once about half the library has gone by, without waiting for the pass to finish.
 
@@ -909,7 +911,7 @@ What the design does keep is a small **in-memory** decoded-image cache — the c
 
 ### Filling: there is no prefetcher
 
-**Superseded 2026-08-26 by *Deck and Queue v2.md*.** **Superseded a third time, and this time the heading is true again.** There is no prefetcher: nothing reads ahead of the queue and nothing warms it, because a card is only dealt once its bytes are already here. The cache stocks itself on its own draw.
+**Reversed 2026-09-05; see *Deal over everything, and the queue fetches its own cards*.** **Superseded 2026-08-26 by *Deck and Queue v2.md*.** **Superseded a third time, and this time the heading is true again.** There is no prefetcher: nothing reads ahead of the queue and nothing warms it, because a card is only dealt once its bytes are already here. The cache stocks itself on its own draw.
 
 **Superseded twice.** By *Deal over everything, and try at the moment of need* on 2026-08-23, and then by look-ahead on 2026-08-24 — so the heading is now false as well as historical: there *is* a prefetcher, it just prefetches something else. The one described below fetched bytes before anything was queued; the one that exists reads cards already queued and asks for theirs. See *What running it found*.
 
@@ -940,7 +942,7 @@ So each answer re-asks its own source, and the tick is only what gets it started
 
 ### Deal over everything, and try at the moment of need
 
-**Superseded 2026-08-26 by *Deck and Queue v2.md*.** **The inversion below is reversed.** Dealing from every photograph and finding out by trying is what v2 replaces: the deck now deals only what can be shown this second, and the cache fills itself independently. Everything from here to *Costs Claude raised* describes the shape that was, including its six fixes — kept because each one records a real failure, and because the reasoning is what v2 inherited.
+**Reversed 2026-09-05; see *Deal over everything, and the queue fetches its own cards*.** **Superseded 2026-08-26 by *Deck and Queue v2.md*.** **The inversion below is reversed.** Dealing from every photograph and finding out by trying is what v2 replaces: the deck now deals only what can be shown this second, and the cache fills itself independently. Everything from here to *Costs Claude raised* describes the shape that was, including its six fixes — kept because each one records a real failure, and because the reasoning is what v2 inherited.
 
 **Built 2026-08-23, and run against the real library overnight.** Syd's design, stated below in his terms. Claude's objections are in *Costs Claude raised* at the end, kept separate so they cannot be mistaken for part of it. What the first night of running it changed is in *What running it found*, below — the design held; six things around it did not.
 
@@ -988,7 +990,7 @@ Capping the fetch backlog at fifty did nothing, and could not have: it bounds ho
 
 #### Dealing is paced by serving
 
-**Superseded 2026-08-26 by *Deck and Queue v2.md*.** **The rule survives and the mechanism does not.** One picture served still buys one card dealt — and now also one download. What is gone is the gauge that counted cards out for fetching as the queue's, and the empty-queue exception written into it, because a card never leaves the queue to be fetched.
+**Reversed 2026-09-05; see *Deal over everything, and the queue fetches its own cards*.** **Superseded 2026-08-26 by *Deck and Queue v2.md*.** **The rule survives and the mechanism does not.** One picture served still buys one card dealt — and now also one download. What is gone is the gauge that counted cards out for fetching as the queue's, and the empty-queue exception written into it, because a card never leaves the queue to be fetched.
 
 A walk consumes every card it skips as well as the one it shows. Dealing to replace all of them means a skipped photograph is swapped for a fresh cold one *while its bytes are still being fetched*, so the fetch lands on a card nobody is holding a place for. One picture served, one card dealt — that is the whole rule, and it makes the queue's population stable and gives a returning card somewhere to return to.
 
@@ -1000,7 +1002,7 @@ The heartbeat that used to fill to nominal now only **seeds an empty queue**. Fi
 
 #### The queue is not a queue
 
-**Superseded 2026-08-26 by *Deck and Queue v2.md*.** **It is a queue again.** `sort_key` and its respacing were deleted in migration 8. Random placement existed because a completed fetch rejoined the queue out of deck order; a fetch completing now puts nothing on the deck, so there is one arrival and one end.
+**Reversed 2026-09-05; placement is random again, by rank — migration 10, see *Deal over everything, and the queue fetches its own cards*.** **Superseded 2026-08-26 by *Deck and Queue v2.md*.** **It is a queue again.** `sort_key` and its respacing were deleted in migration 8. Random placement existed because a completed fetch rejoined the queue out of deck order; a fetch completing now puts nothing on the deck, so there is one arrival and one end.
 
 `position` was an autoincrementing key, so every card landed at the tail and the thing was a strict FIFO. Both arrivals want otherwise, and they want opposite ends:
 
@@ -1060,7 +1062,7 @@ The reason to want it is not tidiness. It is that the right answer moves: adding
 
 #### The caps, and the arithmetic that will break them
 
-**Superseded 2026-08-26 by *Deck and Queue v2.md*.** `lookAheadDepth` and `maximumWaiting` no longer exist, so neither does the arithmetic. What bounds fetching now is the credit rule — twice the deck's size at launch, one per card drawn — and what bounds a hostile provider is `FetchDeadline` plus `SourceBench`.
+**Reversed 2026-09-05; see *Deal over everything, and the queue fetches its own cards*.** **Superseded 2026-08-26 by *Deck and Queue v2.md*.** `lookAheadDepth` and `maximumWaiting` no longer exist, so neither does the arithmetic. What bounds fetching now is the credit rule — twice the deck's size at launch, one per card drawn — and what bounds a hostile provider is `FetchDeadline` plus `SourceBench`.
 
 `lookAheadDepth` (20) is the lead-time knob, not `queueSize`: the warning a cold photograph gets is `lookAheadDepth × dwell`. `queueSize` need only be at least that for the window to cover the queue; beyond it, extra depth buys a finer-grained source mix and nothing else.
 
@@ -1133,6 +1135,81 @@ Recorded as objections to answer, not as part of the design.
 - ~~**How many fetches may be in flight.**~~ Answered by the same queue — whatever drains it is the bound. The number of workers is a number to pick, not a mechanism to design.
 - ~~**What happens to a card whose fetch fails.**~~ Confirmed: a skipped card leaves the queue and comes back on success. A fetch that fails leaves it out, and it comes round again in the ordinary shuffle rather than accumulating as a queue of things that cannot be shown.
 
+### Deal over everything, and the queue fetches its own cards
+
+**Decided 2026-09-05, reversing v2's population. Built 2026-09-05, all five steps, and run on the real library the same day — see *What running the reversal found*.** Syd's design, stated in his terms. Claude's costs are in *Costs Claude raised* at the end, kept separate so they cannot be mistaken for part of it.
+
+**The core idea: the cards served converge to a proportional distribution across the sources after a short amount of time.** Everything below is in service of that sentence. From the user's side: adding a new source is exciting, and results should start appearing after seconds or a few minutes, rather than hours or days.
+
+The deal draws uniformly from **every available photograph** — its source enabled and the photograph not retired — whether or not its bytes are here, and whether or not its source is reachable. **Reachability is not part of the predicate at all.** A photograph is served out of the cache regardless of reachability, so the whole thing still works with no network at all, provided it has run for any period of time before; a card whose source is away and whose bytes are not held fails its fetch and is dropped, which is the ordinary failure path. The card goes on the queue regardless, **placed at random among the cards present** — anywhere from second to last, never at the head. The queue then fetches the bytes of every card it holds that lacks them: **all of it**, not a window ahead of the head, and **nothing beyond it** — the twenty cards are the prefill, and when a card is served another fills in and is fetched. Serving **waits** for the head card's fetch to land. If something goes wrong with the fetch, the card is dropped and serving moves on to the next card in the deck: the card was dealt, but no bytes were served; such is life, and next time it is dealt maybe the bytes will be there. There is no credit counter; at a queue of twenty, the depth bounds fetching on its own.
+
+#### What prompted it
+
+Measured on the live agent, 2026-09-05, ten minutes after forty-one Photos albums were added beside a referenced folder, an iCloud Drive folder, and one iCloud file:
+
+| | rows | servable under v2 | share of the library | share of the v2 pool |
+| --- | ---: | ---: | ---: | ---: |
+| Coins folder (referenced) | 456 | 456 | 22% | 63% |
+| Album Covers folder (iCloud Drive) | 436 | 162 | 21% | 22% |
+| One file (iCloud Drive) | 1 | 1 | | |
+| Photos collections, 41 albums | 1194 | 104 | 57% | 14% |
+| | 2087 | 722 | | |
+
+The queue held three Photos cards of twenty and the last fifteen deals held three, which is the 14% exactly. v2 was doing what it says. What it says is not what Syd expects: **the photographs in the database are what the random deal should draw from**, and a source added to a running agent should be represented in proportion to its share of the library after one deck's worth of deals, not after the cache has caught up.
+
+Under v2 the catching up is paced to viewing. A refresher round starts only at launch and when a card is drawn, and a drawn card banks exactly one credit, so one Photos original landed every 10.5 seconds — the fetch timestamps and the serve timestamps were the same six values. With 1090 Photos originals un-held, convergence to library proportions was about three hours of continuous viewing away, and every one of those hours the screen would have been mostly coins. The 10 GB ceiling was not the bound; the cache held 1.88 GB. The credit rule was.
+
+#### What it changes, against what is built
+
+- **The deck's population.** `Deck.servableStorage` leaves the pool, the candidate predicate, `dealablePopulation`, and the unused count. The repeat window is a fraction of the whole available library again — about 1044 cards at 0.5 on today's 2087 rather than 361 on 722. `cached_at` stays a column; it stops being a gate.
+- **Reachability stays out of the deal.** *Deal over everything, and try at the moment of need* recorded that "`Source.available` stays as something the panel reports; nothing about dealing consults it," and that stands. Considered and declined on 2026-09-05 in two steps — first as a gate, then as a gate with a door for held photographs — and neither is needed: an unreachable source's held photographs serve from the cache, and its unheld ones fail their fetch and are dropped like any other failed card. Besides, tracking reachability in the database is doomed to fail — there is no way to refresh it in real time so that it is accurate, and we only know a picture is reachable when we try to get it. The predicate is `source_enabled` and `media_type`, with no join.
+- **The refresher's own draw goes.** `Deck.nextRemoteCandidate`, `unheldRemoteCount`, `CacheRefresher.begin`, `cardDrawn`, `bank`, and the credit arithmetic have no job left. What replaces them is one rule: **fetch what is queued and not held**, head first, `downloadConcurrency` at a time, each fetch against `FetchDeadline` and each source under `SourceBench`. Filling the queue is what starts fetching, so a burst of twenty deals on a cold queue is a burst of up to twenty fetches, four in flight.
+- **Serving waits, once.** A request that finds the head card's bytes missing asks for the fetcher — a kick, absorbed if a round is already on it — and waits for one of three things: the bytes land and the card is served; the card leaves the queue because its fetch failed, and the request moves to the new head; or the wait runs out. A card whose source is benched is dropped without waiting, because nothing is fetching it and nothing will for at least a minute.
+- **The client's wait is bounded at sixty seconds, as a user preference, and when it runs out the card is dropped.** `serveWaitSeconds`, default 60, zero never waits. The request then takes the first queued card whose bytes are here without waiting again; the cards it passes over are still being fetched and keep their places. **Dropping rather than keeping the card at the head was decided while building step three**: a card still cold a minute into its turn is almost always from a benched source, and keeping it would make every following request wait the same minute on the same card until the bench lifted. Dropping has the nice property of doing much less work when there is an active consumer — a dead card costs one wait, once, and the queue turns over past it.
+- **A failed fetch drops its card in the fetcher, not in serving.** The plan's first draft put the drop under serving; it lives where the failure is known, so a bad card leaves at once rather than sitting at the head until its turn, and serving's wait ends because the card is gone.
+- **Placement is random again, by rank.** Added after the first run, which was better but showed a new source's first card waiting a whole traversal at the tail — about three and a half minutes. A new card takes a uniform slot from second to last and the ranks at and behind it shift up one: migration 10 adds `rank INTEGER`, backfilled from `position` so a live queue keeps its order. Never at the head, so the card about to be shown is never displaced and every new card has at least one picture of fetch lead. A shorter queue was the other way to the same feeling and was declined, out of concern that it would have problems serving in a hostile environment. The cost is fetch lead — a card placed second has one picture's worth rather than a traversal's — and the wait above is what pays it when it comes due.
+- **The Photos fetch deadline comes down from 900 seconds to 60, matching files.** `CacheSettings.libraryFetchLimit` was set to fifteen minutes on 2026-08-26 from a measurement of a Photos original stalling for a fixed 300 seconds — taken, it turned out later, on a day when everything touching iCloud on the machine was wedged. One deadline for every kind; a stall is a stall.
+- **The claim keeps its owner.** `claimed_at` still means *a fetch is running for this photograph*, taken by the queue's fetcher and released when the fetch ends, and it still stops two lanes downloading the same bytes. Dealing takes no claim, as now.
+
+#### What stays
+
+The deck algorithm — pass, window, random offset, `shuffle_key` — is untouched; only its population moves. A fetch completing puts nothing on the queue: the card it fetched for is already there and keeps its place. (The queue was to stay a FIFO; that lasted one run — see *Placement is random again* above.) Eviction stays least-recently-viewed and nothing is exempt from it, so a queued card's original can be evicted before its turn; the fetcher then fetches it again, which is the same rule as a card that was never held. `FetchDeadline`, `BlockingWork`, and `SourceBench` stay exactly as they are — they answer a hostile provider, and this change does not make providers less hostile. *One photograph, one row* stays. The launch bridge stays deleted.
+
+#### What this reverses in this document, and in *Deck and Queue v2.md*
+
+Each passage this undoes now carries a one-line *Reversed 2026-09-05* pointer back here: the deck algorithm's pool sentence, *The repeat window*, *Filling: there is no prefetcher*, *Deal over everything, and try at the moment of need*, *Dealing is paced by serving*, *The caps, and the arithmetic that will break them*, and *Cold start*. *The queue is not a queue* carries a second pointer, since placement is random again. *Eviction* and *Surviving a source that will not answer* keep their v2 notes, because v2's answers there stand.
+
+*Deck and Queue v2.md* is left as written. Its Phases 3, 4, and 5 — the servable-only pool, serving that does no fetching, and the filler that counts nothing — are what this section reverses, and so is its decision that the deck stays a FIFO; its Phases 1, 2, 6, 7, and 8 stand, with Phase 2's refresher replaced by the queue's fetcher described above.
+
+#### Build order
+
+Small slices, each run against the live library before the next begins, and the second is the one that proves the shape.
+
+1. **Population. Done.** The residency predicate left the deck. Reachability went in, then in with a door for held photographs, then out again, all within the hour — see *Reachability stays out of the deal*. Eight tests that pinned v2's pool were flipped with dated comments; `deck stats` says "dealable" and counts held separately.
+2. **The queue fetches its own cards. Done.** `QueueFetcher` replaced `CacheRefresher`: head first, four lanes, kicked after every fill and once at launch, a kick mid-round remembered and the queue walked once more before the round ends. The claim moved with it. A failed or timed-out fetch drops its card. The Photos deadline came down to sixty seconds. Net about eight hundred lines fewer.
+3. **Serving waits. Done.** `serveWaitSeconds`, the poll for bytes-or-gone, the drop on timeout, the first-warm-card fallback, the benched-source shortcut, and the pop moved after the checks so two consumers are still settled by one `DELETE`. A file-backed suite covers the wait with a fetch landing on a second connection mid-wait.
+4. **Delete what is dead. Done.** The queue's head-pop and `PhotoCache.residentPhotoUUIDs` had no production caller and went; fourteen test call sites now peek and remove as serving does. Kept on purpose: `Deck.unheldRemoteCount` for `deck stats`, the two equal fetch-deadline constants as the named seam, and the `cacheUnnecessary` event. About fifty compiler warnings in test files predate this work and were left.
+5. **The ledger. Done.** Both man pages, the `deck stats` and `cache status` wording, a test for the new preference's default and clamp, and this section. The Mac panel shows only per-source counts and needed nothing.
+
+#### What running the reversal found
+
+**First run, steps one to five, on the live library.** Better at once: `DEAL:` lines in library proportion, each materialized one followed within seconds by `CACHE: fetching` and `CACHE: … original cached`, and no `waiting` lines in the ordinary case. What it showed was the tail. A new source's first card was dealt promptly and then waited a whole traversal behind nineteen others, which reads as nothing having happened for three and a half minutes. Syd asked whether new cards went on the end or used the random value to land somewhere in the deck; they went on the end. Random placement came back that afternoon, by rank rather than by key, with the queue's depth left alone — see *Placement is random again*.
+
+**Second run, with placement.** Syd's verdict: *that's really nice. This is basically what I have wanted all along this journey.* A source added to a running agent is on the screen within a picture or two, in proportion to its share of the library, and stays so.
+
+**Two things placed differently from the plan's first draft**, both recorded above: the drop on a failed fetch lives in the fetcher, and a wait that runs out drops the card rather than keeping it at the head.
+
+#### Costs Claude raised
+
+Recorded as objections to answer, not as part of the design.
+
+- ~~**A request now waits on a download.**~~ Answered 2026-09-05: the client waits sixty seconds, configurable, then takes the next card whose bytes are here while the fetch continues; and the Photos deadline drops to sixty so no single card can hold the head for a quarter of an hour. v1 measured 45, 67, and 125-second requests before the walk budget; the bound here is the same idea, placed on the request rather than on the walk.
+- **Always have something to show, and a wait is a blank.** A cold queue on a slow provider shows nothing until the first fetch lands, where v2 showed whatever was on disk. Head-first fetching and the referenced folder's cards, which need no fetch, are what soften it; nothing else does.
+- ~~**A slow source slows the whole screen.**~~ Answered in the building: a dead card costs one wait, once, and is dropped; a card whose source is already benched is dropped without waiting at all. `SourceBench` still bounds how many timeouts a share can cost before it is left alone.
+- **The v1 starvation does not come back, and it is worth saying why.** v1 starved because a fetched card left the queue and had a one-in-fourteen-thousand chance of being dealt again. Here the card stays and is waited for, so every fetch is rewarded with a showing. The mechanism that caused the overnight stop is absent by construction rather than bounded.
+- **Random placement halves the average fetch lead.** A card placed second has one picture's worth of time for its bytes rather than a traversal's, so the wait above will occasionally come due right after a burst of deals from a slow source. Accepted for the immediacy; if `waiting` lines become common after adding a source, the deadline and the wait are the two numbers to look at, not the depth.
+- ~~**Reachable needs a definition the deal can read.**~~ Answered 2026-09-05: it needs none, because reachability is not part of the predicate. The fetch finds out.
+
 ### Eviction
 
 **Superseded 2026-08-26 by *Deck and Queue v2.md*.** Eviction is least-recently-*viewed* now — `COALESCE(last_shown_at, cached_at, added_at)`, over the same `(photo, resolution)` entries — and nothing is exempt. The FIFO-by-write-time policy below, and the queued-photograph protection that went with it, are both gone.
@@ -1166,7 +1243,7 @@ The same policy with much smaller numbers and a different filling schedule. A ph
 
 ## Cold start
 
-**Superseded 2026-08-26 by *Deck and Queue v2.md*.** The cold start below is answered structurally rather than bridged: the cache stocks itself at launch without waiting for a client, and the deck deals only what it holds, so *nothing dealt, nothing served, nothing dealt* cannot close. The launch bridge described here does not exist.
+**Reversed 2026-09-05; see *Deal over everything, and the queue fetches its own cards*.** **Superseded 2026-08-26 by *Deck and Queue v2.md*.** The cold start below is answered structurally rather than bridged: the cache stocks itself at launch without waiting for a client, and the deck deals only what it holds, so *nothing dealt, nothing served, nothing dealt* cannot close. The launch bridge described here does not exist.
 
 **Warm start** — queue populated, pool present. Serving a picture is one indexed read and one delete. Sub-millisecond. Every launch after the first should be this.
 
@@ -2329,6 +2406,10 @@ The practical consequence is that this whole section is safe to defer indefinite
 Deferred here rather than built into 0.1: a payload-free `.photoRevoked` topic plus `GET /v1/revocations?since=<cursor>`, so a surface holding a deleted photo drops it instead of waiting to rotate. Worked out in full under *Revocation, and the staleness that is accepted*; the reason it waits is that whether a picture vanishing under a viewer reads better or worse than one that lingers is a question you answer by watching it happen.
 
 It reaches below the display layer — an endpoint and a notification topic — which is a note on what it costs rather than a reason it does not belong here.
+
+### TODO: separate pools of sources, exposed to the client
+
+Added 2026-09-05. We are going to want separate pools of sources exposed to the client. Each pool would have a subset of the total sources available. They would all share the same cache on the agent. This will allow having separate pools for the screensaver and for wallpapers, and would allow showing previews on the client, adding and removing sources.
 
 ### Display styles
 

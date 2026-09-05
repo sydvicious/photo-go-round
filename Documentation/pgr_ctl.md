@@ -205,9 +205,9 @@ worth knowing.
 `pool stats`
 Rows per source, split by what explains everything else — referenced against
 materialized, how much has bytes, and how much is claimed by a lane that is
-fetching it right now. **Referenced plus held is the deck's pool**: a
-materialized photograph the cache has not got is not something the deck can
-deal, so it is absent from every number the deck reports.
+fetching it right now. Held is the cache's fact, not a gate on the deck's: the
+deck deals every photograph from an enabled source whether or not it has bytes
+yet, and the queue fetches what it holds.
 
 `queue peek`
 The deck, head first: which photographs will be shown, in the order they will be
@@ -215,9 +215,8 @@ shown, each with the source it came from and whether it is read in place or
 copied. **The whole deck unless `-n` narrows it** — it is twenty cards, so
 showing part of it by default answered a question nobody asked.
 
-The trailing line is the deck's depth against the pool it was dealt from, which
-is what can be shown right now rather than the size of the library. Peeking
-consumes nothing.
+The trailing line is the deck's depth against the pool it was dealt from —
+every photograph from an enabled source. Peeking consumes nothing.
 
 Sources are numbered, not named — `source 12`, the same words the agent's
 served line uses. `sources list` is where an id becomes a path, and keeping that
@@ -225,15 +224,14 @@ job in one place is what lets a deck and a log be read against each other
 without translating.
 
 `queue fill`
-Does the agent's topping-up by hand: deals cards from what can be shown right
-now, synchronously, and reports what each round produced. Takes `-n` for how
-many rounds, and stops early when a round produces nothing. This is the only way
-to fill a queue with no agent running.
+Does the agent's topping-up by hand: deals cards from every available
+photograph, synchronously, and reports what each round produced. Takes `-n` for
+how many rounds, and stops early when a round produces nothing. This is the only
+way to fill a queue with no agent running.
 
-**It fetches nothing.** Dealing reads a row and writes a row; the bytes are the
-cache's business and the cache stocks itself. A round that produces nothing on a
-library of remote photographs means the cache has not got to them yet, not that
-the deck is broken.
+**It fetches nothing.** Dealing reads a row and writes a row; a card is dealt
+whether or not its bytes are here, and fetching them is the queue's business in
+the running agent.
 
 `deck stats`
 Where the shuffle stands, plus the distribution of showing counts. `times_shown`
@@ -241,10 +239,11 @@ is a statistic and nothing orders by it, which is what makes it the honest
 measure: a spread of one to three across a library is a healthy fraction below
 1.0, and a spread of three to four hundred is starvation.
 
-**The pool it reports is what can be shown, not what exists**, and the `cache`
-line beneath it says how much of the library is still waiting to be fetched. On
-a library of remote photographs with a cold cache the pool is nought, and that is
-the honest answer — the deck deals nothing it cannot serve.
+**The pool it reports is every available photograph** — enabled source, still
+image — and the `cache` line beneath it is the separate fact of how many have
+bytes and how many are still waiting to be fetched. A pool below the library
+means sources disabled or rows that are video; never a cache that has not caught
+up, and never a source that is unreachable.
 
 The number to watch beside them is the remote half's share of the showing
 histogram: it should match that half's share of the library, and falling below

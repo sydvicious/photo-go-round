@@ -15,48 +15,89 @@ struct QueueTests {
 
     // MARK: - Serving
 
-    @Test("Cards come out in the order the deck dealt them")
-    func theQueueIsFirstInFirstOut() throws {
-        // **This replaces three tests about random placement**, whose subject
-        // was deleted with `sort_key` in migration 8. They existed because two
-        // things arrived here wanting opposite ends of a FIFO: a freshly dealt
-        // card, and a card returning from a completed fetch. A fetch completing
-        // puts nothing on the deck now — it makes a photograph eligible and the
-        // deck picks it up on its own terms — so there is one arrival, one end,
-        // and no arrangement left to randomise.
-        //
-        // The old suite also had to prove the keys did not silently collapse
-        // back into a FIFO, which took about a thousand cycles. That is the
-        // stated behaviour now rather than a failure mode.
+    @Test("A new card lands among the cards present, never at the head, and shifts the rest")
+    func placementIsAmongThePresent() throws {
+        // **Random placement is back**, by rank rather than by key: migration 10.
+        // The slot is injected here so the arithmetic can be asserted exactly;
+        // `placementIsUniform` below covers the draw.
+        let (library, ids, source) = try library(photos: 6)
+        // The first card is not placed — an empty queue has one place to be —
+        // so the first slot here is for the second card.
+        let slots = [1, 1, 3, 2]
+        var next = 0
+        let queue = PhotoQueue(database: library.database, nominalSize: 10) { present in
+            defer { next += 1 }
+            return slots[next]
+        }
+
+        try queue.append(photoID: ids[0], sourceID: source)          // [0]
+        try queue.append(photoID: ids[1], sourceID: source)          // slot 1 of 1 → [0, 1]
+        try queue.append(photoID: ids[2], sourceID: source)          // slot 1 of 2 → [0, 2, 1]
+        try queue.append(photoID: ids[3], sourceID: source)          // slot 3 of 3 → [0, 2, 1, 3]
+        try queue.append(photoID: ids[4], sourceID: source)          // slot 2 of 4 → [0, 2, 4, 1, 3]
+
+        #expect(try queue.peek(10).map(\.id) == [ids[0], ids[2], ids[4], ids[1], ids[3]])
+        // The head never moved, whatever landed behind it.
+        #expect(try queue.peek().first?.id == ids[0])
+    }
+
+    @Test("Placement is uniform from second to last")
+    func placementIsUniform() throws {
+        // Nineteen cards present and two hundred insertions, each removed again
+        // so the population stays put: every slot from second to last should be
+        // landed on, and the head never should. A slot that is never hit in two
+        // hundred draws over nineteen has a probability under 0.002% of being
+        // honest chance.
+        let (library, ids, source) = try library(photos: 20)
+        let queue = PhotoQueue(database: library.database, nominalSize: 20)
+        for id in ids.prefix(19) { try queue.append(photoID: id, sourceID: source) }
+        // Placed at random themselves, so their order is whatever it is — what
+        // matters is that the newcomer's comings and goings leave it alone.
+        let resident = try queue.peek(20).map(\.id)
+        let newcomer = ids[19]
+
+        var landed: Set<Int> = []
+        for _ in 0..<200 {
+            try queue.append(photoID: newcomer, sourceID: source)
+            let index = try #require(try queue.peek(20).map(\.id).firstIndex(of: newcomer))
+            landed.insert(index)
+            try queue.remove(photoID: newcomer)
+        }
+
+        #expect(!landed.contains(0), "a new card displaced the head")
+        #expect(landed == Set(1...19), "slots never landed on: \(Set(1...19).subtracting(landed).sorted())")
+        // And the residents are still in the order they were queued.
+        #expect(try queue.peek(20).map(\.id) == resident)
+    }
+
+    @Test("With placement at the tail, cards come out in the order they went in")
+    func tailPlacementIsAFIFO() throws {
         let library = try TestLibrary()
         let source = try library.addSource()
         let ids = try library.addPhotos(60, to: source)
-        let queue = PhotoQueue(database: library.database, nominalSize: 1000)
+        let queue = PhotoQueue(
+            database: library.database, nominalSize: 1000, placement: PhotoQueue.tail)
 
         for id in ids { try queue.append(photoID: id, sourceID: source) }
 
         let order = try queue.peek(Int.max).map(\.id)
-        #expect(order == ids, "the queue reordered cards the deck had already shuffled")
+        #expect(order == ids)
 
-        // And serving takes them in that order.
         var served: [Int64] = []
-        while let card = try queue.serve() { served.append(card.id) }
+        while let card = try queue.takeHead() { served.append(card.id) }
         #expect(served == ids)
     }
 
     @Test("The card at the top is not starved by the ones queued after it")
     func theTopCardIsNotStarved() throws {
-        // **Observed live on 2026-08-25**: photo 8239 held the highest sort key
-        // for six and a half hours while cards queued minutes earlier were
-        // served and replaced around it.
-        //
-        // A new key is drawn between the lowest and the highest currently
-        // queued. Inserting uniformly among *n* cards has *n+1* gaps — before
-        // the first, between each pair, and after the last — and a draw bounded
-        // above by the maximum can only ever reach the first *n* of them. The
-        // card holding the top key is therefore a fixed point, and respacing
-        // preserves order, so it stays there. One slot of twenty dies, one
-        // photograph is never shown, and nothing says so.
+        // **Observed live on 2026-08-25**, under the `REAL` key of migration
+        // 6: photo 8239 held the highest key for six and a half hours while
+        // cards queued minutes earlier were served and replaced around it. A
+        // key drawn between the lowest and highest present could never land
+        // past the top card, so the top card was a fixed point. Integer ranks
+        // shifted on insert have no such point — slot *n* is the tail and is
+        // reachable — but the property is worth holding down whatever the
+        // mechanism, because it died silently the first time.
         let (library, ids, source) = try library(photos: 400)
         let queue = PhotoQueue(database: library.database, nominalSize: 20)
 
@@ -69,7 +110,7 @@ struct QueueTests {
         var served: Set<Int64> = []
         var next = original.count
         for _ in 0..<300 {
-            guard let card = try queue.serve() else { break }
+            guard let card = try queue.takeHead() else { break }
             served.insert(card.id)
             try queue.append(photoID: ids[next], sourceID: source)
             next += 1
@@ -85,7 +126,7 @@ struct QueueTests {
     func emptyQueueServesNothing() throws {
         let library = try TestLibrary()
         let queue = PhotoQueue(database: library.database, nominalSize: 10)
-        #expect(try queue.serve() == nil)
+        #expect(try queue.takeHead() == nil)
         #expect(try queue.size() == 0)
         // A fresh install starts here and stays here until providers deliver.
         #expect(try queue.needsTopUp())
@@ -103,12 +144,12 @@ struct QueueTests {
 
         #expect(try queue.size() == 3)
         var served: [Int64] = []
-        while let card = try queue.serve() { served.append(card.id) }
+        while let card = try queue.takeHead() { served.append(card.id) }
 
         #expect(served.count == 3)
         #expect(Set(served) == Set(ids))
         #expect(try queue.size() == 0)
-        #expect(try queue.serve() == nil)
+        #expect(try queue.takeHead() == nil)
     }
 
     @Test("Peeking shows what is next without consuming it")
@@ -123,7 +164,7 @@ struct QueueTests {
         #expect(peeked.count == 2)
         #expect(Set(peeked).isSubset(of: Set(ids)))
         #expect(try queue.size() == 3)
-        #expect(try queue.serve()?.id == peeked[0], "peek and serve disagree about the head")
+        #expect(try queue.takeHead()?.id == peeked[0], "peek and take disagree about the head")
     }
 
     // MARK: - Size is nominal, not a ceiling
@@ -139,7 +180,7 @@ struct QueueTests {
         #expect(!(try queue.needsTopUp()))
 
         // A client takes one, which is what notices the shortfall.
-        _ = try queue.serve()
+        _ = try queue.takeHead()
         #expect(try queue.size() == 9)
         #expect(try queue.needsTopUp())
 
@@ -151,10 +192,10 @@ struct QueueTests {
 
         // And it drains back down through the nominal size without any of the
         // overshoot being wasted.
-        for _ in 0..<3 { _ = try queue.serve() }
+        for _ in 0..<3 { _ = try queue.takeHead() }
         #expect(try queue.size() == 10)
         #expect(!(try queue.needsTopUp()))
-        _ = try queue.serve()
+        _ = try queue.takeHead()
         #expect(try queue.needsTopUp())
     }
 
@@ -182,7 +223,8 @@ struct QueueTests {
     @Test("Removing a photo from the pool takes it out of the queue")
     func poolRemovalClearsTheQueue() throws {
         let (library, ids, source) = try library(photos: 3)
-        let queue = PhotoQueue(database: library.database, nominalSize: 10)
+        let queue = PhotoQueue(
+            database: library.database, nominalSize: 10, placement: PhotoQueue.tail)
         for id in ids { try queue.append(photoID: id, sourceID: source) }
 
         try PhotoPool(database: library.database).remove(ids[1])

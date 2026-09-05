@@ -87,7 +87,7 @@ struct QueueTopUpTests {
     /// The agent's loop: serve a picture, then top up once.
     private func serveAndTopUp(_ table: Table, times: Int, using filler: () -> QueueFiller) async {
         for _ in 0..<times {
-            _ = try? await table.queue.serve()
+            _ = try? table.queue.takeHead()
             await filler().fill()
         }
     }

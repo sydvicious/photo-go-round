@@ -45,34 +45,6 @@ struct ServeWalkTests {
         func count(where matches: (QueueEvent) -> Bool) -> Int { all.filter(matches).count }
     }
 
-    /// Records what was asked to be cached, without fetching any of it — so a
-    /// test can watch serving hand work off and never wait for it.
-    final class Asked: @unchecked Sendable {
-        private let lock = NSLock()
-        private var ids: [Int64] = []
-
-        var want: @Sendable (Int64) -> Void {
-            { [self] id in
-                lock.lock()
-                ids.append(id)
-                lock.unlock()
-            }
-        }
-
-        /// A credit handed back, which is what a vanished card now produces
-        /// where it used to produce a fetch request.
-        func credit() {
-            lock.lock()
-            ids.append(0)
-            lock.unlock()
-        }
-
-        var all: [Int64] {
-            lock.lock()
-            defer { lock.unlock() }
-            return ids
-        }
-    }
 
     private struct Fixture {
         let folder: TemporaryFolder
@@ -83,7 +55,6 @@ struct ServeWalkTests {
         var cache: PhotoCache
         let source: Source
         let heard = Heard()
-        let asked = Asked()
 
         /// Counts what the walk asked of the source, when a test cares.
         let counting: CountingProvider
@@ -114,18 +85,18 @@ struct ServeWalkTests {
                 try library.database.run("UPDATE photo SET storage = 'materialized';")
             }
             cache.log = heard.log
-            cache.creditReturned = asked.credit
+            // Short, so a test that meets a cold card does not sit out the
+            // production minute. The wait itself is `ServeWaitTests`' subject.
+            cache.serveWait = .milliseconds(200)
         }
 
-        /// **Bytes first, then cards.** The deck's pool is what the cache
-        /// holds, so dealing before fetching deals nothing at all. This is the
-        /// refresher's job, done synchronously.
+        /// **Cards first, then bytes.** Deals everything the deck offers, then
+        /// fetches every queued card's bytes — the fetcher's job, done
+        /// synchronously. A `dealAll()` after this deals nothing more, which
+        /// is fine.
         func cacheAll() async throws {
-            var attempts = 0
-            while try cache.unheldRemoteCount() > 0, attempts < 200 {
-                attempts += 1
-                if await cache.refreshOnce() == .blocked { break }
-            }
+            try dealAll()
+            try await cache.fetchAllQueued()
         }
 
         @discardableResult
@@ -152,11 +123,10 @@ struct ServeWalkTests {
         }
 
         var queued: Int { (try? cache.queue.size()) ?? 0 }
-        /// **How many photographs the library still has**, not how many the
-        /// deck can deal. These tests are about whether a row survived a
-        /// failure, and `Deck.poolSize` stopped answering that in v2 — it
-        /// counts what is servable, so a photograph that is kept but uncached
-        /// is absent from it and present here.
+        /// **How many photographs the library still has.** These tests are
+        /// about whether a row survived a failure, so they count rows rather
+        /// than asking the deck — which since 2026-09-05 would answer the same
+        /// number, but says so through a predicate these tests are not about.
         var pooled: Int {
             (try? library.database.scalarInt("SELECT COUNT(*) FROM photo;")) ?? 0
         }
@@ -173,7 +143,9 @@ struct ServeWalkTests {
 
         let served = try #require(try await fixture.cache.serve())
         #expect(served.card.externalID == "a.png")
-        #expect(fixture.asked.all.isEmpty, "nothing needed fetching, so nothing was asked for")
+        #expect(
+            fixture.heard.count { if case .caching = $0 { true } else { false } } == 1,
+            "one fetch, for the one card, and none from serving")
         // No box was asked for, so what goes out is the original rather than a
         // kept resize — and the line says which, because that is the only place
         // a console can see whether the renderings are earning their disk.
@@ -201,22 +173,21 @@ struct ServeWalkTests {
 
     // MARK: - Nothing to show
 
-    @Test("An empty pool deals nothing, and serving says so")
-    func anEmptyPoolSaysSo() async throws {
-        // **This used to be about running out of *time*.** The walk had a
-        // two-second budget because a cold queue on a network volume could take
-        // a minute to go through, and telling the two apart mattered. Neither
-        // exists now: a card is only dealt once its bytes are here, so there is
-        // nothing slow to walk past and nothing to time.
-        //
-        // What is left is the honest cold start — every photograph remote, the
-        // cache holding none of them, so the deck has nothing to deal and
-        // serving has nothing to take.
+    @Test("A cold library deals; a request waits on the head, drops it, and answers nothing")
+    func aColdLibraryDealsAndServingWaits() async throws {
+        // The deck deals every available photograph, so a cold library fills
+        // the queue with cards whose bytes are not here. With nothing fetching,
+        // a request waits its bound on the head card, drops it, finds no card
+        // with bytes, and answers nothing. The other card keeps its place: it
+        // was never waited on. See `ServeWaitTests` for the wait itself.
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
 
-        #expect(try fixture.dealAll() == 0)
+        #expect(try fixture.dealAll() == 2)
         #expect(try await fixture.cache.serve() == nil)
-        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 0"))
+        #expect(fixture.heard.count { if case .waiting = $0 { true } else { false } } == 1)
+        #expect(fixture.heard.count { if case .cacheDropped = $0 { true } else { false } } == 1)
+        #expect(fixture.queued == 1, "a card that was never waited on was dropped")
+        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 1"))
     }
 
     @Test("The card actually served is still checked against its source")
@@ -256,10 +227,8 @@ struct ServeWalkTests {
     @Test("Asking for a photograph already cached costs a skip, not a second fetch")
     func cachingSomethingAlreadyHeldDoesNothing() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        // **Not via the queue.** These are about fetching a photograph the
-        // cache does not hold, and a photograph the cache does not hold is not
-        // in the deck's pool — so there is no card to peek at. The row is what
-        // the refresher would have drawn.
+        // **Not via the queue.** These are about the fetch itself, asked of
+        // the row directly, the way the queue's fetcher asks once it has a card.
         let card = try #require(try fixture.firstPhoto())
         #expect(try await fixture.cache.cache(photoID: card.id))
 
@@ -273,10 +242,8 @@ struct ServeWalkTests {
     @Test("A fetch that fails from an online source removes the photograph")
     func aFailedFetchFromAnOnlineSourceRemovesIt() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        // **Not via the queue.** These are about fetching a photograph the
-        // cache does not hold, and a photograph the cache does not hold is not
-        // in the deck's pool — so there is no card to peek at. The row is what
-        // the refresher would have drawn.
+        // **Not via the queue.** These are about the fetch itself, asked of
+        // the row directly, the way the queue's fetcher asks once it has a card.
         let card = try #require(try fixture.firstPhoto())
 
         // The source is right there and the file is not, so it is gone.
@@ -288,10 +255,8 @@ struct ServeWalkTests {
     @Test("A fetch that fails from an offline source keeps everything")
     func aFailedFetchFromAnOfflineSourceKeepsIt() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        // **Not via the queue.** These are about fetching a photograph the
-        // cache does not hold, and a photograph the cache does not hold is not
-        // in the deck's pool — so there is no card to peek at. The row is what
-        // the refresher would have drawn.
+        // **Not via the queue.** These are about the fetch itself, asked of
+        // the row directly, the way the queue's fetcher asks once it has a card.
         let card = try #require(try fixture.firstPhoto())
         try fixture.goOffline()
 
@@ -304,10 +269,8 @@ struct ServeWalkTests {
     @Test("A fetch that cannot land in the cache keeps the photograph")
     func aFailedAdoptKeepsThePhotograph() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        // **Not via the queue.** These are about fetching a photograph the
-        // cache does not hold, and a photograph the cache does not hold is not
-        // in the deck's pool — so there is no card to peek at. The row is what
-        // the refresher would have drawn.
+        // **Not via the queue.** These are about the fetch itself, asked of
+        // the row directly, the way the queue's fetcher asks once it has a card.
         let card = try #require(try fixture.firstPhoto())
 
         // The cache root refuses writes — a condition entirely on our side that
@@ -333,10 +296,8 @@ struct ServeWalkTests {
     @Test("A fetch that fails while the file is confirmed present keeps the photograph")
     func aFailedFetchOfAPresentFileKeepsIt() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        // **Not via the queue.** These are about fetching a photograph the
-        // cache does not hold, and a photograph the cache does not hold is not
-        // in the deck's pool — so there is no card to peek at. The row is what
-        // the refresher would have drawn.
+        // **Not via the queue.** These are about the fetch itself, asked of
+        // the row directly, the way the queue's fetcher asks once it has a card.
         let card = try #require(try fixture.firstPhoto())
 
         // Unreadable is not absent: the provider can see the file and cannot
@@ -359,8 +320,8 @@ struct ServeWalkTests {
 
     @Test("A fetch that fails does not put the card back")
     func aFailedFetchDoesNotReturnTheCard() async throws {
-        // **Nothing serving does asks for a fetch any more**, so the fetch is
-        // started the way the refresher starts one: from the row.
+        // **Nothing serving does asks for a fetch**, so the fetch is started
+        // the way the queue's fetcher starts one: from the row.
         let fixture = try await Fixture(photos: ["a.png"])
         let wanted = try #require(try fixture.firstPhoto()).id
 
@@ -378,19 +339,25 @@ struct ServeWalkTests {
     @Test("An offline source serves what we hold and skips what we do not")
     func offlineServesWhatIsHeld() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        // Exactly one of the two fetched, so the deck's pool is that one and
-        // the other is still a remote asset as far as dealing is concerned.
-        #expect(await fixture.cache.refreshOnce() == .fetched)
+        // Both dealt — the deck deals every available photograph — and exactly
+        // one of the two fetched, so the queue holds one warm card and one cold.
         try fixture.dealAll()
-        let held = try #require(try fixture.cache.queue.peek().first)
+        guard case .fetched = await fixture.cache.fetchQueuedOnce() else {
+            Issue.record("the head card was not fetched"); return
+        }
+        let held = try #require(
+            try fixture.library.database.first(
+                "SELECT id FROM photo WHERE cached_at IS NOT NULL;") { try $0.int64("id") })
 
         // The drive goes away *after* one of them was fetched. This is the case
         // that used to fail: the copy we hold could not be reached, because
-        // producing had already written the source off.
+        // producing had already written the source off. A photograph is served
+        // out of the cache regardless of reachability; the cold card is skipped
+        // for want of bytes, whichever order they were dealt in.
         try fixture.goOffline()
 
         let served = try #require(try await fixture.cache.serve())
-        #expect(served.card.id == held.id)
+        #expect(served.card.id == held)
         #expect(fixture.pooled == 2, "an undock deletes nothing")
     }
 

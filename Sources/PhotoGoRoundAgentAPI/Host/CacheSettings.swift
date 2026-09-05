@@ -16,13 +16,17 @@ public struct CacheSettings: Sendable, Equatable {
     /// generous for a read and short enough that a stuck one is a blip.
     public static let fileFetchLimit = Duration.seconds(60)
 
-    /// The same bound for a photo library, and it has to be far larger.
+    /// The same bound for a photo library. **The same number, since
+    /// 2026-09-05.**
     ///
-    /// Three of five downloads in the Phase 1 Photos spike paid a **fixed
-    /// 300-second stall** before transferring normally — 76 kB and 3.4 MB both
-    /// arriving at 301.5 s. A bound that sounds generous, sixty seconds or two
-    /// minutes, would have failed all three of the ones that then succeeded.
-    public static let libraryFetchLimit = Duration.seconds(900)
+    /// It was fifteen minutes, from a measurement in the Photos spike where
+    /// three of five downloads paid a fixed 300-second stall before
+    /// transferring normally. That measurement was taken on a day when
+    /// everything touching iCloud on the machine was wedged, which was not
+    /// known until later — it described the machine, not the provider. A stall
+    /// is a stall, and a card at the head of the queue cannot wait a quarter of
+    /// an hour for one.
+    public static let libraryFetchLimit = Duration.seconds(60)
 
 
     /// Enough to keep a provider's latency covered without turning a warm-up

@@ -145,8 +145,8 @@ struct HostileProviderTests {
 /// to finish, so a provider taking seventy-five seconds and a provider doing
 /// nothing at all looked identical — and when the completion arrived it carried
 /// no indication of how long it had been waited for. The `caching` line existed
-/// for this and lost its only producer when the queue of pictures to cache was
-/// deleted; the refresher is its producer now.
+/// for this and has changed producer twice; the queue's fetcher is its producer
+/// now.
 @Suite("What the cache says while it works")
 struct CacheNarrationTests {
 

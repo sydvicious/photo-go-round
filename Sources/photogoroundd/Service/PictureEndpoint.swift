@@ -36,12 +36,9 @@ struct PictureEndpoint {
     let queueRanShort: @Sendable () -> Void
     /// Called when a request found nothing to show.
     ///
-    /// **A different event from the deck running short, and it wants a
-    /// different answer.** Running short follows a picture reaching somebody,
-    /// which also buys the cache a download credit. Coming up empty means no
-    /// picture reached anybody — so the deck must be refilled and the cache must
-    /// *not* be paid, or a stalled agent would mint credits for pictures nobody
-    /// saw.
+    /// **A different event from the deck running short.** Running short
+    /// follows a picture reaching somebody; coming up empty means no picture
+    /// reached anybody, and the deck must be refilled all the same.
     ///
     /// Without this the deck can only be refilled by a picture being served or
     /// by the heartbeat, and the heartbeat runs behind the refresh. Removing a
@@ -49,9 +46,13 @@ struct PictureEndpoint {
     /// thirty seconds — the length of a network source's walk — with 592
     /// servable photographs in the cache and the window blank throughout.
     var deckCameUpEmpty: @Sendable () -> Void = {}
-    /// Hands the cache back a credit when a card's bytes turn out to be gone.
-    /// The cache paid for that photograph and no longer has it.
-    var creditReturned: @Sendable () -> Void = {}
+    /// Asked when a request meets a head card whose bytes are not here, so the
+    /// host can make sure it is being fetched. Wired to the queue fetcher's
+    /// kick.
+    var ensureFetching: @Sendable () -> Void = {}
+    /// The process's bench, so serving does not wait on a card whose source
+    /// has stopped answering. Nil never benches anything.
+    var bench: SourceBench?
     /// Where the queue's decisions are said. Separate from the served-request
     /// log above it, which records what a *client* was handed.
     var speak: @Sendable (QueueEvent) -> Void = { $0.report() }
@@ -178,7 +179,9 @@ struct PictureEndpoint {
                 store: store
         )
         cache.log = speak
-        cache.creditReturned = creditReturned
+        cache.serveWait = preferences.serveWait
+        cache.ensureFetching = ensureFetching
+        cache.bench = bench
         return (cache, deck)
     }
 
@@ -444,9 +447,9 @@ struct PictureEndpoint {
     ///
     /// `PhotoCache.serve` already handles the ordinary case, where the bytes
     /// are gone before it looks. This is the narrower one where they go between
-    /// its look and this open. Skipped the same way; the record is corrected
-    /// and the credit returned by the next request that draws the card, or by
-    /// the launch walk, whichever comes first.
+    /// its look and this open. Skipped the same way; the record is corrected by
+    /// the next request that draws the card, or by the launch walk, whichever
+    /// comes first.
     private func vanished(_ served: PhotoCache.ServedPhoto, context: (cache: PhotoCache, deck: Deck)) {
         Console.event(
             "\(served.card.externalID) vanished between the index and the open; skipping it")

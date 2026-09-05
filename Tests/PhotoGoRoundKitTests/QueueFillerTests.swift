@@ -170,7 +170,7 @@ struct QueueFillerTests {
 
         var served: [Int64] = []
         for _ in 0..<6 {
-            guard let card = try await queue.serve() else { break }
+            guard let card = try queue.takeHead() else { break }
             served.append(card.id)
         }
         #expect(served.count == 6)
@@ -198,7 +198,7 @@ struct QueueFillerTests {
         #expect(try queue.size() == 50)
 
         // Drain it completely, the way a fast consumer does.
-        while try await queue.serve() != nil {}
+        while try queue.takeHead() != nil {}
         #expect(try queue.size() == 0)
 
         // Re-offer the same photos and refill in one round.

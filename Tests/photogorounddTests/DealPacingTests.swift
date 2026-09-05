@@ -165,10 +165,9 @@ struct DealPacingTests {
 /// heartbeat that would have was stuck behind a network source's 30.9-second
 /// walk. Ten consecutive `204`s with a full cache behind them.
 ///
-/// This is a *different* event from the deck running short, and it must not be
-/// answered by the same hook: a served picture also buys the cache a download
-/// credit, and an empty deck minting credits for pictures nobody saw would let
-/// a stalled agent fetch without bound.
+/// This is a *different* event from the deck running short, and it is answered
+/// by its own hook: a served picture is what paces the deck, and an empty
+/// answer must refill it without counting as one.
 extension DealPacingTests {
 
     @Test("Answering no photos asks for the deck to be filled")
@@ -180,6 +179,6 @@ extension DealPacingTests {
 
         #expect(response.status == 204)
         #expect(library.emptied.value == 1, "an empty deck asked nobody to refill it")
-        #expect(library.asked.value == 0, "an empty answer must not buy a download credit")
+        #expect(library.asked.value == 0, "an empty answer must not count as a picture served")
     }
 }

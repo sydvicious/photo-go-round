@@ -297,6 +297,23 @@ struct HostTests {
         #expect(suite.preferences.scanInterval == .seconds(1))
     }
 
+    @Test("The serve wait is sixty seconds, may be zero, and is clamped at an hour")
+    func serveWaitDefaultsAndClamps() {
+        let suite = Suite()
+        #expect(suite.preferences.serveWait == .seconds(60))
+        #expect(suite.preferences.effectiveValue(for: .serveWaitSeconds) == "60")
+        #expect(Preferences.allKeys.contains(.serveWaitSeconds), "pgr_ctl get would not list it")
+
+        // Zero is a value, not an error: it means never wait.
+        suite.defaults.set(0, forKey: Preferences.Key.serveWaitSeconds.rawValue)
+        #expect(suite.preferences.serveWait == .zero)
+
+        suite.defaults.set(99_999, forKey: Preferences.Key.serveWaitSeconds.rawValue)
+        #expect(suite.preferences.serveWait == .seconds(3600))
+        suite.defaults.set(-5, forKey: Preferences.Key.serveWaitSeconds.rawValue)
+        #expect(suite.preferences.serveWait == .zero)
+    }
+
     @Test("Preferences are read through, never cached at initialization")
     func preferencesAreNotStale() {
         // Nothing reads a preference into a stored property, so there is no

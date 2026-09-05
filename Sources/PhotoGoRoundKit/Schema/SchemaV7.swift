@@ -5,10 +5,12 @@ import Foundation
 /// `SchemaV4` took the cache out of the database on the grounds that the index
 /// is rebuilt from the filesystem at launch and a second record could only
 /// disagree with it. That was right while residency was a *hint* — something
-/// serving discovered and acted on. It is wrong once the deck deals only what
-/// can be shown right now, because a pool has to be something a `WHERE` clause
-/// can say, and shipping the whole resident set into a temp table on every deal
-/// is what `Deck.withServableSet` was already reduced to doing.
+/// serving discovered and acted on. It became wrong on 2026-08-26, when the
+/// deck dealt only what could be shown right now and a pool had to be
+/// something a `WHERE` clause could say. The deck deals everything again since
+/// 2026-09-05, but the column stays: the eviction order reads it, the status
+/// lines count it, and the queue's fetcher uses it to find the cards that still
+/// need bytes.
 ///
 /// **The filesystem is still the truth and this is still a projection.** The
 /// column records when a photograph's *original* landed, nothing about

@@ -60,12 +60,12 @@ struct TestLibrary {
         return database.lastInsertRowID
     }
 
-    /// **`servable` defaults to true, and that is the v2 default for a reason.**
+    /// `servable` records the photographs as held, by setting `cached_at`.
     ///
-    /// The deck's pool is what can be shown right now, so a photograph with no
-    /// bytes is one the deck cannot see. A test about dealing, consumers, or
-    /// the queue wants photographs the deck *can* deal; a test about the pool
-    /// boundary itself passes `false` and says so.
+    /// The deck stopped reading that column on 2026-09-05 — it deals every
+    /// available photograph, bytes or not — so this decides nothing about
+    /// dealing any more. It stays because tests about serving and residency
+    /// want the library to say the bytes are here.
     @discardableResult
     func addPhotos(
         _ count: Int,
@@ -210,29 +210,47 @@ final class Mutex<Value>: @unchecked Sendable {
     }
 }
 
-/// Filling a queue the way the agent does, **in the order v2 does it**.
-///
-/// The two steps swapped places. Dealing and fetching were once one operation,
-/// then they were separated — deal a card, and the bytes arrive because serving
-/// asked for them. Now the cache goes first: the deck's pool *is* what the
-/// cache holds, so dealing before fetching deals nothing at all.
-///
-/// So this stocks the cache the way the refresher would, then deals from it.
+/// Taking the head of the queue the way serving does — choose it, then remove
+/// it — for tests about the queue's order. `PhotoQueue` has no head-pop of its
+/// own since 2026-09-05, because the card serving takes is not always the head.
+extension PhotoQueue {
+    @discardableResult
+    func takeHead() throws -> DeckCard? {
+        guard let head = try peek().first else { return nil }
+        guard try remove(photoID: head.id) else { return nil }
+        return head
+    }
+}
+
+/// Filling a queue the way the agent does, **in the order it does it since
+/// 2026-09-05**: deal every card the deck offers, then fetch the bytes of every
+/// queued card that lacks them, head first. The fetcher's job, done
+/// synchronously and with no deadline.
 extension PhotoCache {
-    /// Fetches until nothing remote is left un-held, then deals until the deck
-    /// offers nothing. Answers how many cards are queued.
+    /// Deals until the deck offers nothing, then fetches until the queue holds
+    /// nothing cold. Answers how many cards are queued — which a failed fetch
+    /// reduces, because a card that could not be fetched leaves the queue.
     @discardableResult
     func fillCompletely(limit: Int = 500) async throws -> Int {
-        // Bounded by attempts as well as by the population: a draw that lands
-        // on something already held is free and legitimate, so a loop that only
-        // counted fetches could run a long time on a nearly-full cache.
-        var attempts = 0
-        while try unheldRemoteCount() > 0, attempts < limit * 4 {
-            attempts += 1
-            if await refreshOnce() == .blocked { break }
-        }
         var dealt = 0
         while dealt < limit, try deal() { dealt += 1 }
+        try await fetchAllQueued(limit: limit)
         return try queue.size()
+    }
+
+    /// Fetches every queued card that lacks bytes, head first, stepping past
+    /// benched sources. Stops on the disk floor.
+    func fetchAllQueued(limit: Int = 500) async throws {
+        var after: Int64? = nil
+        var steps = 0
+        while steps < limit {
+            steps += 1
+            switch await fetchQueuedOnce(after: after) {
+            case .fetched(let rank), .failed(let rank), .benched(let rank):
+                after = rank
+            case .blocked, .drained:
+                return
+            }
+        }
     }
 }

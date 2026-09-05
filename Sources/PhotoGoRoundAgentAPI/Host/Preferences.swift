@@ -75,6 +75,7 @@ public struct Preferences: @unchecked Sendable {
         public static let downloadConcurrency = Key("downloadConcurrency")
         public static let queueSize = Key("queueSize")
         public static let queueRefreshIntervalSeconds = Key("queueRefreshIntervalSeconds")
+        public static let serveWaitSeconds = Key("serveWaitSeconds")
         public static let sources = Key("sources")
         /// Where the service is listening. Written by the agent, read by every
         /// local client.
@@ -213,17 +214,17 @@ public struct Preferences: @unchecked Sendable {
     /// cent of the library is absent from the queue most of the time — at ten,
     /// a source with 7.9% of the photographs held none at all when sampled.
     ///
-    /// **It no longer decides whether a card arrives without its bytes.** That
-    /// used to be the governing constraint, and the number was chosen to equal
-    /// `PhotoCache.lookAheadDepth` so every card was inside the look-ahead
-    /// window from the moment it was dealt. There is no look-ahead now and no
-    /// card without bytes: the deck deals only what the cache already holds, so
-    /// arriving at the head unservable is impossible by construction rather
-    /// than by arithmetic.
+    /// **It is the lead a cold card gets.** A card is dealt whether or not its
+    /// bytes are here and the queue's fetcher goes and gets them, so a card
+    /// dealt onto the tail has this many pictures' worth of time before its
+    /// turn. Twenty at ten seconds a picture is two hundred seconds, against a
+    /// fetch deadline of sixty; a card that still has no bytes at the head is
+    /// waited for, up to `serveWait`, and dropped.
     ///
-    /// **What it does decide, beyond the sampling, is the cache's fetch rate.**
-    /// The refresher's allowance is twice this number at launch and one credit
-    /// per card drawn, so raising it raises the burst a cold start pulls down.
+    /// **What it does decide, beyond the sampling, is how far ahead the cache
+    /// fetches.** The queue fetches its own cards, so this is the number of
+    /// photographs that can be in flight or waiting for bytes at once, and
+    /// raising it raises the burst a cold start pulls down.
     ///
     /// Read afresh every time the queue is topped up, so changing it takes
     /// effect at the next refresh rather than at the next launch. Raising it
@@ -241,6 +242,21 @@ public struct Preferences: @unchecked Sendable {
     /// fast consumer refills promptly, while sweeping and evicting can be lazy.
     public var queueRefreshInterval: Duration {
         .seconds(number(.queueRefreshIntervalSeconds, default: 5, in: 1...3600))
+    }
+
+    /// How long a request may wait for the head card's bytes to land before it
+    /// gives up on that card.
+    ///
+    /// The card was dealt whether or not its bytes were here, and the queue's
+    /// fetcher has been working on it since; by the time it reaches the head
+    /// it has usually had twenty pictures' worth of time. This is the bound
+    /// for when it has not. Spent once per request: when it runs out the cold
+    /// card is dropped from the queue — next time it is dealt, maybe the bytes
+    /// will be there — and the request takes the first card whose bytes are
+    /// here without waiting again. Sixty seconds, decided 2026-09-05; zero
+    /// means never wait.
+    public var serveWait: Duration {
+        .seconds(number(.serveWaitSeconds, default: 60, in: 0...3600))
     }
 
     // MARK: - Sources
@@ -495,6 +511,7 @@ public struct Preferences: @unchecked Sendable {
         case .downloadConcurrency: String(downloadConcurrency)
         case .queueSize: String(queueSize)
         case .queueRefreshIntervalSeconds: String(Int(queueRefreshInterval.totalSeconds))
+        case .serveWaitSeconds: String(Int(serveWait.totalSeconds))
         default: nil
         }
     }
@@ -515,6 +532,6 @@ public struct Preferences: @unchecked Sendable {
         .repeatWindowFraction, .cacheByteCeiling,
         .cacheMinimumFreeBytes, .cacheCriticalFreeBytes,
         .scanIntervalSeconds, .maintenanceIntervalSeconds, .downloadConcurrency, .queueSize,
-        .queueRefreshIntervalSeconds,
+        .queueRefreshIntervalSeconds, .serveWaitSeconds,
     ]
 }

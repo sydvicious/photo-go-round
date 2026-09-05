@@ -145,7 +145,7 @@ enum InspectCommands {
                 "\(number). \(card.externalID)  [source \(card.sourceID), \(card.storage)]")
         }
         Console.note("\(try context.cache.queue.size()) in the deck, of a possible "
-            + "\((try? context.deck.poolSize()) ?? 0) that can be shown right now")
+            + "\((try? context.deck.poolSize()) ?? 0) it can deal from")
     }
 
     /// Asks every enabled source for a picture, synchronously, and says what
@@ -158,10 +158,9 @@ enum InspectCommands {
         let context = try Library.context(environment)
         try context.cache.prepare()
 
-        // Dealing rather than producing: the queue holds cards now, so a round
-        // is a row read and a row written and no bytes move. Fetching is the
-        // agent's queue of pictures to cache, driven by what serving finds it
-        // does not hold — there is nothing here to stand in for that.
+        // Dealing only: a round is a row read and a row written and no bytes
+        // move. In the agent every deal kicks the fetcher, which downloads what
+        // the queue holds; there is nothing here to stand in for that.
         for round in 1...max(1, rounds) {
             var dealt = 0
             while try context.cache.deal(settings: context.preferences.deckSettings) {
@@ -187,11 +186,18 @@ enum InspectCommands {
     /// spread of one to three across a library is a healthy fraction below 1.0,
     /// and a spread of three to four hundred is the starvation bug this deck was
     /// rewritten to remove.
-    /// Photographs read in place, which are in the pool without the cache
-    /// having done anything for them.
-    private static func referencedCount(_ context: Library.Context) -> Int {
+    /// Originals the cache holds for photographs the deck can deal.
+    ///
+    /// Read from `cached_at` rather than derived from the pool, because the pool
+    /// stopped meaning *held* on 2026-09-05: the deck deals every available
+    /// photograph, and how many of those have bytes is a separate fact.
+    private static func heldCount(_ context: Library.Context) -> Int {
         (try? context.database.scalarInt(
-            "SELECT COUNT(*) FROM photo WHERE storage = 'referenced' AND source_enabled = 1;"))
+            """
+            SELECT COUNT(*) FROM photo p
+             WHERE p.source_enabled = 1 AND p.media_type = 'image'
+               AND p.cached_at IS NOT NULL;
+            """))
             .flatMap { $0 } ?? 0
     }
 
@@ -199,14 +205,13 @@ enum InspectCommands {
         let context = try Library.context(environment)
         let stats = try context.deck.stats(settings: context.preferences.deckSettings)
 
-        // **The pool is what can be shown, not what exists**, so a number far
-        // below the library is the ordinary state of a library the cache has
-        // not finished stocking — not a fault. The line below says how much is
-        // still waiting, because without it the first number is alarming and
-        // unexplained.
-        Console.note("pool          \(stats.dealablePhotos) servable of \(stats.totalPhotos)")
+        // **The pool is every available photograph**: enabled source, still
+        // image. What falls short of the library is what is disabled or video —
+        // never what the cache has not got to, and never what is unreachable.
+        // The cache line beneath is the separate fact of how many have bytes.
+        Console.note("pool          \(stats.dealablePhotos) dealable of \(stats.totalPhotos)")
         let waiting = (try? context.deck.unheldRemoteCount()) ?? 0
-        Console.note("cache         \(stats.dealablePhotos - referencedCount(context)) held, "
+        Console.note("cache         \(heldCount(context)) held, "
             + "\(waiting) remote still waiting to be fetched")
         Console.note("window        \(stats.repeatWindow) cards "
             + "(fraction \(context.preferences.deckSettings.repeatWindowFraction))")

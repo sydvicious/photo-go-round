@@ -76,16 +76,14 @@ struct RunCommand {
             databasePath: databasePath, cacheRoot: environment.cacheRoot, store: store)
         let filler = self.filler
 
-        // **The cache refreshes itself.** It draws a remote asset at random,
-        // skips it if it already holds it, and spends a credit when it does
-        // not — twice the deck's maximum size at launch, one back per card
-        // drawn. Nothing asks it for a particular photograph, and it does not
-        // wait for a client: that is what makes the cold start impossible to
-        // deadlock rather than something a bridge has to rescue.
+        // **The queue fetches its own cards.** A card is dealt whether or not
+        // its bytes are here, and every deal that puts a cold card on the queue
+        // kicks the fetcher, which walks the queue head first and downloads
+        // what is missing, `downloadConcurrency` at a time. Nothing draws at
+        // random and nothing counts credits: what gets fetched is what was
+        // dealt, in the order it will be shown. See the plan's *Deal over
+        // everything, and the queue fetches its own cards*.
         //
-        // Its closures build their own `PhotoCache` from the path, because a
-        // `Database` belongs to one isolation domain and this one runs on
-        // whichever thread the round happens to be on.
         // One bench for the process. A source that stops answering is left
         // alone for a while, and the bench is what bounds work that never
         // returns — see `FetchDeadline`, which deliberately has no cap of its
@@ -93,81 +91,81 @@ struct RunCommand {
         let bench = SourceBench()
         // Rebuilt per use rather than shared: a `Database` belongs to one
         // isolation domain, and these run on whichever lane reaches them.
-        let cacheForRefresh: @Sendable () -> PhotoCache? = {
+        let cacheForFetch: @Sendable () -> PhotoCache? = {
             guard let database = try? Database(path: databasePath) else { return nil }
             var cache = PhotoCache(
                 database: database, root: environment.cacheRoot,
                 settings: environment.preferences.cacheSettings,
                 sources: SourceStore(database: database, bytes: store),
+                queueSize: environment.preferences.queueSize,
                 store: store)
             cache.log = Self.speak
             cache.bench = bench
             return cache
         }
 
-        let refresher = CacheRefresher(
-            budget: { 2 * environment.preferences.queueSize },
-            unheldCount: {
-                guard let database = try? Database(path: databasePath) else { return 0 }
-                return (try? Deck(database: database).unheldRemoteCount()) ?? 0
-            },
-            attempt: {
-                guard let cache = cacheForRefresh() else { return .blocked }
-                switch cache.nextToFetch() {
-                case .blocked: return .blocked
-                case .exhausted: return .exhausted
-                case .alreadyHeld: return .alreadyHeld
-                case .benched: return .benched
-
-                case .fetch(let card, let limit):
-                    // Said before the wait, not after it. See `QueueEvent.caching`.
-                    Self.speak(
-                        .caching(photo: card.externalID, source: card.sourceID, within: limit))
-                    // **The lane comes back whatever the provider does.** The
-                    // fetch is let go of rather than waited for: a read blocked
-                    // waiting for an iCloud file to materialise answers neither
-                    // cancellation nor this deadline, and a structured child
-                    // would be awaited at scope exit — which is the wait this
-                    // exists to escape.
-                    let landed = Flag()
-                    let answered = await FetchDeadline.run(
-                        within: limit,
-                        work: {
-                            guard let worker = cacheForRefresh() else { return }
-                            if await worker.fetchDrawn(card) { landed.raise() }
-                            // Whatever happened, the claim must not outlive the
-                            // work: a photograph left claimed is sidelined for
-                            // the whole timeout for no reason.
-                            worker.finishFetch(card, landed: true)
-                        },
-                        whenAbandoned: {
-                            Log.cache.notice(
-                                "fetch for photo \(card.id, privacy: .public) returned after it was given up on"
-                            )
-                        })
-
-                    guard answered else {
-                        cache.fetchTimedOut(card, after: limit)
-                        return .failed
-                    }
-                    let ok = landed.lower()
-                    cache.finishFetch(card, landed: ok)
-                    if ok { environment.announce(.cacheChanged) }
-                    return ok ? .fetched : .failed
-                }
-            },
-            // **Lanes, so a slow source cannot stop a fast one.** A single-lane
-            // refresher spends its round waiting on whichever provider it drew.
+        let fetcher = QueueFetcher(
             concurrency: preferences.downloadConcurrency,
+            next: { after in
+                guard let cache = cacheForFetch() else { return .blocked }
+                return cache.nextQueuedToFetch(after: after)
+            },
+            fetch: { card, limit in
+                guard let cache = cacheForFetch() else { return .failed }
+                // Said before the wait, not after it. See `QueueEvent.caching`.
+                Self.speak(.caching(photo: card.externalID, source: card.sourceID, within: limit))
+                // **The lane comes back whatever the provider does.** The fetch
+                // is let go of rather than waited for: a read blocked waiting
+                // for an iCloud file to materialise answers neither cancellation
+                // nor this deadline, and a structured child would be awaited at
+                // scope exit — which is the wait this exists to escape.
+                let landed = Flag()
+                let answered = await FetchDeadline.run(
+                    within: limit,
+                    work: {
+                        guard let worker = cacheForFetch() else { return }
+                        let ok = await worker.fetch(card)
+                        if ok { landed.raise() }
+                        // Whatever happened, the claim must not outlive the
+                        // work: a photograph left claimed is sidelined for the
+                        // whole timeout for no reason.
+                        worker.finishFetch(card, landed: ok)
+                    },
+                    whenAbandoned: {
+                        Log.cache.notice(
+                            "fetch for photo \(card.id, privacy: .public) returned after it was given up on"
+                        )
+                    })
+
+                guard answered else {
+                    // **A card that did not answer leaves the queue.** Its
+                    // source is told off by the bench; the photograph itself
+                    // goes back into the deck's contention. Should the abandoned
+                    // work land later, the bytes are kept and the next deal of
+                    // this photograph finds them here.
+                    cache.fetchTimedOut(card, after: limit)
+                    cache.dropUnfetched(card, because: "its fetch did not answer in \(limit)")
+                    return .timedOut
+                }
+                guard landed.lower() else {
+                    cache.dropUnfetched(card, because: "its fetch failed")
+                    return .failed
+                }
+                environment.announce(.cacheChanged)
+                return .fetched
+            },
             log: { Console.event($0) }
         )
 
-        // **A card drawn is the other of the two things that start a round.**
-        // Topping the deck up and buying the cache a credit are the same event
-        // — a picture reached somebody — so they are rung together.
+        // **A picture reached somebody: top the deck up, and fetch what the
+        // top-up dealt.** The two are one event, so they are rung together —
+        // and the kick follows the fill rather than running beside it, because
+        // a fetcher kicked before the deal has landed finds nothing to do.
         let topUp: @Sendable () -> Void = {
-            Task { await filler.servedOne(preferences: environment.preferences) }
-            Task { await refresher.cardDrawn() }
+            Task {
+                let round = await filler.servedOne(preferences: environment.preferences)
+                if round.produced > 0 { await fetcher.kick() }
+            }
         }
 
         filler.reporting(to: Self.speak)
@@ -178,18 +176,21 @@ struct RunCommand {
             preferences: preferences,
             store: store,
             queueRanShort: topUp,
-            // **An empty answer refills the deck and pays the cache nothing.**
-            // The heartbeat would eventually do the first, but it runs behind
-            // the refresh — so a source removed while a slow share is being
-            // walked leaves the window blank for the length of that walk. The
-            // filler has its own connection on its own thread, so this does not
-            // wait for the loop.
+            // **An empty answer refills the deck.** The heartbeat would
+            // eventually do it, but it runs behind the refresh — so a source
+            // removed while a slow share is being walked leaves the window blank
+            // for the length of that walk. The filler has its own connection on
+            // its own thread, so this does not wait for the loop.
             deckCameUpEmpty: {
-                Task { await filler.topUpIfShort(preferences: environment.preferences) }
+                Task {
+                    let round = await filler.topUpIfShort(preferences: environment.preferences)
+                    if round.produced > 0 { await fetcher.kick() }
+                }
             },
-            // A card whose bytes turn out to be gone hands the cache back the
-            // credit it spent on that photograph.
-            creditReturned: { refresher.bank() },
+            // A request waiting on a cold head card asks for the fetcher; the
+            // kick is absorbed if a round is already on it.
+            ensureFetching: { Task { await fetcher.kick() } },
+            bench: bench,
             speak: Self.speak
         )
         // Sources are managed over the same listener, because a client cannot
@@ -311,12 +312,10 @@ struct RunCommand {
             }
         }
 
-        // Launch grants a full allowance and the fetcher starts immediately,
-        // in the background: an agent with no client attached still stocks the
-        // cache, and one whose library is entirely referenced finds nothing to
-        // do and stops. Detached because a slow first fetch must not hold up
-        // the loop that serves pictures.
-        Task { await refresher.begin() }
+        // Cards left on the queue by the last run may still want their bytes.
+        // In the background, because a slow first fetch must not hold up the
+        // loop that serves pictures.
+        Task { await fetcher.kick() }
 
         // Preferences are the truth; the source table is a projection of them.
         // A database that was deleted rebuilds itself here.
@@ -358,14 +357,6 @@ struct RunCommand {
         // waiting out a network walk. See `Heartbeat.order(launching:)`.
         var launching = true
         var lastStatus = ""
-        // **The launch grant waits for the library to exist.** Firing it before
-        // the first scan asks an empty `photo` table how much is un-held, gets
-        // nought, and ends the round on the spot — so nothing is ever fetched
-        // and, on a library with no referenced photographs in it, nothing can
-        // ever be drawn to start another one. That is precisely the cold start
-        // this design removes, reintroduced by doing the right thing in the
-        // wrong order. Found by running it, 2026-08-26.
-        var grantedLaunchAllowance = false
         /// One refresh pass at a time. Distinct from `Self.refreshing`, which
         /// admits one walk per *source*: this is one walk of the whole list.
         let refreshPass = Latch()
@@ -406,13 +397,6 @@ struct RunCommand {
             // the heartbeat belongs to this loop and to nothing else.
             if refreshFinished.lower() {
                 heartbeat.finished(.refresh, at: Date())
-                // Now the library is known, so the cache can be told to stock
-                // itself — before this, it would ask an empty table how much is
-                // un-held and end its round on the spot.
-                if !grantedLaunchAllowance {
-                    grantedLaunchAllowance = true
-                    Task { await refresher.begin() }
-                }
             }
 
             let scanInterval = scanIntervalOverride ?? preferences.scanInterval
@@ -450,10 +434,6 @@ struct RunCommand {
                         await Self.runRefresh(
                             databasePath: databasePath, bytes: store, localFirst: firstPass)
                         heartbeat.finished(.refresh, at: Date())
-                        if !grantedLaunchAllowance {
-                            grantedLaunchAllowance = true
-                            await refresher.begin()
-                        }
                     } else if refreshPass.tryEnter() {
                         // **`isDue` keeps saying yes while this runs**, because
                         // it reads the last *finish*. The gate is what stops a
@@ -481,7 +461,8 @@ struct RunCommand {
                             forced: asked || once)
                     else { continue }
                     try await maintainQueue(
-                        sources: sources, preferences: preferences, environment: environment)
+                        sources: sources, preferences: preferences, environment: environment,
+                        fetcher: fetcher)
                     heartbeat.finished(.queue, at: Date())
                 }
             }
@@ -691,7 +672,8 @@ struct RunCommand {
     private func maintainQueue(
         sources: SourceStore,
         preferences: Preferences,
-        environment: MacHostEnvironment
+        environment: MacHostEnvironment,
+        fetcher: QueueFetcher
     ) async throws {
 
 
@@ -707,7 +689,11 @@ struct RunCommand {
         // anybody asking for a picture, so an idle agent spends its idle time
         // getting the next few ready rather than discovering at the last moment
         // that they need fetching.
-        await filler.topUpIfShort(preferences: preferences)
+        let round = await filler.topUpIfShort(preferences: preferences)
+        // A one-pass run waits for its fetches; a serving agent lets them run.
+        if round.produced > 0 {
+            if once { await fetcher.kick() } else { Task { await fetcher.kick() } }
+        }
     }
 
     private func runMaintenance(
@@ -1145,7 +1131,7 @@ extension RunCommand {
 ///
 /// `Flag` is raise-and-read, which cannot express *test and set* — two ticks
 /// could both see it lowered and both start a pass. This is the smaller thing
-/// `QueueFiller` and `CacheRefresher` each build inline for their own rounds.
+/// `QueueFiller` and `QueueFetcher` each build inline for their own rounds.
 final class Latch: @unchecked Sendable {
     private let lock = NSLock()
     private var held = false

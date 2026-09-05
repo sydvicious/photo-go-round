@@ -43,9 +43,14 @@ struct SourceStateTests {
             library = try TestLibrary()
             bytes = PhotoStore(root: cacheRoot.url.appending(path: "cache"))
             store = SourceStore(database: library.database, bytes: bytes)
-            cache = PhotoCache(
+            var built = PhotoCache(
                 database: library.database, root: cacheRoot.url.appending(path: "cache"),
                 sources: store, store: bytes)
+            // Short, so a state with nothing to serve does not sit out the
+            // production minute waiting for bytes nobody is fetching. The wait
+            // itself is `ServeWaitTests`' subject.
+            built.serveWait = .milliseconds(200)
+            cache = built
             try cache.prepare()
 
             source = try await store.add(kind: .folder, locator: folder.path)
@@ -77,11 +82,10 @@ struct SourceStateTests {
             try #require(try store.source(id: source.id))
         }
 
-        /// **How many photographs the library still has**, not how many the
-        /// deck can deal. These tests are about whether a row survived a
-        /// failure, and `Deck.poolSize` stopped answering that in v2 — it
-        /// counts what is servable, so a photograph that is kept but uncached
-        /// is absent from it and present here.
+        /// **How many photographs the library still has.** These tests are
+        /// about whether a row survived a failure, so they count rows rather
+        /// than asking the deck — which since 2026-09-05 would answer the same
+        /// number, but says so through a predicate these tests are not about.
         var pooled: Int {
             (try? library.database.scalarInt("SELECT COUNT(*) FROM photo;")) ?? 0
         }
@@ -159,7 +163,8 @@ struct SourceStateTests {
         #expect(try await fixture.serveEverything().isEmpty)
         // Nothing was deleted: the source is right there and can produce it
         // again, which is what makes this different from every other empty
-        // answer in this file.
+        // answer in this file. Serving waited its bound for the bytes, dropped
+        // the card, and the row is there for the next deal.
         #expect(fixture.pooled == 1)
     }
 

@@ -545,6 +545,7 @@ struct SourceTests {
 
         #expect(result.sourceUnavailable)
         #expect(result.removed == 0)
+        // Still in the pool, too: reachability is not part of the deal.
         #expect(try library.deck.poolSize() == 2)
     }
 
@@ -586,12 +587,10 @@ struct SourceTests {
         #expect(stats.referenced == 0)
         #expect(stats.claimed == 0)
 
-        // A claim taken at selection is visible, which is what makes a stuck
-        // fetch something you can see rather than something you infer. The
-        // claim belongs to the cache's draw now — dealing takes none, because
-        // its bytes are already here.
-        try library.database.run("UPDATE photo SET cached_at = NULL;")
-        _ = try library.deck.nextRemoteCandidate()
+        // A claim is visible, which is what makes a stuck fetch something you
+        // can see rather than something you infer. The claim belongs to the
+        // queue's fetcher — dealing takes none.
+        #expect(try library.deck.claim(photoID: images[0]))
         stats = try pool.stats(forSource: source)
         #expect(stats.claimed == 1)
 

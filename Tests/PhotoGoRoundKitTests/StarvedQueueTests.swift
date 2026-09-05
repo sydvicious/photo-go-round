@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 
+@testable import PhotoGoRoundAgentAPI
 @testable import PhotoGoRoundKit
 
 /// The queue going empty and staying empty while the pool is full of
@@ -122,11 +123,17 @@ struct StarvedQueueTests {
     /// so the failure was in *dealing*, not in serving. This test exists to keep
     /// the two apart, so a future change cannot quietly turn the honest case
     /// into the broken-looking one.
-    @Test("Offline sources still deal — an unreachable volume empties the cache, not the queue")
+    @Test("Offline sources still deal — reachability is the fetch's problem, not the deck's")
     func offlineSourcesStillFillTheQueue() throws {
+        // Reachability was tried as part of the deal on 2026-09-05, twice, and
+        // taken out again: what we hold of an unmounted volume serves from the
+        // cache, and what we do not fails its fetch and is dropped, so there is
+        // nothing for a gate here to decide. Held or cold, every photograph of
+        // an offline source is dealt.
         let library = try TestLibrary()
         let source = try library.addSource(locator: "/Volumes/gone/")
-        try library.addPhotos(100, to: source)
+        let held = Set(try library.addPhotos(30, to: source, namePrefix: "held"))
+        let cold = Set(try library.addPhotos(70, to: source, namePrefix: "cold", servable: false))
 
         // The source is unreachable, which is a fact about the volume and not
         // about the pool. Enabled stays true: offline is not disabled.
@@ -139,20 +146,8 @@ struct StarvedQueueTests {
             ["id": .int(source)]
         )
 
-        // Dealing is a row read and a row write. It does not care.
-        var dealt = 0
-        while dealt < 20, let card = try library.deck.nextCandidate(settings: .default) {
-            try library.enqueue(card.id, sourceID: source)
-            try library.deck.releaseClaim(photoID: card.id)
-            dealt += 1
-        }
-
-        #expect(
-            dealt == 20,
-            "an offline source stopped the deck from dealing; offline is a serving problem"
-        )
-        #expect(try PhotoQueue(database: library.database, nominalSize: 20).size() == 20)
-        // So a walk has cards to walk. It will skip every one of them for want
-        // of bytes — `walked 20`, not `walked 0`.
+        #expect(try library.deck.poolSize() == 100)
+        let dealt = Set(try library.drawSequence(count: 100, settings: DeckSettings(repeatWindowFraction: 1.0)))
+        #expect(dealt == held.union(cold), "an offline source stopped the deck from dealing")
     }
 }

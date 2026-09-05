@@ -73,9 +73,15 @@ struct EndpointCacheTests {
                 database: database, root: cacheRoot,
                 sources: sources, queueSize: 100, store: store)
             let collector = log
+            // A short serve wait: two tests below meet a card whose original
+            // was evicted and nothing here fetches it back, so the request
+            // would otherwise sit out the production minute. The wait itself
+            // is `ServeWaitTests`' subject.
+            let defaults = scratchSuite("ep")
+            defaults.set(0.2, forKey: Preferences.Key.serveWaitSeconds.rawValue)
             endpoint = PictureEndpoint(
                 databasePath: path, cacheRoot: cacheRoot,
-                preferences: Preferences(defaults: scratchSuite("ep")),
+                preferences: Preferences(defaults: defaults),
                 store: store, queueRanShort: {}, log: { collector.record($0) })
         }
 
@@ -342,7 +348,9 @@ struct EndpointCacheTests {
 
         // 300×300 was never rendered and the original is gone, so there is
         // nothing to make it from. Answering with the 200-wide file would be
-        // handing over pixels the client did not ask for.
+        // handing over pixels the client did not ask for. In the agent the
+        // request would wait for the fetcher to bring the original back; here
+        // nothing fetches, so it waits its short bound and answers nothing.
         let response = try await library.get("w=300&h=300", toppingUp: false)
         #expect(response.status == 204)
     }
@@ -664,29 +672,35 @@ struct EndpointCacheTests {
 }
 
 
-/// Filling a queue the way the agent does, **in the order v2 does it**.
-///
-/// The two steps swapped places. Dealing and fetching were once one operation,
-/// then they were separated — deal a card, and the bytes arrive because serving
-/// asked for them. Now the cache goes first: the deck's pool *is* what the
-/// cache holds, so dealing before fetching deals nothing at all.
-///
-/// So this stocks the cache the way the refresher would, then deals from it.
+/// Filling a queue the way the agent does, **in the order it does it since
+/// 2026-09-05**: deal every card the deck offers, then fetch the bytes of every
+/// queued card that lacks them, head first. The fetcher's job, done
+/// synchronously and with no deadline.
 extension PhotoCache {
-    /// Fetches until nothing remote is left un-held, then deals until the deck
-    /// offers nothing. Answers how many cards are queued.
+    /// Deals until the deck offers nothing, then fetches until the queue holds
+    /// nothing cold. Answers how many cards are queued — which a failed fetch
+    /// reduces, because a card that could not be fetched leaves the queue.
     @discardableResult
     func fillCompletely(limit: Int = 500) async throws -> Int {
-        // Bounded by attempts as well as by the population: a draw that lands
-        // on something already held is free and legitimate, so a loop that only
-        // counted fetches could run a long time on a nearly-full cache.
-        var attempts = 0
-        while try unheldRemoteCount() > 0, attempts < limit * 4 {
-            attempts += 1
-            if await refreshOnce() == .blocked { break }
-        }
         var dealt = 0
         while dealt < limit, try deal() { dealt += 1 }
+        try await fetchAllQueued(limit: limit)
         return try queue.size()
+    }
+
+    /// Fetches every queued card that lacks bytes, head first, stepping past
+    /// benched sources. Stops on the disk floor.
+    func fetchAllQueued(limit: Int = 500) async throws {
+        var after: Int64? = nil
+        var steps = 0
+        while steps < limit {
+            steps += 1
+            switch await fetchQueuedOnce(after: after) {
+            case .fetched(let rank), .failed(let rank), .benched(let rank):
+                after = rank
+            case .blocked, .drained:
+                return
+            }
+        }
     }
 }
