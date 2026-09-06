@@ -87,26 +87,13 @@ struct PictureEndpoint {
         var sourceID: Int64?
         var bytes: Int64
         var milliseconds: Double
-        /// Whether the pixels came from a rendering we already had.
-        ///
-        /// Nil when no size was asked for, because the original is neither: it
-        /// is the file itself, and nothing was decoded to produce it.
-        var cache: Cache?
-
-        /// A miss is the interesting one, and the milliseconds beside it are
-        /// what it cost — a decode and a re-encode of a full-resolution
-        /// photograph, which is the number the whole render-on-demand design is
-        /// judged on.
-        enum Cache: String, Sendable {
-            case hit
-            case miss
-        }
-
         /// What the cache holds, at the moment this request was answered.
         ///
-        /// Beside the hit or miss because the two are read together: a miss is
-        /// ordinary while the cache is filling and worth a second look once it
-        /// is not, and the size is how you tell which.
+        /// **`cache: hit | miss` used to sit beside this** and went with the
+        /// resize cache on 2026-09-06: every sized request renders now, so a
+        /// field that is always `miss` says nothing. The milliseconds at the end
+        /// of the line are what the render cost, which is the number the
+        /// render-on-demand design is judged on.
         var cacheBytes: Int64?
         /// How many cards were still queued after this one was taken.
         ///
@@ -122,13 +109,6 @@ struct PictureEndpoint {
             if let width, let height { parts.append("\(width)x\(height)") }
             if let deal { parts.append("deal #\(deal)") }
             if bytes > 0 { parts.append(RunCommand.bytes(bytes)) }
-            // **Two facts, two fields.** These were one — `miss of 5.17 GB` —
-            // which reads as though 5.17 GB had been missed. The first says
-            // whether the pixels came from a rendering already held at this
-            // size; the second is how much the whole cache is holding, which is
-            // beside it because a miss is ordinary while the cache is filling
-            // and worth a second look once it is not.
-            if let cache { parts.append(cache.rawValue) }
             if let cacheBytes { parts.append("cache \(RunCommand.bytes(cacheBytes))") }
             if let queued { parts.append("\(queued) queued") }
             parts.append(milliseconds.formatted(.number.precision(.fractionLength(1))) + "ms")
@@ -149,7 +129,7 @@ struct PictureEndpoint {
                 """
                 served status=\(status, privacy: .public) consumer=\(consumer, privacy: .public) \
                 card=\(card ?? 0, privacy: .public) deal=\(deal ?? 0, privacy: .public) \
-                bytes=\(bytes, privacy: .public) cache=\(cache?.rawValue ?? "n/a", privacy: .public) \
+                bytes=\(bytes, privacy: .public) \
                 source=\(sourceID ?? 0, privacy: .public) \
                 cacheBytes=\(cacheBytes ?? -1, privacy: .public) \
                 queued=\(queued ?? -1, privacy: .public) ms=\(milliseconds, privacy: .public)
@@ -210,7 +190,6 @@ struct PictureEndpoint {
         detail: String,
         card: DeckCard? = nil,
         bytes: Int64 = 0,
-        cache: Served.Cache? = nil,
         cacheBytes: Int64? = nil,
         queued: Int? = nil
     ) {
@@ -226,7 +205,6 @@ struct PictureEndpoint {
                 sourceID: card?.sourceID,
                 bytes: bytes,
                 milliseconds: (ContinuousClock.now - request.receivedAt).totalSeconds * 1000,
-                cache: cache,
                 cacheBytes: cacheBytes,
                 queued: queued
             )
@@ -265,89 +243,15 @@ struct PictureEndpoint {
             // A photograph that will not render is skipped to the next entry
             // rather than answered with an error: the client asked for a picture
             // and there are others. Only an exhausted queue is *no photos*.
-            // The box is named up front, because the cache needs it to answer
-            // at all: a photograph whose original has been evicted can still be
-            // served from a rendering held at exactly this size, and only the
-            // caller knows what size that is.
-            let size = box.map { PhotoStore.Size(width: $0.width, height: $0.height) }
+            //
+            // **The box is not passed down any more.** It used to be, so that a
+            // photograph whose original had been evicted could be answered from
+            // a rendering held at exactly this size. Nothing is held but
+            // originals since 2026-09-06, so what comes back is the original and
+            // the resize happens here, on every request.
+            while let served = try await context.cache.serve(to: consumerID) {
 
-            while let served = try await context.cache.serve(to: consumerID, fitting: size) {
-
-                // What a re-render would decode from. The served URL, except
-                // for a held rendering the client cannot accept, where it
-                // becomes the original.
-                var renderSource = served.url
-
-                // Already rendered at this size: hand over the file rather than
-                // decoding again — when the client accepts its format. On a
-                // small library this is the common case, because a photograph
-                // comes round every few minutes — and it is the *only* case
-                // when the original is no longer held.
-                var serveHeld = served.isRendering
-                if served.isRendering {
-                    let held = PhotoRenderer.Format(
-                        rawValue: served.url.pathExtension.lowercased())
-                    let acceptable = held?.admitted(by: accept) ?? false
-                    if !acceptable {
-                        if let original = (try? context.cache.residentURL(
-                            forPhoto: served.card.id)) ?? nil
-                        {
-                            // Re-render in the format the client asked for; the
-                            // replacement takes the held file's place at this
-                            // size — see `PhotoStore.store`.
-                            serveHeld = false
-                            renderSource = original
-                        } else {
-                            // Nothing to re-render from. The bytes we hold go
-                            // out rather than nothing — a format preference is
-                            // not worth answering a client with no picture.
-                            Console.event(
-                                "\(served.card.externalID) held as \(served.url.pathExtension) which the client does not accept; original gone, serving it anyway")
-                            Log.deck.notice(
-                                "photo \(served.card.id, privacy: .public) served in an unaccepted format; the original is no longer held")
-                        }
-                    }
-                }
-                if serveHeld {
-                    // Opened before anything is promised. The pop removed this
-                    // photograph's eviction protection, so the file can vanish
-                    // between here and the pump; an open handle keeps the bytes
-                    // whatever happens to the name, and a failed open is the
-                    // race caught before any header is written — skipped like
-                    // any other card whose bytes are not here.
-                    guard let stream = HTTPListener.Response.StreamedFile(url: served.url) else {
-                        vanished(served, context: context)
-                        continue
-                    }
-                    var headers = Self.headers(
-                        for: served.card, contentType: Self.contentType(of: served.url))
-                    // Read from the file rather than echoing the box that was
-                    // asked for: the header describes what the client is handed,
-                    // and that has to mean the same thing hit or miss.
-                    if let pixels = PhotoRenderer.pixelSize(of: served.url) {
-                        headers["X-PGR-Pixels"] = "\(pixels.width)x\(pixels.height)"
-                    }
-                    headers["X-PGR-Cache"] = "hit"
-                    try? context.deck.markDelivered(photoID: served.card.id)
-                    // **A deal follows a picture that reached somebody**, not a
-                    // request that arrived. Rung at the top of this loop it
-                    // fired once per card *taken*, so a request walking past
-                    // three unrenderable photographs bought four fresh cards —
-                    // against `PhotoCache`'s own statement that "a skip no
-                    // longer buys a fresh card". `markDelivered` is the
-                    // endpoint's existing notion of a 200 in hand, so this
-                    // belongs beside it and nowhere else.
-                    queueRanShort()
-                    report(
-                        request, status: 200, detail: served.card.externalID,
-                        card: served.card, bytes: stream.byteCount, cache: .hit,
-                        cacheBytes: store.totals.byteCount,
-                        queued: try? context.cache.queue.size())
-                    return HTTPListener.Response(
-                        status: 200, reason: "OK", headers: headers, body: .file(stream))
-                }
-
-                guard let box, let size else {
+                guard let box else {
                     // No size asked for: the original, untouched — opened now,
                     // for the same reason as above.
                     guard let stream = HTTPListener.Response.StreamedFile(url: served.url) else {
@@ -375,17 +279,20 @@ struct PictureEndpoint {
                 }
 
                 do {
+                    // **Rendered and thrown away.** The bytes went into the
+                    // cache under `(photo, resolution)` until 2026-09-06, where
+                    // they were a gigabyte of near-duplicate boxes — a window
+                    // moved two pixels and the whole set was made again — for a
+                    // hit that a shuffle with a repeat window almost never
+                    // takes. The decode is ~109 ms median, measured, and it is
+                    // spent inside the gap between pictures rather than on a
+                    // blank frame.
                     let rendered = try PhotoRenderer.render(
-                        contentsOf: renderSource, fitting: box.width, by: box.height, as: format)
-                    // Keep it. A failure to write is not a failure to serve.
-                    _ = try? context.cache.keep(
-                        rendered.bytes, of: served.card, at: size,
-                        pathExtension: rendered.format.rawValue)
+                        contentsOf: served.url, fitting: box.width, by: box.height, as: format)
 
                     var headers = Self.headers(
                         for: served.card, contentType: rendered.format.mimeType)
                     headers["X-PGR-Pixels"] = "\(rendered.width)x\(rendered.height)"
-                    headers["X-PGR-Cache"] = "miss"
                     try? context.deck.markDelivered(photoID: served.card.id)
                     // **A deal follows a picture that reached somebody**, not a
                     // request that arrived. Rung at the top of this loop it
@@ -398,7 +305,8 @@ struct PictureEndpoint {
                     queueRanShort()
                     report(
                         request, status: 200, detail: served.card.externalID,
-                        card: served.card, bytes: Int64(rendered.bytes.count), cache: .miss, cacheBytes: store.totals.byteCount,
+                        card: served.card, bytes: Int64(rendered.bytes.count),
+                        cacheBytes: store.totals.byteCount,
                         queued: try? context.cache.queue.size())
                     return HTTPListener.Response(
                         status: 200, reason: "OK", headers: headers,

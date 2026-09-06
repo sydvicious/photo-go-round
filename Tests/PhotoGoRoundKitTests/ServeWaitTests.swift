@@ -115,7 +115,7 @@ struct ServeWaitTests {
 
         // Make the head cold again: its bytes go, and the record with them.
         let head = try #require(fixture.head)
-        fixture.bytes.remove(PhotoStore.Key(photoUUID: head.uuid))
+        fixture.bytes.remove(photoUUID: head.uuid)
         try fixture.cache.releaseResidency(ofPhotos: [head.uuid])
 
         let clock = ContinuousClock()

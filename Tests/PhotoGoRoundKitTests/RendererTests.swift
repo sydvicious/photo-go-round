@@ -235,20 +235,6 @@ struct RendererTests {
         #expect(PhotoRenderer.Format.negotiated(accept: "text/html") == nil)
     }
 
-    @Test("Admission is broader than negotiation: held bytes serve if the client accepts them")
-    func admissionIsBroaderThanNegotiation() {
-        // Negotiation picks what to produce; admission asks whether bytes
-        // already held may go out as they are. A permissive client admits a
-        // held JPEG even though negotiation would have produced HEIC.
-        #expect(PhotoRenderer.Format.jpeg.admitted(by: "image/heic, image/jpeg"))
-        #expect(PhotoRenderer.Format.jpeg.admitted(by: nil))
-        #expect(PhotoRenderer.Format.jpeg.admitted(by: "*/*"))
-        #expect(PhotoRenderer.Format.heic.admitted(by: "image/*"))
-        #expect(!PhotoRenderer.Format.heic.admitted(by: "image/jpeg"))
-        #expect(!PhotoRenderer.Format.jpeg.admitted(by: "image/heic"))
-        #expect(!PhotoRenderer.Format.heic.admitted(by: "image/png"))
-    }
-
     @Test("The format asked for is the format returned")
     func formatIsHonoured() throws {
         let directory = temporary()
@@ -271,66 +257,8 @@ struct RendererTests {
 
 /// The rendering cache, which is what makes a second request for a size already
 /// held a file read rather than a decode.
-@Suite("Rendering cache")
-struct RenderCacheTests {
-
-    private func image(width: Int, height: Int, at url: URL) throws {
-        let context = CGContext(
-            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
-        context.setFillColor(CGColor(red: 0.9, green: 0.4, blue: 0.1, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        let destination = CGImageDestinationCreateWithURL(
-            url as CFURL, UTType.png.identifier as CFString, 1, nil)!
-        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
-        #expect(CGImageDestinationFinalize(destination))
-    }
-
-    @Test("The same photograph is held at two sizes at once, and both keep serving")
-    func twoSizesCoexist() throws {
-        let directory = URL.temporaryDirectory.appending(path: "pgr-two-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let original = directory.appending(path: "photo.png")
-        try image(width: 2000, height: 2000, at: original)
-
-        let store = PhotoStore(root: directory.appending(path: "cache"))
-        let photo = UUID().uuidString.lowercased()
-        let source = UUID().uuidString.lowercased()
-        let small = PhotoStore.Size(width: 100, height: 100)
-        let large = PhotoStore.Size(width: 1000, height: 1000)
-
-        // Neither held yet: both are misses.
-        #expect(store.url(for: .init(photoUUID: photo, size: small)) == nil)
-        #expect(store.url(for: .init(photoUUID: photo, size: large)) == nil)
-
-        for size in [small, large] {
-            let rendered = try PhotoRenderer.render(
-                contentsOf: original, fitting: size.width, by: size.height, as: .jpeg)
-            try store.store(
-                rendered.bytes, for: .init(photoUUID: photo, size: size),
-                sourceUUID: source, pathExtension: "jpeg")
-        }
-
-        // Switching back and forth, repeatedly: every request is a hit, and each
-        // size keeps its own pixels. One did not overwrite the other.
-        for _ in 0..<4 {
-            for size in [small, large, large, small] {
-                let held = try #require(store.url(for: .init(photoUUID: photo, size: size)))
-                let source = CGImageSourceCreateWithURL(held as CFURL, nil)!
-                let properties =
-                    CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as! [CFString: Any]
-                #expect(properties[kCGImagePropertyPixelWidth] as? Int == size.width)
-                #expect(properties[kCGImagePropertyPixelHeight] as? Int == size.height)
-            }
-        }
-
-        #expect(Set(store.sizes(forPhoto: photo)) == [small, large])
-        #expect(store.totals.renderings == 2)
-        #expect(store.totals.originals == 0)
-    }
+@Suite("The byte store")
+struct ByteStoreTests {
 
     @Test("The index survives a restart, rebuilt from the filenames alone")
     func indexIsRebuiltFromDisk() throws {
@@ -339,29 +267,27 @@ struct RenderCacheTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let root = directory.appending(path: "cache")
-        let photo = UUID().uuidString.lowercased()
+        let first = UUID().uuidString.lowercased()
+        let second = UUID().uuidString.lowercased()
         let source = UUID().uuidString.lowercased()
-        let size = PhotoStore.Size(width: 640, height: 480)
 
-        let first = PhotoStore(root: root)
-        try first.store(
-            Data(count: 128), for: .init(photoUUID: photo, size: size),
-            sourceUUID: source, pathExtension: "jpeg")
-        try first.store(
-            Data(count: 512), for: .init(photoUUID: photo),
-            sourceUUID: source, pathExtension: "heic")
+        let writer = PhotoStore(root: root)
+        try writer.store(
+            Data(count: 128), forPhoto: first, sourceUUID: source, pathExtension: "jpeg")
+        try writer.store(
+            Data(count: 512), forPhoto: second, sourceUUID: source, pathExtension: "heic")
 
         // A different process, with nothing in memory and nothing in a database
         // telling it what is here.
-        let second = PhotoStore(root: root)
-        #expect(second.url(for: .init(photoUUID: photo, size: size)) == nil)
+        let reader = PhotoStore(root: root)
+        #expect(reader.url(forPhoto: first) == nil)
 
-        let rebuilt = second.rebuild(photos: [photo: source])
+        let rebuilt = reader.rebuild(photos: [first: source, second: source])
         #expect(rebuilt.kept == 2)
         #expect(rebuilt.discarded == 0)
         #expect(rebuilt.bytes == 640)
-        #expect(second.url(for: .init(photoUUID: photo, size: size)) != nil)
-        #expect(second.url(for: .init(photoUUID: photo)) != nil)
+        #expect(reader.url(forPhoto: first) != nil)
+        #expect(reader.url(forPhoto: second) != nil)
     }
 
     @Test("A file whose photograph is unknown is deleted, not adopted")
@@ -370,18 +296,15 @@ struct RenderCacheTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let root = directory.appending(path: "cache")
-        let store = PhotoStore(root: root)
+        let store = PhotoStore(root: directory.appending(path: "cache"))
         let known = UUID().uuidString.lowercased()
         let stranger = UUID().uuidString.lowercased()
         let source = UUID().uuidString.lowercased()
 
         try store.store(
-            Data(count: 10), for: .init(photoUUID: known), sourceUUID: source,
-            pathExtension: "heic")
+            Data(count: 10), forPhoto: known, sourceUUID: source, pathExtension: "heic")
         try store.store(
-            Data(count: 10), for: .init(photoUUID: stranger), sourceUUID: source,
-            pathExtension: "heic")
+            Data(count: 10), forPhoto: stranger, sourceUUID: source, pathExtension: "heic")
 
         // This is what a rebuilt database looks like from the cache's side: the
         // photographs it held are simply not there any more. Serving them under
@@ -389,40 +312,72 @@ struct RenderCacheTests {
         let result = store.rebuild(photos: [known: source])
         #expect(result.kept == 1)
         #expect(result.discarded == 1)
-        #expect(store.url(for: .init(photoUUID: stranger)) == nil)
-        #expect(store.url(for: .init(photoUUID: known)) != nil)
+        #expect(store.url(forPhoto: stranger) == nil)
+        #expect(store.url(forPhoto: known) != nil)
     }
 
-    @Test("A photograph can outlive its own original")
-    func renderingSurvivesTheOriginal() throws {
-        let directory = URL.temporaryDirectory.appending(path: "pgr-outlive-\(UUID().uuidString)")
+    @Test("One photograph is one file: storing again replaces what was there")
+    func oneFilePerPhotograph() throws {
+        let directory = URL.temporaryDirectory.appending(path: "pgr-onefile-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let store = PhotoStore(root: directory.appending(path: "cache"), byteCeiling: 600)
+        let store = PhotoStore(root: directory.appending(path: "cache"))
         let photo = UUID().uuidString.lowercased()
         let source = UUID().uuidString.lowercased()
-        let size = PhotoStore.Size(width: 200, height: 200)
 
-        // The original is written first, so it is the oldest and goes first.
         try store.store(
-            Data(count: 500), for: .init(photoUUID: photo), sourceUUID: source,
-            pathExtension: "heic")
-        try store.store(
-            Data(count: 400), for: .init(photoUUID: photo, size: size), sourceUUID: source,
-            pathExtension: "jpeg")
-        _ = store.rebuild(photos: [photo: source])
+            Data(count: 500), forPhoto: photo, sourceUUID: source, pathExtension: "heic")
+        // A different extension, which is a different filename: the file it
+        // replaces must not be left where no index entry can name it again.
+        let second = try store.store(
+            Data(count: 300), forPhoto: photo, sourceUUID: source, pathExtension: "jpeg")
 
-        // **The original goes before its own renderings**, which used to be an
-        // accident of write order — the file was backdated here to force it —
-        // and is now the stated rule. A rendering is a fraction of the bytes
-        // and is display-ready, so the same budget holds more pictures that can
-        // be served without a decode.
-        let result = store.evictIfNeeded(inOrder: [photo])
-        #expect(result.evicted == 1)
-        // The rendering is still serviceable on its own: a client asking at that
-        // size never needs the original back.
-        #expect(store.url(for: .init(photoUUID: photo)) == nil)
-        #expect(store.url(for: .init(photoUUID: photo, size: size)) != nil)
+        #expect(store.totals.entries == 1)
+        #expect(store.totals.byteCount == 300)
+        #expect(store.url(forPhoto: photo) == second)
+        let rebuilt = PhotoStore(root: directory.appending(path: "cache"))
+            .rebuild(photos: [photo: source])
+        #expect(rebuilt.kept == 1)
+        #expect(rebuilt.bytes == 300)
+    }
+
+    /// **Temporary, and goes when the sweep does.** See
+    /// `PhotoStore.IndexResult.reclaimedDirectories`.
+    @Test("Rendering directories left by the old resize cache are swept at launch")
+    func leftoverRenderingDirectoriesAreReclaimed() throws {
+        let directory = URL.temporaryDirectory.appending(path: "pgr-sweep-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let root = directory.appending(path: "cache")
+        let photo = UUID().uuidString.lowercased()
+        let source = UUID().uuidString.lowercased()
+
+        let store = PhotoStore(root: root)
+        try store.store(
+            Data(count: 500), forPhoto: photo, sourceUUID: source, pathExtension: "heic")
+
+        // What the resize cache used to write, by hand: the photograph is one
+        // the database still claims, so the unclaimed-file rule would never
+        // have taken these.
+        let sized = root.appending(path: source).appending(path: "1800x1066")
+        try FileManager.default.createDirectory(at: sized, withIntermediateDirectories: true)
+        try Data(count: 90).write(to: sized.appending(path: "\(photo).heic"))
+        try Data(count: 10).write(to: sized.appending(path: "\(UUID().uuidString).heic"))
+
+        // A read-only pass removes nothing.
+        let peek = PhotoStore(root: root).index(photos: [photo: source])
+        #expect(peek.reclaimedDirectories == 0)
+        #expect(FileManager.default.fileExists(atPath: sized.path(percentEncoded: false)))
+
+        let swept = PhotoStore(root: root).rebuild(photos: [photo: source])
+        #expect(swept.reclaimedDirectories == 1)
+        #expect(swept.reclaimedBytes == 100)
+        #expect(!FileManager.default.fileExists(atPath: sized.path(percentEncoded: false)))
+        // The original is untouched, and is all that is counted.
+        #expect(swept.kept == 1)
+        #expect(swept.bytes == 500)
+        #expect(store.url(forPhoto: photo) != nil)
     }
 }

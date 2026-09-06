@@ -27,8 +27,8 @@ import PhotoGoRoundAgentAPI
 /// many photographs are waiting. Both queues move on almost every request — a
 /// card is taken, another is skipped, a fetch is asked for, one lands — and a
 /// depth printed only when something is *added* leaves the reader inferring the
-/// rest. `rendered` is the exception and has no depth, because keeping a resize
-/// happens on the serving path and touches neither queue.
+/// rest. Every case carries one; the lone exception, `rendered`, went with the
+/// resize cache on 2026-09-06.
 public enum QueueEvent: Sendable, Equatable {
 
     // MARK: The queue of pictures to show
@@ -37,16 +37,14 @@ public enum QueueEvent: Sendable, Equatable {
     /// cards, not bytes. Prefixed `DEAL:` rather than `SERVE:`, because a burst
     /// of twenty deals is noise in the middle of reading what serving decided.
     case dealt(photo: String, source: Int64?, queued: Int)
-    /// Its bytes are here, so it is the picture. `rendering` is true when they
-    /// are a resize kept earlier rather than the original — the moment a kept
-    /// resize pays for itself.
+    /// Its bytes are here, so it is the picture — always the original, since
+    /// the cache stopped keeping resizes on 2026-09-06.
     ///
     /// `unconfirmed` carries the reason when the source could not say whether the
     /// photograph is still there and the copy we hold went out anyway. That is
     /// the offline case, and it is the one moment the deleted-photo guarantee is
     /// knowingly relaxed, so it is said out loud rather than left to inference.
-    case serving(
-        photo: String, source: Int64?, rendering: Bool, unconfirmed: String?, queued: Int)
+    case serving(photo: String, source: Int64?, unconfirmed: String?, queued: Int)
     /// Not here. The fetch is now somebody else's problem and the queue moves on.
     case skipped(photo: String, source: Int64?, because: String, queued: Int)
     /// The head card's bytes are not here yet, and the request is waiting for
@@ -102,15 +100,6 @@ public enum QueueEvent: Sendable, Equatable {
     /// slot the healthy sources never get, and the queue starves while the
     /// photographs it needs sit on local disk.
     case sourcePaused(source: Int64?, until: Duration)
-    /// A resize was made and written to the cache.
-    ///
-    /// **The other half of what the cache holds, and the half that was silent.**
-    /// Fetching an original is the only thing the cache *queue* does, so those
-    /// were the only `CACHE:` lines; but a referenced photograph is never
-    /// fetched — its original is the file on disk — and the only thing ever kept
-    /// for one is this. A source of referenced photographs could fill gigabytes
-    /// of renderings without printing a line.
-    case rendered(photo: String, source: Int64?, at: String, bytes: Int)
     // MARK: Settings
 
     /// A preference the agent acts on has changed underneath it.
@@ -139,8 +128,8 @@ public enum QueueEvent: Sendable, Equatable {
         switch self {
         case .dealt(let photo, let source, let queued):
             "DEAL: \(Self.name(photo, source)) — \(queued) queued"
-        case .serving(let photo, let source, let rendering, let unconfirmed, let queued):
-            "SERVE: \(Self.name(photo, source)) is here as \(rendering ? "a kept resize" : "its original"), "
+        case .serving(let photo, let source, let unconfirmed, let queued):
+            "SERVE: \(Self.name(photo, source)) is here, "
                 + (unconfirmed.map { "unconfirmed (\($0)), showing it anyway" } ?? "showing it")
                 + " — \(queued) queued"
         case .skipped(let photo, let source, let because, let queued):
@@ -170,8 +159,6 @@ public enum QueueEvent: Sendable, Equatable {
         case .sourcePaused(let source, let until):
             "CACHE: source \(source.map(String.init) ?? "?") paused for \(until)"
                 + " — it has stopped answering"
-        case .rendered(let photo, let source, let at, let bytes):
-            "CACHE: resized \(Self.name(photo, source)) to \(at), \(Self.bytes(Int64(bytes)))"
         case .configurationChanged(let what):
             "CONFIG: \(what)"
         }

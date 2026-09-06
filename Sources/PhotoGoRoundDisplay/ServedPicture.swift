@@ -37,15 +37,6 @@ public struct ServedPicture: Sendable, Equatable {
     public let source: Int64?
     /// `referenced` or `materialized`, as the cache sees it.
     public let storage: String?
-    /// Whether the service had this rendering already. Absent for originals,
-    /// which are not rendered and therefore neither hit nor missed.
-    public let cache: CacheState?
-
-    public enum CacheState: String, Sendable {
-        case hit
-        case miss
-    }
-
     public init(
         data: Data,
         contentType: String,
@@ -53,8 +44,7 @@ public struct ServedPicture: Sendable, Equatable {
         card: Int64? = nil,
         deal: Int64? = nil,
         source: Int64? = nil,
-        storage: String? = nil,
-        cache: CacheState? = nil
+        storage: String? = nil
     ) {
         self.data = data
         self.contentType = contentType
@@ -63,7 +53,6 @@ public struct ServedPicture: Sendable, Equatable {
         self.deal = deal
         self.source = source
         self.storage = storage
-        self.cache = cache
     }
 }
 
@@ -97,8 +86,7 @@ extension ServedPicture {
             card: fields["x-pgr-card"].flatMap(Int64.init),
             deal: fields["x-pgr-deal"].flatMap(Int64.init),
             source: fields["x-pgr-source"].flatMap(Int64.init),
-            storage: fields["x-pgr-storage"],
-            cache: fields["x-pgr-cache"].flatMap(CacheState.init(rawValue:))
+            storage: fields["x-pgr-storage"]
         )
     }
 }

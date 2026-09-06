@@ -250,10 +250,9 @@ histogram: it should match that half's share of the library, and falling below
 means the fetches are not keeping up.
 
 `cache status`
-Originals held, renderings held, how many photographs are referenced in place
-rather than copied, how many are waiting for bytes, what is on disk against the
-byte ceiling, and what is free on the volume. Also the number of queued
-pictures.
+Originals held, how many photographs are referenced in place rather than copied,
+how many are waiting for bytes, what is on disk against the byte ceiling, and
+what is free on the volume. Also the number of queued pictures.
 
 `cache evict`
 Runs an eviction pass now rather than waiting for the agent's maintenance

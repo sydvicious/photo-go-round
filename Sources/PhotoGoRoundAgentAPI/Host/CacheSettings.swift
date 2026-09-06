@@ -42,13 +42,25 @@ public struct CacheSettings: Sendable, Equatable {
 
     /// The bound, and the only one.
     ///
-    /// A photograph count stopped meaning anything once one photograph became an
-    /// original plus several renderings, and it was always a poor proxy for the
-    /// thing being protected: a thousand photographs is somewhere between 2 GB
-    /// and 100 GB depending on whether they are phone JPEGs or ProRAW. Referenced
-    /// photographs cost nothing here — they were never copied.
+    /// A photograph count was always a poor proxy for the thing being protected:
+    /// a thousand photographs is somewhere between 2 GB and 100 GB depending on
+    /// whether they are phone JPEGs or ProRAW. Referenced photographs cost
+    /// nothing here — they were never copied.
     ///
-    /// 10 GB is a starting point to be replaced by measurement.
+    /// **1 GB, from the queue rather than from a guess. Set 2026-09-06.** The
+    /// cache is somewhere to put downloads long enough to serve the queue, which
+    /// is what it had become in practice; twice the queue's own working set is
+    /// the whole requirement. At a queue of 20 and a measured mean original of
+    /// 2.95 MB across 2905 cached photographs, `2 × 20 × 2.95 MB` is 118 MB,
+    /// rounded up to the nearest gigabyte.
+    ///
+    /// It was 10 GB, back when the cache was also a prediction about what would
+    /// be wanted soon and held a resize per `(photo, display box)` on top of
+    /// every original. **The point of a smaller number is the disk**, and
+    /// particularly a laptop set to Optimize Mac Storage, where a photograph is
+    /// on the volume twice: Photos downloads the original as purgeable space and
+    /// we materialize our own copy beside it. This bounds our half. It does
+    /// nothing about theirs.
     public var byteCeiling: Int64
 
     /// Below this much free space, stop materializing and say why. Running out
@@ -63,7 +75,7 @@ public struct CacheSettings: Sendable, Equatable {
     public static let gigabyte: Int64 = 1_000_000_000
 
     public init(
-        byteCeiling: Int64 = 10 * CacheSettings.gigabyte,
+        byteCeiling: Int64 = CacheSettings.gigabyte,
         minimumFreeBytes: Int64 = 5 * CacheSettings.gigabyte,
         criticalFreeBytes: Int64 = 2 * CacheSettings.gigabyte
     ) {
@@ -74,13 +86,12 @@ public struct CacheSettings: Sendable, Equatable {
         self.criticalFreeBytes = max(0, min(criticalFreeBytes, minimumFreeBytes))
     }
 
+    /// **One set of numbers, for every platform. Decided 2026-09-06.** There was
+    /// a `phone` preset beside this — a 2 GB ceiling, on the reasoning that iOS
+    /// carries a smaller cache and fills it opportunistically. It went when the
+    /// Mac ceiling came down to 1 GB and made the phone's the larger of the two.
+    /// The ceiling follows the queue rather than the device, and the queue is
+    /// the same everywhere; a device that genuinely needs a different number can
+    /// be told one through the preference, which is why it is a preference.
     public static let `default` = CacheSettings()
-
-    /// iOS carries a far smaller cache and fills it opportunistically rather
-    /// than continuously. Same policy, smaller numbers.
-    public static let phone = CacheSettings(
-        byteCeiling: 2 * CacheSettings.gigabyte,
-        minimumFreeBytes: CacheSettings.gigabyte,
-        criticalFreeBytes: 500_000_000
-    )
 }

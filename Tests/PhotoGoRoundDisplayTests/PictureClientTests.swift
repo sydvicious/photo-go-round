@@ -69,7 +69,6 @@ struct PictureClientTests {
                         "X-PGR-Card": "7806",
                         "X-PGR-Deal": "5",
                         "X-PGR-Pixels": "100x67",
-                        "X-PGR-Cache": "miss",
                     ],
                     Data([0xDE, 0xAD, 0xBE, 0xEF])
                 ))
@@ -81,7 +80,6 @@ struct PictureClientTests {
         #expect(picture.card == 7806)
         #expect(picture.deal == 5)
         #expect(picture.pixels == PixelSize(width: 100, height: 67))
-        #expect(picture.cache == .miss)
     }
 
     @Test("Anything else the service says is a refusal")

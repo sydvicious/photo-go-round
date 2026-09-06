@@ -40,7 +40,7 @@ worth keeping.
   - Schema v7 also drops `sort_key` and `queue_order`; `respaceIfCollapsing` and the gap arithmetic go.
   - `FillerBox` reduces to *top up to the deck's maximum when short*: no gauge in-flight accounting, no bridge, no `seedServableFirst`, no `dealWhatIsAlreadyHere`, no `topUpIfShort(force:)`.
   - Prove: the existing filler tests still pass against a filler with two closures and no state.
-- **Phase 6 — Eviction by most-recently-viewed.** `PhotoStore.evictIfNeeded` orders by `COALESCE(last_shown_at, cached_at)` rather than by write time, and nothing is exempt.
+- **Phase 6 — Eviction by most-recently-viewed.** `PhotoStore.evictIfNeeded` orders by `COALESCE(last_shown_at, cached_at)` rather than by write time, and nothing is exempt. **Amended 2026-09-06 to `MAX(...)`** — see *Found by running it*.
   - Out: the `protecting:` argument, `queuedPhotoUUIDs`, and `EvictionResult.protectedFromEviction`.
   - Prove: a cache at its ceiling evicts the longest-unseen photograph, keeps the one that just landed, and reaches the ceiling even when every entry is a card the deck is holding.
 - **Phase 7 — Remove what no longer means anything.** The `Out:` lists above are the deletions each change forces; this is the sweep for what only becomes dead once all of them have landed, and for the tests that encode the design being replaced.
@@ -67,7 +67,7 @@ worth keeping.
 - **The deck keeps its configured maximum size — twenty today — and stays a FIFO.** Random placement existed only because completed fetches rejoined the queue out of deck order. Nothing rejoins now, so `sort_key` and its respacing are deleted rather than kept for a reason that no longer applies.
 - **`claimed_at` changes owner rather than leaving.** It exists because a fetch happens between choosing and storing — which is now true of the cache and false of the deck.
 - **The lane pool keeps its hard-won parts.** Per-photograph deadlines, the detached-and-abandoned fetch, `BlockingWork`, and exponential source benching all stay: they answer a hostile provider, and v2 does not make providers less hostile.
-- **Eviction becomes LRU by view, and one servable file is exempt.** The order is `COALESCE(last_shown_at, cached_at)`, so a photograph that has never been shown counts as of the moment it landed — the newest thing in the cache rather than the oldest. **Amended 2026-08-26:** eviction stops at one file rather than emptying the cache, because a cache holding nothing meets every ceiling and shows nobody anything. That is the only case where the ceiling is not reached, and it is *Always have something to show* applied to the cache.
+- **Eviction becomes LRU by view, and one servable file is exempt.** The order is `COALESCE(last_shown_at, cached_at)`, so a photograph that has never been shown counts as of the moment it landed — the newest thing in the cache rather than the oldest. **Amended 2026-09-06: the rank is `MAX(last_shown_at, cached_at, added_at)`, the most recent of the terms rather than the first that exists.** `COALESCE` gave the intended answer only for a photograph that had *never* been shown; one shown long ago and cached seconds ago still sorted on the stale timestamp, which is the whole of the bug under *Found by running it*. **Amended 2026-08-26:** eviction stops at one file rather than emptying the cache, because a cache holding nothing meets every ceiling and shows nobody anything. That is the only case where the ceiling is not reached, and it is *Always have something to show* applied to the cache.
 
 # Background
 
@@ -163,7 +163,7 @@ So `photo.cached_at` comes back. Three properties keep it honest:
 
 The in-memory index does not go away — it is still what answers "where are this photograph's bytes" for the request that is serving one, and it is still what holds the byte counts eviction adds up. What changes is that the *set* of resident photographs is now also queryable, and `cached_at` has three readers: the deck's pool predicate, the eviction order's tiebreak for a photograph that has never been shown, and the refresher's stop-condition count. Note which one is *not* on that list — the refresher's draw itself, which asks the in-memory index whether it already holds what it picked rather than filtering the query. The column is for the questions that need a count or an order.
 
-That second job moves eviction's *ordering* out of the index and into the database. `PhotoStore.Entry.createdAt` is a file's modification date and says nothing about when anybody looked at the photograph; the order now comes from a query, and the index supplies the sizes. It is one `SELECT uuid ORDER BY COALESCE(last_shown_at, cached_at)` against an indexed column, run only when the cache is over its ceiling.
+That second job moves eviction's *ordering* out of the index and into the database. `PhotoStore.Entry.createdAt` is a file's modification date and says nothing about when anybody looked at the photograph; the order now comes from a query, and the index supplies the sizes. It is one `SELECT uuid ORDER BY MAX(last_shown_at, cached_at, added_at)` — `COALESCE` until 2026-09-06 — against an indexed column, run only when the cache is over its ceiling.
 
 ## What the deck stops having to do
 
@@ -273,7 +273,9 @@ In v2 the circle does not close, because the refresher does not wait for anybody
 
 "Evicts based on most-recently-viewed" needs one thing said about it that it does not say itself: where a photograph that has never been viewed goes in that order.
 
-The order is `COALESCE(last_shown_at, cached_at)` ascending. A photograph that has never been shown counts as of the moment it arrived, which puts it at the *front* of the MRU list — the newest thing in the cache, last to go — and it walks toward the back on its own as everything around it gets shown. A download that never gets picked is eventually evicted like anything else, on the same rule, with no special case for it.
+The order is `MAX(last_shown_at, cached_at, added_at)` ascending, each term coalesced to zero first — **`COALESCE(last_shown_at, cached_at)` until 2026-09-06, which was a different query and the wrong one.** A photograph that has never been shown counts as of the moment it arrived, which puts it at the *front* of the MRU list — the newest thing in the cache, last to go — and it walks toward the back on its own as everything around it gets shown. A download that never gets picked is eventually evicted like anything else, on the same rule, with no special case for it.
+
+**And so does a photograph that *has* been shown, once it is fetched again.** That is what `MAX` adds and `COALESCE` could not express: landing in the cache is a reason to keep something regardless of how long ago it was last displayed, which matters because the deck deals over the whole library and a card is very often a photograph seen hours ago. Without it, every card the queue fetches sorts to the front of the eviction order on the strength of its old `last_shown_at` and is thrown away before its turn.
 
 **And nothing is exempt.** An exemption is a ceiling that cannot be reached: set `byteCeiling` low, or let the volume fill from something outside the agent, and we sit over the limit holding entries we are forbidden to touch. That includes today's `evictIfNeeded(protecting: queuedPhotoUUIDs())`, which skips the photographs the deck is holding and reports the count in `EvictionResult.protectedFromEviction` — the same hole at a deck's scale. It goes.
 
@@ -287,7 +289,9 @@ A cache holding nothing meets any ceiling perfectly and makes the product do the
 
 **This is not the `protecting:` set coming back**, and the difference is the one the paragraph above is about. That held every photograph the deck was carrying — an unbounded set, growing with the deck, which made the ceiling unreachable in the *ordinary* case. This is exactly one file, and only ever when there is nothing else, so the ceiling is met in every case where meeting it is possible at all.
 
-**One file, not one photograph**, and that is load-bearing. A rendering is a photo somebody can be shown, so dropping an original while keeping its rendering fills the frame *and* meets a ceiling that holding both would have missed. The first implementation exempted the whole photograph and broke `RendererTests`, which had been asserting exactly this since before the exemption existed.
+~~**One file, not one photograph**, and that is load-bearing.~~ A rendering is a photo somebody can be shown, so dropping an original while keeping its rendering fills the frame *and* meets a ceiling that holding both would have missed. The first implementation exempted the whole photograph and broke `RendererTests`, which had been asserting exactly this since before the exemption existed.
+
+**Moot since 2026-09-06: one photograph is one file** — see *The resize cache is removed* in `PLAN.md`. There is no longer a within-photograph choice to get right, and the floor is simply the last photograph standing.
 
 **Releasing what it kept needs no rule of its own.** A cache down to one file has held that file while it was the only thing servable, so it has been shown, and it carries a real `last_shown_at`. Anything arriving afterwards has never been shown and counts as of the moment it arrived — newer by construction, per the ordering at the top of this section. So the survivor is always first out the next time anything else is cached, and a budget that had room for one picture has room for many again without anybody deciding to let go of it.
 
@@ -328,7 +332,22 @@ of the five was visible by reading the code.
   `cached_at` and never will, and what the cache holds for it is a *rendering*.
   Unranked entries sort first, so on a library of local folders every rendering
   went the moment the ceiling was reached. Live, after the fix: 105 hits against
-  15 misses in 120 requests.
+  15 misses in 120 requests. **Retired 2026-09-06** — a referenced photograph now
+  occupies no cache bytes at all, so there is nothing of one to rank. The
+  predicate stayed off anyway, because an order that ranks a photograph the store
+  does not hold costs nothing and the reverse does not.
+- **The eviction rank was `COALESCE` where the prose said "most recent".** Added
+  2026-09-06, and it lived here undisturbed from the day this document introduced
+  least-recently-viewed. `COALESCE(last_shown_at, cached_at, added_at)` takes the
+  first non-null, so once a photograph had ever been shown, the moment it landed
+  in the cache was never read again — and a card dealt for a photograph last seen
+  ten hours ago was fetched, sorted to rank 1 on that stale timestamp, and evicted
+  before it was ever shown. The card then reached the head with no bytes and
+  downloaded it again. Live, at a 1 GB ceiling: the front of the order was
+  thirteen cards, every one on the queue and every one cached seconds earlier;
+  nineteen of twenty queued cards sat in the first forty to be evicted. Under
+  `MAX(last_shown_at, cached_at, added_at)`, none of them do. **A 10 GB ceiling
+  hid it for a fortnight** by making eviction almost never run.
 - **The launch allowance fired before the library existed.** `begin()` ran
   before `reconcile` and the first scan, so it asked an empty `photo` table how
   much was un-held, got nought, and ended the round. On a library with no
@@ -373,7 +392,7 @@ predicting a bias that does not occur.
 
 Per phase, and end to end.
 
-- **Unit.** The refresher's credit arithmetic and its draw, with a fake fetcher, parameterised on deck size rather than written against today's twenty: launch spends its allowance and stops; a draw releases one; a failed fetch releases none; **a draw that lands on something already held spends nothing and draws again**; a cache holding nine in ten still fetches the full allowance; a library entirely resident ends the round instead of spinning; **credits full and disk full fetches nothing**; a refresh that removes held photographs banks their credits and starts no round until a card is drawn; a card whose cached file was deleted under the agent drops its reference, returns a credit, and lets the deck move on rather than answering an error. The deck's pool predicate against a database with one resident, one referenced, and one neither. Eviction ordering by `COALESCE(last_shown_at, cached_at)`: the just-landed photograph survives, the longest-unseen goes, and a cache whose every entry is a deck card still reaches its ceiling. Residency reconciliation after a store operation and after a hand-deleted file.
+- **Unit.** The refresher's credit arithmetic and its draw, with a fake fetcher, parameterised on deck size rather than written against today's twenty: launch spends its allowance and stops; a draw releases one; a failed fetch releases none; **a draw that lands on something already held spends nothing and draws again**; a cache holding nine in ten still fetches the full allowance; a library entirely resident ends the round instead of spinning; **credits full and disk full fetches nothing**; a refresh that removes held photographs banks their credits and starts no round until a card is drawn; a card whose cached file was deleted under the agent drops its reference, returns a credit, and lets the deck move on rather than answering an error. The deck's pool predicate against a database with one resident, one referenced, and one neither. Eviction ordering by `MAX(last_shown_at, cached_at, added_at)` — `COALESCE` until 2026-09-06: the just-landed photograph survives, the longest-unseen goes, **a photograph shown long ago but fetched a moment ago survives too**, and a cache whose every entry is a deck card still reaches its ceiling. The tests state every timestamp relative to `added_at`, because these are all real epoch values on one scale and an absolute `1000` is a date in 1970 rather than a small number. Residency reconciliation after a store operation and after a hand-deleted file.
 - **Integration.** `photogoroundd --once` against a temporary container with a folder source on the boot volume (all referenced — the refresher must do nothing and the deck must fill) and against one with a folder source made materialized (the refresher must fetch its allowance and stop).
 - **From nothing, against a mix.** Delete the database and let the system rebuild itself with a **heterogeneous set of sources** — at least one referenced folder on the boot volume and at least one materialized source on a network share, removable volume, or iCloud Drive. This is the case every phase can break and no unit test covers, because the two halves only diverge when the library has both kinds in it: a library that is all referenced never exercises the cache, and one that is all remote never exercises the bias.
   - Migration 7 runs on the empty database and `cached_at` starts NULL for everything.

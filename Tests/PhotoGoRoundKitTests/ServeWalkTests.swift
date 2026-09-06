@@ -146,13 +146,13 @@ struct ServeWalkTests {
         #expect(
             fixture.heard.count { if case .caching = $0 { true } else { false } } == 1,
             "one fetch, for the one card, and none from serving")
-        // No box was asked for, so what goes out is the original rather than a
-        // kept resize — and the line says which, because that is the only place
-        // a console can see whether the renderings are earning their disk.
+        // The line says the bytes are here and that it is showing them. It used
+        // to distinguish "its original" from "a kept resize"; the resize cache
+        // went on 2026-09-06 and an original is the only thing left to serve.
         #expect(
             fixture.heard.lines.contains {
                 $0.hasPrefix("SERVE: a.png (source ")
-                    && $0.contains(" is here as its original, showing it — ")
+                    && $0.contains(" is here, showing it — ")
             })
     }
 
@@ -397,46 +397,22 @@ struct ServeWalkTests {
 
     // MARK: - What it says while doing it
 
-    @Test("Keeping a resize says what was resized and to what size, and nothing else")
-    func keepingAResizeIsSaid() async throws {
-        // **This used to be two tests**, one for a referenced photograph and one
-        // for a materialized one, because the line named where the pixels were
-        // decoded from — "from its file on disk" against "from the cached
-        // original". That fact is real but it is a different fact from a
-        // rendering being kept, and carrying both in one sentence made neither
-        // easy to find on a console. One line, one event.
+    @Test("Serving says the photograph is here, and asks for no size to say it")
+    func servingNamesTheBytesThatWentOut() async throws {
+        // **This replaced two tests about the resize cache**, deleted with it on
+        // 2026-09-06: one asserting `CACHE: resized … to 800x600` when a
+        // rendering was kept, and one asserting that a SERVE line distinguished
+        // "its original" from "a kept resize". Nothing is kept but originals,
+        // so there is one thing left for the line to say.
         let fixture = try await Fixture(photos: ["a.png"])
         try await fixture.cacheAll()
         try fixture.dealAll()
-        let served = try #require(try await fixture.cache.serve())
-
-        _ = try fixture.cache.keep(
-            Data(count: 1234), of: served.card,
-            at: PhotoStore.Size(width: 800, height: 600), pathExtension: "jpeg")
-
-        #expect(
-            fixture.heard.lines.contains {
-                $0.hasPrefix("CACHE: resized a.png (source \(fixture.source.id)) to 800x600,")
-            })
-    }
-
-    @Test("Serving says whether the bytes are the original or a kept resize")
-    func servingNamesWhichBytesWentOut() async throws {
-        let fixture = try await Fixture(photos: ["a.png"], materialized: false)
-        try fixture.dealAll()
-        let served = try #require(try await fixture.cache.serve())
-        let box = PhotoStore.Size(width: 800, height: 600)
-        _ = try fixture.cache.keep(
-            Data(count: 1234), of: served.card, at: box, pathExtension: "jpeg")
-
-        // Dealt again and asked for at exactly the size just kept, which is the
-        // only way the held resize is what goes out.
-        try fixture.dealAll()
-        _ = try #require(try await fixture.cache.serve(fitting: box))
+        _ = try #require(try await fixture.cache.serve())
 
         let lines = fixture.heard.lines
-        #expect(lines.contains { $0.contains("is here as its original, showing it") })
-        #expect(lines.contains { $0.contains("is here as a kept resize, showing it") })
+        #expect(lines.contains { $0.contains("SERVE: a.png") && $0.contains("is here, showing it") })
+        #expect(!lines.contains { $0.contains("kept resize") })
+        #expect(!lines.contains { $0.hasPrefix("CACHE: resized") })
     }
 }
 

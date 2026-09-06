@@ -11,7 +11,6 @@ import PhotoGoRoundAgentAPI
 ///
 /// ```
 /// cache/<source-uuid>/.original/<photo-uuid>.heic
-/// cache/<source-uuid>/3840x2160/<photo-uuid>.heic
 /// ```
 ///
 /// **The names carry durable identities, never row ids.** The database is
@@ -21,63 +20,27 @@ import PhotoGoRoundAgentAPI
 /// database is a file that gets deleted, which is the same rule that cleans up
 /// after a removed source, a deleted photograph, and a rebuilt library.
 ///
-/// `.original` is a reserved directory rather than the photograph's native pixel
-/// size. Otherwise every original lands in a directory named for its own
-/// dimensions and hundreds of one-off directories sit mixed in with the handful
-/// of live display sizes. The leading dot makes the reservation structural: a
-/// size directory is `<w>x<h>` and can never begin with one.
+/// **One photograph is one file.** The store held renderings alongside originals
+/// until 2026-09-06, keyed by `(photo, resolution)`; a photograph's UUID is now
+/// the whole key. `.original` survives as the directory name because keeping it
+/// leaves every cached original where it already is, and because a sweep that
+/// recognises exactly one directory name is what reclaims the sized directories
+/// left behind — see `index(photos:discardingUnclaimed:)`.
 public final class PhotoStore: @unchecked Sendable {
-
-    /// A rendering's dimensions, or `nil` for the original.
-    public struct Size: Hashable, Sendable, CustomStringConvertible {
-        public let width: Int
-        public let height: Int
-
-        public init(width: Int, height: Int) {
-            self.width = width
-            self.height = height
-        }
-
-        public var description: String { "\(width)x\(height)" }
-
-        static func parse(_ name: String) -> Size? {
-            let parts = name.split(separator: "x")
-            guard parts.count == 2, let width = Int(parts[0]), let height = Int(parts[1]),
-                width > 0, height > 0
-            else { return nil }
-            return Size(width: width, height: height)
-        }
-    }
-
-    public struct Key: Hashable, Sendable {
-        public let photoUUID: String
-        /// `nil` is the original.
-        public let size: Size?
-
-        public init(photoUUID: String, size: Size? = nil) {
-            self.photoUUID = photoUUID
-            self.size = size
-        }
-    }
 
     public struct Entry: Sendable, Equatable {
         public let url: URL
         public let byteCount: Int64
-        /// Ordering for eviction: FIFO by write time, never updated on a
-        /// hit. Write order stopped tracking display order when fetches began
-        /// landing in completion order — kept because a shuffle has no hot set
-        /// for anything cleverer to protect.
-        public let createdAt: Date
     }
 
     public let root: URL
-    /// The only bound. A photograph count stopped meaning anything once one
-    /// photograph became an original plus several renderings, and it was always
-    /// a poor proxy for the disk it exists to protect.
+    /// The only bound. A photograph count was always a poor proxy for the disk
+    /// this exists to protect, and one file per photograph does not bring it
+    /// back: the files differ in size by more than an order of magnitude.
     public var byteCeiling: Int64
 
     private let lock = NSLock()
-    private var entries: [Key: Entry] = [:]
+    private var entries: [String: Entry] = [:]
     /// Which source each photograph belongs to, so a key can be turned into a
     /// path without asking the database.
     private var sourceOfPhoto: [String: String] = [:]
@@ -91,12 +54,12 @@ public final class PhotoStore: @unchecked Sendable {
 
     // MARK: - Where a file goes
 
-    public func url(for key: Key, sourceUUID: String, pathExtension: String) -> URL {
+    public func url(forPhoto photoUUID: String, sourceUUID: String, pathExtension: String) -> URL {
         root
             .appending(path: sourceUUID)
-            .appending(path: key.size.map(\.description) ?? Self.originalDirectory)
+            .appending(path: Self.originalDirectory)
             .appending(path: pathExtension.isEmpty
-                ? key.photoUUID : "\(key.photoUUID).\(pathExtension.lowercased())")
+                ? photoUUID : "\(photoUUID).\(pathExtension.lowercased())")
     }
 
     // MARK: - Rebuilding from the disk
@@ -109,9 +72,7 @@ public final class PhotoStore: @unchecked Sendable {
     /// the whole database rebuilt — and there is nothing left that could name it
     /// correctly, so it goes.
     @discardableResult
-    public func rebuild(
-        photos: [String: String]
-    ) -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
+    public func rebuild(photos: [String: String]) -> IndexResult {
         index(photos: photos, discardingUnclaimed: true)
     }
 
@@ -122,37 +83,75 @@ public final class PhotoStore: @unchecked Sendable {
     /// library the agent is using, and a read-only question must not delete a
     /// file because this process happens to disagree about what is claimed.
     @discardableResult
-    public func index(
-        photos: [String: String]
-    ) -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
+    public func index(photos: [String: String]) -> IndexResult {
         index(photos: photos, discardingUnclaimed: false)
+    }
+
+    /// **Any directory under a source that is not `.original` is swept — and
+    /// this is temporary.** Delete it once every cache in use has launched at
+    /// least once against this build; after that it can only ever sweep zero
+    /// directories, and reading it later would suggest renderings are something
+    /// the store still expects to find. Until
+    /// 2026-09-06 the store also held renderings, in directories named `<w>x<h>`
+    /// beside it. Those files belong to photographs the database still claims,
+    /// so the unclaimed-file rule below would never have taken them and they
+    /// would have sat on disk for ever — a gigabyte of them in the development
+    /// cache on the day this changed. Recognising one directory name and
+    /// deleting the rest is what reclaims them, once, on the next launch.
+    public struct IndexResult: Sendable, Equatable {
+        public let kept: Int
+        public let discarded: Int
+        public let bytes: Int64
+        public let emptied: Int
+        /// Leftover rendering directories swept, and the bytes they held.
+        ///
+        /// **Temporary, and meant to be deleted.** It exists to reclaim what
+        /// the resize cache left behind on 2026-09-06 and has nothing to do
+        /// once every cache in use has been through one launch. See
+        /// `index(photos:discardingUnclaimed:)`.
+        public let reclaimedDirectories: Int
+        public let reclaimedBytes: Int64
     }
 
     private func index(
         photos: [String: String], discardingUnclaimed: Bool
-    ) -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
-        var found: [Key: Entry] = [:]
+    ) -> IndexResult {
+        var found: [String: Entry] = [:]
         var discarded = 0
         var bytes: Int64 = 0
 
         let manager = FileManager.default
         var emptied = 0
+        var reclaimedDirectories = 0
+        var reclaimedBytes: Int64 = 0
         for sourceDirectory in (try? manager.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
         {
             // Files kept from this one source, so a directory left holding
             // nothing can be recognised below.
             var keptHere = 0
-            for sizeDirectory in (try? manager.contentsOfDirectory(
+            for child in (try? manager.contentsOfDirectory(
                 at: sourceDirectory, includingPropertiesForKeys: nil)) ?? []
             {
-                let name = sizeDirectory.lastPathComponent
-                let size = name == Self.originalDirectory ? nil : Size.parse(name)
-                guard name == Self.originalDirectory || size != nil else { continue }
+                guard child.lastPathComponent == Self.originalDirectory else {
+                    // A leftover rendering directory. Only a sweep that is
+                    // allowed to delete takes it; a read-only caller such as
+                    // `pgr_ctl status` counts nothing here and removes nothing.
+                    guard discardingUnclaimed else { continue }
+                    let leftovers = (try? manager.contentsOfDirectory(
+                        at: child, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+                    guard !leftovers.isEmpty || Self.isDirectory(child, manager) else { continue }
+                    for file in leftovers {
+                        reclaimedBytes += Int64(
+                            (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+                    }
+                    try? manager.removeItem(at: child)
+                    reclaimedDirectories += 1
+                    continue
+                }
 
                 for file in (try? manager.contentsOfDirectory(
-                    at: sizeDirectory,
-                    includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])) ?? []
+                    at: child, includingPropertiesForKeys: [.fileSizeKey])) ?? []
                 {
                     let uuid = file.deletingPathExtension().lastPathComponent
                     guard photos[uuid] != nil else {
@@ -162,14 +161,9 @@ public final class PhotoStore: @unchecked Sendable {
                         }
                         continue
                     }
-                    let values = try? file.resourceValues(
-                        forKeys: [.fileSizeKey, .contentModificationDateKey])
-                    let byteCount = Int64(values?.fileSize ?? 0)
-                    found[Key(photoUUID: uuid, size: size)] = Entry(
-                        url: file,
-                        byteCount: byteCount,
-                        createdAt: values?.contentModificationDate ?? .distantPast
-                    )
+                    let byteCount = Int64(
+                        (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+                    found[uuid] = Entry(url: file, byteCount: byteCount)
                     bytes += byteCount
                     keptHere += 1
                 }
@@ -184,9 +178,7 @@ public final class PhotoStore: @unchecked Sendable {
             // Safe to take: a directory is created by the first file written
             // into it, so an empty one is not a source waiting for bytes.
             guard discardingUnclaimed, keptHere == 0 else { continue }
-            let isDirectory = (try? sourceDirectory.resourceValues(forKeys: [.isDirectoryKey]))?
-                .isDirectory ?? false
-            guard isDirectory else { continue }
+            guard Self.isDirectory(sourceDirectory, manager) else { continue }
             try? manager.removeItem(at: sourceDirectory)
             emptied += 1
         }
@@ -206,10 +198,27 @@ public final class PhotoStore: @unchecked Sendable {
                 "removed \(emptied, privacy: .public) cache directories holding nothing"
             )
         }
+        // **Said out loud, because the last silent reclaim went unnoticed for
+        // weeks** — see the plan on `prepare()` discarding its own result.
+        if reclaimedDirectories > 0 {
+            Log.cache.notice(
+                """
+                reclaimed \(reclaimedDirectories, privacy: .public) leftover rendering \
+                directories holding \(reclaimedBytes, privacy: .public) bytes; the cache \
+                stopped keeping renderings on 2026-09-06
+                """
+            )
+        }
         Log.cache.notice(
             "cache index rebuilt: \(found.count, privacy: .public) entries, \(bytes, privacy: .public) bytes"
         )
-        return (found.count, discarded, bytes, emptied)
+        return IndexResult(
+            kept: found.count, discarded: discarded, bytes: bytes, emptied: emptied,
+            reclaimedDirectories: reclaimedDirectories, reclaimedBytes: reclaimedBytes)
+    }
+
+    private static func isDirectory(_ url: URL, _ manager: FileManager) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
     }
 
     /// Tells the store about a photograph it may not have seen, so a file
@@ -222,25 +231,25 @@ public final class PhotoStore: @unchecked Sendable {
 
     // MARK: - Reading
 
-    /// The bytes for this key, or nil when they are not held.
+    /// The bytes for this photograph, or nil when they are not held.
     ///
     /// A missing file is treated as a miss and forgotten, so a purge or a
-    /// tidied directory costs a re-render rather than a broken answer.
-    public func url(for key: Key) -> URL? {
+    /// tidied directory costs a fetch rather than a broken answer.
+    public func url(forPhoto photoUUID: String) -> URL? {
         lock.lock()
-        let entry = entries[key]
+        let entry = entries[photoUUID]
         lock.unlock()
         guard let entry else { return nil }
         guard FileManager.default.fileExists(atPath: entry.url.path(percentEncoded: false)) else {
-            forget(key)
+            forget(photoUUID)
             return nil
         }
         return entry.url
     }
 
-    public func contains(_ key: Key) -> Bool { url(for: key) != nil }
+    public func contains(photo photoUUID: String) -> Bool { url(forPhoto: photoUUID) != nil }
 
-    /// Every photograph whose **original** is held right now.
+    /// Every photograph whose bytes are held right now.
     ///
     /// For the startup seed, which wants to fill the queue with pictures that
     /// can be shown *this second* rather than ones that will need fetching. A
@@ -255,12 +264,12 @@ public final class PhotoStore: @unchecked Sendable {
     public var residentPhotoUUIDs: Set<String> {
         lock.lock()
         defer { lock.unlock() }
-        return Set(entries.keys.filter { $0.size == nil }.map(\.photoUUID))
+        return Set(entries.keys)
     }
 
-    private func forget(_ key: Key) {
+    private func forget(_ photoUUID: String) {
         lock.lock()
-        entries.removeValue(forKey: key)
+        entries.removeValue(forKey: photoUUID)
         lock.unlock()
     }
 
@@ -274,10 +283,10 @@ public final class PhotoStore: @unchecked Sendable {
     /// *complete*.
     @discardableResult
     public func store(
-        _ data: Data, for key: Key, sourceUUID: String, pathExtension: String,
-        now: Date = Date()
+        _ data: Data, forPhoto photoUUID: String, sourceUUID: String, pathExtension: String
     ) throws -> URL {
-        let destination = url(for: key, sourceUUID: sourceUUID, pathExtension: pathExtension)
+        let destination = url(
+            forPhoto: photoUUID, sourceUUID: sourceUUID, pathExtension: pathExtension)
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
 
@@ -287,12 +296,12 @@ public final class PhotoStore: @unchecked Sendable {
         _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
 
         lock.lock()
-        let previous = entries[key]
-        entries[key] = Entry(url: destination, byteCount: Int64(data.count), createdAt: now)
-        sourceOfPhoto[key.photoUUID] = sourceUUID
+        let previous = entries[photoUUID]
+        entries[photoUUID] = Entry(url: destination, byteCount: Int64(data.count))
+        sourceOfPhoto[photoUUID] = sourceUUID
         lock.unlock()
-        // One entry per key means one file: a rendering re-made in another
-        // format lands under another extension, and the file it replaces would
+        // One entry per photograph means one file: bytes re-fetched in another
+        // format land under another extension, and the file they replace would
         // otherwise sit on disk where no index entry can ever name it again.
         if let previous, previous.url != destination {
             try? FileManager.default.removeItem(at: previous.url)
@@ -303,10 +312,10 @@ public final class PhotoStore: @unchecked Sendable {
     /// The same, for bytes a provider has already written somewhere.
     @discardableResult
     public func adopt(
-        fileAt origin: URL, for key: Key, sourceUUID: String, pathExtension: String,
-        now: Date = Date()
+        fileAt origin: URL, forPhoto photoUUID: String, sourceUUID: String, pathExtension: String
     ) throws -> URL {
-        let destination = url(for: key, sourceUUID: sourceUUID, pathExtension: pathExtension)
+        let destination = url(
+            forPhoto: photoUUID, sourceUUID: sourceUUID, pathExtension: pathExtension)
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         if origin != destination {
@@ -317,36 +326,25 @@ public final class PhotoStore: @unchecked Sendable {
             (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
 
         lock.lock()
-        entries[key] = Entry(url: destination, byteCount: byteCount, createdAt: now)
-        sourceOfPhoto[key.photoUUID] = sourceUUID
+        entries[photoUUID] = Entry(url: destination, byteCount: byteCount)
+        sourceOfPhoto[photoUUID] = sourceUUID
         lock.unlock()
         return destination
     }
 
     // MARK: - Removing
 
-    /// Everything held for one photograph, original and renderings alike.
+    /// What is held for one photograph, bytes and index together.
+    ///
+    /// **One method where there were two.** While the store held renderings,
+    /// taking a photograph and taking a single entry were different operations,
+    /// and a caller undoing its own half-finished adoption needed the narrow
+    /// one. A photograph is one file now, so both were the same call.
     @discardableResult
     public func remove(photoUUID: String) -> Int64 {
         lock.lock()
-        let mine = entries.filter { $0.key.photoUUID == photoUUID }
-        for key in mine.keys { entries.removeValue(forKey: key) }
+        let entry = entries.removeValue(forKey: photoUUID)
         sourceOfPhoto.removeValue(forKey: photoUUID)
-        lock.unlock()
-
-        for entry in mine.values { try? FileManager.default.removeItem(at: entry.url) }
-        return mine.values.reduce(0) { $0 + $1.byteCount }
-    }
-
-    /// One entry, bytes and index together.
-    ///
-    /// For a caller undoing its own half-finished work — bytes adopted, the
-    /// bookkeeping that records them failed — where `remove(photoUUID:)` would
-    /// be too broad: it would take renderings that were never in question.
-    @discardableResult
-    public func remove(_ key: Key) -> Int64 {
-        lock.lock()
-        let entry = entries.removeValue(forKey: key)
         lock.unlock()
 
         guard let entry else { return 0 }
@@ -358,9 +356,11 @@ public final class PhotoStore: @unchecked Sendable {
     @discardableResult
     public func removeSource(_ sourceUUID: String) -> Int64 {
         lock.lock()
-        let mine = entries.filter { sourceOfPhoto[$0.key.photoUUID] == sourceUUID }
-        for key in mine.keys { entries.removeValue(forKey: key) }
-        for uuid in Set(mine.keys.map(\.photoUUID)) { sourceOfPhoto.removeValue(forKey: uuid) }
+        let mine = entries.filter { sourceOfPhoto[$0.key] == sourceUUID }
+        for uuid in mine.keys {
+            entries.removeValue(forKey: uuid)
+            sourceOfPhoto.removeValue(forKey: uuid)
+        }
         lock.unlock()
 
         try? FileManager.default.removeItem(at: root.appending(path: sourceUUID))
@@ -383,10 +383,8 @@ public final class PhotoStore: @unchecked Sendable {
     public struct Eviction: Sendable, Equatable {
         public let evicted: Int
         public let bytesFreed: Int64
-        /// Photographs whose **original** went, so the caller can clear their
-        /// `cached_at`. Renderings are not residency — a photograph that keeps
-        /// a rendering and loses its original is no longer held, and one that
-        /// loses only a rendering still is.
+        /// Photographs that went, so the caller can clear their `cached_at`.
+        /// One file per photograph, so this is simply what was evicted.
         public let releasedOriginals: Set<String>
 
         init(evicted: Int, bytesFreed: Int64, releasedOriginals: Set<String> = []) {
@@ -398,11 +396,12 @@ public final class PhotoStore: @unchecked Sendable {
 
     /// Evicts in the order the caller gives, until the ceiling is met.
     ///
-    /// **Least-recently-viewed first, and the last photo standing is exempt.** `order` is
-    /// photographs oldest-first by `COALESCE(last_shown_at, cached_at)`, which
-    /// only the database can answer — `Entry.createdAt` is a file's
-    /// modification date and says nothing about when anybody looked at the
-    /// photograph.
+    /// **Least-recently-viewed first, and the last photo standing is exempt.**
+    /// `order` is photographs oldest-first by
+    /// `COALESCE(last_shown_at, cached_at, added_at)`, which only the database
+    /// can answer. `Entry` carried a `createdAt` — the file's modification date
+    /// — until 2026-09-06; nothing ever read it, because a write time says
+    /// nothing about when anybody looked at the photograph.
     ///
     /// A photograph that has never been shown counts as of the moment it
     /// arrived, so it is the *newest* thing in the cache and the last to go. It
@@ -426,13 +425,6 @@ public final class PhotoStore: @unchecked Sendable {
     /// a budget that had room for one picture has room for many again without
     /// anybody deciding to let go of it.
     ///
-    /// **A rendering is a photo somebody can be shown**, which is what decides
-    /// where the floor sits. One photograph here is an original plus whatever
-    /// renderings were made from it, so dropping the original while keeping a
-    /// rendering leaves the frame filled *and* meets a ceiling that holding
-    /// both would have missed. The floor is one servable file, and the rule
-    /// gives up exactly as little as it has to.
-    ///
     /// **This is not the `protecting:` set coming back.** That held back every
     /// photograph the deck was carrying, which made the ceiling unreachable in
     /// the ordinary case: set `byteCeiling` low, or let the volume fill from
@@ -442,11 +434,6 @@ public final class PhotoStore: @unchecked Sendable {
     /// transfer. This is exactly one photograph, and only ever the last one, so
     /// the ceiling is met in every case where meeting it is possible at all.
     ///
-    /// Within one photograph the **original goes before its renderings**. A
-    /// rendering is a fraction of the bytes and is display-ready, so the same
-    /// budget holds far more pictures that can be served without a decode; an
-    /// original whose rendering survives can still answer a client asking at
-    /// that size.
     @discardableResult
     public func evictIfNeeded(inOrder order: [String]) -> Eviction {
         lock.lock()
@@ -462,23 +449,19 @@ public final class PhotoStore: @unchecked Sendable {
         // A photograph the caller did not rank has no row claiming it, so
         // nothing will miss it: it goes first.
         let queue = entries.sorted { left, right in
-            let leftRank = rank[left.key.photoUUID] ?? -1
-            let rightRank = rank[right.key.photoUUID] ?? -1
-            if leftRank != rightRank { return leftRank < rightRank }
-            // Original before rendering, within one photograph.
-            return (left.key.size == nil ? 0 : 1) < (right.key.size == nil ? 0 : 1)
+            (rank[left.key] ?? -1) < (rank[right.key] ?? -1)
         }
 
         // Whatever survives is the tail of the queue, which is the most
         // recently shown — `order` runs oldest-first.
         var surviving = entries.count
 
-        var going: [(Key, Entry)] = []
-        for (key, entry) in queue {
+        var going: [(String, Entry)] = []
+        for (uuid, entry) in queue {
             guard total > byteCeiling else { break }
             guard surviving > 1 else { break }
-            going.append((key, entry))
-            entries.removeValue(forKey: key)
+            going.append((uuid, entry))
+            entries.removeValue(forKey: uuid)
             surviving -= 1
             total -= entry.byteCount
         }
@@ -507,43 +490,31 @@ public final class PhotoStore: @unchecked Sendable {
         }
         return Eviction(
             evicted: going.count, bytesFreed: freed,
-            releasedOriginals: Set(going.lazy.filter { $0.0.size == nil }.map(\.0.photoUUID)))
+            releasedOriginals: Set(going.lazy.map(\.0)))
     }
 
     // MARK: - What it holds
 
     public struct Totals: Sendable, Equatable {
         public let entries: Int
-        public let originals: Int
-        public let renderings: Int
         public let byteCount: Int64
     }
 
     public var totals: Totals {
         lock.lock()
         defer { lock.unlock() }
-        let originals = entries.keys.count { $0.size == nil }
         return Totals(
             entries: entries.count,
-            originals: originals,
-            renderings: entries.count - originals,
             byteCount: entries.values.reduce(0) { $0 + $1.byteCount }
         )
     }
 
-    /// How many bytes are held for these photographs, original and renderings.
+    /// How many bytes are held for these photographs.
     public func byteCount(ofPhotos photoUUIDs: Set<String>) -> Int64 {
         lock.lock()
         defer { lock.unlock() }
         return entries.reduce(Int64(0)) {
-            photoUUIDs.contains($1.key.photoUUID) ? $0 + $1.value.byteCount : $0
+            photoUUIDs.contains($1.key) ? $0 + $1.value.byteCount : $0
         }
-    }
-
-    /// Every size held for one photograph, for diagnostics.
-    public func sizes(forPhoto photoUUID: String) -> [Size] {
-        lock.lock()
-        defer { lock.unlock() }
-        return entries.keys.filter { $0.photoUUID == photoUUID }.compactMap(\.size)
     }
 }

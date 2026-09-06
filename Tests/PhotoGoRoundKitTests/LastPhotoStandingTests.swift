@@ -24,7 +24,7 @@ struct LastPhotoStandingTests {
         _ bytes: Int, as photo: String, in store: PhotoStore
     ) throws -> String {
         try store.store(
-            Data(count: bytes), for: .init(photoUUID: photo),
+            Data(count: bytes), forPhoto: photo,
             sourceUUID: "SOURCE", pathExtension: "heic")
         return photo
     }
@@ -42,7 +42,7 @@ struct LastPhotoStandingTests {
         let result = store.evictIfNeeded(inOrder: [photo])
 
         #expect(result.evicted == 0)
-        #expect(store.url(for: .init(photoUUID: photo)) != nil)
+        #expect(store.url(forPhoto: photo) != nil)
     }
 
     @Test("With a ceiling too small for any of them, the most recently shown one stays")
@@ -61,9 +61,9 @@ struct LastPhotoStandingTests {
         let result = store.evictIfNeeded(inOrder: [oldest, middle, newest])
 
         #expect(result.evicted == 2)
-        #expect(store.url(for: .init(photoUUID: oldest)) == nil)
-        #expect(store.url(for: .init(photoUUID: middle)) == nil)
-        #expect(store.url(for: .init(photoUUID: newest)) != nil)
+        #expect(store.url(forPhoto: oldest) == nil)
+        #expect(store.url(forPhoto: middle) == nil)
+        #expect(store.url(forPhoto: newest) != nil)
     }
 
     /// The guard against an exemption that quietly stops eviction working. A
@@ -85,31 +85,6 @@ struct LastPhotoStandingTests {
         #expect(store.totals.byteCount <= 2_500)
     }
 
-    /// Where the floor sits. A rendering is a photo somebody can be shown, so
-    /// keeping the original as well would have missed a ceiling that dropping
-    /// it meets exactly — which is what `RendererTests` had been asserting
-    /// since before this exemption existed.
-    @Test("An original still goes when its own rendering can survive instead")
-    func theRuleIsPerEntryNotPerPhoto() throws {
-        let root = Self.temporaryRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = PhotoStore(root: root.appending(path: "cache"), byteCeiling: 600)
-
-        let photo = UUID().uuidString.lowercased()
-        try Self.store(500, as: photo, in: store)
-        try store.store(
-            Data(count: 400),
-            for: .init(photoUUID: photo, size: .init(width: 200, height: 200)),
-            sourceUUID: "SOURCE", pathExtension: "jpeg")
-        _ = store.rebuild(photos: [photo: "SOURCE"])
-
-        let result = store.evictIfNeeded(inOrder: [photo])
-
-        #expect(result.evicted == 1)
-        #expect(store.url(for: .init(photoUUID: photo)) == nil)
-        #expect(store.url(for: .init(photoUUID: photo, size: .init(width: 200, height: 200))) != nil)
-    }
-
     /// **The exemption is a floor, not a privilege.** Nothing about the
     /// oversized photo is protected — it was kept only while it was the one
     /// thing standing between the product and a blank frame. The moment
@@ -126,7 +101,7 @@ struct LastPhotoStandingTests {
         try Self.store(5_000, as: giant, in: store)
         _ = store.rebuild(photos: [giant: "SOURCE"])
         store.evictIfNeeded(inOrder: [giant])
-        #expect(store.url(for: .init(photoUUID: giant)) != nil)
+        #expect(store.url(forPhoto: giant) != nil)
 
         // Something smaller arrives. The giant is older, so it is first in the
         // eviction order and no longer the last entry standing.
@@ -137,8 +112,8 @@ struct LastPhotoStandingTests {
         let result = store.evictIfNeeded(inOrder: [giant, small])
 
         #expect(result.evicted == 1)
-        #expect(store.url(for: .init(photoUUID: giant)) == nil)
-        #expect(store.url(for: .init(photoUUID: small)) != nil)
+        #expect(store.url(forPhoto: giant) == nil)
+        #expect(store.url(forPhoto: small) != nil)
         #expect(store.totals.byteCount == 200)
     }
 

@@ -228,13 +228,10 @@ Today that is the only fit: shrink or grow, aspect ratio preserved. More options
 will be added to the endpoint later.
 
 The format comes from `Accept`: HEIC unless the client will take only JPEG, since
-everything here decodes HEIC and it is roughly half the bytes. A rendering
-already held is served as it is when the client accepts its format, whichever
-format that is; a client whose `Accept` excludes it gets a re-render that
-replaces the held file at that size. An `Accept` admitting neither HEIC nor
-JPEG is refused with `406`, before any card is spent on it. The one exception:
-when the held format is unacceptable and the original is no longer held, the
-rendering goes out anyway rather than nothing.
+everything here decodes HEIC and it is roughly half the bytes. Every sized
+request is rendered fresh, so the format asked for is always the format
+returned. An `Accept` admitting neither HEIC nor JPEG is refused with `406`,
+before any card is spent on it.
 
 **A photograph that will not render is skipped**, and the next entry is tried, so
 a bad file costs a client the picture it would have had and nothing else. After
@@ -242,10 +239,18 @@ three failures it is retired and never offered again. The row stays — the file
 still on disk, and deleting the row would only mean the next rescan found it
 again.
 
-**Renderings are kept**, so asking twice for the same photograph at the same size
-decodes once. `X-PGR-Cache` says `hit` or `miss`. They survive a restart, and
-they are bounded by `cacheByteCeiling` along with the originals — a rendering is
-a fraction of an original's bytes, so the same budget holds far more of them.
+**Renderings are not kept.** Asking twice for the same photograph at the same
+size decodes twice. The cache holds originals and nothing else, so serving can
+never grow it.
+
+They were kept until 2026-09-06, under `(photo, display box)`, with an
+`X-PGR-Cache` header saying `hit` or `miss`. The box is the client's window in
+pixels, so it drifts: a window moved two pixels made a second full set beside
+the first, and a shuffle with a repeat window almost never asks for the same
+photograph at the same size twice anyway. The development cache held 0.99 GB of
+them against a hit rate near zero. A render measured 109 ms at the median and
+about a second for a 38 MB original, spent inside the gap between pictures
+rather than on a blank frame.
 
 Serving is also what notices the queue has run short, and what deals more. **Every
 card dealt is fetched by the queue's own fetcher**, head first and
@@ -319,8 +324,8 @@ refresh.
 
 `DELETE` answers `204`, and takes the source's photographs and queue entries with
 it. Removal is not deletion: nothing on the source is touched. **The cached bytes
-go at once** — the originals we copied and every rendering made from them — rather
-than waiting for a restart to notice nothing claims them.
+go at once** — the originals we copied — rather than waiting for a restart to
+notice nothing claims them.
 
 Enabling, disabling, and refreshing are not here. They stay in `pgr_ctl`, which
 keeps the database and preferences and never makes a web request.
@@ -349,7 +354,7 @@ without restarting it and without any cooperation:
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
 | `maintenanceIntervalSeconds` | how often to evict at the byte ceiling | 30 |
 | `downloadConcurrency` | fetches running at once, across all sources | 4 |
-| `cacheByteCeiling` | bytes of cached photographs and renderings to keep | 10 GB |
+| `cacheByteCeiling` | bytes of cached photographs to keep | 1 GB |
 | `cacheMinimumFreeBytes` | stop fetching below this much free space | 5 GB |
 | `cacheCriticalFreeBytes` | evict ahead of the ceiling below this much | 2 GB |
 
@@ -364,9 +369,9 @@ mode, so `-wal` and `-shm` sidecars sit beside it and "delete the database"
 means deleting all three.
 
 *cache-root*`/`
-Copied photograph bytes, and the renderings made from them. Only photographs on
-volumes that can disappear are copied; anything on the boot volume is read where
-it lies, though renderings of it are still kept.
+Copied photograph bytes. Only photographs on volumes that can disappear are
+copied; anything on the boot volume is read where it lies and costs nothing
+here.
 
 The service walks this directory at startup and rebuilds its index from the
 filenames, and a file the database does not claim is deleted rather than adopted.

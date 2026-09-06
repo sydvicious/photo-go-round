@@ -80,7 +80,7 @@ enum InspectCommands {
                 ? "nothing to cache — \(status.referencedCount) photos are referenced in place"
                 : "empty"
         }
-        return "\(status.residentCount) originals, \(status.renderingCount) renderings, "
+        return "\(status.residentCount) originals, "
             + "\(status.referencedCount) referenced, \(bytes) on disk"
     }
 
@@ -252,13 +252,12 @@ enum InspectCommands {
         let context = try Library.context(environment)
         let status = try context.cache.status()
         Console.note("originals    \(status.residentCount) materialized photographs held")
-        Console.note("renderings   \(status.renderingCount) across every size asked for")
         Console.note("referenced   \(status.referencedCount) photos, never copied, no budget")
         Console.note("pending      \(status.pendingCount) materialized photos with no bytes yet")
         Console.note("on disk      \(Library.bytes(status.bytesOnDisk))")
         Console.note("ceiling      \(Library.bytes(status.byteCeiling))")
         Console.note("free         \(Library.bytes(status.freeBytesOnVolume)) on the cache volume")
-        Console.note("queued       \(status.queued) pictures, none of which can be evicted")
+        Console.note("queued       \(status.queued) pictures")
         Console.note("root         \(environment.cacheRoot.path(percentEncoded: false))")
     }
 

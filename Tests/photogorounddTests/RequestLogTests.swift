@@ -147,8 +147,8 @@ extension RequestLogTests {
     ///
     /// The logs are the first place a problem shows itself, so a line that has
     /// to be decoded before it can be read is a real cost.
-    @Test("What produced the pixels and what the cache holds are separate fields")
-    func cacheStateAndCacheSizeDoNotRunTogether() {
+    @Test("What the cache holds reads as a size, not as an amount missed")
+    func cacheSizeReadsAsASize() {
         let entry = PictureEndpoint.Served(
             status: 200,
             detail: "2018 Rice Homecoming.jpeg",
@@ -160,26 +160,28 @@ extension RequestLogTests {
             sourceID: 12,
             bytes: 87_000,
             milliseconds: 56,
-            cache: .miss,
             cacheBytes: 5_170_000_000,
             queued: 19
         )
 
+        // The wording this guards against is `miss of 5.17 GB`, which read as
+        // though 5.17 GB had been missed. The `hit`/`miss` half went with the
+        // resize cache on 2026-09-06; what is left has to keep saying what it
+        // is on its own.
         #expect(!entry.summary.contains("of 5.17 GB"))
-        #expect(entry.summary.contains("· miss ·"))
         #expect(entry.summary.contains("· cache 5.17 GB ·"))
+        #expect(!entry.summary.contains("miss"))
     }
 
-    @Test("A request that asked for no size reports neither field")
-    func noSizeMeansNoCacheFields() {
-        // Nothing was decoded and nothing was kept, so there is no state to
-        // report — the original went out as it is.
+    @Test("A request that asked for no size reports no cache size")
+    func noSizeMeansNoCacheField() {
+        // The original went out as it is, so nothing consulted the cache's
+        // totals and there is no number to print.
         let entry = PictureEndpoint.Served(
             status: 200, detail: "a.jpg", consumer: "cli",
             bytes: 100, milliseconds: 1
         )
 
-        #expect(!entry.summary.contains("miss"))
         #expect(!entry.summary.contains("cache "))
     }
 }

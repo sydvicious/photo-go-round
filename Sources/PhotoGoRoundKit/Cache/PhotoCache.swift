@@ -66,22 +66,22 @@ public struct PhotoCache {
     /// sweep took 15 files and 33 directories on 2026-08-26 and said nothing
     /// the agent's own console showed.
     @discardableResult
-    public func prepare() throws -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
+    public func prepare() throws -> PhotoStore.IndexResult {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var mutableRoot = root
         try? mutableRoot.setResourceValues(values)
-        // A crash mid-download leaves its temporary in `.staging`, and the
-        // index walk never looks inside — the name is neither `.original` nor
-        // a size — so launch is the only place it can be reclaimed.
+        // A crash mid-download leaves its temporary in `.staging`. The index
+        // walk would now sweep it as a leftover rendering directory, which is
+        // the right outcome by luck rather than by design, so it is still taken
+        // here explicitly and stays correct when that sweep is deleted.
         try? FileManager.default.removeItem(at: root.appending(path: Self.stagingDirectory))
         return try indexCache()
     }
 
     /// Where a fetch writes before adopting into the store. Beside the source
-    /// directories but never indexed: a name that is neither `.original` nor a
-    /// size is skipped by the rebuild walk.
+    /// directories, and removed at launch rather than indexed.
     static let stagingDirectory = ".staging"
 
     /// Rebuilds the byte index from the disk, discarding anything the database
@@ -92,7 +92,7 @@ public struct PhotoCache {
     /// it, and a file whose UUID is unknown has no owner left that could name it
     /// correctly.
     @discardableResult
-    public func indexCache() throws -> (kept: Int, discarded: Int, bytes: Int64, emptied: Int) {
+    public func indexCache() throws -> PhotoStore.IndexResult {
         var owners: [String: String] = [:]
         try database.query(
             """
@@ -208,7 +208,7 @@ public struct PhotoCache {
 
         switch row.storage {
         case .materialized:
-            return store.url(for: PhotoStore.Key(photoUUID: row.uuid))
+            return store.url(forPhoto: row.uuid)
         case .referenced:
             guard let source = try sources.source(id: row.sourceID) else { return nil }
             // Through the seam, never from the stored path — so this keeps
@@ -228,8 +228,6 @@ public struct PhotoCache {
         public let referencedCount: Int
         /// Materialized photos still waiting for their bytes.
         public let pendingCount: Int
-        /// Renderings held, across every size and photograph.
-        public let renderingCount: Int
         public let bytesOnDisk: Int64
         public let byteCeiling: Int64
         public let freeBytesOnVolume: Int64
@@ -247,10 +245,9 @@ public struct PhotoCache {
         let totals = store.totals
 
         return Status(
-            residentCount: totals.originals,
+            residentCount: totals.entries,
             referencedCount: referenced,
-            pendingCount: max(0, materialized - totals.originals),
-            renderingCount: totals.renderings,
+            pendingCount: max(0, materialized - totals.entries),
             bytesOnDisk: totals.byteCount,
             byteCeiling: settings.byteCeiling,
             freeBytesOnVolume: freeBytesOnVolume(),
@@ -289,9 +286,11 @@ public struct PhotoCache {
         // by the queue, which refuses a photograph it already holds.
 
         // The byte store is keyed by source, so it has to be told which source a
-        // photograph belongs to before anything is written for it — including a
-        // rendering of a referenced photograph, which is the only thing we ever
-        // hold for one.
+        // photograph belongs to before anything is written for it. **Only a
+        // materialized photograph is ever written**, since the resize cache went
+        // on 2026-09-06 and a referenced one is read where it lies; this is
+        // called for every candidate anyway, because it is one dictionary write
+        // and the alternative is a second place that has to know the rule.
         store.note(photoUUID: candidate.uuid, sourceUUID: candidate.sourceUUID)
         guard try queue.append(photoID: candidate.id, sourceID: candidate.sourceID, at: now) else {
             return false
@@ -326,9 +325,8 @@ public struct PhotoCache {
         // Already there. This is how asking for the same picture more than once
         // costs a skip rather than a second fetch — the check is here, when the
         // request comes off the queue, rather than in whatever put it on.
-        let originalKey = PhotoStore.Key(photoUUID: card.uuid)
         guard card.storage == .materialized else { return false }
-        guard !store.contains(originalKey) else {
+        guard !store.contains(photo: card.uuid) else {
             log(.cacheUnnecessary(photo: card.externalID, source: card.sourceID))
             return false
         }
@@ -361,8 +359,8 @@ public struct PhotoCache {
         }
         do {
             try store.adopt(
-                fileAt: temporary, for: originalKey,
-                sourceUUID: card.sourceUUID, pathExtension: extension_, now: now)
+                fileAt: temporary, forPhoto: card.uuid,
+                sourceUUID: card.sourceUUID, pathExtension: extension_)
             // **Residency is recorded in the same statement as the size.**
             // `cached_at` is the projection of what the store holds; the
             // eviction order reads it, the status lines count it, and the
@@ -381,7 +379,7 @@ public struct PhotoCache {
             // the disagreement would stand until the next launch. Dropping the
             // entry leaves both saying *not held*, which is true, and the
             // photograph is simply drawn again.
-            store.remove(originalKey)
+            store.remove(photoUUID: card.uuid)
             log(.cacheFailed(photo: card.externalID, source: card.sourceID, because: "\(error)"))
             Log.cache.error(
                 "photo \(card.id, privacy: .public) was fetched and could not be kept: \(String(describing: error), privacy: .public)"
@@ -397,7 +395,7 @@ public struct PhotoCache {
         log(
             .cached(
                 photo: card.externalID, source: card.sourceID,
-                bytes: store.url(for: originalKey).flatMap {
+                bytes: store.url(forPhoto: card.uuid).flatMap {
                     (try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
                 } ?? 0))
         return true
@@ -455,7 +453,7 @@ public struct PhotoCache {
 
             // The column said not held and the store says otherwise: the store
             // is the truth, and there is nothing to fetch. Walk on.
-            if store.contains(PhotoStore.Key(photoUUID: card.uuid)) { continue }
+            if store.contains(photo: card.uuid) { continue }
 
             // **A benched source is not asked at all.** Its card stays where it
             // is and is looked at again on the next kick; the lane moves past
@@ -479,7 +477,7 @@ public struct PhotoCache {
     /// a failure and must not drop the card.
     public func fetch(_ card: DeckCard, now: Date = Date()) async -> Bool {
         let landed = (try? await cache(photoID: card.id, now: now)) ?? false
-        return landed || store.contains(PhotoStore.Key(photoUUID: card.uuid))
+        return landed || store.contains(photo: card.uuid)
     }
 
     /// Ends a fetch: releases the claim, and tells the bench what happened.
@@ -588,42 +586,17 @@ public struct PhotoCache {
         }
     }
 
-    /// The rendering held for this photograph at this size, if any.
-    public func rendering(of card: DeckCard, at size: PhotoStore.Size) -> URL? {
-        store.url(for: PhotoStore.Key(photoUUID: card.uuid, size: size))
-    }
-
-    /// Keeps a rendering, so the next request for the same photograph at the
-    /// same size is a file read rather than a decode.
-    @discardableResult
-    public func keep(
-        _ bytes: Data, of card: DeckCard, at size: PhotoStore.Size, pathExtension: String
-    ) throws -> URL {
-        let url = try store.store(
-            bytes, for: PhotoStore.Key(photoUUID: card.uuid, size: size),
-            sourceUUID: card.sourceUUID, pathExtension: pathExtension)
-        // Logged here rather than at the caller, so a second thing that renders
-        // cannot do it silently. **One line, one event**: where the pixels
-        // were decoded from is a different fact from a rendering being kept,
-        // and putting both in one sentence made neither easy to find.
-        log(
-            .rendered(
-                photo: card.externalID, source: card.sourceID,
-                at: "\(size.width)x\(size.height)", bytes: bytes.count))
-        return url
-    }
-
     // MARK: - Serving one picture
 
     /// One picture, ready to hand over.
     public struct ServedPhoto: Sendable {
         public let card: DeckCard
-        /// The bytes to send: either the photograph's original, or a rendering
-        /// of it we were already holding at exactly the size that was asked for.
+        /// The bytes to send: the photograph's original, in place for a
+        /// referenced file and in the cache for a materialized one. **Always
+        /// the original** — the store stopped holding renderings on 2026-09-06,
+        /// so there is no longer a second thing this could be, and the caller
+        /// renders from it on every request.
         public let url: URL
-        /// True when `url` is that rendering — already the right pixels, so
-        /// there is nothing left to decode and nothing to keep.
-        public let isRendering: Bool
     }
 
     /// **Serving takes the head card, waits for its bytes if they are not here
@@ -659,13 +632,13 @@ public struct PhotoCache {
     /// guarantee: a photograph the user deleted is never shown again, not even
     /// in the minutes before a refresh would have noticed.
     ///
-    /// `fitting` is the box the caller is about to draw into, and naming it is
-    /// what lets an **evicted original with a surviving rendering** still be
-    /// served. Nil asks for the original, which is what `curl` with no `w` and
-    /// `h` wants.
+    /// **The box the caller is about to draw into is no longer its business.**
+    /// `serve` took a `fitting:` size until 2026-09-06, so that a photograph
+    /// whose original had been evicted could still be answered from a rendering
+    /// held at exactly that size. Nothing holds renderings now, so what is here
+    /// is the original or nothing, and the caller resizes what it is handed.
     public func serve(
         to consumerID: Int64? = nil,
-        fitting box: PhotoStore.Size? = nil,
         now: Date = Date()
     ) async throws -> ServedPhoto? {
         var skipped = 0
@@ -676,9 +649,9 @@ public struct PhotoCache {
             // The head — or, once the wait is spent, the first card with bytes.
             let candidate: (card: DeckCard, bytes: URL?)?
             if patience > .zero {
-                candidate = try queue.peek().first.map { ($0, try bytesHere(for: $0, fitting: box)) }
+                candidate = try queue.peek().first.map { ($0, try bytesHere(for: $0)) }
             } else {
-                candidate = try firstQueuedWithBytes(fitting: box)
+                candidate = try firstQueuedWithBytes()
             }
             guard let (card, foundBytes) = candidate else {
                 log(.nothingToShow(walked: skipped, because: "out of cards"))
@@ -726,7 +699,7 @@ public struct PhotoCache {
                 log(.waiting(photo: card.externalID, source: card.sourceID, upTo: patience, queued: depth()))
                 // Join the fetch already running for it, or have one started.
                 ensureFetching()
-                switch try await waitForBytes(of: card, fitting: box, upTo: patience) {
+                switch try await waitForBytes(of: card, upTo: patience) {
                 case .landed(let url):
                     bytes = url
                 case .gone:
@@ -742,7 +715,6 @@ public struct PhotoCache {
                 }
             }
             guard let url = bytes else { continue }
-            let isRendering = box.map { store.url(for: PhotoStore.Key(photoUUID: card.uuid, size: $0)) == url } ?? false
 
             // **Is it still there? — asked last, and only about the one card
             // that is going out.** It is a promise about what is *displayed*,
@@ -779,7 +751,7 @@ public struct PhotoCache {
             log(
                 .serving(
                     photo: card.externalID, source: card.sourceID,
-                    rendering: isRendering, unconfirmed: unconfirmed, queued: depth()))
+                    unconfirmed: unconfirmed, queued: depth()))
             let seq = try await deck.markShown(photoID: card.id, now: now)
             if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
             // The deck moved, so anything mirroring its position — a diagnostic
@@ -791,8 +763,7 @@ public struct PhotoCache {
                     sourceUUID: card.sourceUUID, externalID: card.externalID,
                     storage: card.storage, dealSeq: seq
                 ),
-                url: url,
-                isRendering: isRendering
+                url: url
             )
         }
     }
@@ -807,19 +778,19 @@ public struct PhotoCache {
     /// a round is already running; a cache built in a test need not wire it.
     public var ensureFetching: @Sendable () -> Void = {}
 
-    /// Where a card's bytes are, if they are here: a rendering at the requested
-    /// size, looked at first because it is the cheaper answer *and* may be the
-    /// only one left after the original was evicted; otherwise the original.
-    private func bytesHere(for card: DeckCard, fitting box: PhotoStore.Size?) throws -> URL? {
-        let held = box.flatMap { store.url(for: PhotoStore.Key(photoUUID: card.uuid, size: $0)) }
-        return try held ?? residentURL(forPhoto: card.id)
+    /// Where a card's bytes are, if they are here. **One place to look now**:
+    /// the original, in the cache for a materialized photograph and in place
+    /// through `FileAccess` for a referenced one. It used to check for a
+    /// rendering at the requested size first.
+    private func bytesHere(for card: DeckCard) throws -> URL? {
+        try residentURL(forPhoto: card.id)
     }
 
     /// The first queued card, head first, whose bytes are here. For a request
     /// that has spent its wait and is not waiting again.
-    private func firstQueuedWithBytes(fitting box: PhotoStore.Size?) throws -> (card: DeckCard, bytes: URL?)? {
+    private func firstQueuedWithBytes() throws -> (card: DeckCard, bytes: URL?)? {
         for card in try queue.peek(max(queue.nominalSize * 2, 64)) {
-            if let url = try bytesHere(for: card, fitting: box) { return (card, url) }
+            if let url = try bytesHere(for: card) { return (card, url) }
         }
         return nil
     }
@@ -836,12 +807,12 @@ public struct PhotoCache {
     /// store's index is the one thing both sides can see; a tenth of a second
     /// is nothing beside a fetch and beside the picture's dwell.
     private func waitForBytes(
-        of card: DeckCard, fitting box: PhotoStore.Size?, upTo limit: Duration
+        of card: DeckCard, upTo limit: Duration
     ) async throws -> Waited {
         let clock = ContinuousClock()
         let deadline = clock.now + limit
         while true {
-            if let url = try bytesHere(for: card, fitting: box) { return .landed(url) }
+            if let url = try bytesHere(for: card) { return .landed(url) }
             guard try queue.contains(photoID: card.id) else { return .gone }
             guard clock.now < deadline else { return .timedOut }
             try await Task.sleep(for: .milliseconds(100))
@@ -899,47 +870,70 @@ public struct PhotoCache {
     /// Photographs oldest-first by when anybody last had a reason to keep them.
     ///
     /// **Every photograph, not only the ones with bytes fetched for them.** The
-    /// first version of this asked for `WHERE cached_at IS NOT NULL`, which
-    /// reads as "the ones the cache holds" and is wrong on the ordinary
-    /// library: a photograph on the boot volume is *referenced*, read in place,
-    /// never copied — so it has no `cached_at` and never will. What the cache
-    /// holds for it is a **rendering**, which is the only thing it ever holds
-    /// for one, and those renderings were absent from this list. An entry the
-    /// order does not rank sorts ahead of everything, so on a library of local
-    /// folders the cache evicted every rendering the moment it was over its
-    /// ceiling, and the resize cache did nothing but cost decodes.
+    /// first version asked for `WHERE cached_at IS NOT NULL`, which reads as
+    /// "the ones the cache holds" and was wrong while the cache also held
+    /// renderings: a photograph on the boot volume is *referenced*, read in
+    /// place, never copied, so it has no `cached_at` and never will — and the
+    /// renderings that were the only thing held for one were absent from this
+    /// list, so they were evicted the moment the cache went over its ceiling.
     ///
-    /// **The coalesce is the rest of the rule**, and it now has three terms
-    /// because there are three ways to have had a reason to keep a photograph.
-    /// It was last shown; or it landed in the cache; or it is merely known
-    /// about, which is where a referenced photograph nobody has displayed sits.
-    /// Reading a missing value as *viewed infinitely long ago* would invert the
-    /// policy in each case.
+    /// **That case is gone with the renderings, on 2026-09-06.** A referenced
+    /// photograph now occupies no cache bytes at all, so it cannot be evicted
+    /// and never reaches the store. The predicate stays off anyway: it costs
+    /// nothing, and an order that ranks a photograph the store does not hold is
+    /// harmless where one that fails to rank a photograph it does hold is not.
+    ///
+    /// **The rank is the most recent of the three, and it was the first of the
+    /// three until 2026-09-06.** There are three ways to have had a reason to
+    /// keep a photograph: it was last shown; or it landed in the cache; or it is
+    /// merely known about. Reading a missing value as *viewed infinitely long
+    /// ago* would invert the policy in each case, which is what the zeroes are
+    /// for — `MAX` over NULL is NULL in SQLite, so each term is coalesced before
+    /// the comparison rather than after.
+    ///
+    /// **This was `COALESCE(last_shown_at, cached_at, added_at)`, and that is a
+    /// different query.** `COALESCE` takes the first non-null, so once a
+    /// photograph had ever been shown, the moment it landed in the cache was
+    /// never consulted again. A card dealt for a photograph last displayed ten
+    /// hours ago was fetched, landed with `cached_at` of *now*, and still sorted
+    /// at rank 1 — so it was evicted on the next maintenance tick, before it was
+    /// ever shown, and the card reached the head of the queue with no bytes and
+    /// downloaded it again. On a live agent at a 1 GB ceiling the front of the
+    /// order was thirteen cards, every one on the queue and every one cached
+    /// seconds earlier, while what it kept was photographs shown half an hour
+    /// before that the repeat window guarantees will not be wanted for hours.
+    ///
+    /// It was invisible at a 10 GB ceiling because eviction almost never ran.
+    /// Dropping the ceiling to 1 GB made it run every tick, and every tick takes
+    /// from the front. See `CacheTests.freshlyFetchedOutlivesRecentlyShown`.
     func evictionOrder() throws -> [String] {
         try database.all(
             """
             SELECT uuid FROM photo
-             ORDER BY COALESCE(last_shown_at, cached_at, added_at), id;
+             ORDER BY MAX(
+                        COALESCE(last_shown_at, 0),
+                        COALESCE(cached_at, 0),
+                        COALESCE(added_at, 0)
+                      ), id;
             """
         ) { try $0.string("uuid") }
     }
 
-    /// FIFO by creation time, bounded by bytes, over `(photo, resolution)`
-    /// entries rather than over photographs.
+    /// Least-recently-wanted first, bounded by bytes, one entry per photograph.
     ///
-    /// **The original justification for plain FIFO no longer holds, and the
-    /// policy is kept for a weaker reason.** It used to be that entries were
-    /// written in deck order — bytes entered the cache in the order they would
-    /// be shown, so oldest-written was also longest-since-dealt, and the cache
-    /// was a sliding window over the deck. Neither half is true now: bytes
-    /// arrive from the queue of pictures to cache in the order fetches
-    /// *complete*, and cards are placed at random positions rather than at the
-    /// back, so nothing connects write order to display order.
+    /// **The ordering comes from the database, not from the files.** The rank is
+    /// `evictionOrder()` above — `COALESCE(last_shown_at, cached_at, added_at)`
+    /// — so this is oldest-reason-to-keep first rather than the FIFO by write
+    /// time the header used to claim. `PhotoStore.Entry` carried a `createdAt`
+    /// for that FIFO and nothing ever read it; it went on 2026-09-06.
     ///
-    /// What is left is that it does not matter much. A shuffle shows every
-    /// photograph about equally often, so there is no hot set for an LRU to
-    /// protect — and `createdAt` is never updated on a hit, so this is FIFO by
-    /// *write* time rather than by use either way. Anything queued is skipped
+    /// **It was over `(photo, resolution)` entries until 2026-09-06**, with the
+    /// original evicted before its own renderings so a display-ready fraction of
+    /// the bytes survived. One photograph is one file now, so there is no
+    /// within-photograph order left to decide.
+    ///
+    /// A shuffle shows every photograph about equally often, so there is no hot
+    /// set for anything cleverer to protect. Anything queued is skipped
     /// regardless of age, which covers the only entries with a known imminent
     /// reader.
     ///
@@ -1014,9 +1008,7 @@ public struct PhotoCache {
         var referenced = 0
         for row in rows {
             if row.storage == "referenced" { referenced += 1 }
-            let held = store.sizes(forPhoto: row.uuid).count
-                + (store.contains(PhotoStore.Key(photoUUID: row.uuid)) ? 1 : 0)
-            guard held > 0 else { continue }
+            guard store.contains(photo: row.uuid) else { continue }
             if row.storage == "materialized" { refetch += 1 }
         }
         // The byte total comes from the index, since the database no longer

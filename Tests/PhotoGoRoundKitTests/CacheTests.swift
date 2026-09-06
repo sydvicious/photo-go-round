@@ -59,21 +59,16 @@ struct CacheTests {
 
     // MARK: - Layout
 
-    @Test("Cache paths are source, then size, then the photograph's own identity")
-    func cacheLayoutIsSourceThenSize() {
+    @Test("Cache paths are source, then `.original`, then the photograph's own identity")
+    func cacheLayoutIsSourceThenOriginal() {
         let store = PhotoStore(root: URL(filePath: "/cache"))
-        let original = store.url(
-            for: PhotoStore.Key(photoUUID: "abc"), sourceUUID: "src", pathExtension: "HEIC")
+        let original = store.url(forPhoto: "abc", sourceUUID: "src", pathExtension: "HEIC")
         #expect(original.path(percentEncoded: false) == "/cache/src/.original/abc.heic")
 
-        let rendered = store.url(
-            for: PhotoStore.Key(photoUUID: "abc", size: .init(width: 3840, height: 2160)),
-            sourceUUID: "src", pathExtension: "heic")
-        #expect(rendered.path(percentEncoded: false) == "/cache/src/3840x2160/abc.heic")
-
-        // A file with no extension keeps none, rather than gaining a stray dot.
-        let bare = store.url(
-            for: PhotoStore.Key(photoUUID: "abc"), sourceUUID: "src", pathExtension: "")
+        // **`.original` is the only directory name now.** A rendering used to
+        // land beside it under `3840x2160`; the store stopped keeping them on
+        // 2026-09-06 and the walk sweeps whatever is left.
+        let bare = store.url(forPhoto: "abc", sourceUUID: "src", pathExtension: "")
         #expect(bare.path(percentEncoded: false) == "/cache/src/.original/abc")
     }
 
@@ -374,13 +369,25 @@ struct CacheTests {
     /// **This replaces ageing the files by hand.** Eviction used to be FIFO by
     /// write time, so a test had to backdate modification dates because a
     /// produce loop finishes in microseconds and every file shared a timestamp.
-    /// The order is `COALESCE(last_shown_at, cached_at)` now, which is a fact
-    /// about the photograph rather than about its file — so the test states it
-    /// directly.
+    /// The order is a fact about the photograph rather than about its file, so
+    /// the test states it directly.
+    ///
+    /// **Both columns are written, and both relative to `added_at`.** Two traps,
+    /// and this helper walked into each of them in turn. The rank has been
+    /// `MAX(last_shown_at, cached_at, added_at)` since 2026-09-06, so writing
+    /// only `last_shown_at` leaves `cached_at` at whatever `produceAll` stamped
+    /// — real wall-clock now — which dominates the `MAX` and makes every
+    /// photograph exactly the same age. And an absolute `1000` is not a small
+    /// number beside a real epoch timestamp, it is one from 1970: these columns
+    /// are all real timestamps on one scale, and a photograph cannot be shown
+    /// before it was added.
     private func shown(_ fixture: Fixture, oldestFirst uuids: [String]) throws {
         for (index, uuid) in uuids.enumerated() {
             try fixture.library.database.run(
-                "UPDATE photo SET last_shown_at = :at WHERE uuid = :uuid;",
+                """
+                UPDATE photo SET last_shown_at = added_at + :at, cached_at = added_at + :at
+                 WHERE uuid = :uuid;
+                """,
                 ["at": .int(Int64(1000 + index)), "uuid": .text(uuid)])
         }
     }
@@ -411,17 +418,19 @@ struct CacheTests {
         // The four most recently seen survive. **Nothing is queued-protected**:
         // every one of these is on the deck, and the ceiling is reached anyway.
         let held = uuids.filter {
-            fixture.cache.store.url(for: PhotoStore.Key(photoUUID: $0)) != nil
+            fixture.cache.store.url(forPhoto: $0) != nil
         }
         #expect(held == Array(uuids.suffix(4)))
     }
 
     @Test("A photograph that has never been shown is the last to go, not the first")
     func neverShownSortsNewest() async throws {
-        // The whole of the `COALESCE`. Read literally, "most recently viewed"
-        // makes a photograph nobody has viewed infinitely old — so the cache
-        // would reach its ceiling and then discard every download on arrival,
-        // freezing on whatever happened to be resident at that moment.
+        // Why `last_shown_at` is not the rank on its own. Read literally,
+        // "most recently viewed" makes a photograph nobody has viewed infinitely
+        // old — so the cache would reach its ceiling and then discard every
+        // download on arrival, freezing on whatever happened to be resident at
+        // that moment. Landing in the cache is the second reason to keep
+        // something, and `MAX` is what lets it count.
         let fixture = try await Fixture(
             photos: (0..<6).map { "photo-\($0).png" },
             settings: CacheSettings(byteCeiling: 10_000)
@@ -429,9 +438,17 @@ struct CacheTests {
         try await fixture.produceAll()
 
         let uuids = try uuidsByID(fixture)
-        // Five have been seen; the sixth has only just landed.
+        // Five have been seen; the sixth has only just landed and has never been
+        // shown at all. Its `cached_at` is stated rather than left to
+        // `produceAll`, for the reason `shown(_:oldestFirst:)` gives.
         try shown(fixture, oldestFirst: Array(uuids.prefix(5)))
         let fresh = try #require(uuids.last)
+        try fixture.library.database.run(
+            """
+            UPDATE photo SET last_shown_at = NULL, cached_at = added_at + 1500
+             WHERE uuid = :uuid;
+            """,
+            ["uuid": .text(fresh)])
 
         let tight = PhotoCache(
             database: fixture.library.database, root: fixture.cache.root,
@@ -441,8 +458,58 @@ struct CacheTests {
         #expect(try tight.evictIfNeeded().evicted > 0)
 
         #expect(
-            fixture.cache.store.url(for: PhotoStore.Key(photoUUID: fresh)) != nil,
+            fixture.cache.store.url(forPhoto: fresh) != nil,
             "the cache evicted the photograph it had just paid for")
+    }
+
+    @Test("A photograph fetched just now outlives one shown half an hour ago")
+    func freshlyFetchedOutlivesRecentlyShown() async throws {
+        // **The thrash this was written for, seen on a live agent 2026-09-06.**
+        // At a 1 GB ceiling the front of the eviction order was thirteen cards
+        // that were all on the queue and all cached *seconds* earlier: dealt for
+        // photographs last displayed nine to eighteen hours before, fetched from
+        // iCloud, and then evicted on the very next maintenance tick — before
+        // they were ever shown. The card reached the head with no bytes, waited,
+        // and downloaded the same photograph again.
+        //
+        // The cause was `COALESCE(last_shown_at, cached_at, added_at)`, which
+        // takes the *first non-null* — so once a photograph had ever been shown,
+        // the moment it landed in the cache was never consulted again. The plan
+        // describes this rank as "when anybody last had a reason to keep them",
+        // and lists three ways to have had one; that is the *most recent* of
+        // them, which is `MAX`, and strictly least-recently-used.
+        let fixture = try await Fixture(
+            photos: (0..<6).map { "photo-\($0).png" },
+            settings: CacheSettings(byteCeiling: 10_000)
+        )
+        try await fixture.produceAll()
+
+        let uuids = try uuidsByID(fixture)
+        let justFetched = try #require(uuids.first)
+
+        // Everything was shown, and cached, half an hour ago. Relative to
+        // `added_at`, for the reason `shown(_:oldestFirst:)` gives.
+        try fixture.library.database.run(
+            "UPDATE photo SET last_shown_at = added_at + 5000, cached_at = added_at + 5000;")
+        // Except this one: displayed long before any of them, and fetched a
+        // moment ago for a card sitting on the queue right now.
+        try fixture.library.database.run(
+            """
+            UPDATE photo SET last_shown_at = added_at + 1000, cached_at = added_at + 9000
+             WHERE uuid = :uuid;
+            """,
+            ["uuid": .text(justFetched)])
+
+        let tight = PhotoCache(
+            database: fixture.library.database, root: fixture.cache.root,
+            settings: CacheSettings(byteCeiling: 200), sources: fixture.store,
+            store: fixture.cache.store
+        )
+        #expect(try tight.evictIfNeeded().evicted > 0)
+
+        #expect(
+            fixture.cache.store.url(forPhoto: justFetched) != nil,
+            "evicted the photograph it had just paid to download, before showing it once")
     }
 
     @Test("Nothing is exempt, so the ceiling is always reachable")
@@ -505,7 +572,7 @@ struct CacheTests {
                 "SELECT uuid FROM photo WHERE id = :id;", ["id": .int(doomed)]
             ) { try $0.string("uuid") }
         )
-        let held = try #require(fixture.cache.store.url(for: PhotoStore.Key(photoUUID: uuid)))
+        let held = try #require(fixture.cache.store.url(forPhoto: uuid))
 
         #expect(try fixture.cache.remove(doomed).count == 1)
         #expect(!FileManager.default.fileExists(atPath: held.path(percentEncoded: false)))
@@ -560,7 +627,7 @@ struct CacheTests {
                 try $0.string("uuid")
             }
         )
-        let held = try #require(fixture.cache.store.url(for: PhotoStore.Key(photoUUID: uuid)))
+        let held = try #require(fixture.cache.store.url(forPhoto: uuid))
         try FileManager.default.removeItem(at: held)
 
         // The index is built *from* the disk, so it cannot claim what is not
@@ -766,162 +833,5 @@ struct CacheTests {
         )
         #expect(try healthy.evictIfNeeded().evicted == 0)
         #expect(try healthy.status().bytesOnDisk == 1000)
-    }
-}
-
-/// Eviction on a library that lives on the boot volume.
-///
-/// **The ordinary case, and the one the eviction order first got wrong.** A
-/// referenced photograph is read in place and never copied, so it has no
-/// `cached_at` — but the cache still holds *renderings* for it, and those are
-/// the only thing it ever holds for one. An eviction order built from
-/// `cached_at` cannot see them, and an entry the order does not rank is the
-/// first thing out.
-@Suite("Eviction on the boot volume")
-struct ReferencedEvictionTests {
-
-    private struct Fixture {
-        let folder: TemporaryFolder
-        let cacheRoot: TemporaryFolder
-        let library: TestLibrary
-        let sources: SourceStore
-        let cache: PhotoCache
-
-        init(photos: Int, byteCeiling: Int64) async throws {
-            folder = TemporaryFolder(name: "pgr-ref-evict")
-            cacheRoot = TemporaryFolder(name: "pgr-ref-evict-cache")
-            for i in 0..<photos { folder.write("photo-\(i).png", bytes: 64) }
-
-            library = try TestLibrary()
-            sources = SourceStore(database: library.database)
-            cache = PhotoCache(
-                database: library.database,
-                root: cacheRoot.url.appending(path: "cache"),
-                settings: CacheSettings(byteCeiling: byteCeiling),
-                sources: sources
-            )
-            try cache.prepare()
-            let source = try await sources.add(
-                kind: .folder, locator: folder.path, recursive: true)
-            await sources.refresh(source)
-            // Everything in a temporary directory really is on the boot volume,
-            // so this is what the classifier decides on its own.
-            try library.database.run("UPDATE photo SET storage = 'referenced';")
-        }
-
-        /// Keeps a rendering for each photograph, which is the only thing the
-        /// cache ever holds for a referenced one.
-        func render(_ uuids: [String], bytes: Int) throws {
-            let size = PhotoStore.Size(width: 100, height: 100)
-            for uuid in uuids {
-                try cache.store.store(
-                    Data(count: bytes), for: PhotoStore.Key(photoUUID: uuid, size: size),
-                    sourceUUID: "src", pathExtension: "jpeg")
-            }
-        }
-
-        func uuids() throws -> [String] {
-            try library.database.all("SELECT uuid FROM photo ORDER BY id;") {
-                try $0.string("uuid")
-            }
-        }
-
-        func held(_ uuid: String) -> Bool {
-            cache.store.url(
-                for: PhotoStore.Key(
-                    photoUUID: uuid, size: PhotoStore.Size(width: 100, height: 100))) != nil
-        }
-    }
-
-    @Test("A referenced photograph's rendering is evicted by recency, not first")
-    func referencedRenderingsAreRanked() async throws {
-        let fixture = try await Fixture(photos: 6, byteCeiling: 250)
-        let uuids = try fixture.uuids()
-        try fixture.render(uuids, bytes: 100)
-
-        // Shown oldest-first, so the last two are the ones worth keeping.
-        for (index, uuid) in uuids.enumerated() {
-            try fixture.library.database.run(
-                "UPDATE photo SET last_shown_at = added_at + :at WHERE uuid = :uuid;",
-                ["at": .int(Int64(1000 + index)), "uuid": .text(uuid)])
-        }
-
-        #expect(try fixture.cache.evictIfNeeded().evicted > 0)
-
-        // The two most recently shown must survive. Ordering the whole cache by
-        // a column referenced photographs never have puts every one of them
-        // ahead of everything else, so the ones just displayed go first.
-        #expect(fixture.held(uuids[5]), "evicted the rendering shown most recently")
-        #expect(fixture.held(uuids[4]), "evicted the rendering shown second most recently")
-        #expect(!fixture.held(uuids[0]), "kept the rendering nobody has looked at in longest")
-    }
-
-    @Test("A referenced photograph nobody has shown still ranks, and ranks oldest")
-    func neverShownReferencedRanksOldest() async throws {
-        // The third `COALESCE` term. A referenced photograph that has never
-        // been displayed has no `last_shown_at` and no `cached_at` — only
-        // `added_at`. Without that term it is unranked, which is to say first
-        // out, and a rendering made for it is thrown away before anything that
-        // has actually been looked at.
-        let fixture = try await Fixture(photos: 4, byteCeiling: 250)
-        let uuids = try fixture.uuids()
-        try fixture.render(uuids, bytes: 100)
-
-        // Two shown; two never shown at all. **Relative to `added_at`**, not an
-        // arbitrary small number: these columns are all real timestamps on the
-        // same scale, and a photograph cannot be shown before it was added.
-        // Writing 5000 here made the shown ones sort oldest and the test failed
-        // against correct code — worth saying, because it is an easy way to
-        // write a test that lies.
-        for uuid in uuids.suffix(2) {
-            try fixture.library.database.run(
-                """
-                UPDATE photo SET last_shown_at = added_at + 1000 WHERE uuid = :uuid;
-                """,
-                ["uuid": .text(uuid)])
-        }
-
-        #expect(try fixture.cache.evictIfNeeded().evicted > 0)
-
-        // The two that were displayed survive; the two nobody has looked at go.
-        #expect(fixture.held(uuids[2]) && fixture.held(uuids[3]))
-    }
-
-    @Test("Local and remote photographs compete for the ceiling on one rule")
-    func aMixedLibraryRanksOnOneOrder() async throws {
-        // **The case the whole design turns on**, and the one no unit test
-        // reached until now: a library with both kinds in it. A referenced
-        // photograph's rendering and a fetched original are both bytes under
-        // the same ceiling, and the order that decides between them has to be
-        // one order — not "everything remote, then everything local".
-        let fixture = try await Fixture(photos: 6, byteCeiling: 250)
-        let uuids = try fixture.uuids()
-        try fixture.render(uuids, bytes: 100)
-
-        // Half the library is remote and its originals have landed.
-        for uuid in uuids.prefix(3) {
-            try fixture.library.database.run(
-                """
-                UPDATE photo SET storage = 'materialized', cached_at = 2000
-                 WHERE uuid = :uuid;
-                """,
-                ["uuid": .text(uuid)])
-        }
-
-        // Interleaved by recency, deliberately alternating the two kinds: the
-        // most recently shown is remote, the next is local, and so on.
-        let order = [uuids[0], uuids[3], uuids[1], uuids[4], uuids[2], uuids[5]]
-        for (index, uuid) in order.enumerated() {
-            try fixture.library.database.run(
-                "UPDATE photo SET last_shown_at = added_at + :at WHERE uuid = :uuid;",
-                ["at": .int(Int64(1000 + index)), "uuid": .text(uuid)])
-        }
-
-        #expect(try fixture.cache.evictIfNeeded().evicted > 0)
-
-        // The survivors are the most recently shown *whatever kind they are*.
-        #expect(fixture.held(uuids[5]), "a local rendering lost to recency it should have won")
-        #expect(fixture.held(uuids[2]), "a remote rendering lost to recency it should have won")
-        #expect(!fixture.held(uuids[0]), "the longest-unseen was kept")
     }
 }

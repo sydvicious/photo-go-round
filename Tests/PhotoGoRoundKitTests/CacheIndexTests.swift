@@ -62,7 +62,7 @@ struct CacheIndexTests {
 
             for uuid in uuids {
                 _ = try bytes.store(
-                    Data(repeating: 0xAB, count: 64), for: PhotoStore.Key(photoUUID: uuid),
+                    Data(repeating: 0xAB, count: 64), forPhoto: uuid,
                     sourceUUID: sourceUUID, pathExtension: "heic")
             }
             return Set(uuids)

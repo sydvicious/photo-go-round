@@ -44,20 +44,6 @@ public enum PhotoRenderer {
             return nil
         }
 
-        /// Whether an `Accept` header admits this format.
-        ///
-        /// Broader than `negotiated` on purpose: negotiation picks what to
-        /// *produce*, while this asks whether bytes already held may be served
-        /// as they are — a rendering in any acceptable format is a hit, and
-        /// only a client that genuinely excludes it forces a re-render.
-        public func admitted(by accept: String?) -> Bool {
-            guard let accept = accept?.lowercased() else { return true }
-            if accept.contains("image/*") || accept.contains("*/*") { return true }
-            switch self {
-            case .heic: return accept.contains("image/heic")
-            case .jpeg: return accept.contains("image/jpeg") || accept.contains("image/jpg")
-            }
-        }
     }
 
     public struct Rendered: Sendable {

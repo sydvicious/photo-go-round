@@ -16,7 +16,6 @@ struct PictureTests {
         "X-PGR-Source": "2",
         "X-PGR-Storage": "referenced",
         "X-PGR-Pixels": "3840x2160",
-        "X-PGR-Cache": "miss",
     ]
 
     @Test("Every header the endpoint sets is read back")
@@ -28,7 +27,6 @@ struct PictureTests {
         #expect(picture.source == 2)
         #expect(picture.storage == "referenced")
         #expect(picture.pixels == PixelSize(width: 3840, height: 2160))
-        #expect(picture.cache == .miss)
     }
 
     /// `URLHTTPResponse` normalises header names and a raw socket does not, so
@@ -40,15 +38,16 @@ struct PictureTests {
         #expect(ServedPicture.from(data: Data(), headers: lowered).pixels?.width == 3840)
     }
 
-    /// The original bytes are served with neither a size nor a cache state,
-    /// because nothing rendered them.
-    @Test("An original carries no pixels and no cache state")
+    /// The original bytes are served with no size, because nothing rendered
+    /// them. `X-PGR-Cache` used to be absent here too and is gone entirely: the
+    /// service stopped keeping renderings on 2026-09-06, so every sized request
+    /// is a render and there is no hit or miss to report.
+    @Test("An original carries no pixels")
     func original() {
         let picture = ServedPicture.from(
             data: Data(),
             headers: ["Content-Type": "image/png", "X-PGR-Card": "9", "X-PGR-Deal": "1", "X-PGR-Storage": "materialized"])
         #expect(picture.pixels == nil)
-        #expect(picture.cache == nil)
         #expect(picture.contentType == "image/png")
     }
 

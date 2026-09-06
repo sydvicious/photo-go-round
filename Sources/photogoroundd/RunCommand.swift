@@ -58,6 +58,13 @@ struct RunCommand {
         let reclaimed = try cache.prepare()
         // Only when there was something to reclaim, so a clean launch stays
         // quiet and a launch that took 33 directories off the disk does not.
+        // Temporary, and goes with the sweep that produces it — see
+        // `PhotoStore.IndexResult.reclaimedDirectories`.
+        if reclaimed.reclaimedDirectories > 0 {
+            Console.note(
+                "reclaimed \(reclaimed.reclaimedDirectories) leftover resize directories"
+                    + ", \(RunCommand.bytes(reclaimed.reclaimedBytes))")
+        }
         if reclaimed.discarded > 0 || reclaimed.emptied > 0 {
             Console.event(
                 "reclaimed \(reclaimed.discarded) cached files nothing claimed"
@@ -719,7 +726,7 @@ struct RunCommand {
         let stats = try deck.stats(settings: preferences.deckSettings)
         return """
             \(stats.dealablePhotos) in pool · \(status.queued)/\(preferences.queueSize) queued · \
-            \(status.residentCount) originals · \(status.renderingCount) renderings · \
+            \(status.residentCount) originals · \
             \(status.referencedCount) referenced · \(Self.bytes(status.bytesOnDisk)) on disk
             """
     }

@@ -103,29 +103,6 @@ struct EndpointCacheTests {
             _ = try await cache.fillCompletely()
         }
 
-        /// Deletes the cached original and re-indexes the byte store from the
-        /// filesystem, leaving the rendering and the queue entry alone.
-        ///
-        /// `rebuild` rather than `PhotoCache.indexCache`, and the difference is
-        /// the point: `indexCache` *also* drops any queued card whose original
-        /// is missing, so calling it here would remove the very photograph this
-        /// is arranging to ask for.
-        func evictTheOriginal() throws {
-            let uuid = try #require(
-                try sources.database.scalarString("SELECT uuid FROM photo LIMIT 1;"))
-            let original = try #require(cache.store.url(for: PhotoStore.Key(photoUUID: uuid)))
-            try FileManager.default.removeItem(at: original)
-
-            var owners: [String: String] = [:]
-            try sources.database.query(
-                "SELECT p.uuid AS photo_uuid, s.uuid AS source_uuid"
-                    + " FROM photo p JOIN source s ON s.id = p.source_id;"
-            ) { row in
-                owners[try row.string("photo_uuid")] = try row.string("source_uuid")
-            }
-            _ = cache.store.rebuild(photos: owners)
-        }
-
         /// One request, with the queue topped up first.
         ///
         /// Serving pops the queue, and the agent refills it because serving is
@@ -185,22 +162,6 @@ struct EndpointCacheTests {
 
     // MARK: - Hit and miss
 
-    @Test("The first request for a size renders; the second is served from cache")
-    func secondRequestIsAHit() async throws {
-        let library = try Library()
-        try await library.fill()
-
-        let first = try await library.get("w=100&h=100")
-        #expect(first.status == 200)
-        #expect(headers(first)["X-PGR-Cache"] == "miss")
-
-        let second = try await library.get("w=100&h=100")
-        #expect(second.status == 200)
-        #expect(
-            headers(second)["X-PGR-Cache"] == "hit",
-            "the endpoint rendered again instead of reading what it had just written")
-    }
-
     @Test("A delivered picture is counted, and counted once per request")
     func deliveryIsCounted() async throws {
         let library = try Library()
@@ -242,132 +203,7 @@ struct EndpointCacheTests {
         #expect(handed == 1)
     }
 
-    @Test("Two sizes are held at once, and alternating between them hits both")
-    func twoSizesAlternate() async throws {
-        let library = try Library()
-        try await library.fill()
-
-        // Each size misses once.
-        for box in ["w=100&h=100", "w=1000&h=1000"] {
-            let response = try await library.get(box)
-            #expect(headers(response)["X-PGR-Cache"] == "miss")
-        }
-
-        // Then every request hits, whichever order they come in, and each keeps
-        // its own pixels — one did not overwrite the other.
-        for box in ["w=100&h=100", "w=1000&h=1000", "w=1000&h=1000", "w=100&h=100"] {
-            let response = try await library.get(box)
-            #expect(headers(response)["X-PGR-Cache"] == "hit", "\(box)")
-        }
-
-        let small = try await library.get("w=100&h=100")
-        let large = try await library.get("w=1000&h=1000")
-        // 1200×900 fitted into each box.
-        #expect(headers(small)["X-PGR-Pixels"] == "100x75")
-        #expect(headers(large)["X-PGR-Pixels"] == "1000x750")
-    }
-
-    @Test("A different size is a different entry, not a hit on the wrong pixels")
-    func sizesDoNotCollide() async throws {
-        let library = try Library()
-        try await library.fill()
-
-        _ = try await library.get("w=100&h=100")
-        let other = try await library.get("w=101&h=101")
-        #expect(headers(other)["X-PGR-Cache"] == "miss")
-        // The decoder truncates the short edge where `fit` rounds it, so this is
-        // 75 rather than 76 — see `PhotoRenderer.fit`.
-        #expect(headers(other)["X-PGR-Pixels"] == "101x75")
-    }
-
-    @Test("The index survives a new process, so nothing is rendered twice")
-    func cacheSurvivesARestart() async throws {
-        let library = try Library()
-        try await library.fill()
-        _ = try await library.get("w=100&h=100")
-
-        // A second endpoint over the same directories, with nothing in memory —
-        // which is what a restart is.
-        let store = PhotoStore(root: library.cache.root)
-        let restarted = PictureEndpoint(
-            databasePath: library.directory.appending(path: "photogoround.sqlite")
-                .path(percentEncoded: false),
-            cacheRoot: library.cache.root,
-            preferences: Preferences(defaults: scratchSuite("ep")),
-            store: store, queueRanShort: {}, log: { _ in })
-        try PhotoCache(
-            database: try Database(
-                path: library.directory.appending(path: "photogoround.sqlite")
-                    .path(percentEncoded: false)),
-            root: library.cache.root, sources: library.sources, store: store
-        ).indexCache()
-
-        // Top the queue up first: serving popped it, and this endpoint has no
-        // agent behind it to notice.
-        _ = try await library.cache.fillCompletely()
-        let response = await restarted.route(
-            try #require(HTTPListener.parse("GET /v1/next?w=100&h=100 HTTP/1.1")))
-        #expect(headers(response)["X-PGR-Cache"] == "hit")
-    }
-
     // MARK: - When the original is gone and the rendering is not
-
-    /// The case `PhotoStore.evictIfNeeded` documents as a feature — "a client
-    /// asking again at a size already held never needs the original back" — and
-    /// which did not work, because serving insisted on finding the original
-    /// before it would part with anything.
-    @Test("A rendering is served after its original has been evicted")
-    func aRenderingOutlivesItsOriginal() async throws {
-        let library = try Library()
-        try await library.fill(materialized: true)
-
-        let first = try await library.get("w=200&h=200")
-        #expect(first.status == 200)
-        #expect(headers(first)["X-PGR-Cache"] == "miss")
-
-        // Queue it *before* evicting, and do not top up afterwards — producing
-        // would copy the original back in and there would be nothing to prove.
-        try await library.topUp()
-        try library.evictTheOriginal()
-
-        let second = try await library.get("w=200&h=200", toppingUp: false)
-        #expect(
-            second.status == 200,
-            "the photograph was skipped, though we were holding exactly the pixels asked for")
-        #expect(headers(second)["X-PGR-Cache"] == "hit")
-        #expect(headers(second)["X-PGR-Pixels"] == "200x150")
-    }
-
-    @Test("A size nobody rendered is not invented from one that was")
-    func anotherSizeIsNotServedFromTheWrongRendering() async throws {
-        let library = try Library()
-        try await library.fill(materialized: true)
-        _ = try await library.get("w=200&h=200")
-        try await library.topUp()
-        try library.evictTheOriginal()
-
-        // 300×300 was never rendered and the original is gone, so there is
-        // nothing to make it from. Answering with the 200-wide file would be
-        // handing over pixels the client did not ask for. In the agent the
-        // request would wait for the fetcher to bring the original back; here
-        // nothing fetches, so it waits its short bound and answers nothing.
-        let response = try await library.get("w=300&h=300", toppingUp: false)
-        #expect(response.status == 204)
-    }
-
-    @Test("Asking for the original when only a rendering is held serves nothing")
-    func theOriginalIsNotFakedFromARendering() async throws {
-        let library = try Library()
-        try await library.fill(materialized: true)
-        _ = try await library.get("w=200&h=200")
-        try await library.topUp()
-        try library.evictTheOriginal()
-
-        // No box at all means the original bytes, untouched. We do not have
-        // them, and a rendering is not them.
-        let response = try await library.getOriginal(toppingUp: false)
-        #expect(response.status == 204)
-    }
 
     // MARK: - What comes back
 
@@ -379,7 +215,6 @@ struct EndpointCacheTests {
         let response = try await library.getOriginal()
         #expect(response.status == 200)
         #expect(headers(response)["X-PGR-Pixels"] == nil)
-        #expect(headers(response)["X-PGR-Cache"] == nil)
         #expect(headers(response)["Content-Type"] == "image/png")
     }
 
@@ -414,50 +249,56 @@ struct EndpointCacheTests {
         #expect(String(entry.deal ?? 0) == headers(response)["X-PGR-Deal"])
     }
 
-    @Test("The console line says hit or miss, which is what a miss costs is read against")
-    func theRecordSaysHitOrMiss() async throws {
+    @Test("The console line carries what the cache holds and how deep the queue is")
+    func theRecordCarriesCacheAndQueue() async throws {
         let library = try Library()
         try await library.fill()
 
-        _ = try await library.get("w=200&h=200")
         _ = try await library.get("w=200&h=200")
         _ = try await library.getOriginal()
 
-        let records = library.log.all.suffix(3)
-        #expect(records.map(\.cache) == [.miss, .hit, nil])
-        // The cache size sits beside the hit or miss, and the queue depth
-        // beside both: a miss is ordinary while the cache fills and worth a
-        // second look once it is not, and the depth says whether the deck is
-        // keeping up. **Separate fields**, because `miss of 5.17 GB` read as
-        // though 5.17 GB had been missed.
+        let records = library.log.all.suffix(2)
+        // **`hit` and `miss` went with the resize cache on 2026-09-06.** Every
+        // sized request renders now, so a field that could only say `miss` said
+        // nothing; the milliseconds at the end of the line are what it cost.
         #expect(try #require(records.first).cacheBytes != nil)
         #expect(try #require(records.first).queued != nil)
-        #expect(try #require(records.first).summary.contains("· miss ·"))
         #expect(try #require(records.first).summary.contains("· cache "))
         #expect(try #require(records.first).summary.contains(" queued"))
-        // A miss is the one worth reading, so it has to be in the words a
-        // person sees rather than only in the header a client sees.
-        #expect(try #require(records.first).summary.contains("miss"))
-        // Asking for the original is neither: nothing was decoded to produce it.
-        #expect(try #require(records.last).summary.contains("hit") == false)
-        #expect(try #require(records.last).summary.contains("miss") == false)
+        #expect(try #require(records.first).summary.contains("ms"))
+        #expect(!(try #require(records.first).summary.contains("hit")))
+        #expect(!(try #require(records.first).summary.contains("miss")))
+        // Asking for the original consults no totals, so it prints no size.
+        #expect(!(try #require(records.last).summary.contains("· cache ")))
     }
 
-    @Test("A hit is logged as well as a miss, and reports the bytes it sent")
-    func cacheHitsAreLogged() async throws {
+    @Test("The same size asked for twice renders twice and keeps nothing on disk")
+    func nothingIsKeptBetweenRequests() async throws {
         let library = try Library()
         try await library.fill()
 
+        let before = library.cache.store.totals
+
         _ = try await library.get("w=200&h=200")
         _ = try await library.get("w=200&h=200")
 
-        let records = library.log.all.suffix(2)
-        #expect(records.count == 2)
-        // Both are ordinary served pictures as far as the record is concerned —
-        // a client cannot tell, and neither should the log's shape.
-        #expect(records.allSatisfy { $0.status == 200 })
-        #expect(records.allSatisfy { $0.bytes > 0 })
-        #expect(records.allSatisfy { $0.card == records.first?.card })
+        // **The contract this replaced the resize cache with.** The bytes went
+        // under `(photo, resolution)` until 2026-09-06, where a window moved two
+        // pixels remade the whole set for a hit a shuffle almost never takes.
+        // Only originals are held now, so serving cannot grow the store.
+        let after = library.cache.store.totals
+        #expect(after.entries == before.entries)
+        #expect(after.byteCount == before.byteCount)
+
+        // And nothing is on disk beside `.original`.
+        let manager = FileManager.default
+        let sources = (try? manager.contentsOfDirectory(
+            at: library.cache.store.root, includingPropertiesForKeys: nil)) ?? []
+        for source in sources {
+            let children = (try? manager.contentsOfDirectory(
+                at: source, includingPropertiesForKeys: nil)) ?? []
+            #expect(children.allSatisfy { $0.lastPathComponent == ".original" })
+        }
     }
 
     @Test("One record per request, and no record for work that was skipped")
@@ -483,42 +324,6 @@ struct EndpointCacheTests {
         #expect(headers(response)["Content-Type"] == "image/jpeg")
     }
 
-    @Test("A held rendering the client cannot accept is re-rendered, and the replacement takes its place")
-    func unacceptableHeldFormatIsReplaced() async throws {
-        let library = try Library()
-        try await library.fill()
-
-        // A HEIC rendering is held at this size.
-        let first = try await library.get("w=100&h=100")
-        #expect(headers(first)["Content-Type"] == "image/heic")
-
-        let uuid = try #require(
-            try library.sources.database.scalarString("SELECT uuid FROM photo LIMIT 1;"))
-        let key = PhotoStore.Key(photoUUID: uuid, size: .init(width: 100, height: 100))
-        let heic = try #require(library.cache.store.url(for: key))
-        #expect(heic.pathExtension == "heic")
-
-        // A client that accepts only JPEG must not be handed those bytes: the
-        // contract is that the format comes from `Accept`, and before this test
-        // it held only on the miss path.
-        let second = try await library.get("w=100&h=100", accept: "image/jpeg")
-        #expect(second.status == 200)
-        #expect(headers(second)["Content-Type"] == "image/jpeg")
-
-        // One rendering per (photo, size): the JPEG replaced the HEIC, and the
-        // old file is gone rather than stranded on disk where no index entry
-        // can ever name it again.
-        let replaced = try #require(library.cache.store.url(for: key))
-        #expect(replaced.pathExtension == "jpeg")
-        #expect(!FileManager.default.fileExists(atPath: heic.path(percentEncoded: false)))
-
-        // A permissive client then hits the JPEG — acceptable is the test, not
-        // identical to what negotiation would have picked fresh.
-        let third = try await library.get("w=100&h=100", accept: "image/heic, image/jpeg")
-        #expect(headers(third)["Content-Type"] == "image/jpeg")
-        #expect(headers(third)["X-PGR-Cache"] == "hit")
-    }
-
     @Test("An Accept admitting neither format is refused with 406, and costs no card")
     func unproducibleAcceptIsRefused() async throws {
         let library = try Library()
@@ -532,24 +337,6 @@ struct EndpointCacheTests {
         // Refused before the pop: a request that cannot be answered in any
         // format must not spend a card finding that out.
         #expect(try library.cache.queue.size() == queued)
-    }
-
-    @Test("With the original evicted, an unacceptable held rendering goes out rather than nothing")
-    func heldRenderingServesWhenOriginalIsGone() async throws {
-        let library = try Library()
-        try await library.fill(materialized: true)
-
-        _ = try await library.get("w=100&h=100")  // HEIC rendering kept
-        try await library.topUp()
-        try library.evictTheOriginal()
-
-        // Nothing to re-render from, so the bytes we hold go out with the
-        // reason logged — a format preference is not worth answering a client
-        // with nothing.
-        let response = try await library.get(
-            "w=100&h=100", accept: "image/jpeg", toppingUp: false)
-        #expect(response.status == 200)
-        #expect(headers(response)["Content-Type"] == "image/heic")
     }
 
     // MARK: - What a 200 carries

@@ -28,7 +28,7 @@ struct CacheDirectorySweepTests {
         let store = PhotoStore(root: root, byteCeiling: 1_000_000)
 
         try store.store(
-            Data(count: 100), for: .init(photoUUID: "PHOTO"), sourceUUID: "SOURCE",
+            Data(count: 100), forPhoto: "PHOTO", sourceUUID: "SOURCE",
             pathExtension: "heic")
         #expect(Self.exists(root.appending(path: "SOURCE")))
 
@@ -47,7 +47,7 @@ struct CacheDirectorySweepTests {
         let store = PhotoStore(root: root, byteCeiling: 1_000_000)
 
         try store.store(
-            Data(count: 100), for: .init(photoUUID: "PHOTO"), sourceUUID: "SOURCE",
+            Data(count: 100), forPhoto: "PHOTO", sourceUUID: "SOURCE",
             pathExtension: "heic")
 
         let result = store.rebuild(photos: ["PHOTO": "SOURCE"])
@@ -66,7 +66,7 @@ struct CacheDirectorySweepTests {
         let store = PhotoStore(root: root, byteCeiling: 1_000_000)
 
         try store.store(
-            Data(count: 100), for: .init(photoUUID: "PHOTO"), sourceUUID: "SOURCE",
+            Data(count: 100), forPhoto: "PHOTO", sourceUUID: "SOURCE",
             pathExtension: "heic")
 
         _ = store.index(photos: [:])
