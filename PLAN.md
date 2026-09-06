@@ -2466,6 +2466,20 @@ It reaches below the display layer — an endpoint and a notification topic — 
 
 Added 2026-09-05. We are going to want separate pools of sources exposed to the client. Each pool would have a subset of the total sources available. They would all share the same cache on the agent. This will allow having separate pools for the screensaver and for wallpapers, and would allow showing previews on the client, adding and removing sources.
 
+### TODO: a wedged Photos library freezes the agent
+
+Added 2026-09-06, from a Mac that is underprovisioned for the job. Photos has been syncing with iCloud for more than a day, every call into it hangs rather than failing, and anything in the agent that touches it stops with it. The agent is not slow, it is stopped.
+
+**A hang is not a failure, and nothing here is built for it.** `SourceBench` exists precisely for a source that stops answering, but it is driven by fetches that *return* an error; work that never returns never trips it. `CacheSettings.libraryFetchLimit` bounds a materialize at 60 seconds, so the fetch path is the one place already covered. Three places are not:
+
+- **`serve` awaits `provider.existence(of:in:)` on the request path, with no deadline** — the *is it still there?* check that makes the deleted-photo guarantee. It calls `library.authorization` and `library.assetExists`, both PhotoKit, and it is the last thing between a card and a 200. A wedged library therefore hangs `GET /v1/next` itself rather than costing a skip, which is the opposite of every other failure on that path.
+- **The refresh walk runs inside the heartbeat tick**, so `enumerate` on a Photos source blocks maintenance, eviction, and the preference re-read behind it. This document already records that shape costing 30.9 seconds on a network share; a hang makes it unbounded.
+- **`availability(of:)`** is on the same footing as the two above.
+
+Worth measuring before designing anything. Whether these calls hang indefinitely or eventually return; whether `PHPhotoLibrary.authorizationStatus` hangs too, since it is the cheap gate everything else sits behind; and whether the system offers any way to ask *is this library usable right now* that is itself bounded. Two directions suggest themselves and neither is decided: a deadline around every provider call rather than around fetches alone, treating a timeout as `.unknown` — which the offline path already knows how to serve through — or letting the bench be tripped by silence as well as by errors. The first looks smaller and more honest; it also means deciding what a `serve` does when the guarantee cannot be checked, which is a promise this plan makes deliberately and should not weaken by accident.
+
+**It is not specific to a bad machine.** The provisioning is what made it constant and therefore visible; a first sync after a restore, a large import, or a slow network reaches the same state on any Mac for a shorter while.
+
 ### TODO: pulling originals fills the startup volume
 
 Added 2026-09-05. On a laptop set to Optimize Mac Storage, every asset the deck touches makes Photos download the full original from iCloud, and the system reclaims that purgeable space slowly enough that the startup volume fills. The renderer discards those pixels anyway — it subsamples to the client's box — so the originals are being pulled to be thrown away.
@@ -2475,6 +2489,12 @@ Worth measuring whether `PHImageManager.requestImage` at the display box, with `
 It reverses the reasoning that put `PHAssetResourceManager` in the kit, so it wants numbers before design. On a Mac set to download originals nothing changes: everything is already local and the same request always wins.
 
 **A preference and a checkbox, whichever way the measurement goes.** Whether Photos is asked for the full-resolution original or left to hand over whatever derivative it already has locally is a choice about somebody's disk, and the right answer differs between a Mac mini with the whole library downloaded and a laptop on Optimize Mac Storage. So it is a setting in the App Group suite alongside the other cache preferences, and a checkbox in the Mac app's source settings beside the Photos collections — not a constant picked once here. The measurement above decides the default, not whether the option exists.
+
+### TODO: an app icon
+
+Added 2026-09-06. There is no icon anywhere — no asset catalog, no `.icns`, no `CFBundleIcon` key in the agent bundle or the Mac app — so both run with the generic placeholder.
+
+Two surfaces need one and they are not the same job. The Mac app's is the ordinary case: Dock, ⌘-Tab, Finder. The agent's matters more than a headless process suggests, because `SMAppService` puts it in System Settings → Login Items, which is exactly where somebody decides whether to trust a background item that starts itself — and a generic icon there reads as something that arrived without being asked. The phases add iOS, tvOS, and watchOS later; whatever is drawn should survive being shrunk to a watch.
 
 ### Display styles
 
