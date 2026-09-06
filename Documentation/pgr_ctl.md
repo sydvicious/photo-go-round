@@ -60,6 +60,7 @@ are spelled exactly as the agent spells them.
 Use the real library: `~/Library/Containers`, `~/Library/Caches`, and the real
 preference domain. Without it everything lives under `<repo>/.build`, so a plain
 run cannot disturb anything. All three move together, deliberately.
+`./Scripts/scrub-dev.sh` deletes the development three; see FILES.
 
 `--container <dir>`
 Storage root. Defaults to `<repo>/.build/pgr-container`, or with `--prod` to
@@ -345,6 +346,13 @@ The database, and its WAL sidecars.
 `<cache>/`
 Materialized photo bytes. Only photos on volumes that can disappear are copied;
 anything on the boot volume is read where it lies.
+
+`Scripts/scrub-dev.sh`
+Deletes the development database and cache, after stopping an agent running from
+this checkout. `--preferences` deletes the dev preference domain as well, which
+takes the source list with it; `--dry-run` says what would go; `--yes` skips the
+prompt. Paths are derived from the repository and cannot be overridden, so the
+production library is unreachable from it (_internal testing only_).
 
 ## EXIT STATUS
 
