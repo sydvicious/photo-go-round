@@ -19,7 +19,7 @@ import Testing
 struct SilentLibraryTests {
 
     /// A library that hangs on everything, so the bound is what ends the wait.
-    private struct Hanging: PhotoLibrary {
+    struct Hanging: PhotoLibrary {
         var authorization: LibraryAuthorization {
             get async throws { try await Self.never() }
         }
@@ -55,6 +55,21 @@ struct SilentLibraryTests {
             try await Task.sleep(for: .seconds(300))
             fatalError("unreachable")
         }
+    }
+
+    /// A library bound the way the agent binds the real one, wrapped around one
+    /// that never answers — for suites elsewhere that need the agent's own
+    /// behaviour against silence rather than a fake that throws immediately.
+    ///
+    /// The metadata bound is above `SourceStore.validationLimit` on purpose,
+    /// because that ordering is what lets adding tell *no answer* from *the
+    /// library said no*.
+    static func stalling() -> BoundedPhotoLibrary {
+        BoundedPhotoLibrary(
+            Hanging(),
+            metadata: SourceStore.validationLimit * 4,
+            fetch: SourceStore.validationLimit * 4,
+            consent: SourceStore.validationLimit * 4)
     }
 
     private static func bounded(_ library: any PhotoLibrary) -> BoundedPhotoLibrary {

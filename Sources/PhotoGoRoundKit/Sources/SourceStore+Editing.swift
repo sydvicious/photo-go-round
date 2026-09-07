@@ -107,38 +107,113 @@ extension SourceStore {
             fileManager: fileManager, now: now)
     }
 
-    /// Which of the non-path locators name nothing — and, for the ones that
-    /// name something, what it is called.
+    /// How long adding will question a library about an album before it stops
+    /// asking and records it anyway.
     ///
-    /// A Photos album is validated by asking its own provider whether the
-    /// collection still resolves — the same question `availability` answers for
-    /// a source that already exists, asked one moment earlier. A library that
-    /// cannot be read fails here too, and should: an album nobody can see is
-    /// not one to accept and then report unavailable forever.
+    /// **Short, because nothing here has to succeed.** Both questions below are
+    /// asked to make the answer better, not to make the write correct: the scan
+    /// establishes availability on its own and rewrites the description whenever
+    /// it changes. Spending the library's own ten-second bound twice per album
+    /// is what made a client give up on a `POST` the agent went on to complete.
+    static let validationLimit = Duration.seconds(5)
+
+    /// Which of the non-path locators the library says are not there — and, for
+    /// the rest, what they are called.
+    ///
+    /// **A library that answers is believed; a library that does not is not
+    /// guessed at. Changed 2026-09-07.** This used to require `.available` and
+    /// reject everything else, which was right when every alternative to
+    /// *available* was an answer. It is not any more: a library that has stopped
+    /// answering reaches the provider as `.offline` too, and refusing on that
+    /// told somebody an album they had just picked out of a list did not exist.
+    ///
+    /// So the three cases are kept apart:
+    ///
+    /// - **The library answered and the album is not there** — `.missing`,
+    ///   `.gone` — refused, as before.
+    /// - **The library answered and cannot be read at all** — a denial, which is
+    ///   `.offline` — refused, as before. Accepting an album nobody may look at
+    ///   would store a source reported unavailable for ever, and the person can
+    ///   see why and fix it in System Settings.
+    /// - **The library did not answer** — `nil` from `asking` below — recorded.
+    ///   Nothing was said about this album, so nothing is concluded about it.
+    ///   The source is unavailable with the reason on it until a scan succeeds,
+    ///   which the refresh pass retries on its own for as long as it takes.
+    ///
+    /// The third case is only distinguishable from the second because
+    /// `validationLimit` is **below** the library's own bound: a library that
+    /// will not answer expires here first, rather than arriving as a fast
+    /// `.offline` that reads like a refusal. `aSilentLibraryRecordsTheSource`
+    /// is what holds that true.
     ///
     /// **The description is captured here, in the same breath**, because this
     /// is the one moment the agent is already asking the library about the
     /// album, and the client sending a name it looked up itself would be a
-    /// second writer for one fact. See `Missing Albums Plan.md`, Phase 3.
+    /// second writer for one fact. It is not required: `refresh` writes the
+    /// description whenever it differs, so a name missed here arrives with the
+    /// first scan that works. See `Missing Albums Plan.md`, Phase 3.
     private func resolveLocators(
         in requests: [SourceRequest], now: Date
     ) async -> (unresolved: [String], descriptions: [String: SourceDescription]) {
         var bad: [String] = []
         var descriptions: [String: SourceDescription] = [:]
+        // **A library that went quiet once is not asked again for this batch.**
+        // The picker adds every ticked album in one request, so twenty albums
+        // against a library that answers nothing would otherwise spend the bound
+        // twenty times over and put the whole `POST` far past any client's
+        // patience. The first silence is the answer for all of them: nothing is
+        // known about any, and all are recorded.
+        var silent: Set<SourceKind> = []
+
         for request in requests where !request.kind.isFileBacked {
             guard let provider = provider(for: request.kind) else { continue }
+            guard !silent.contains(request.kind) else { continue }
             let provisional = Source(
                 id: 0, uuid: "", kind: request.kind, locator: request.path, addedAt: now)
-            let standing: SourceAvailability = await provider.availability(of: provisional)
-            guard standing == .available else {
+
+            // Nil is the library not answering inside the bound, which is not a
+            // statement about the album and must not read as one.
+            let standing = await Self.asking(within: Self.validationLimit) {
+                await provider.availability(of: provisional)
+            }
+            switch standing {
+            // The library answered, and the answer was no.
+            case .missing, .gone, .offline:
                 bad.append(request.path)
                 continue
+            case .available:
+                break
+            // `.none` is the library saying nothing, which is not a no.
+            case .none:
+                silent.insert(request.kind)
+                continue
             }
-            if let description = await provider.describe(provisional) {
+
+            // Only worth asking of a library that just answered the question
+            // before it. One that did not will not name the album either, and
+            // the refresh writes the name in with the first scan that works.
+            let described = await Self.asking(within: Self.validationLimit) {
+                await provider.describe(provisional)
+            }
+            if let description = described.flatMap({ $0 }) {
                 descriptions[request.path] = description
+            } else if described == nil {
+                silent.insert(request.kind)
             }
         }
         return (bad, descriptions)
+    }
+
+    /// Asks one question against a bound, and answers nil when it goes
+    /// unanswered.
+    ///
+    /// The providers' own questions do not throw — they answer `.offline`,
+    /// `nil`, `[]` — so the bound has to be applied from outside to tell *the
+    /// library said so* from *nobody said anything*.
+    private static func asking<T: Sendable>(
+        within limit: Duration, _ work: @escaping @Sendable () async -> T
+    ) async -> T? {
+        try? await Deadline.run(within: limit, work)
     }
 
     /// The part that writes, and therefore the part that holds the lock.

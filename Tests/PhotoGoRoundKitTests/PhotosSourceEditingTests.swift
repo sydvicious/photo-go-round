@@ -25,7 +25,7 @@ struct PhotosSourceEditingTests {
         deinit { discardScratchSuite(name) }
     }
 
-    private func store(_ database: Database, library: FakePhotoLibrary) -> SourceStore {
+    private func store(_ database: Database, library: any PhotoLibrary) -> SourceStore {
         SourceStore(
             database: database,
             providers: [
@@ -301,6 +301,74 @@ struct PhotosSourceEditingTests {
         // Accepting an album nobody can see would store a source that is
         // reported unavailable forever — which is exactly what the refusal
         // exists to prevent.
+        let scratch = Scratch()
+        let denied = FakePhotoLibrary(
+            authorization: .denied, titles: [album: "Favorites"], assets: [album: []])
+        let store = store(try TestLibrary().database, library: denied)
+
+        await #expect(throws: SourceStore.EditFailure.locatorsNotFound([album])) {
+            try await store.add(
+                [SourceRequest(kind: .photosCollection, path: album)], to: scratch.preferences)
+        }
+        #expect(scratch.preferences.sources.isEmpty)
+    }
+
+    /// **The case that sent this back for a second look.** Adding a collection
+    /// on a machine migrating a large library timed out at the client while the
+    /// agent was still asking the library about the album — and the agent, once
+    /// it had a bound of its own, went on to refuse the album outright because a
+    /// library that would not answer looked exactly like one saying the album
+    /// was not there.
+    ///
+    /// A library that says nothing has said nothing about this album. The source
+    /// is recorded, marked unavailable with the reason, and the refresh pass
+    /// retries it for as long as it takes.
+    @Test("A library that will not answer records the source rather than refusing it")
+    func aSilentLibraryRecordsTheSource() async throws {
+        let scratch = Scratch()
+        let silent = SilentLibraryTests.stalling()
+        let store = store(try TestLibrary().database, library: silent)
+
+        let added = try await store.add(
+            [SourceRequest(kind: .photosCollection, path: album)], to: scratch.preferences)
+
+        #expect(added.added.count == 1)
+        #expect(added.added.first?.locator == album)
+        #expect(scratch.preferences.sources.count == 1)
+        // No name yet — the library never said one. `refresh` writes it with the
+        // first scan that works, so nothing is permanently lost by not having it.
+        #expect(added.added.first?.description == nil)
+    }
+
+    /// **The picker adds every ticked album in one request**, so the bound has
+    /// to be spent once for the batch rather than once per album. Twenty albums
+    /// against a silent library used to mean twenty waits, which is how a `POST`
+    /// gets far past any client's patience however patient the client is.
+    @Test("A batch against a silent library costs one wait, not one per album")
+    func silenceIsPaidForOnce() async throws {
+        let scratch = Scratch()
+        let store = store(try TestLibrary().database, library: SilentLibraryTests.stalling())
+        let albums = (0..<8).map {
+            SourceRequest(kind: .photosCollection, path: "ALBUM-\($0)/L0/040")
+        }
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let added = try await store.add(albums, to: scratch.preferences)
+        let spent = clock.now - started
+
+        #expect(added.added.count == 8)
+        // Comfortably under eight waits, and above none — the point is that it
+        // does not scale with the number of albums.
+        #expect(spent < SourceStore.validationLimit * 3)
+    }
+
+    /// The other half, and the reason the two are told apart: a library that
+    /// answers *you may not look* has answered. Accepting then would store a
+    /// source reported unavailable for ever, over something the person can fix
+    /// in System Settings.
+    @Test("A silent library and a denied one are not the same refusal")
+    func silenceAndDenialDiffer() async throws {
         let scratch = Scratch()
         let denied = FakePhotoLibrary(
             authorization: .denied, titles: [album: "Favorites"], assets: [album: []])
