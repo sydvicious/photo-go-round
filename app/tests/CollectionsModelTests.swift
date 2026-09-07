@@ -58,6 +58,10 @@ struct CollectionsModelTests {
             lock.withLock { silent = true }
         }
 
+        func speaksAgain() {
+            lock.withLock { silent = false }
+        }
+
         private var silent = false
 
         func transport() -> @Sendable (URLRequest) async throws -> (Data, URLResponse) {
@@ -503,8 +507,12 @@ struct CollectionsModelTests {
         #expect(agent.requests.contains("DELETE /v2/sources/S1"))
     }
 
-    @Test("A read does not undo a tick made while it was in flight")
-    func readingDoesNotReseed() async {
+    /// **The poll, which is what a read in flight actually is.** It used to say
+    /// this with `load`, back when the two were the same call; they are not any
+    /// more, because opening the window has to forget the last visit and a poll
+    /// must not.
+    @Test("A poll does not undo a tick made while it was in flight")
+    func pollingDoesNotReseed() async {
         let scratch = Scratch()
         let agent = Agent()
         agent.holds(library: Self.library([("albums", "Albums", [Self.album("A", "One")])]))
@@ -512,10 +520,55 @@ struct CollectionsModelTests {
         await model.load()
 
         model.chosen.insert("A")
-        await model.load()
+        await model.refresh()
 
         #expect(model.chosen == ["A"])
         #expect(model.hasChanges)
+    }
+
+    // MARK: - Opening the window again
+
+    /// **A `Window` scene's model outlives its window**, so without this the
+    /// second visit opens showing why the first one failed — *the agent is not
+    /// answering*, about an agent that is answering fine now.
+    @Test("Reopening the picker forgets the last visit's trouble and asks again")
+    func reopeningForgetsTheLastFailure() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds(library: Self.library([("albums", "Albums", [Self.album("A", "One")])]))
+        let model = Self.model(agent, scratch, read: .milliseconds(50))
+        agent.goesSilent()
+        await model.load()
+        #expect(model.trouble != nil)
+
+        // The window closes and opens again, against an agent that is fine now.
+        agent.speaksAgain()
+        await model.load()
+
+        #expect(model.trouble == nil)
+        #expect(model.visible.count == 1)
+    }
+
+    /// The ticks described the source list as it stood when the last window
+    /// opened. Anything could have changed it since — including this same
+    /// picker, on its last trip.
+    @Test("Reopening seeds the ticks from what the agent has now")
+    func reopeningReseedsTheTicks() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds(library: Self.library([("albums", "Albums", [Self.album("A", "One")])]))
+        let model = Self.model(agent, scratch)
+        await model.load()
+        #expect(model.chosen.isEmpty)
+
+        // Something adds it while this model is alive — `pgr_ctl`, another
+        // window, or an earlier trip through this same picker.
+        agent.holds(sources: [Self.source(uuid: "S1", locator: "A")])
+        await model.load()
+
+        #expect(model.chosen == ["A"])
+        // Seeded from reality, so there is nothing to apply.
+        #expect(!model.hasChanges)
     }
 
     // MARK: - Applying

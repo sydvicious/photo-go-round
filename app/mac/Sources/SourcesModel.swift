@@ -143,9 +143,31 @@ final class SourcesModel {
 
     // MARK: - Reading
 
-    /// Asks the agent what it has. Never throws: this is called on a timer and
-    /// on appearance, and a failure is something to *show*, not to propagate.
+    /// **The panel opened**, which is not the same as a read.
+    ///
+    /// A `Window` scene's model outlives its window, so a second visit inherits
+    /// what the last one concluded — including the reason it failed. Reopening
+    /// Settings after the agent went quiet would show *the agent is running but
+    /// not answering* the instant the window drew, about an agent that is
+    /// answering fine now, and it would keep saying so until the first read
+    /// landed — which against a silent agent is the whole ten-second read
+    /// bound.
+    ///
+    /// So a visit forgets what the last one concluded and asks again.
+    ///
+    /// **`sources` and `selection` are deliberately kept.** The list somebody
+    /// saw last time is a better thing to reopen onto than an empty table, and
+    /// `refresh` reconciles the selection against whatever comes back — which
+    /// it has to do anyway, since something else may have removed the row.
     func load() async {
+        trouble = nil
+        await refresh()
+    }
+
+    /// Asks the agent what it has. Never throws: this is called on a timer, on a
+    /// doorbell, and after every change, and a failure is something to *show*,
+    /// not to propagate.
+    func refresh() async {
         do {
             let listed = try await service.list()
             let previous = sources
@@ -180,7 +202,7 @@ final class SourcesModel {
         guard poll == nil else { return }
         poll = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.load()
+                await self?.refresh()
                 let failed = self?.trouble != nil
                 let wait = failed ? (self?.retry ?? Self.retryInterval)
                     : (self?.interval ?? Self.pollInterval)
@@ -283,7 +305,14 @@ final class SourcesModel {
         // reload succeeds — listing works fine when a change was refused — and
         // it clears `trouble` on its way, which would erase the only account of
         // why the thing the user just asked for did not happen.
-        await load()
+        //
+        // `refresh` rather than `load`: a change happens *inside* a visit, and
+        // the two clear `trouble` at different moments. `refresh` clears it only
+        // when a read succeeds; `load` clears it up front, which would blank
+        // whatever is on screen for the length of the read and then put this
+        // failure back — a flicker saying nothing is wrong, in the middle of
+        // reporting that something is.
+        await refresh()
         if let failure { trouble = failure }
     }
 

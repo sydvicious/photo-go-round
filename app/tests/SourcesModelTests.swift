@@ -265,6 +265,54 @@ struct SourcesModelTests {
         #expect(clock.now - started < .milliseconds(500))
     }
 
+    // MARK: - Opening the panel again
+
+    /// **A `Window` scene's model outlives its window**, so without this the
+    /// second visit draws showing why the first one failed — and against a
+    /// silent agent it would keep saying so for the whole read bound before the
+    /// fresh answer replaced it.
+    @Test("Reopening the panel forgets the last visit's trouble and asks again")
+    func reopeningForgetsTheLastFailure() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.entry(uuid: "a")])
+        let model = model(agent, scratch, read: .milliseconds(50))
+        agent.goesSilent()
+        await model.load()
+        #expect(model.trouble != nil)
+
+        // The window closes and opens again, against an agent that is fine now.
+        agent.speaksAgain()
+        await model.load()
+
+        #expect(model.trouble == nil)
+        #expect(model.sources.count == 1)
+    }
+
+    /// **A doorbell is a read, not a visit.** The picker announcing a change
+    /// must not blank a refusal the person is still reading — `refresh` replaces
+    /// it only when a read actually succeeds.
+    @Test("A read leaves a refusal on screen until it has something to replace it with")
+    func aReadDoesNotBlankARefusalUpFront() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.entry(uuid: "a")])
+        let model = model(agent, scratch, read: .milliseconds(50))
+        await model.load()
+
+        agent.refuses(status: 400, body: "{\"error\": \"no\"}")
+        model.selection = "a"
+        await model.removeSelected()
+        #expect(model.trouble == "no")
+
+        // The agent goes quiet before the doorbell's read can land, so there is
+        // nothing to replace the refusal with — and it must still be there.
+        agent.goesSilent()
+        async let reading: Void = model.refresh()
+        #expect(model.trouble == "no")
+        await reading
+    }
+
     /// **Not "the agent is not running".** It is, and it took the connection.
     /// Sending somebody to start an agent whose process is right there in
     /// Activity Monitor is worse than saying nothing.

@@ -52,8 +52,14 @@ struct SourcesSettingsView: View {
         .onDisappear { model.endPolling() }
         // A change made in this app's own picker, rather than one the timer
         // will find eventually. See `SourceChanges`.
+        //
+        // A read, not a visit: the window never went away, so there is nothing
+        // stale to forget. `load` would also blank whatever is on screen the
+        // instant another window announced something — including a refusal the
+        // person is still reading — and put it back only if the read that
+        // followed happened to fail the same way.
         .onChange(of: SourceChanges.shared.revision) {
-            Task { await model.load() }
+            Task { await model.refresh() }
         }
         .sheet(item: $configuring) { source in
             ConfigureSourceView(source: source) { recursive in

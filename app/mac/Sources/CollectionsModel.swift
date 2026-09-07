@@ -75,11 +75,37 @@ final class CollectionsModel {
 
     // MARK: - Reading
 
+    /// **The window opened**, which is not the same as a poll.
+    ///
+    /// A `Window` scene's model outlives its window — the same fact that made
+    /// `existing` stale on a second open — so a fresh visit inherits everything
+    /// the last one left behind, including the reason the last one failed.
+    /// Reopening the picker after the agent went quiet would show that
+    /// sentence again immediately, beside an attempt that may be about to
+    /// succeed: a picker saying *the agent is not answering* about an agent
+    /// that is.
+    ///
+    /// So a visit forgets what the last one concluded and asks again. The ticks
+    /// go with it: they described the source list as it stood when the last
+    /// window opened, and anything could have changed it since — including this
+    /// same picker, earlier.
+    ///
+    /// **`library` is deliberately not cleared.** Three hundred albums from five
+    /// minutes ago is a better thing to be looking at while the question is
+    /// asked than a blank panel, and the answer replaces them either way.
     func load() async {
-        await reload()
+        trouble = nil
+        seeded = false
+        await refresh()
     }
 
-    /// Re-reads both halves: what the agent has, and what the library holds.
+    /// Re-reads both halves: what the agent has, and what the library holds,
+    /// **leaving the ticks as they are**.
+    ///
+    /// This is the poll. `load` is the other entry point, and the difference
+    /// between them is exactly the seeding: a poll must never undo a tick
+    /// somebody made while it was in flight, and a visit must never inherit the
+    /// last one's.
     ///
     /// **`existing` is re-read every time, and that is the fix for a real
     /// bug.** It used to be fetched once, guarded on `library == nil` — but a
@@ -87,7 +113,7 @@ final class CollectionsModel {
     /// the picker opened it still held the sources from the first. Unticking
     /// something added since then found no source to name and skipped it, with
     /// no request and nothing in any log. Seen 2026-08-26.
-    private func reload() async {
+    func refresh() async {
         do {
             existing = try await service.list().filter(\.isPhotosCollection)
             wasChosen = Set(existing.map(\.locator))
@@ -109,7 +135,7 @@ final class CollectionsModel {
                 let counting = self?.library?.isCounting ?? true
                 try? await Task.sleep(for: counting ? Self.whileCounting : Self.whenSettled)
                 guard !Task.isCancelled else { return }
-                await self?.reload()
+                await self?.refresh()
             }
         }
     }
@@ -331,7 +357,10 @@ final class CollectionsModel {
         defer { isWorking = false }
         do {
             _ = try await service.requestPhotoAccess()
-            await reload()
+            // A read rather than a fresh visit: consent was granted *inside*
+            // this visit, and reseeding here would drop a tick made before the
+            // button was pressed.
+            await refresh()
         } catch {
             trouble = SourcesModel.explain(error)
         }
