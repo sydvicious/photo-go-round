@@ -16,17 +16,19 @@ import Testing
 @MainActor
 struct SelectionFollowsTests {
 
+    /// A throwaway preference domain that leaves nothing behind.
+    ///
+    /// **A path domain from `scratchSuiteName`, not a dotted one.** A dotted
+    /// name lands in `~/Library/Preferences`, which `cfprefsd` owns and writes
+    /// on its own schedule — including after the process that asked is gone.
+    /// That is how the `removePersistentDomain` teardown that used to be here
+    /// lost its race and left one plist per test behind, until a later
+    /// `swift test` failed on them. See `ScratchPreferences`.
     private nonisolated final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("selection-follows")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
         init() { preferences.publishServicePort(9999) }
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     private func model(_ agent: SourcesModelTests.Agent, _ scratch: Scratch) -> SourcesModel {

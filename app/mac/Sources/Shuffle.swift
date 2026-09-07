@@ -5,6 +5,7 @@ import ImageIO
 import Observation
 import PhotoGoRoundDisplay
 import PhotoGoRoundAgentAPI
+import os
 
 /// Asks the agent for a picture, decodes it, and holds the one on screen.
 ///
@@ -40,6 +41,16 @@ final class Shuffle {
     enum Trouble: Equatable {
         case noPhotos
         case noAgent(String)
+        /// The agent accepted the connection and never answered.
+        ///
+        /// **Not folded into `noAgent`, because it sends somebody to a
+        /// different place.** "No agent" means start it; this means it is
+        /// running and stuck, which on this project has one usual cause — a
+        /// photo library that has stopped answering, taking the agent's
+        /// cooperative threads with it. Telling somebody their agent is not
+        /// running while its process sits in Activity Monitor is worse than
+        /// saying nothing.
+        case silent(String)
 
         /// Bouncing letters are Phase 6's treatment and land with the empty
         /// state proper; this is the words, which is the part that has to be
@@ -48,6 +59,29 @@ final class Shuffle {
             switch self {
             case .noPhotos: "No photos"
             case .noAgent: "No agent"
+            case .silent: "Not answering"
+            }
+        }
+
+        /// Whether this is the agent's fault rather than an empty library.
+        ///
+        /// The window veils the photograph and names the trouble in its title
+        /// for these and not for `noPhotos`, which is a library somebody can
+        /// fix by adding a source and not a sign anything is broken.
+        var isAgentTrouble: Bool {
+            switch self {
+            case .noPhotos: false
+            case .noAgent, .silent: true
+            }
+        }
+
+        /// What to say in a log line — the words plus whatever detail came
+        /// with them.
+        var line: String {
+            switch self {
+            case .noPhotos: "no photos"
+            case .noAgent(let why): "no agent: \(why)"
+            case .silent(let why): "not answering: \(why)"
             }
         }
     }
@@ -55,26 +89,40 @@ final class Shuffle {
     /// How long a picture stays up. Not yet a preference: *Everything
     /// user-settable is a user default* is held back to Beyond 0.1, and a
     /// number nobody has looked at yet is not worth a key.
-    static let dwell = Duration.seconds(10)
+    static let defaultDwell = Duration.seconds(10)
     /// A cold start answers `204` until the first downloads land, so this is
     /// how quickly a fresh library starts showing something.
-    private static let whenEmpty = Duration.seconds(3)
+    private static let defaultWhenEmpty = Duration.seconds(3)
     /// Longer, because a missing agent is not going to fix itself in a tick and
     /// hammering a closed port helps nobody.
-    private static let whenAbsent = Duration.seconds(5)
+    private static let defaultWhenAbsent = Duration.seconds(5)
     /// A picture that will not decode costs this much before the next is asked
     /// for — enough that a library of broken files cannot spin.
     private static let whenUndecodable = Duration.milliseconds(250)
 
     private let source: PictureSource
+    /// The three waits, injected for the same reason `SourcesModel` takes its
+    /// poll interval: a test that waits ten real seconds to watch one picture
+    /// give way to the next is a test nobody will run.
+    private let dwell: Duration
+    private let whenEmpty: Duration
+    private let whenAbsent: Duration
     /// The size the view is about to draw at, in pixels. Nothing is asked for
     /// until the view has laid out once and said what it is.
     private var box: PixelSize?
     private var displayID: String?
     private var loop: Task<Void, Never>?
 
-    init(source: PictureSource) {
+    init(
+        source: PictureSource,
+        dwell: Duration = Shuffle.defaultDwell,
+        whenEmpty: Duration = Shuffle.defaultWhenEmpty,
+        whenAbsent: Duration = Shuffle.defaultWhenAbsent
+    ) {
         self.source = source
+        self.dwell = dwell
+        self.whenEmpty = whenEmpty
+        self.whenAbsent = whenAbsent
     }
 
     /// The ordinary case: the agent this checkout's development runs talk to.
@@ -112,13 +160,13 @@ final class Shuffle {
 
     /// One picture, and how long to wait before the next.
     private func advance() async -> Duration {
-        guard let box else { return Self.whenEmpty }
+        guard let box else { return whenEmpty }
         do {
             guard let picture = try await source.next(
                 consumer: "app", displayID: displayID, fitting: box)
             else {
-                trouble = .noPhotos
-                return Self.whenEmpty
+                note(.noPhotos)
+                return whenEmpty
             }
             guard let image = await Self.decode(picture.data) else {
                 // The service skips a photograph that will not render and
@@ -128,25 +176,56 @@ final class Shuffle {
                 return Self.whenUndecodable
             }
             shown = Frame(image: image, picture: picture)
-            trouble = nil
-            return Self.dwell
+            note(nil)
+            return dwell
         } catch let failure as PictureClient.Failure {
-            trouble = .noAgent(Self.explain(failure))
-            return Self.whenAbsent
+            note(Self.trouble(from: failure))
+            return whenAbsent
         } catch {
-            trouble = .noAgent(error.localizedDescription)
-            return Self.whenAbsent
+            note(.noAgent(error.localizedDescription))
+            return whenAbsent
         }
     }
 
-    private static func explain(_ failure: PictureClient.Failure) -> String {
+    /// Records the trouble, and logs it **when it changes**.
+    ///
+    /// The loop turns every few seconds, so a log line per attempt would be a
+    /// thousand identical entries across an evening with the agent down — which
+    /// buries the one line that says when it went wrong and the one that says
+    /// when it came back. Transitions go in at `.notice`, where they persist;
+    /// each unchanged retry goes in at `.debug`, which is memory-only and there
+    /// for somebody watching a stream live.
+    private func note(_ next: Trouble?) {
+        defer { trouble = next }
+        guard next != trouble else {
+            if let next { Log.deck.debug("shuffle: still \(next.line, privacy: .public)") }
+            return
+        }
+        switch next {
+        case .none:
+            // Only worth a line if something had gone wrong. A first picture
+            // arriving is not news.
+            if trouble != nil {
+                Log.deck.notice("shuffle: answering again, showing pictures")
+            }
+        case .some(let trouble):
+            Log.deck.notice("shuffle: \(trouble.line, privacy: .public)")
+        }
+    }
+
+    private static func trouble(from failure: PictureClient.Failure) -> Trouble {
         switch failure {
         case .noPortPublished:
-            "nothing has published a port — the agent is not running"
+            .noAgent("nothing has published a port — the agent is not running")
         case .unreachable(let port, let reason):
-            "nothing is listening on \(port) — \(reason)"
+            .noAgent("nothing is listening on \(port) — \(reason)")
         case .refused(let status):
-            "the service answered \(status)"
+            .noAgent("the service answered \(status)")
+        // **The one that is not `noAgent`.** Something is listening on the port
+        // and did not answer inside the limit, which is a running agent that is
+        // stuck rather than one that is gone.
+        case .silent(let port, let limit):
+            .silent("the agent on \(port) said nothing within \(limit)")
         }
     }
 

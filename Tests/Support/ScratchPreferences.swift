@@ -5,8 +5,16 @@ import Testing
 ///
 /// Compiled into every test target rather than shared through a module, because
 /// each target is its own process and what is being managed here — a directory
-/// and an exit hook — belongs to a process.
-enum ScratchPreferences {
+/// and an exit hook — belongs to a process. Each target holds a symlink to this
+/// file, including the app's, whose leak is what put it there.
+///
+/// **`nonisolated` throughout, and that is load-bearing for one of the five.**
+/// The app's test target compiles with `MainActor` as its default isolation, so
+/// without this every function here would be main-actor bound — and the `Scratch`
+/// helpers that call them are deliberately `nonisolated`, because a `deinit`
+/// runs wherever the last reference is dropped. None of this has any actor
+/// affinity to give up: it is a directory, a file, and an exit hook.
+nonisolated enum ScratchPreferences {
 
     /// Every scratch domain's file name begins with this, so a log line or a
     /// stray file says what it is. The real domains, `com.sydpolk.photogoround`
@@ -71,7 +79,7 @@ enum ScratchPreferences {
 /// Going through here is what keeps a new test from inventing its own dotted
 /// namespace — several used to use a bare `pgr.` — and writing a plist into
 /// `~/Library/Preferences` that nothing ever collects.
-func scratchSuiteName(_ label: String) -> String {
+nonisolated func scratchSuiteName(_ label: String) -> String {
     _ = ScratchPreferences.inherited
     let directory = ScratchPreferences.root.appending(path: "\(label)-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -79,7 +87,7 @@ func scratchSuiteName(_ label: String) -> String {
         .path(percentEncoded: false)
 }
 
-func scratchSuite(_ label: String) -> UserDefaults {
+nonisolated func scratchSuite(_ label: String) -> UserDefaults {
     UserDefaults(suiteName: scratchSuiteName(label))!
 }
 
@@ -90,7 +98,7 @@ func scratchSuite(_ label: String) -> UserDefaults {
 /// else belongs here: `removePersistentDomain` and `synchronize` are writes
 /// through the daemon, and the daemon is exactly what this design keeps out of
 /// the teardown.
-func discardScratchSuite(_ name: String) {
+nonisolated func discardScratchSuite(_ name: String) {
     try? FileManager.default.removeItem(at: URL(filePath: name).deletingLastPathComponent())
 }
 

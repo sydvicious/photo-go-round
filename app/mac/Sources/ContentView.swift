@@ -6,9 +6,15 @@ struct ContentView: View {
     @State private var shuffle = Shuffle()
 
     /// The name, and what is wrong with it when something is.
+    ///
+    /// **The trouble supplies its own words.** They used to be spelled here, so
+    /// adding *Not answering* beside *No agent* would have meant writing the
+    /// distinction down twice and letting the two copies drift.
     private var title: String {
-        guard case .noAgent = shuffle.trouble else { return Bundle.main.displayName }
-        return "\(Bundle.main.displayName) - No agent"
+        guard let trouble = shuffle.trouble, trouble.isAgentTrouble else {
+            return Bundle.main.displayName
+        }
+        return "\(Bundle.main.displayName) - \(trouble.words)"
     }
 
     var body: some View {
@@ -26,7 +32,7 @@ struct ContentView: View {
             // are looking at, veiled rather than hidden. Nothing is *written* on
             // it — the words are in the title bar, where they have a background
             // to be legible against.
-            if shuffle.shown != nil, case .noAgent = shuffle.trouble {
+            if shuffle.shown != nil, shuffle.trouble?.isAgentTrouble == true {
                 Color.gray
                     .opacity(0.3)
                     .transition(.opacity)

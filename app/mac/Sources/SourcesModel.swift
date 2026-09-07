@@ -338,6 +338,12 @@ final class SourcesModel {
             "Photo-Go-Round's agent is not running, so there is nothing to ask."
         case SourceService.Failure.unreachable(let reason):
             "The agent published an address but did not answer: \(reason)"
+        // **Not "the agent is not running".** It is, and it took the
+        // connection; something inside it is stuck. Sending somebody to start
+        // an agent that is already started is worse than saying nothing.
+        case SourceService.Failure.silent(let limit):
+            "The agent accepted the connection and said nothing for \(limit). "
+                + "It is running but not answering."
         case SourceService.Failure.notFound(let paths):
             paths.count == 1
                 ? "Not found: \(paths[0])"

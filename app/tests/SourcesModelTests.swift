@@ -14,19 +14,21 @@ import Testing
 @MainActor
 struct SourcesModelTests {
 
+    /// A throwaway preference domain that leaves nothing behind.
+    ///
+    /// **A path domain from `scratchSuiteName`, not a dotted one.** A dotted
+    /// name lands in `~/Library/Preferences`, which `cfprefsd` owns and writes
+    /// on its own schedule — including after the process that asked is gone.
+    /// That is how the `removePersistentDomain` teardown that used to be here
+    /// lost its race and left one plist per test behind, until a later
+    /// `swift test` failed on them. See `ScratchPreferences`.
     private nonisolated final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("sources-model")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
 
         init() { preferences.publishServicePort(9999) }
 
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     /// An agent that answers however a test needs it to, and counts what it was
@@ -58,6 +60,22 @@ struct SourcesModelTests {
         func stopsRefusing() {
             lock.withLock { refusal = nil }
         }
+
+        /// Takes every request and answers none of them.
+        ///
+        /// **Not the same as refusing.** A refusal is the agent saying no,
+        /// quickly; this is an agent whose cooperative threads are parked inside
+        /// a photo library that has stopped answering, so it accepts the
+        /// connection and then nothing happens at all.
+        func goesSilent() {
+            lock.withLock { silent = true }
+        }
+
+        func speaksAgain() {
+            lock.withLock { silent = false }
+        }
+
+        private var silent = false
 
         /// Holds every change open until released, so a test can look at the
         /// panel while a request is still in flight — which is what a slow
@@ -96,9 +114,14 @@ struct SourcesModelTests {
             { [self] request in
                 let method = request.httpMethod ?? "GET"
                 let path = request.url?.path(percentEncoded: false) ?? ""
-                let (refusing, held) = lock.withLock {
+                let (refusing, held, quiet) = lock.withLock {
                     asked.append("\(method) \(path)")
-                    return (refusal, listing)
+                    return (refusal, listing, silent)
+                }
+                if quiet {
+                    // Far longer than any bound these tests set, so the deadline
+                    // is always what ends the wait.
+                    try await Task.sleep(for: .seconds(300))
                 }
 
                 if method != "GET", let gate = lock.withLock({ openGate }) { await gate.waitHere() }
@@ -169,11 +192,117 @@ struct SourcesModelTests {
     /// Intervals in milliseconds, not the panel's minutes: these tests are
     /// about *whether* it polls and stops, and waiting three real minutes to
     /// find out is a test nobody runs.
-    private func model(_ agent: Agent, _ scratch: Scratch) -> SourcesModel {
+    /// Waits for something to become true, rather than sleeping a guess.
+    ///
+    /// The panel polls on a timer and the machine does not promise to let it —
+    /// a fixed sleep long enough to be reliable under load is far longer than
+    /// the wait usually needed, and a short one fails whenever something else
+    /// is running.
+    private static func until(
+        _ reached: @MainActor () -> Bool,
+        _ what: String,
+        within limit: Duration = .seconds(10)
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now + limit
+        while clock.now < deadline {
+            if reached() { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("\(what) did not happen within \(limit)")
+    }
+
+    /// **The bounds default to the panel's real ones**, because most tests
+    /// here are about what the panel does with an answer rather than about
+    /// giving up on one — and a short bound would cut off the tests that
+    /// deliberately hold a change open with a gate. Only the tests about
+    /// silence shorten them, and they say so.
+    private func model(
+        _ agent: Agent, _ scratch: Scratch,
+        read: Duration = SourceService.defaultReadLimit,
+        write: Duration = SourceService.defaultWriteLimit
+    ) -> SourcesModel {
         SourcesModel(
             service: SourceService(
-                preferences: scratch.preferences, transport: agent.transport()),
+                preferences: scratch.preferences, read: read, write: write,
+                transport: agent.transport()),
             interval: .milliseconds(20), retry: .milliseconds(20))
+    }
+
+    // MARK: - An agent that is running and stuck
+
+    /// **The guarantee: the panel cannot be locked for ever.**
+    ///
+    /// Every change sets `isWorking`, which disables the controls and shows a
+    /// spinner, and clears it when the request comes back. Against an agent that
+    /// never answers, "comes back" used to mean fifteen seconds at best and
+    /// never at worst — a Settings window with every button dead and no
+    /// explanation. The bound is what makes the lockout end.
+    @Test("A change against a silent agent gives the panel back")
+    func aSilentAgentDoesNotLockThePanel() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.entry(uuid: "a")])
+        // **Both bounds, because a change spends both.** `change` asks, and then
+        // re-reads whatever happened — so against an agent that answers neither,
+        // the lockout lasts the write bound plus the read bound. In the shipping
+        // panel that is thirty seconds and then ten: bounded, which is the
+        // point, but not short. Naming both here is what keeps that fact in a
+        // test rather than in somebody's afternoon.
+        let model = model(agent, scratch, read: .milliseconds(50), write: .milliseconds(50))
+        await model.load()
+        agent.goesSilent()
+
+        model.selection = "a"
+        let clock = ContinuousClock()
+        let started = clock.now
+        await model.removeSelected()
+
+        #expect(!model.isWorking)
+        #expect(model.trouble != nil)
+        // Both bounds and no more: a third wait in here would mean `change`
+        // had grown an ask nobody counted.
+        #expect(clock.now - started < .milliseconds(500))
+    }
+
+    /// **Not "the agent is not running".** It is, and it took the connection.
+    /// Sending somebody to start an agent whose process is right there in
+    /// Activity Monitor is worse than saying nothing.
+    @Test("A silent agent is described as running and stuck, not as absent")
+    func silenceIsNotAbsence() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.goesSilent()
+        let model = model(agent, scratch, read: .milliseconds(50))
+
+        await model.load()
+
+        let trouble = model.trouble ?? ""
+        #expect(trouble.contains("not answering"))
+        #expect(!trouble.contains("is not running"))
+    }
+
+    /// The panel keeps asking, so an agent that comes back is picked up without
+    /// anybody closing and reopening the window.
+    @Test("The panel recovers on its own when the agent starts answering again")
+    func recoversWhenTheAgentReturns() async throws {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.entry(uuid: "a")])
+        agent.goesSilent()
+        let model = model(agent, scratch, read: .milliseconds(50))
+
+        model.beginPolling()
+        // Waited for rather than slept through: the retry interval is 20 ms and
+        // a loaded machine does not promise to honour it, so a fixed sleep here
+        // is either slow or flaky and usually both.
+        try await Self.until({ model.trouble != nil }, "the silence being noticed")
+
+        agent.speaksAgain()
+        try await Self.until({ model.trouble == nil }, "the panel recovering")
+        model.endPolling()
+
+        #expect(model.sources.count == 1)
     }
 
     // MARK: - Reading
@@ -611,17 +740,19 @@ struct SourcesModelTests {
 @MainActor
 struct InFlightTests {
 
+    /// A throwaway preference domain that leaves nothing behind.
+    ///
+    /// **A path domain from `scratchSuiteName`, not a dotted one.** A dotted
+    /// name lands in `~/Library/Preferences`, which `cfprefsd` owns and writes
+    /// on its own schedule — including after the process that asked is gone.
+    /// That is how the `removePersistentDomain` teardown that used to be here
+    /// lost its race and left one plist per test behind, until a later
+    /// `swift test` failed on them. See `ScratchPreferences`.
     private nonisolated final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("in-flight")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
         init() { preferences.publishServicePort(9999) }
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     @Test("A second press while the first is still going is ignored, and the panel says it is busy")

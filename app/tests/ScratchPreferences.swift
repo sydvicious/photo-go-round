@@ -1,0 +1,1 @@
+../../Tests/Support/ScratchPreferences.swift

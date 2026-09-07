@@ -13,19 +13,21 @@ import Testing
 @MainActor
 struct CollectionsModelTests {
 
+    /// A throwaway preference domain that leaves nothing behind.
+    ///
+    /// **A path domain from `scratchSuiteName`, not a dotted one.** A dotted
+    /// name lands in `~/Library/Preferences`, which `cfprefsd` owns and writes
+    /// on its own schedule — including after the process that asked is gone.
+    /// That is how the `removePersistentDomain` teardown that used to be here
+    /// lost its race and left one plist per test behind, until a later
+    /// `swift test` failed on them. See `ScratchPreferences`.
     private nonisolated final class Scratch {
-        let name = "com.sydpolk.photogoround.tests.\(UUID().uuidString)"
+        let name = scratchSuiteName("collections-model")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
 
         init() { preferences.publishServicePort(9999) }
 
-        deinit {
-            let defaults = UserDefaults(suiteName: name)
-            defaults?.removePersistentDomain(forName: name)
-            defaults?.removeSuite(named: name)
-            try? FileManager.default.removeItem(
-                at: URL.homeDirectory.appending(path: "Library/Preferences/\(name).plist"))
-        }
+        deinit { discardScratchSuite(name) }
     }
 
     /// An agent that answers by path, and remembers what it was asked in the
@@ -49,14 +51,28 @@ struct CollectionsModelTests {
             lock.withLock { library = encoded }
         }
 
+        /// Takes every request and answers none of them — an agent whose
+        /// cooperative threads are parked inside a photo library that has
+        /// stopped answering. Distinct from refusing, which is quick.
+        func goesSilent() {
+            lock.withLock { silent = true }
+        }
+
+        private var silent = false
+
         func transport() -> @Sendable (URLRequest) async throws -> (Data, URLResponse) {
             { [self] request in
                 let method = request.httpMethod ?? "GET"
                 let path = request.url?.path ?? ""
-                let body = lock.withLock { () -> Data in
+                let (body, quiet) = lock.withLock { () -> (Data, Bool) in
                     asked.append("\(method) \(path)")
-                    if path.hasPrefix("/v2/photos") { return library }
-                    return method == "GET" ? sources : Data("[]".utf8)
+                    if path.hasPrefix("/v2/photos") { return (library, silent) }
+                    return (method == "GET" ? sources : Data("[]".utf8), silent)
+                }
+                if quiet {
+                    // Far longer than any bound these tests set, so the deadline
+                    // is always what ends the wait.
+                    try await Task.sleep(for: .seconds(300))
                 }
                 return (
                     body,
@@ -104,10 +120,63 @@ struct CollectionsModelTests {
         ]
     }
 
-    private static func model(_ agent: Agent, _ scratch: Scratch) -> CollectionsModel {
+    /// **The bounds default to the picker's real ones**, because most tests
+    /// here are about what it does with an answer rather than about giving up
+    /// on one. Only the tests about silence shorten them, and they say so.
+    private static func model(
+        _ agent: Agent, _ scratch: Scratch,
+        read: Duration = SourceService.defaultReadLimit,
+        write: Duration = SourceService.defaultWriteLimit
+    ) -> CollectionsModel {
         CollectionsModel(
             service: SourceService(
-                preferences: scratch.preferences, transport: agent.transport()))
+                preferences: scratch.preferences, read: read, write: write,
+                transport: agent.transport()))
+    }
+
+    // MARK: - An agent that is running and stuck
+
+    /// **Applying must never leave the picker locked.** `apply` sets
+    /// `isWorking`, which disables Apply and the ticks and shows a spinner. An
+    /// agent that never answers used to mean that state had no end.
+    @Test("Applying against a silent agent gives the picker back")
+    func silenceDoesNotLockThePicker() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds(library: Self.library([("albums", "Albums", [Self.album("A1", "Sunsets")])]))
+        // Milliseconds rather than the picker's thirty seconds: this is about
+        // *whether* the lockout ends, not how long it takes.
+        let model = Self.model(agent, scratch, write: .milliseconds(50))
+        await model.load()
+        agent.goesSilent()
+
+        model.chosen = ["A1"]
+        let applied = await model.apply()
+
+        #expect(!applied)
+        #expect(!model.isWorking)
+        #expect(model.trouble != nil)
+    }
+
+    /// **What is already on screen stays on screen**, which is the picker's
+    /// half of the rule the window follows for a stale photograph: a list of
+    /// three hundred albums that blanked because one poll went unanswered would
+    /// read as *your library is empty*.
+    @Test("A silent agent does not blank the albums the picker already had")
+    func silenceKeepsWhatIsAlreadyShown() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds(library: Self.library([("albums", "Albums", [Self.album("A1", "Sunsets")])]))
+        let model = Self.model(agent, scratch, read: .milliseconds(50))
+        await model.load()
+        #expect(model.visible.count == 1)
+
+        agent.goesSilent()
+        await model.load()
+
+        #expect(model.trouble != nil)
+        // Still there, and still named.
+        #expect(model.visible.first?.collections.first?.title == "Sunsets")
     }
 
     // MARK: - The tree

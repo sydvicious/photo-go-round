@@ -1,5 +1,6 @@
 import Foundation
 import PhotoGoRoundAgentAPI
+import os
 
 /// The agent's source endpoints, over HTTP and nothing else.
 ///
@@ -21,16 +22,57 @@ struct SourceService {
     /// The one seam. `URLSession` in the app, a stub in a test — so the panel's
     /// behaviour can be exercised without an agent to talk to.
     private let transport: @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    /// How long each shape of ask will wait. Injected for the same reason
+    /// `SourcesModel` takes its poll interval: a test that waits ten real
+    /// seconds to prove a bound exists is a test nobody will run.
+    private let readLimit: Duration
+    private let writeLimit: Duration
+    private let consentLimit: Duration
 
     init(
         preferences: Preferences,
+        read: Duration = SourceService.defaultReadLimit,
+        write: Duration = SourceService.defaultWriteLimit,
+        consent: Duration = SourceService.defaultConsentLimit,
         transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse) = {
-            try await URLSession.shared.data(for: $0)
+            [session = AgentSession.make()] in try await session.data(for: $0)
         }
     ) {
         self.preferences = preferences
+        self.readLimit = read
+        self.writeLimit = write
+        self.consentLimit = consent
         self.transport = transport
     }
+
+    // MARK: - How long the panel will wait
+
+    /// Reading: the source list, and the library's contents.
+    ///
+    /// **Short, because these are polled.** `SourcesModel` re-reads on a timer
+    /// and `CollectionsModel` re-reads while counts are still arriving, so an
+    /// answer that has not come in ten seconds is better reported than waited
+    /// for — the next attempt is along shortly and the panel goes on showing
+    /// what it last had.
+    static let defaultReadLimit = Duration.seconds(10)
+
+    /// Changing: adding, removing, configuring, reconnecting.
+    ///
+    /// **Longer, because the agent does real work before it answers.** Adding a
+    /// folder walks it; adding albums enumerates them. Thirty seconds is the
+    /// length of a network source's walk, which is the slowest of these that is
+    /// still working properly.
+    static let defaultWriteLimit = Duration.seconds(30)
+
+    /// Consent, and nothing else.
+    ///
+    /// **This one waits on a person rather than on a machine.** `POST
+    /// /v2/photos/authorization` raises a TCC dialog on the agent and does not
+    /// return until somebody has read it and clicked. Either bound above would
+    /// fire while that dialog was still on screen and report a failure against
+    /// an agent behaving perfectly. Bounded all the same: a prompt nobody ever
+    /// answers must not lock the panel for the rest of the session.
+    static let defaultConsentLimit = Duration.seconds(120)
 
     // MARK: - What comes back
 
@@ -107,6 +149,16 @@ struct SourceService {
         /// The answer did not decode. A newer agent, or something else on the
         /// port.
         case unreadable
+        /// Something accepted the connection and never answered.
+        ///
+        /// **Distinct from `unreachable`, and the distinction is the point.**
+        /// `unreachable` is a `URLError` — the network said no, and said it
+        /// quickly. This is an agent that is running, took the connection, and
+        /// is stuck; on this project the usual cause is a photo library that has
+        /// stopped answering, which costs the agent the cooperative threads it
+        /// needs to answer anything. The panel says that rather than claiming
+        /// the agent is not running.
+        case silent(limit: Duration)
     }
 
     /// What is in the photo library, as the picker needs it.
@@ -162,7 +214,7 @@ struct SourceService {
     // MARK: - Asking
 
     func collections() async throws -> Library {
-        try await send(decoding: Library.self, "GET", "/v2/photos/albums")
+        try await send(decoding: Library.self, "GET", "/v2/photos/albums", within: readLimit)
     }
 
     /// Raises the consent prompt on the agent, and answers with what came back.
@@ -174,7 +226,8 @@ struct SourceService {
     func requestPhotoAccess() async throws -> String {
         struct Consent: Decodable { var authorization: String }
         return try await send(
-            decoding: Consent.self, "POST", "/v2/photos/authorization", body: Data()
+            decoding: Consent.self, "POST", "/v2/photos/authorization", body: Data(),
+            within: consentLimit
         ).authorization
     }
 
@@ -184,7 +237,7 @@ struct SourceService {
     }
 
     func list() async throws -> [Source] {
-        try await send(decoding: [Source].self, "GET", "/v2/sources")
+        try await send(decoding: [Source].self, "GET", "/v2/sources", within: readLimit)
     }
 
     /// Adds every path in one request, so a selection of two hundred files is
@@ -212,14 +265,16 @@ struct SourceService {
         guard let body = try? JSONSerialization.data(withJSONObject: entries) else {
             throw Failure.unreadable
         }
-        return try await send(decoding: [Source].self, "POST", "/v2/sources", body: body)
+        return try await send(
+            decoding: [Source].self, "POST", "/v2/sources", body: body, within: writeLimit)
     }
 
     @discardableResult
     func setRecursive(_ recursive: Bool, of uuid: String) async throws -> Source {
         let body = try JSONEncoder().encode(["recursive": recursive])
         return try await send(
-            decoding: Source.self, "PATCH", "/v2/sources/\(uuid)", body: body)
+            decoding: Source.self, "PATCH", "/v2/sources/\(uuid)", body: body,
+            within: writeLimit)
     }
 
     /// Points a missing album at the one album in the library that matches
@@ -227,45 +282,67 @@ struct SourceService {
     /// exactly one; a refusal names the candidates.
     @discardableResult
     func reconnect(_ uuid: String) async throws -> Source {
-        try await send(decoding: Source.self, "POST", "/v2/sources/\(uuid)/reconnect", body: nil)
+        try await send(
+            decoding: Source.self, "POST", "/v2/sources/\(uuid)/reconnect", body: nil,
+            within: writeLimit)
     }
 
     /// Answers `204`, so there is nothing to decode — the absence of a refusal
     /// is the whole answer.
     func remove(_ uuid: String) async throws {
-        _ = try await send("DELETE", "/v2/sources/\(uuid)", body: nil)
+        _ = try await send("DELETE", "/v2/sources/\(uuid)", body: nil, within: writeLimit)
     }
 
     // MARK: - The one request shape
 
     @discardableResult
     private func send<T: Decodable>(
-        decoding type: T.Type, _ method: String, _ path: String, body: Data? = nil
+        decoding type: T.Type, _ method: String, _ path: String, body: Data? = nil,
+        within limit: Duration
     ) async throws -> T {
-        let data = try await send(method, path, body: body)
+        let data = try await send(method, path, body: body, within: limit)
         guard let decoded = try? Self.decoder().decode(T.self, from: data) else {
             throw Failure.unreadable
         }
         return decoded
     }
 
-    private func send(_ method: String, _ path: String, body: Data?) async throws -> Data {
+    private func send(
+        _ method: String, _ path: String, body: Data?, within limit: Duration
+    ) async throws -> Data {
         guard let port = preferences.servicePort,
             let url = URL(string: "http://localhost:\(port)\(path)")
         else { throw Failure.noAgent }
 
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 15
+        // **No `timeoutInterval`.** It used to be 15, which is the gap between
+        // packets rather than a bound on the answer — see `AgentSession`. The
+        // session carries both of `URLSession`'s own timeouts, and both sit
+        // above the deadline below so that the deadline is always the one that
+        // fires and a silence is always reported as a silence.
         if let body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
+        // Built by now, and captured as a constant: a `var` cannot cross into
+        // a `@Sendable` closure.
+        let sending = request
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await transport(request)
+            (data, response) = try await Deadline.run(within: limit) { [transport] in
+                try await transport(sending)
+            }
+        } catch is Deadline.Expired {
+            Log.sources.error(
+                """
+                panel: \(method, privacy: .public) \(path, privacy: .public) \
+                unanswered after \(limit.totalSeconds, privacy: .public)s
+                """
+            )
+            throw Failure.silent(limit: limit)
         } catch let error as URLError {
             throw Failure.unreachable(error.localizedDescription)
         }

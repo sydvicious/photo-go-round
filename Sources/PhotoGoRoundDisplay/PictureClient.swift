@@ -1,6 +1,5 @@
 import Foundation
 import PhotoGoRoundAgentAPI
-import PhotoGoRoundAgentAPI
 
 /// The Mac agent's client: one `GET /v1/next` per picture.
 ///
@@ -16,8 +15,28 @@ public struct PictureClient: PictureSource {
     private let preferences: Preferences
     private let session: URLSession
 
-    public init(preferences: Preferences, session: URLSession = .shared) {
+    /// The bound on one picture.
+    ///
+    /// **Under one dwell, which is what sets it.** `Shuffle` leaves a picture
+    /// up for ten seconds, so a bound of half that means an agent which has
+    /// gone quiet is reported while the picture it failed to replace is still
+    /// on screen — rather than a dwell and a half later, by which time a person
+    /// has been looking at a stalled window wondering. It is also two orders of
+    /// magnitude above a healthy serve, which is a queue pop and a file
+    /// streamed off the boot volume.
+    public static let defaultLimit = Duration.seconds(5)
+
+    /// Injected so a test can prove the bound without waiting out the real
+    /// one, which is the same reason `SourcesModel` takes its poll interval.
+    private let limit: Duration
+
+    public init(
+        preferences: Preferences,
+        limit: Duration = PictureClient.defaultLimit,
+        session: URLSession = AgentSession.make()
+    ) {
         self.preferences = preferences
+        self.limit = limit
         self.session = session
     }
 
@@ -35,6 +54,16 @@ public struct PictureClient: PictureSource {
         case unreachable(port: UInt16, reason: String)
         /// The service answered, and not with a picture.
         case refused(status: Int)
+        /// A port is published, something accepted the connection, and nothing
+        /// was ever said.
+        ///
+        /// **Separate from `unreachable`, because it is a different fault with
+        /// a different cause.** Refusing is the agent being absent; going quiet
+        /// after accepting is the agent being alive and stuck — which is what a
+        /// wedged photo library does to it. Telling somebody the agent is not
+        /// running while its process is right there in Activity Monitor sends
+        /// them looking in the wrong place.
+        case silent(port: UInt16, limit: Duration)
     }
 
     /// The published address, or `nil` when there is none.
@@ -64,17 +93,29 @@ public struct PictureClient: PictureSource {
         }
         components.queryItems = query
 
-        var request = URLRequest(url: components.url!)
+        let request = URLRequest(url: components.url!)
         // No `Accept`, which the service reads as *HEIC is fine* — it is roughly
         // half the bytes of JPEG and everything on this machine decodes it.
         // Saying so explicitly would mean re-stating the service's default in a
         // second place, where the two could drift apart.
-        request.timeoutInterval = 30
+        //
+        // **Nothing sets `timeoutInterval` here any more.** It used to be 30,
+        // which is `timeoutIntervalForRequest` — the gap between packets, not
+        // the bound on the answer; see `AgentSession`. Setting it to `limit`
+        // instead would be worse than leaving it: the transport would time out
+        // at the same instant `Deadline` does, and the same silence would be
+        // reported as `unreachable` or `silent` depending on which won the race.
+        // The session's bounds sit above the deadline so that the deadline is
+        // always the one that fires.
 
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await Deadline.run(within: limit) { [session] in
+                try await session.data(for: request)
+            }
+        } catch is Deadline.Expired {
+            throw Failure.silent(port: port, limit: limit)
         } catch let error as URLError {
             throw Failure.unreachable(port: port, reason: error.localizedDescription)
         }

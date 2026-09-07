@@ -41,6 +41,54 @@ struct PictureClientTests {
         }
     }
 
+    /// **The fault this whole bound exists for.** An agent whose cooperative
+    /// threads are parked inside a wedged photo library accepts the connection
+    /// and then says nothing — and before there was a deadline, the picture loop
+    /// waited on it for as long as it stayed stuck.
+    @Test("An agent that accepts the connection and says nothing is silent, not unreachable")
+    func silentAgent() async throws {
+        let suite = DefaultsSuite()
+        suite.preferences.publishServicePort(9000)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            limit: .milliseconds(50),
+            session: Stub.silentSession())
+
+        do {
+            _ = try await client.next(consumer: "app", displayID: nil, fitting: nil)
+            Issue.record("expected a failure")
+        } catch let failure as PictureClient.Failure {
+            // **Not `unreachable`.** That would send somebody to start an agent
+            // whose process is right there in Activity Monitor.
+            guard case .silent(let port, let limit) = failure else {
+                Issue.record("expected silent, got \(failure)")
+                return
+            }
+            #expect(port == 9000)
+            #expect(limit == .milliseconds(50))
+        }
+    }
+
+    /// The loop asks again every few seconds, so a bound that leaked the
+    /// abandoned request would pile up one stuck task per turn of the wheel for
+    /// as long as the agent stayed wedged.
+    @Test("A silent agent costs one wait each time, not a growing one")
+    func silenceDoesNotAccumulate() async throws {
+        let suite = DefaultsSuite()
+        suite.preferences.publishServicePort(9000)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            limit: .milliseconds(50),
+            session: Stub.silentSession())
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        for _ in 0..<3 {
+            _ = try? await client.next(consumer: "app", displayID: nil, fitting: nil)
+        }
+        #expect(clock.now - started < .seconds(2))
+    }
+
     // MARK: - The answers that are not errors
 
     @Test("204 is an empty queue, which is an ordinary answer")
@@ -183,11 +231,18 @@ private enum Stub {
     /// runs these in parallel and a single slot would be whichever test wrote
     /// to it last. The key rides on the session's own additional headers, which
     /// is the only channel a test has to a request the client builds.
-    private static let handlers = Mutex<[String: @Sendable (URLRequest) -> Answer]>([:])
+    private static let handlers = Mutex<[String: @Sendable (URLRequest) -> Answer?]>([:])
     private static let keyHeader = "X-PGR-Stub"
 
+    /// A session that accepts the request and never answers it — the agent that
+    /// is running and stuck, which is the case a refused connection cannot
+    /// stand in for.
+    static func silentSession() -> URLSession {
+        session { _ in nil }
+    }
+
     static func session(
-        _ answer: (@Sendable (URLRequest) -> Answer)? = nil
+        _ answer: (@Sendable (URLRequest) -> Answer?)? = nil
     ) -> URLSession {
         let key = UUID().uuidString
         if let answer { handlers.withLock { $0[key] = answer } }
@@ -204,10 +259,13 @@ private enum Stub {
 
         override func startLoading() {
             let key = request.value(forHTTPHeaderField: Stub.keyHeader) ?? ""
-            guard let answer = Stub.handlers.withLock({ $0[key] })?(request) else {
+            guard let handler = Stub.handlers.withLock({ $0[key] }) else {
                 client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
                 return
             }
+            // A handler that answers nil says nothing, ever. Distinct from
+            // having no handler, which is a test that forgot to set one up.
+            guard let answer = handler(request) else { return }
             switch answer {
             case .failure(let error):
                 client?.urlProtocol(self, didFailWithError: error)
