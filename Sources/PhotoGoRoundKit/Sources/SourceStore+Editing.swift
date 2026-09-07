@@ -39,6 +39,14 @@ extension SourceStore {
         /// cannot be read at all. Refused under the same all-or-none rule as a
         /// mistyped path, and naming itself.
         case locatorsNotFound([String])
+        /// A reconnect asked of a source that is not a missing album: a
+        /// folder, an album that is there, or one behind a permission prompt.
+        /// Only an album the library cannot find has a successor to look for.
+        case notMissing
+        /// A reconnect that found no album, or more than one, called what
+        /// this one was and sitting where it sat. The titles of whatever it
+        /// did find, so a person can see why. The source stays missing.
+        case notReconnectable(matches: [String])
         /// Paths that are not there. **All of them, and the whole batch is
         /// refused**: a request naming three folders where the second is
         /// misspelled adds none of them, rather than leaving the library in a
@@ -211,6 +219,72 @@ extension SourceStore {
         try reconcile(with: preferences, now: now)
         guard let updated = try self.source(uuid: source.uuid) else {
             throw EditFailure.notProjected(source.locator)
+        }
+        return updated
+    }
+
+    /// Points a missing album at the one album in the library now that it was
+    /// called and where it sat, keeping the source — its `uuid`, its cache
+    /// directory, its enabled state, its place in the list.
+    ///
+    /// **The row and the preference change in one locked step.** Reconcile
+    /// matches rows to preferences by locator; a preference pointing at the
+    /// new identifier beside a row still holding the old would make the next
+    /// reconcile remove the row, its photographs, and its cached bytes, and
+    /// add a stranger. The lock keeps a reconcile from running between the two
+    /// writes, and the preference goes first because it is the write that can
+    /// refuse — the old locator not listed, the new one already there — and
+    /// refusing before anything else has moved is cheaper than moving it back.
+    ///
+    /// The next refresh does the rest: the old rows name assets a rebuild
+    /// renumbered too, so they leave and the album's photographs arrive under
+    /// their new identifiers. What this saves the person is finding the album
+    /// again among three hundred in the picker; see `Missing Albums Plan.md`.
+    @discardableResult
+    public func reconnect(
+        _ source: Source, in preferences: Preferences, now: Date = Date()
+    ) async throws -> Source {
+        // Asked before the lock, like `add`: a provider suspends, and the lock
+        // cannot be held across a suspension. Nothing here writes yet.
+        guard let provider = provider(for: source.kind) else {
+            throw EditFailure.unsupportedKind(source.kind)
+        }
+        guard case .missing = await provider.availability(of: source) else {
+            throw EditFailure.notMissing
+        }
+        let matches = await provider.successors(of: source)
+        guard matches.count == 1, let match = matches.first else {
+            throw EditFailure.notReconnectable(matches: matches.map(\.description.title))
+        }
+        return try move(source, to: match, in: preferences)
+    }
+
+    /// The part of `reconnect` that writes, and therefore the part that holds
+    /// the lock — synchronous, because `NSLock` is unavailable from an async
+    /// context, and everything that had to suspend has already happened.
+    private func move(
+        _ source: Source, to match: SourceMatch, in preferences: Preferences
+    ) throws -> Source {
+        Self.editing.lock()
+        defer { Self.editing.unlock() }
+        guard
+            preferences.replaceSource(
+                locator: source.locator, with: match.locator, description: match.description)
+        else { throw EditFailure.notProjected(source.locator) }
+        do {
+            try relocate(sourceID: source.id, to: match.locator, describedAs: match.description)
+        } catch {
+            // The preference moved and the row did not: put the preference
+            // back, so the two still agree and the next reconcile is a no-op.
+            preferences.replaceSource(
+                locator: match.locator, with: source.locator, description: source.description)
+            throw error
+        }
+        Log.sources.notice(
+            "source \(source.id, privacy: .public) reconnected: \(source.locator, privacy: .public) is now \(match.locator, privacy: .public)"
+        )
+        guard let updated = try self.source(uuid: source.uuid) else {
+            throw EditFailure.notProjected(match.locator)
         }
         return updated
     }

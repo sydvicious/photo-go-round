@@ -139,6 +139,113 @@ struct PhotosSourceEditingTests {
             "the preference is the seed, not the record")
     }
 
+    // MARK: - Reconnecting
+
+    private static let renumbered = "REBUILT-0000-0000-0000-000000000000/L0/041"
+    private static let kids = SourceDescription(
+        title: "Kids 2019", collectionKind: "userAlbum", folders: ["Family"])
+
+    /// The library after a rebuild: the stored album is gone and `successors`
+    /// stand where it was, each called "Kids 2019" in the Family folder.
+    private func rebuilt(successors: [String]) -> FakePhotoLibrary {
+        FakePhotoLibrary(
+            titles: Dictionary(uniqueKeysWithValues: successors.map { ($0, "Kids 2019") }),
+            assets: Dictionary(
+                uniqueKeysWithValues: successors.map {
+                    ($0, [LibraryAsset(identifier: "NEW-\($0)/L0/001")])
+                }),
+            collections: successors.map {
+                LibraryCollection(identifier: $0, title: "Kids 2019", kind: .userAlbum)
+            },
+            folders: Dictionary(uniqueKeysWithValues: successors.map { ($0, ["Family"]) }))
+    }
+
+    /// A source added before the rebuild, in preferences and in the table,
+    /// with the name it had then.
+    private func missingAlbum(
+        in store: SourceStore, preferences: Preferences
+    ) async throws -> Source {
+        preferences.setSources([
+            SourceSpec(kind: .photosCollection, locator: album, description: Self.kids)
+        ])
+        try store.reconcile(with: preferences)
+        let source = try #require(try store.all().first)
+        await store.refresh(source)
+        return try #require(try store.source(id: source.id))
+    }
+
+    @Test("Reconnecting moves the row and the preference together, and keeps the source")
+    func reconnectMovesBothAndKeepsTheSource() async throws {
+        let scratch = Scratch()
+        let store = store(try TestLibrary().database, library: rebuilt(successors: [Self.renumbered]))
+        let before = try await missingAlbum(in: store, preferences: scratch.preferences)
+        #expect(before.available == false, "the refresh could not find it")
+
+        let after = try await store.reconnect(before, in: scratch.preferences)
+
+        #expect(after.uuid == before.uuid, "the source is the same source")
+        #expect(after.id == before.id)
+        #expect(after.locator == Self.renumbered)
+        #expect(after.available, "it is there now, and says so without waiting for a refresh")
+        #expect(after.description == Self.kids)
+        #expect(scratch.preferences.sources.map(\.locator) == [Self.renumbered])
+        #expect(scratch.preferences.sources.first?.description == Self.kids)
+
+        // The two agree, so reconciling adds and removes nothing — which is
+        // the whole reason they were written under one lock.
+        let reconciled = try store.reconcile(with: scratch.preferences)
+        #expect(reconciled.isEmpty)
+        #expect(try store.all().map(\.uuid) == [before.uuid])
+    }
+
+    @Test("Reconnecting with no successor changes nothing, and says so")
+    func reconnectWithNoMatchIsRefused() async throws {
+        let scratch = Scratch()
+        let store = store(try TestLibrary().database, library: rebuilt(successors: []))
+        let before = try await missingAlbum(in: store, preferences: scratch.preferences)
+
+        await #expect(throws: SourceStore.EditFailure.notReconnectable(matches: [])) {
+            try await store.reconnect(before, in: scratch.preferences)
+        }
+        #expect(try store.source(id: before.id)?.locator == album)
+        #expect(scratch.preferences.sources.map(\.locator) == [album])
+    }
+
+    @Test("Reconnecting with two successors is refused, naming both")
+    func reconnectWithTwoMatchesIsRefused() async throws {
+        let scratch = Scratch()
+        let store = store(
+            try TestLibrary().database, library: rebuilt(successors: [Self.renumbered, "OTHER/L0/042"]))
+        let before = try await missingAlbum(in: store, preferences: scratch.preferences)
+
+        await #expect(
+            throws: SourceStore.EditFailure.notReconnectable(matches: ["Kids 2019", "Kids 2019"])
+        ) {
+            try await store.reconnect(before, in: scratch.preferences)
+        }
+        #expect(try store.source(id: before.id)?.locator == album)
+        #expect(try store.source(id: before.id)?.available == false)
+    }
+
+    @Test("An album that is there cannot be reconnected, and neither can a folder")
+    func reconnectIsOnlyForMissingAlbums() async throws {
+        let scratch = Scratch()
+        let store = store(try TestLibrary().database, library: resolvable())
+        let addition = try await store.add(
+            [SourceRequest(kind: .photosCollection, path: album)], to: scratch.preferences)
+        let present = try #require(addition.added.first)
+
+        await #expect(throws: SourceStore.EditFailure.notMissing) {
+            try await store.reconnect(present, in: scratch.preferences)
+        }
+
+        let folder = TemporaryFolder()
+        let added = try await store.add(kind: .folder, locator: folder.path)
+        await #expect(throws: SourceStore.EditFailure.notMissing) {
+            try await store.reconnect(added, in: scratch.preferences)
+        }
+    }
+
     @Test("An album that has gone missing keeps the name it last had")
     func aMissingAlbumKeepsItsName() async throws {
         // The whole point: a refresh that cannot find the album marks the

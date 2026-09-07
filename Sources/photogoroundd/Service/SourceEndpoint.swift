@@ -138,6 +138,10 @@ struct SourceEndpoint {
         /// a permission prompt; absent for a folder or a file. Since
         /// 2026-09-07; see `Missing Albums Plan.md`.
         var missing: Bool?
+        /// True when a missing album has exactly one album in the library
+        /// now that it was called and where it sat, so `POST …/reconnect`
+        /// would succeed. Present only when `missing` is true.
+        var reconnectable: Bool?
         /// How many photographs this source has put in the pool. Zero for a
         /// source added a moment ago, because the scan has not run yet.
         var photos: Int
@@ -174,6 +178,9 @@ struct SourceEndpoint {
         /// The paths that exist but are not the kind they were asked for as —
         /// a file named as a folder, a directory named as a file.
         var mismatched: [String]?
+        /// The albums a reconnect could have meant, by title, when it was
+        /// refused for finding none or more than one.
+        var matches: [String]?
     }
 
     // MARK: - Routing
@@ -224,6 +231,9 @@ struct SourceEndpoint {
             return await list(request, store: store, version: version)
         case ("POST", nil):
             return await add(request, store: store, version: version)
+        case ("POST", .some(let member)) where member.hasSuffix(Self.reconnectSuffix) && version == .v2:
+            let uuid = String(member.dropLast(Self.reconnectSuffix.count))
+            return await reconnect(request, uuid: uuid, store: store, version: version)
         case ("GET", .some(let uuid)):
             return await one(request, uuid: uuid, store: store, version: version)
         case ("PATCH", .some(let uuid)):
@@ -415,6 +425,47 @@ struct SourceEndpoint {
         }
     }
 
+    // MARK: - Reconnecting
+
+    /// The member action, as a path suffix: `POST /v2/sources/<uuid>/reconnect`.
+    /// v2 only, since v1 carries no album to reconnect.
+    static let reconnectSuffix = "/reconnect"
+
+    /// Points a missing album at its one successor and answers with the
+    /// source as it now stands. `409` names the candidates when there were
+    /// none or several — the source stays missing either way — and `400` says
+    /// the source was not a missing album to begin with.
+    private func reconnect(
+        _ request: HTTPListener.Request, uuid: String, store: SourceStore, version: Version
+    ) async -> HTTPListener.Response {
+        do {
+            guard let source = try store.source(uuid: uuid) else { return missing(request, uuid) }
+            let updated = try await store.reconnect(source, in: preferences)
+            return answer(
+                request, json(await wire(updated, store: store, version: version)),
+                detail: "\(source.locator) reconnected to \(updated.locator)")
+        } catch SourceStore.EditFailure.notMissing {
+            return answer(
+                request,
+                json(
+                    Failure(error: "only a missing Photos album can be reconnected"),
+                    status: 400, reason: "Bad Request"),
+                detail: "not a missing album")
+        } catch SourceStore.EditFailure.notReconnectable(let matches) {
+            return answer(
+                request,
+                json(
+                    Failure(
+                        error: matches.isEmpty
+                            ? "no album in the library matches" : "more than one album matches",
+                        matches: matches),
+                    status: 409, reason: "Conflict"),
+                detail: "\(matches.count) matches")
+        } catch {
+            return answer(request, failed(error), detail: "could not reconnect the source")
+        }
+    }
+
     // MARK: - Removing
 
     private func remove(
@@ -447,6 +498,7 @@ struct SourceEndpoint {
         // that asked for v1 gets exactly what v1 has always answered.
         var title: String?
         var missing: Bool?
+        var reconnectable: Bool?
         if version == .v2, let provider = store.provider(for: source.kind) {
             // The library's answer first, so a rename shows through at once;
             // the stored name when the library has none to give, which is
@@ -460,6 +512,9 @@ struct SourceEndpoint {
                     missing = false
                 } else if case .missing = await provider.availability(of: source) {
                     missing = true
+                    // The same rule `reconnect` applies, asked ahead of time
+                    // so the panel can enable the button honestly.
+                    reconnectable = await provider.successors(of: source).count == 1
                 } else {
                     missing = false
                 }
@@ -475,6 +530,7 @@ struct SourceEndpoint {
             unavailableReason: source.unavailableReason,
             title: title,
             missing: missing,
+            reconnectable: reconnectable,
             photos: (try? store.pool.size(forSource: source.id)) ?? 0,
             addedAt: source.addedAt,
             scannedAt: source.scannedAt

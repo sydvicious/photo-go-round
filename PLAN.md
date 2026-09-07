@@ -1790,6 +1790,8 @@ DELETE /v1/sources/<uuid>    remove one
 
 That is the whole client-facing surface for sources. **Preferences are not a client transport**, which is the reversal below.
 
+`/v2/sources` carries the same five routes over every kind, Photos albums included, and since 2026-09-07 one more: `POST /v2/sources/<uuid>/reconnect`, which points a missing album at the one album in the library now that it was called and where it sat — 200 with the moved source, 409 naming the candidates when there were none or several, 400 for anything that is not a missing album. See `Apple Photos Plan.md` for the versioning and `Missing Albums Plan.md` for the reconnect.
+
 ### Preferences as a client transport, tried and reversed
 
 Recorded because it was built and undone, and because the reasons are the useful part rather than the conclusion.

@@ -62,12 +62,16 @@ struct SourceService {
         /// one kind of unavailable a person can act on here. Absent for a
         /// folder or a file, and for an agent from before 2026-09-07.
         var missing: Bool?
+        /// True when the agent found exactly one album the missing one could
+        /// be reconnected to. Present only for a missing album.
+        var reconnectable: Bool?
         var photos: Int
         var scannedAt: Date?
 
         var id: String { uuid }
 
         var isMissing: Bool { missing == true }
+        var isReconnectable: Bool { reconnectable == true }
 
         /// What to call it in a list: the last path component, which is the part
         /// a person recognises. The full path is shown underneath and in
@@ -216,6 +220,14 @@ struct SourceService {
         let body = try JSONEncoder().encode(["recursive": recursive])
         return try await send(
             decoding: Source.self, "PATCH", "/v2/sources/\(uuid)", body: body)
+    }
+
+    /// Points a missing album at the one album in the library that matches
+    /// what it was called and where it sat. The agent decides whether there is
+    /// exactly one; a refusal names the candidates.
+    @discardableResult
+    func reconnect(_ uuid: String) async throws -> Source {
+        try await send(decoding: Source.self, "POST", "/v2/sources/\(uuid)/reconnect", body: nil)
     }
 
     /// Answers `204`, so there is nothing to decode — the absence of a refusal

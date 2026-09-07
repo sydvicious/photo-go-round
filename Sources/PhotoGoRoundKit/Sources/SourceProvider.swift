@@ -109,6 +109,17 @@ public protocol SourceProvider: Sendable {
     /// it. See `Missing Albums Plan.md`.
     func describe(_ source: Source) async -> SourceDescription?
 
+    /// The sources this one could be reconnected to: everything in the library
+    /// now that matches what this source was called and where it sat, by the
+    /// provider's own rule. Empty for a path, for a source with no stored
+    /// description, and for a library that cannot be read.
+    ///
+    /// **The caller decides what to do with the count.** Exactly one is a
+    /// reconnect; none or several is a source that stays missing, with the
+    /// candidates named so a person can see why. See `Missing Albums Plan.md`,
+    /// Phase 5.
+    func successors(of source: Source) async -> [SourceMatch]
+
     /// Writes the bytes for one photo to `destination`.
     ///
     /// Only called for photos whose storage is `.materialized`. A referenced
@@ -148,6 +159,23 @@ extension SourceProvider {
     /// A path describes itself.
     public func describe(_ source: Source) async -> SourceDescription? { nil }
 
+    /// A path has no successor: it is either there or it is not.
+    public func successors(of source: Source) async -> [SourceMatch] { [] }
+}
+
+/// One thing a missing source could be reconnected to: the locator it would
+/// take, and what that names.
+public struct SourceMatch: Sendable, Equatable {
+    public let locator: String
+    public let description: SourceDescription
+
+    public init(locator: String, description: SourceDescription) {
+        self.locator = locator
+        self.description = description
+    }
+}
+
+extension SourceProvider {
     /// The whole source as one array.
     ///
     /// A convenience for tests and for callers that already know the source is

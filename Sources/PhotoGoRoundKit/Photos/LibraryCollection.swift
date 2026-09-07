@@ -97,6 +97,24 @@ public enum LibraryCollectionKind: String, Sendable, Equatable, Hashable, CaseIt
     /// Apple adds after it shipped. Listed rather than hidden: a collection a
     /// person can see in Photos and not here is a bug they cannot diagnose.
     case otherSmartAlbum
+
+    /// Whether a library holds exactly one collection of this kind, so that
+    /// the kind alone identifies it.
+    ///
+    /// **What a reconnect matches on.** Favorites is Favorites in every
+    /// library and there is one; its title is Apple's and changes with the
+    /// system language, so comparing it would fail a match for nothing. A
+    /// user album, a synced or shared one, and the media-type family are many
+    /// per kind, and for those the title and the folders are the identity.
+    /// See `Missing Albums Plan.md`, Phase 5.
+    public var isSingleton: Bool {
+        switch self {
+        case .wholeLibrary, .favorites, .recentlyAdded, .hidden, .photoStream, .unableToUpload:
+            true
+        case .userAlbum, .syncedAlbum, .sharedAlbum, .imported, .mediaType, .otherSmartAlbum:
+            false
+        }
+    }
 }
 
 /// The four groups Photos' own sidebar uses.

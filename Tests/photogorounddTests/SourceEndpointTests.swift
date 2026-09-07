@@ -445,16 +445,22 @@ struct SourceEndpointTests {
 
     // MARK: - Naming an album that is not there
 
-    /// A Photos library with nothing in it, so every album is missing and the
-    /// library itself is perfectly readable — the state a rebuild leaves the
-    /// agent in. Only the two calls `availability` and `title` make matter.
-    private struct EmptyLibrary: PhotoLibrary {
+    /// A readable Photos library holding only what a test stocks it with — by
+    /// default nothing, so every album is missing and the library itself is
+    /// perfectly readable, which is the state a rebuild leaves the agent in.
+    /// Only the collection calls matter; nothing here materializes anything.
+    private struct StubLibrary: PhotoLibrary {
+        var collectionList: [LibraryCollection] = []
+        var folderTree: [String: [String]] = [:]
+
         var authorization: LibraryAuthorization { get async { .authorized } }
         func requestAuthorization() async -> LibraryAuthorization { .authorized }
-        func collections() async -> [LibraryCollection] { [] }
-        func folderPaths() async -> [String: [String]] { [:] }
+        func collections() async -> [LibraryCollection] { collectionList }
+        func folderPaths() async -> [String: [String]] { folderTree }
         func imageCount(ofCollection identifier: String) async -> Int? { nil }
-        func title(ofCollection identifier: String) async -> String? { nil }
+        func title(ofCollection identifier: String) async -> String? {
+            collectionList.first { $0.identifier == identifier }?.title
+        }
         @discardableResult
         func enumerateImages(
             inCollection identifier: String, _ body: (LibraryAsset) async throws -> Void
@@ -474,7 +480,7 @@ struct SourceEndpointTests {
         // and `missing` is what tells it the person can do something about it.
         let library = try Library(providers: [
             FolderSourceProvider(fileAccess: UnsandboxedFileAccess()),
-            PhotosCollectionSourceProvider(library: EmptyLibrary()),
+            PhotosCollectionSourceProvider(library: StubLibrary()),
         ])
         try insertAlbum(library, locator: "ALBUM/L0/040", title: "Kids 2019", available: false)
 
@@ -482,6 +488,102 @@ struct SourceEndpointTests {
         let album = try #require(listed.first)
         #expect(album.title == "Kids 2019")
         #expect(album.missing == true)
+    }
+
+    // MARK: - Reconnecting
+
+    private static let renumbered = "REBUILT-0000-0000-0000-000000000000/L0/041"
+
+    /// An agent whose library has been rebuilt: the stored album is gone and
+    /// the given albums, each called "Kids 2019", stand where it was.
+    private func rebuiltLibrary(successors: [String]) throws -> Library {
+        try Library(providers: [
+            FolderSourceProvider(fileAccess: UnsandboxedFileAccess()),
+            PhotosCollectionSourceProvider(
+                library: StubLibrary(
+                    collectionList: successors.map {
+                        LibraryCollection(identifier: $0, title: "Kids 2019", kind: .userAlbum)
+                    })),
+        ])
+    }
+
+    /// The missing album, in preferences as well as the table, so the
+    /// reconnect has a preference to rewrite.
+    private func listMissingAlbum(_ library: Library, locator: String) throws {
+        library.preferences.setSources([
+            SourceSpec(
+                kind: .photosCollection, locator: locator,
+                description: SourceDescription(title: "Kids 2019", collectionKind: "userAlbum"))
+        ])
+        try library.store.reconcile(with: library.preferences)
+        try library.store.database.run(
+            "UPDATE source SET available = 0, unavailable_reason = 'the album is not in this Photos library';"
+        )
+    }
+
+    @Test("The list says which missing albums can be reconnected")
+    func theListSaysWhatIsReconnectable() async throws {
+        let library = try rebuiltLibrary(successors: [Self.renumbered])
+        try listMissingAlbum(library, locator: "OLD/L0/040")
+
+        let album = try #require(try sources(try await library.get("/v2/sources")).first)
+        #expect(album.missing == true)
+        #expect(album.reconnectable == true)
+
+        let none = try rebuiltLibrary(successors: [])
+        try listMissingAlbum(none, locator: "OLD/L0/040")
+        let orphan = try #require(try sources(try await none.get("/v2/sources")).first)
+        #expect(orphan.missing == true)
+        #expect(orphan.reconnectable == false)
+    }
+
+    @Test("Reconnecting answers with the source at its new identifier, the same uuid")
+    func reconnectAnswersTheMovedSource() async throws {
+        let library = try rebuiltLibrary(successors: [Self.renumbered])
+        try listMissingAlbum(library, locator: "OLD/L0/040")
+        let before = try #require(try sources(try await library.get("/v2/sources")).first)
+
+        let response = try await library.post("", to: "/v2/sources/\(before.uuid)/reconnect")
+        #expect(response.status == 200)
+        let after = try source(response)
+        #expect(after.uuid == before.uuid)
+        #expect(after.locator == Self.renumbered)
+        #expect(after.missing == false)
+        #expect(after.available)
+        #expect(library.preferences.sources.map(\.locator) == [Self.renumbered])
+    }
+
+    @Test("A reconnect with no match, or several, is a conflict that names them")
+    func reconnectWithoutOneMatchIsAConflict() async throws {
+        let none = try rebuiltLibrary(successors: [])
+        try listMissingAlbum(none, locator: "OLD/L0/040")
+        let orphan = try #require(try sources(try await none.get("/v2/sources")).first)
+        let refusedNone = try await none.post("", to: "/v2/sources/\(orphan.uuid)/reconnect")
+        #expect(refusedNone.status == 409)
+        #expect(try failure(refusedNone).matches == [])
+
+        let two = try rebuiltLibrary(successors: [Self.renumbered, "OTHER/L0/042"])
+        try listMissingAlbum(two, locator: "OLD/L0/040")
+        let torn = try #require(try sources(try await two.get("/v2/sources")).first)
+        let refusedTwo = try await two.post("", to: "/v2/sources/\(torn.uuid)/reconnect")
+        #expect(refusedTwo.status == 409)
+        #expect(try failure(refusedTwo).matches == ["Kids 2019", "Kids 2019"])
+        #expect(two.preferences.sources.map(\.locator) == ["OLD/L0/040"], "nothing moved")
+    }
+
+    @Test("Only a missing album can be reconnected; a folder gets 400 and a stranger 404")
+    func reconnectRefusesWhatItCannotMove() async throws {
+        let library = try rebuiltLibrary(successors: [Self.renumbered])
+        let folder = library.folder("pictures", photographs: 1)
+        let added = try sources(
+            try await library.post(#"[{"kind": "folder", "path": "\#(library.path(of: folder))"}]"#))
+        let folderWire = try #require(added.first)
+
+        let refused = try await library.post("", to: "/v2/sources/\(folderWire.uuid)/reconnect")
+        #expect(refused.status == 400)
+
+        let unknown = try await library.post("", to: "/v2/sources/nobody/reconnect")
+        #expect(unknown.status == 404)
     }
 
     @Test("A folder is never missing, and an album behind a permission prompt is not either")

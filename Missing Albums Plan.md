@@ -25,10 +25,10 @@ A Photos library rebuild on 2026-09-07 renumbered two albums. The agent could no
   - Missing albums leave the chosen-collections line and appear only here.
   - Remove deletes every listed source, as the picker's untick does today — one change, one spinner, one lockout.
   - `SourcesModelTests` for the partition, both wordings, and the removal. Not yet checked by eye.
-- **Phase 5 — Reconnect.** A missing album with exactly one catalog match by kind, title, and folders can be pointed at its new identifier without losing the source.
-  - `POST /v2/sources/<uuid>/reconnect`; 409 when there is no match or more than one.
-  - Row and preference are rewritten together under the editing lock, keeping the source's uuid.
-  - A Reconnect button beside Remove, enabled when the list reports at least one reconnectable album.
+- **Phase 5 — complete, 2026-09-07. Reconnect.** A missing album with exactly one catalog match by kind, title, and folders can be pointed at its new identifier without losing the source.
+  - `POST /v2/sources/<uuid>/reconnect`; 409 naming the candidates when there is no match or more than one; 400 for anything that is not a missing album.
+  - Preference and row are rewritten together under the editing lock, keeping the source's uuid, and the source is marked available at once.
+  - A Reconnect button beside Remove, enabled when the list reports at least one reconnectable album; the rest stay listed.
 
 # Design Decisions
 
@@ -42,8 +42,8 @@ A Photos library rebuild on 2026-09-07 renumbered two albums. The agent could no
 - **`folders` is a JSON array, not a joined string.** Decided 2026-09-07 in the building. A Photos folder may be called anything, including something with a separator in it, and Reconnect's rule is exact or nothing.
 - **The three facts travel as one optional value.** `SourceDescription` on the row model and the preference record; three columns in the table. A title without a kind is a row nothing in this project writes, and it reads as no description rather than half of one.
 - **The source endpoint takes its providers as a parameter.** A test seam, nil in the agent. The production set asks PhotoKit, which has no grant under a test runner and says nothing, and "missing" is exactly the answer the v2 list has to be able to give.
-- **Reconnect rewrites the row and the preference in the same locked step.** Reconcile matches rows to preferences by locator; rewriting the preference alone would make reconcile remove the row, its cached bytes, and its directory, and add a stranger.
-- **A match is exact or it is not a match.** Kind, title, and folder path, and exactly one candidate. Smart albums match on kind alone, since their titles are Apple's and their kinds are unique.
+- **Reconnect rewrites the row and the preference in the same locked step.** Reconcile matches rows to preferences by locator; rewriting the preference alone would make reconcile remove the row, its cached bytes, and its directory, and add a stranger. **Built 2026-09-07 with the preference first.** The lock is what keeps a reconcile out from between the two writes, so their order is free, and the preference write is the one that can refuse — the old locator not listed, the new one already there — which is cheaper to hear before anything has moved. A row that then fails to move puts the preference back. The source is marked available in the same step rather than waiting for the next refresh, so the panel and the deck's gate see it at once.
+- **A match is exact or it is not a match.** Kind, title, and folder path, and exactly one candidate. **Refined 2026-09-07:** a kind a library holds exactly one of — Library, Favorites, Recents, Hidden, Photo Stream, Unable to Upload — matches on kind alone, since Apple names those and the name follows the system language. Every other kind, the media-type family included, is many per kind and matches on title and folders as well. `LibraryCollectionKind.isSingleton` says which is which.
 - **`missing` is a flag on the wire, not a string to compare.** The app must not recognise an album problem by matching the reason text. **Behind it, since 2026-09-07, is a fourth `SourceAvailability` case**, `.missing`, chosen over a second associated value on `.offline`: everything that serves, fetches, or deals treats it as offline, and only the endpoint reads it. The flag is present for every Photos source in v2 and absent for a folder or a file, and it is computed only for a source the scan has already marked unavailable.
 
 # Background
@@ -150,6 +150,8 @@ The panel's colour rule holds: the line reads in the secondary style with the or
 
 **Why the order and the lock matter.** Reconcile identifies a row by its locator. If the preference changed and the row did not, the next reconcile would find a spec with no row — add one, fresh uuid, fresh cache directory — and a row with no spec — remove it, cascading its photo rows and unlinking its cache directory. The album would be reconnected and its cache gone. Doing both in one locked step is the whole of the design.
 
+**Built the other way round, 2026-09-07, for a reason the paragraph above already contains.** It is the lock that keeps a reconcile out, not the order; with the lock held either order is safe, and the preference write is the one with something to refuse. So the preference goes first, and a row that then fails to move puts the preference back. The asking — is it missing, what matches — happens before the lock, because a provider suspends and `NSLock` cannot be held across a suspension; the write is a synchronous helper, exactly as `add` is split.
+
 **What Reconnect buys, honestly.** After a rebuild the asset identifiers changed too, so the next refresh of a reconnected source removes every old row and adds new ones, and the old cached bytes leave with their rows. The cache is refetched either way. What Reconnect keeps is the source itself — its uuid, its enabled state, its place in the list — and what it saves the person is finding the album again among three hundred in the picker. That is worth a button, and not more than a button.
 
 **The endpoint.** `POST /v2/sources/<uuid>/reconnect`, no body. 200 with the source's wire form on success; 409 with `{error, matches: [titles]}` when the match is not exact; 400 for a source that is not missing or not a Photos kind. `pgr_ctl` gets no new command for it in this plan — the case is a panel case, and a command would need a man page entry and tests it does not yet earn. If `pgr_ctl sources` is to show the stored name, that is a one-line change to its listing and is covered by the existing output tests.
@@ -208,6 +210,16 @@ Switching the system library fails every album at once. Under this plan every Ph
 **An album from before names were stored still reads as "040" on the missing line, and still asks the question.** That is the two albums that started this. The line exists so that a person can act, and a poor name beside a Remove button is the whole of what they needed.
 
 **Not checked by eye.** The panel was compiled, not looked at; the layout is a guess in the plan's own words until somebody opens it against a Phase 3 agent. The two albums should appear as "040, 040" with Remove enabled and Reconnect greyed.
+
+**Phase 5, 2026-09-07.** Fourteen files, thirteen tests: the match rule against a rebuilt fake library, the store's reconnect and its three refusals, the endpoint's four answers, the list's `reconnectable` flag, and the app's button and action. 673 in the package, 63 in the app.
+
+**The singleton rule came from writing the test.** The plan said smart albums match on kind alone because their kinds are unique. The media-type family is one kind with a dozen albums in it — Panoramas, Live Photos, Screenshots — so a kind-only match would have reconnected Panoramas to Live Photos. `isSingleton` names the six kinds a library really holds one of; everything else matches on title and folders too.
+
+**The two "040" albums are not reconnectable, by design.** They have no stored name, so there is nothing to match, and the provider answers with an empty list rather than guessing from the identifier's tail. Remove is what they get.
+
+**The app's test scratch class leaves preference files behind under `xcodebuild test`.** It names a dotted suite of its own and removes the plist in `deinit`, and cfprefsd writes the file after that. Three app test runs left 168 files in `~/Library/Preferences`, and the package suite's hygiene check — which exists for exactly this — refused to pass until they were gone. They were removed by their full name pattern. The fix the check prescribes is the path-based `scratchSuiteName` the package suites use; the app suite does not use it yet, and that is left for Syd.
+
+**Not checked by eye**, as with Phase 4. The reproduction that would prove the whole thing — rename an album in Photos, watch it go missing with Reconnect enabled, press it, watch it come back under the same uuid — is the plan's *From nothing* item and has not been run.
 
 ## Other plan documents this touches
 

@@ -148,6 +148,39 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
             title: collection.title, collectionKind: collection.kind.rawValue, folders: folders)
     }
 
+    // MARK: - Reconnecting
+
+    /// Every collection in the library now that the stored description names,
+    /// by `matches(_:folders:to:)`. A source with no description — added
+    /// before names were stored — matches nothing, and says so with an empty
+    /// list rather than by guessing from an identifier's tail.
+    public func successors(of source: Source) async -> [SourceMatch] {
+        guard let description = source.description, await library.authorization.canRead
+        else { return [] }
+        let folders = await library.folderPaths()
+        return await library.collections().compactMap { collection in
+            let path = folders[collection.identifier] ?? []
+            guard Self.matches(collection, folders: path, to: description) else { return nil }
+            return SourceMatch(
+                locator: collection.identifier,
+                description: SourceDescription(
+                    title: collection.title, collectionKind: collection.kind.rawValue, folders: path))
+        }
+    }
+
+    /// **Exact, or it is not a match.** The kind first, always. For a kind a
+    /// library holds one of, that is the whole test — Favorites is Favorites
+    /// whatever the system language calls it. For every other kind the title
+    /// and the folder path must both be equal, because that is how Photos
+    /// itself tells two albums of the same name apart.
+    static func matches(
+        _ collection: LibraryCollection, folders: [String], to description: SourceDescription
+    ) -> Bool {
+        guard collection.kind.rawValue == description.collectionKind else { return false }
+        if collection.kind.isSingleton { return true }
+        return collection.title == description.title && folders == description.folders
+    }
+
     // MARK: - Materialize
 
     public func materialize(

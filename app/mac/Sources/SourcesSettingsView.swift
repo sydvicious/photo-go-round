@@ -112,11 +112,12 @@ struct SourcesSettingsView: View {
 
     /// Remove and Reconnect, shown only while something is missing.
     ///
-    /// **Reconnect is here from the start and disabled until Phase 5**, so the
-    /// panel's shape does not change between phases. Remove acts on every
-    /// missing album at once — see `SourcesModel.removeMissing`. The spinner
-    /// says a change is in flight, since the buttons are locked out meanwhile
-    /// and a silent lockout looks like a broken panel.
+    /// Reconnect is enabled when the agent found exactly one successor for at
+    /// least one missing album, and acts on those; the rest stay listed with
+    /// Remove. Both act on every album they apply to at once — see
+    /// `SourcesModel.removeMissing`. The spinner says a change is in flight,
+    /// since the buttons are locked out meanwhile and a silent lockout looks
+    /// like a broken panel.
     @ViewBuilder
     private var missingControls: some View {
         if !model.missingCollections.isEmpty {
@@ -126,9 +127,12 @@ struct SourcesSettingsView: View {
                         .controlSize(.small)
                         .transition(.opacity)
                 }
-                Button("Reconnect") {}
-                    .disabled(true)
-                    .help("Point a missing album at the one that replaced it — not yet available")
+                Button("Reconnect") {
+                    Log.sources.notice("panel: reconnect missing albums pressed")
+                    Task { await model.reconnectMissing() }
+                }
+                .disabled(!model.canReconnect || model.isWorking)
+                .help("Point each missing album at the one album that matches what it was called and where it sat")
                 Button("Remove") {
                     Log.sources.notice("panel: remove missing albums pressed")
                     Task { await model.removeMissing() }

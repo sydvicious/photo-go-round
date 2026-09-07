@@ -195,6 +195,101 @@ struct PhotosProviderTests {
                 == SourceDescription(title: "Favorites", collectionKind: "favorites", folders: []))
     }
 
+    // MARK: - Successors
+
+    private static let renumbered = "REBUILT-0000-0000-0000-000000000000/L0/041"
+
+    /// A library after a rebuild: the album this suite's sources name is gone,
+    /// and one or more albums stand where it was.
+    private func rebuilt(_ collections: [LibraryCollection], folders: [String: [String]] = [:])
+        -> PhotosCollectionSourceProvider
+    {
+        PhotosCollectionSourceProvider(
+            library: FakePhotoLibrary(
+                titles: Dictionary(uniqueKeysWithValues: collections.map { ($0.identifier, $0.title) }),
+                collections: collections, folders: folders))
+    }
+
+    private func missingSource(_ description: SourceDescription) -> Source {
+        Source(
+            id: 1, uuid: "SOURCE-1", kind: .photosCollection, locator: album,
+            description: description, addedAt: Date(timeIntervalSince1970: 0))
+    }
+
+    @Test("A user album's successor is the one with its title in its folders, and nothing else")
+    func aUserAlbumMatchesOnTitleAndFolders() async {
+        let stored = SourceDescription(
+            title: "Kids 2019", collectionKind: "userAlbum", folders: ["Family"])
+        let provider = rebuilt(
+            [
+                LibraryCollection(identifier: Self.renumbered, title: "Kids 2019", kind: .userAlbum),
+                LibraryCollection(identifier: "OTHER/L0/042", title: "Kids 2019", kind: .userAlbum),
+                LibraryCollection(identifier: "OTHER/L0/043", title: "Kids 2020", kind: .userAlbum),
+            ],
+            folders: [Self.renumbered: ["Family"], "OTHER/L0/042": ["Archive"]])
+
+        let found = await provider.successors(of: missingSource(stored))
+        #expect(found.map(\.locator) == [Self.renumbered])
+        #expect(
+            found.first?.description
+                == SourceDescription(title: "Kids 2019", collectionKind: "userAlbum", folders: ["Family"]))
+    }
+
+    @Test("Two albums of the same name in the same folder are two successors, and a person decides")
+    func sameNameSamePlaceIsAmbiguous() async {
+        let stored = SourceDescription(title: "Kids 2019", collectionKind: "userAlbum")
+        let provider = rebuilt([
+            LibraryCollection(identifier: "A/L0/1", title: "Kids 2019", kind: .userAlbum),
+            LibraryCollection(identifier: "B/L0/2", title: "Kids 2019", kind: .userAlbum),
+        ])
+
+        #expect(await provider.successors(of: missingSource(stored)).count == 2)
+    }
+
+    @Test("Favorites is found by kind alone, whatever the system calls it")
+    func aSingletonMatchesOnKind() async {
+        // Apple names it, and the name follows the system language. There is
+        // one per library, so the kind is the whole identity.
+        let stored = SourceDescription(title: "Favorites", collectionKind: "favorites")
+        let provider = rebuilt([
+            LibraryCollection(identifier: "FAV/L0/9", title: "Favoriten", kind: .favorites),
+            LibraryCollection(identifier: "USER/L0/1", title: "Favorites", kind: .userAlbum),
+        ])
+
+        #expect(await provider.successors(of: missingSource(stored)).map(\.locator) == ["FAV/L0/9"])
+    }
+
+    @Test("A media-type smart album is many per kind, so its title still decides")
+    func mediaTypeMatchesOnTitle() async {
+        let stored = SourceDescription(title: "Panoramas", collectionKind: "mediaType")
+        let provider = rebuilt([
+            LibraryCollection(identifier: "M/L0/1", title: "Live Photos", kind: .mediaType),
+            LibraryCollection(identifier: "M/L0/2", title: "Panoramas", kind: .mediaType),
+        ])
+
+        #expect(await provider.successors(of: missingSource(stored)).map(\.locator) == ["M/L0/2"])
+    }
+
+    @Test("A source with no stored name has no successor, and an unreadable library offers none")
+    func noDescriptionNoSuccessor() async {
+        let provider = rebuilt([
+            LibraryCollection(identifier: Self.renumbered, title: "040", kind: .userAlbum)
+        ])
+        // The two albums that started this: added before names were stored.
+        // Their identifier's tail is not a name and must not be matched as one.
+        #expect(await provider.successors(of: photosSource(locator: album)).isEmpty)
+
+        let denied = PhotosCollectionSourceProvider(
+            library: FakePhotoLibrary(
+                authorization: .denied,
+                titles: [Self.renumbered: "Kids 2019"],
+                collections: [
+                    LibraryCollection(identifier: Self.renumbered, title: "Kids 2019", kind: .userAlbum)
+                ]))
+        let stored = SourceDescription(title: "Kids 2019", collectionKind: "userAlbum")
+        #expect(await denied.successors(of: missingSource(stored)).isEmpty)
+    }
+
     @Test("An album that does not resolve has no description, and neither does an unreadable library")
     func describeAnswersNothingItCannotSee() async {
         let provider = PhotosCollectionSourceProvider(library: library())

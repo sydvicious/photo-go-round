@@ -58,6 +58,15 @@ final class SourcesModel {
         }
     }
 
+    /// The missing albums the agent can point at a successor: exactly one
+    /// album in the library now is called what they were and sits where they
+    /// did. What the Reconnect button acts on, and whether it is enabled.
+    var reconnectableCollections: [SourceService.Source] {
+        missingCollections.filter(\.isReconnectable)
+    }
+
+    var canReconnect: Bool { !reconnectableCollections.isEmpty }
+
     private static func byName(_ list: [SourceService.Source]) -> [SourceService.Source] {
         list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -231,6 +240,22 @@ final class SourcesModel {
         guard !missing.isEmpty else { return }
         await change {
             for uuid in missing { try await self.service.remove(uuid) }
+        }
+    }
+
+    /// Reconnects every missing album that has exactly one successor, and
+    /// leaves the rest listed. One change, for the same reasons as
+    /// `removeMissing`. The agent is the one that decides "exactly one": the
+    /// flag this reads is its answer from the last list, and a refusal in the
+    /// moment between shows up as trouble beside the line.
+    func reconnectMissing() async {
+        let reconnectable = reconnectableCollections.map(\.uuid)
+        Log.sources.notice(
+            "panel: reconnect asked for \(reconnectable.count, privacy: .public), working \(self.isWorking, privacy: .public)"
+        )
+        guard !reconnectable.isEmpty else { return }
+        await change {
+            for uuid in reconnectable { try await self.service.reconnect(uuid) }
         }
     }
 

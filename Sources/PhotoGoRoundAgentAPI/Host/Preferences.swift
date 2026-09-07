@@ -412,6 +412,29 @@ public struct Preferences: @unchecked Sendable {
         }
     }
 
+    /// Points a source at a new locator, keeping everything else it was
+    /// configured with, and records what the new one is called.
+    ///
+    /// **The one edit that changes a locator in place.** Reconciliation
+    /// matches rows to entries by locator, so this is only safe when the row
+    /// has been rewritten in the same locked step — see `SourceStore.reconnect`
+    /// — or the next reconcile removes the old row, its photographs, and its
+    /// cached bytes, and adds a stranger. False when the old locator is not
+    /// listed, or the new one already is.
+    @discardableResult
+    public func replaceSource(
+        locator old: String, with new: String, description: SourceDescription?
+    ) -> Bool {
+        mutateSources { current in
+            guard let index = current.firstIndex(where: { $0.locator == old }),
+                !current.contains(where: { $0.locator == new })
+            else { return false }
+            current[index].locator = new
+            current[index].description = description
+            return true
+        }
+    }
+
     @discardableResult
     public func setSourceEnabled(_ enabled: Bool, locator: String) -> Bool {
         mutateSources { current in

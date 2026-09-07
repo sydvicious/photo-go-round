@@ -734,6 +734,32 @@ public struct SourceStore {
         )
     }
 
+    /// Moves a source to a new locator, records what that names, and marks it
+    /// available — the row's half of `reconnect`, which holds the lock and
+    /// writes the preference to match. **Not for anything else**: a locator
+    /// is the identity reconciliation matches on, and a row moved without its
+    /// preference is a row the next reconcile deletes.
+    func relocate(sourceID: Int64, to locator: String, describedAs description: SourceDescription)
+        throws
+    {
+        try database.transaction(.immediate) {
+            try database.run(
+                """
+                UPDATE source
+                   SET locator = :locator,
+                       title = :title, collection_kind = :kind, folders = :folders,
+                       available = 1, unavailable_reason = NULL, unavailable_at = NULL
+                 WHERE id = :id;
+                """,
+                [
+                    "locator": .text(locator), "title": .text(description.title),
+                    "kind": .text(description.collectionKind),
+                    "folders": SQLValue(description.foldersColumn), "id": .int(sourceID),
+                ]
+            )
+        }
+    }
+
     /// Records what a source is called and where it sits, as its provider
     /// reports it now. See `SchemaV11`.
     public func describe(sourceID: Int64, as description: SourceDescription) throws {

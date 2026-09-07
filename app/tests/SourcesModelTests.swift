@@ -41,8 +41,10 @@ struct SourcesModelTests {
         private var refusal: (status: Int, body: String)?
         private var asked: [String] = []
 
-        var methods: [String] { lock.withLock { asked } }
-        var listCount: Int { lock.withLock { asked.filter { $0 == "GET" }.count } }
+        var methods: [String] { lock.withLock { asked.map { String($0.split(separator: " ")[0]) } } }
+        /// Every request as "METHOD path", for a test that cares where it went.
+        var requests: [String] { lock.withLock { asked } }
+        var listCount: Int { methods.filter { $0 == "GET" }.count }
 
         func holds(_ sources: [[String: Any]]) {
             let encoded = (try? JSONSerialization.data(withJSONObject: sources)) ?? Data("[]".utf8)
@@ -93,8 +95,9 @@ struct SourcesModelTests {
         func transport() -> @Sendable (URLRequest) async throws -> (Data, URLResponse) {
             { [self] request in
                 let method = request.httpMethod ?? "GET"
+                let path = request.url?.path(percentEncoded: false) ?? ""
                 let (refusing, held) = lock.withLock {
-                    asked.append(method)
+                    asked.append("\(method) \(path)")
                     return (refusal, listing)
                 }
 
@@ -111,8 +114,21 @@ struct SourcesModelTests {
                             headerFields: nil)!
                     )
                 }
+                // A reconnect answers with the one source it moved, so the
+                // fake answers with that source as the listing now describes
+                // it — the agent re-reads afterwards anyway, but a body that
+                // cannot be decoded is a failure the model would show.
+                var body = method == "GET" ? held : Data("[]".utf8)
+                if method == "POST", path.hasSuffix("/reconnect"),
+                    let uuid = path.split(separator: "/").dropLast().last,
+                    let listed = try? JSONSerialization.jsonObject(with: held) as? [[String: Any]],
+                    let moved = listed.first(where: { $0["uuid"] as? String == String(uuid) }),
+                    let encoded = try? JSONSerialization.data(withJSONObject: moved)
+                {
+                    body = encoded
+                }
                 return (
-                    method == "GET" ? held : Data("[]".utf8),
+                    body,
                     HTTPURLResponse(
                         url: request.url!, statusCode: method == "DELETE" ? 204 : 200,
                         httpVersion: nil, headerFields: nil)!
@@ -124,7 +140,8 @@ struct SourcesModelTests {
     static func entry(
         uuid: String, kind: String = "folder", locator: String = "/x/Pictures",
         recursive: Bool? = true, photos: Int = 3, available: Bool = true,
-        scanned: Bool = true, title: String? = nil, missing: Bool? = nil
+        scanned: Bool = true, title: String? = nil, missing: Bool? = nil,
+        reconnectable: Bool? = nil
     ) -> [String: Any] {
         var entry: [String: Any] = [
             "uuid": uuid, "kind": kind, "locator": locator, "enabled": true,
@@ -134,16 +151,19 @@ struct SourcesModelTests {
         if scanned { entry["scannedAt"] = "2026-08-23T18:04:12Z" }
         if let title { entry["title"] = title }
         if let missing { entry["missing"] = missing }
+        if let reconnectable { entry["reconnectable"] = reconnectable }
         return entry
     }
 
     /// A Photos album as the v2 list describes one.
     static func album(
-        uuid: String, title: String?, missing: Bool = false, photos: Int = 40
+        uuid: String, title: String?, missing: Bool = false, reconnectable: Bool? = nil,
+        photos: Int = 40
     ) -> [String: Any] {
         entry(
             uuid: uuid, kind: "photos_collection", locator: "LIB-\(uuid)/L0/0\(uuid)",
-            recursive: nil, photos: photos, available: !missing, title: title, missing: missing)
+            recursive: nil, photos: photos, available: !missing, title: title, missing: missing,
+            reconnectable: missing ? (reconnectable ?? false) : nil)
     }
 
     /// Intervals in milliseconds, not the panel's minutes: these tests are
@@ -416,6 +436,61 @@ struct SourcesModelTests {
         #expect(model.missingCollections.isEmpty)
         #expect(model.photoCollections.map(\.name) == ["Favorites"], "the album that is there is untouched")
         #expect(model.trouble == nil)
+    }
+
+    @Test("Reconnect is offered when the agent found a successor for at least one missing album")
+    func reconnectIsOfferedForReconnectableAlbums() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        let model = model(agent, scratch)
+
+        agent.holds([Self.album(uuid: "2", title: "Trip to Maine", missing: true)])
+        await model.load()
+        #expect(!model.canReconnect, "missing, but nothing to reconnect it to")
+
+        agent.holds([
+            Self.album(uuid: "2", title: "Trip to Maine", missing: true),
+            Self.album(uuid: "3", title: "Kids 2019", missing: true, reconnectable: true),
+        ])
+        await model.load()
+        #expect(model.canReconnect)
+        #expect(model.reconnectableCollections.map(\.name) == ["Kids 2019"])
+        #expect(model.missingCollections.count == 2, "the other one is still listed")
+    }
+
+    @Test("Reconnecting posts to each reconnectable album, leaves the rest, and re-reads")
+    func reconnectingSends() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([
+            Self.album(uuid: "2", title: "Trip to Maine", missing: true),
+            Self.album(uuid: "3", title: "Kids 2019", missing: true, reconnectable: true),
+        ])
+        let model = model(agent, scratch)
+        await model.load()
+
+        agent.holds([
+            Self.album(uuid: "2", title: "Trip to Maine", missing: true),
+            Self.album(uuid: "3", title: "Kids 2019"),
+        ])
+        await model.reconnectMissing()
+
+        #expect(agent.requests.filter { $0.hasPrefix("POST") } == ["POST /v2/sources/3/reconnect"])
+        #expect(model.photoCollections.map(\.name) == ["Kids 2019"], "back among the chosen")
+        #expect(model.missingCollections.map(\.name) == ["Trip to Maine"], "still listed")
+        #expect(model.trouble == nil)
+    }
+
+    @Test("Reconnecting with nothing reconnectable asks nothing")
+    func reconnectingNothingIsANoOp() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.album(uuid: "2", title: "Trip to Maine", missing: true)])
+        let model = model(agent, scratch)
+        await model.load()
+
+        await model.reconnectMissing()
+        #expect(!agent.methods.contains("POST"))
     }
 
     @Test("Removing missing albums when none are missing asks nothing")
