@@ -21,10 +21,10 @@ A Photos library rebuild on 2026-09-07 renumbered two albums. The agent could no
   - Three optional keys on the preference dictionary; absent for folders and files. One `SourceDescription` value in Swift.
   - A successful refresh renews the row, so a rename shows through; the preference keeps the add-time name as the seed.
   - The wire form's `title` falls back to the stored one, and `missing` says the album is the thing that is gone — from a fourth `SourceAvailability` case.
-- **Phase 4 — The panel says so.** Under the chosen collections: "There are missing albums: *name*, *name*. Do you want to remove these references?" with a Remove button.
+- **Phase 4 — complete, 2026-09-07. The panel says so.** Under the chosen collections: "There are missing albums: *name*, *name*. Do you want to remove these references?" with a Remove button, and Reconnect beside it, disabled until Phase 5.
   - Missing albums leave the chosen-collections line and appear only here.
-  - Remove deletes every listed source, as the picker's untick does today.
-  - `SourcesModelTests` for the partition and the removal.
+  - Remove deletes every listed source, as the picker's untick does today — one change, one spinner, one lockout.
+  - `SourcesModelTests` for the partition, both wordings, and the removal. Not yet checked by eye.
 - **Phase 5 — Reconnect.** A missing album with exactly one catalog match by kind, title, and folders can be pointed at its new identifier without losing the source.
   - `POST /v2/sources/<uuid>/reconnect`; 409 when there is no match or more than one.
   - Row and preference are rewritten together under the editing lock, keeping the source's uuid.
@@ -138,6 +138,8 @@ The Apple Photos group box today is a comma-separated line of chosen collection 
 
 The panel's colour rule holds: the line reads in the secondary style with the orange the folder list uses for an unavailable source, and the words carry the meaning.
 
+**Built 2026-09-07.** The line sits under the chosen collections on the left, in caption size and the folder list's orange. The two buttons sit under Select Collections… on the right, small, with a spinner beside them while a removal is in flight. One missing album is asked about in the singular — "There is a missing album: Kids 2019. Do you want to remove its reference?" — and the message is built in the model rather than the view, so the wording is under test. Remove sends one delete per missing album inside a single change, which is what makes it one spinner and one lockout and lets a second press be ignored.
+
 `app/mac/FEATURES.md` owns what the panel looks like and will need this added when it is next audited. Not edited here.
 
 ## Reconnect
@@ -201,6 +203,12 @@ Switching the system library fails every album at once. Under this plan every Ph
 
 **The v1 list is untouched.** Neither the title fallback nor `missing` reaches it; v1 carries no Photos sources at all.
 
+**Phase 4, 2026-09-07.** Four files, all in the app; six tests, sixty in the app's target, built and run with a DerivedData of their own. The view's tests are the model's: the partition, the name order, a folder never being missing, both wordings and the nil case, removal deleting each missing album and re-reading, no deletes when nothing is missing, and the busy state with a second press ignored. The partition matters more than it looks: an album shown as chosen *and* as missing would be "Kids 2019" twice, and the two lists are the same filter with the flag flipped.
+
+**An album from before names were stored still reads as "040" on the missing line, and still asks the question.** That is the two albums that started this. The line exists so that a person can act, and a poor name beside a Remove button is the whole of what they needed.
+
+**Not checked by eye.** The panel was compiled, not looked at; the layout is a guess in the plan's own words until somebody opens it against a Phase 3 agent. The two albums should appear as "040, 040" with Remove enabled and Reconnect greyed.
+
 ## Other plan documents this touches
 
 Amended 2026-09-07 for Phases 1 to 3:
@@ -209,9 +217,9 @@ Amended 2026-09-07 for Phases 1 to 3:
 - `PLAN.md` — the *Sources* decisions on the moment-before-showing check and on the System Photo Library; the *Cache* decisions on dealing over everything and on every photo being dealt; the *What happens to a source that never comes back* discussion; the source-as-preference section, which gains the three optional keys.
 - `Deck and Queue v2.md` — the readers of `cached_at`.
 
-Still to amend, with Phases 4 and 5:
+Still to amend:
 
-- `app/mac/FEATURES.md` — the Apple Photos group box's missing-albums line and its two buttons.
+- `app/mac/FEATURES.md` — the Apple Photos group box's missing-albums line and its two buttons. Deferred to the Mac app audit, which is where every other drift in that file is waiting.
 
 # References
 

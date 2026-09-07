@@ -26,10 +26,40 @@ final class SourcesModel {
     ///
     /// Their names come from the agent — only it can ask the library what an
     /// album is called — which is why the panel reads `/v2/sources`.
+    ///
+    /// **A missing album is not in play and is not listed here.** It has its
+    /// own line — see `missingCollections` — and appearing in both would show
+    /// "Kids 2019" once as chosen and once as gone.
     var photoCollections: [SourceService.Source] {
-        sources
-            .filter(\.isPhotosCollection)
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        Self.byName(sources.filter { $0.isPhotosCollection && !$0.isMissing })
+    }
+
+    /// The Photos albums the agent can no longer find in the library — a
+    /// rebuild renumbered them, or the library was switched — in name order.
+    ///
+    /// These are the ones the picker cannot show, because it lists what the
+    /// library holds now, so this is the only place a person can see them or
+    /// do anything about them. See `Missing Albums Plan.md`, Phase 4.
+    var missingCollections: [SourceService.Source] {
+        Self.byName(sources.filter { $0.isPhotosCollection && $0.isMissing })
+    }
+
+    /// The line the panel shows beneath the chosen collections, or nil when
+    /// nothing is missing. The names are the ones the albums last had; an
+    /// album added before names were stored reads as its identifier's tail.
+    var missingAlbumsMessage: String? {
+        let names = missingCollections.map(\.name)
+        switch names.count {
+        case 0: return nil
+        case 1: return "There is a missing album: \(names[0]). Do you want to remove its reference?"
+        default:
+            return "There are missing albums: " + names.joined(separator: ", ")
+                + ". Do you want to remove these references?"
+        }
+    }
+
+    private static func byName(_ list: [SourceService.Source]) -> [SourceService.Source] {
+        list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     /// Everything the lower panel lists, in the order the agent returned them.
@@ -182,6 +212,26 @@ final class SourcesModel {
 
     func setRecursive(_ recursive: Bool, of uuid: String) async {
         await change { try await self.service.setRecursive(recursive, of: uuid) }
+    }
+
+    /// Removes every missing album's source — the row, its photographs, and
+    /// their cached bytes, as the picker's untick does for an album that is
+    /// still there.
+    ///
+    /// **All of them, as one change.** The case is two or three albums after
+    /// a rebuild, not a list to manage, and one change is one spinner and one
+    /// lockout. A person who wants to keep one reconnects it first (Phase 5).
+    /// A removal that fails part way stops there, and the reload shows what
+    /// is left beside the reason.
+    func removeMissing() async {
+        let missing = missingCollections.map(\.uuid)
+        Log.sources.notice(
+            "panel: remove missing albums asked for \(missing.count, privacy: .public), working \(self.isWorking, privacy: .public)"
+        )
+        guard !missing.isEmpty else { return }
+        await change {
+            for uuid in missing { try await self.service.remove(uuid) }
+        }
     }
 
     /// Every change is the same three steps: ask, then re-read, and say what

@@ -71,7 +71,10 @@ struct SourcesSettingsView: View {
     private var photosPanel: some View {
         GroupBox {
             HStack(alignment: .top, spacing: 12) {
-                chosenCollections
+                VStack(alignment: .leading, spacing: 6) {
+                    chosenCollections
+                    missingCollections
+                }
                 Spacer(minLength: 12)
                 VStack(alignment: .trailing, spacing: 6) {
                     if !model.photoCollections.isEmpty {
@@ -82,12 +85,58 @@ struct SourcesSettingsView: View {
                     Button("Select Collections…") {
                         openWindow(id: CollectionPickerView.windowID)
                     }
+                    missingControls
                 }
             }
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
             heading("Apple Photos")
+        }
+    }
+
+    /// The albums the agent can no longer find, named, with the question the
+    /// buttons beside it answer. **The words carry the meaning and the colour
+    /// only underlines it**, the same orange the folder list uses for a source
+    /// it cannot reach. See `Missing Albums Plan.md`, Phase 4.
+    @ViewBuilder
+    private var missingCollections: some View {
+        if let message = model.missingAlbumsMessage {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(Color.orange)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Remove and Reconnect, shown only while something is missing.
+    ///
+    /// **Reconnect is here from the start and disabled until Phase 5**, so the
+    /// panel's shape does not change between phases. Remove acts on every
+    /// missing album at once — see `SourcesModel.removeMissing`. The spinner
+    /// says a change is in flight, since the buttons are locked out meanwhile
+    /// and a silent lockout looks like a broken panel.
+    @ViewBuilder
+    private var missingControls: some View {
+        if !model.missingCollections.isEmpty {
+            HStack(spacing: 6) {
+                if model.isWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                        .transition(.opacity)
+                }
+                Button("Reconnect") {}
+                    .disabled(true)
+                    .help("Point a missing album at the one that replaced it — not yet available")
+                Button("Remove") {
+                    Log.sources.notice("panel: remove missing albums pressed")
+                    Task { await model.removeMissing() }
+                }
+                .disabled(model.isWorking)
+                .help("Remove the missing albums, their photographs, and their cached copies")
+            }
+            .controlSize(.small)
         }
     }
 

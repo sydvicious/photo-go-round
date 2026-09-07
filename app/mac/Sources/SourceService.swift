@@ -57,10 +57,17 @@ struct SourceService {
         /// something. Only the agent can ask the library what an album is
         /// called.
         var title: String?
+        /// True for a Photos album that is not in a library that is — a
+        /// rebuild renumbered it, or the library was switched — which is the
+        /// one kind of unavailable a person can act on here. Absent for a
+        /// folder or a file, and for an agent from before 2026-09-07.
+        var missing: Bool?
         var photos: Int
         var scannedAt: Date?
 
         var id: String { uuid }
+
+        var isMissing: Bool { missing == true }
 
         /// What to call it in a list: the last path component, which is the part
         /// a person recognises. The full path is shown underneath and in

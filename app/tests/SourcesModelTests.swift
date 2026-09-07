@@ -124,7 +124,7 @@ struct SourcesModelTests {
     static func entry(
         uuid: String, kind: String = "folder", locator: String = "/x/Pictures",
         recursive: Bool? = true, photos: Int = 3, available: Bool = true,
-        scanned: Bool = true
+        scanned: Bool = true, title: String? = nil, missing: Bool? = nil
     ) -> [String: Any] {
         var entry: [String: Any] = [
             "uuid": uuid, "kind": kind, "locator": locator, "enabled": true,
@@ -132,7 +132,18 @@ struct SourcesModelTests {
         ]
         if let recursive { entry["recursive"] = recursive }
         if scanned { entry["scannedAt"] = "2026-08-23T18:04:12Z" }
+        if let title { entry["title"] = title }
+        if let missing { entry["missing"] = missing }
         return entry
+    }
+
+    /// A Photos album as the v2 list describes one.
+    static func album(
+        uuid: String, title: String?, missing: Bool = false, photos: Int = 40
+    ) -> [String: Any] {
+        entry(
+            uuid: uuid, kind: "photos_collection", locator: "LIB-\(uuid)/L0/0\(uuid)",
+            recursive: nil, photos: photos, available: !missing, title: title, missing: missing)
     }
 
     /// Intervals in milliseconds, not the panel's minutes: these tests are
@@ -323,6 +334,124 @@ struct SourcesModelTests {
 
         await model.removeSelected()
         #expect(agent.methods.isEmpty)
+    }
+
+    // MARK: - Albums the library no longer has
+
+    @Test("A missing album leaves the chosen line and is listed as missing, by name")
+    func missingAlbumsArePartitioned() async {
+        // **The picker cannot show these**, because it lists what the library
+        // holds now, so the panel is the only place they can be seen. And an
+        // album shown as chosen *and* as missing would be "Kids 2019" twice.
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([
+            Self.album(uuid: "1", title: "Favorites"),
+            Self.album(uuid: "2", title: "Trip to Maine", missing: true),
+            Self.album(uuid: "3", title: "Kids 2019", missing: true),
+            Self.entry(uuid: "f"),
+        ])
+
+        let model = model(agent, scratch)
+        await model.load()
+
+        #expect(model.photoCollections.map(\.name) == ["Favorites"])
+        #expect(model.missingCollections.map(\.name) == ["Kids 2019", "Trip to Maine"])
+        #expect(model.fileSources.map(\.uuid) == ["f"], "a folder is never missing")
+        #expect(
+            model.missingAlbumsMessage
+                == "There are missing albums: Kids 2019, Trip to Maine. Do you want to remove these references?")
+    }
+
+    @Test("One missing album is asked about in the singular, and none is not asked about")
+    func missingAlbumsMessageCounts() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        let model = model(agent, scratch)
+
+        agent.holds([Self.album(uuid: "1", title: "Favorites")])
+        await model.load()
+        #expect(model.missingAlbumsMessage == nil)
+
+        agent.holds([Self.album(uuid: "2", title: "Kids 2019", missing: true)])
+        await model.load()
+        #expect(
+            model.missingAlbumsMessage
+                == "There is a missing album: Kids 2019. Do you want to remove its reference?")
+    }
+
+    @Test("An album from before names were stored still reads as something, not as nothing")
+    func aNamelessMissingAlbumStillHasAName() async {
+        // The two albums that started this were added before the agent kept
+        // names, and the library cannot name them now. The identifier's tail
+        // is a poor name, but it is a name, and the line still asks the
+        // question — which is the whole reason the line exists.
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.album(uuid: "40", title: nil, missing: true)])
+
+        let model = model(agent, scratch)
+        await model.load()
+
+        #expect(model.missingCollections.map(\.name) == ["040"])
+        #expect(model.missingAlbumsMessage?.contains("040") == true)
+    }
+
+    @Test("Removing the missing albums sends a DELETE for each, as one change, and re-reads")
+    func removingMissingAlbums() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([
+            Self.album(uuid: "1", title: "Favorites"),
+            Self.album(uuid: "2", title: "Trip to Maine", missing: true),
+            Self.album(uuid: "3", title: "Kids 2019", missing: true),
+        ])
+        let model = model(agent, scratch)
+        await model.load()
+
+        agent.holds([Self.album(uuid: "1", title: "Favorites")])
+        await model.removeMissing()
+
+        #expect(agent.methods.filter { $0 == "DELETE" }.count == 2)
+        #expect(model.missingCollections.isEmpty)
+        #expect(model.photoCollections.map(\.name) == ["Favorites"], "the album that is there is untouched")
+        #expect(model.trouble == nil)
+    }
+
+    @Test("Removing missing albums when none are missing asks nothing")
+    func removingNoMissingAlbumsIsANoOp() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.album(uuid: "1", title: "Favorites")])
+        let model = model(agent, scratch)
+        await model.load()
+
+        await model.removeMissing()
+        #expect(!agent.methods.contains("DELETE"))
+    }
+
+    @Test("Removing missing albums is one change: busy throughout, and a second press is ignored")
+    func removingMissingAlbumsIsOneChange() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([
+            Self.album(uuid: "2", title: "Trip to Maine", missing: true),
+            Self.album(uuid: "3", title: "Kids 2019", missing: true),
+        ])
+        let model = model(agent, scratch)
+        await model.load()
+
+        let gate = agent.holdsChangesOpen()
+        let first = Task { await model.removeMissing() }
+        while !gate.hasArrived { await Task.yield() }
+        #expect(model.isWorking, "the panel says it is busy while the first delete is in flight")
+
+        await model.removeMissing()
+        gate.release()
+        await first.value
+
+        #expect(agent.methods.filter { $0 == "DELETE" }.count == 2, "the second press sent nothing")
+        #expect(!model.isWorking)
     }
 
     @Test("Configure sends the change and the list comes back with it applied")
