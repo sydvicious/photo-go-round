@@ -27,6 +27,35 @@ final class FakePhotoLibrary: PhotoLibrary, @unchecked Sendable {
         let resource: LibraryResource
     }
 
+    /// One question the library can be asked.
+    ///
+    /// **So a test can silence one call and not the others.** The interesting
+    /// cases are not "the whole library is gone" — they are a library that
+    /// answers `authorization` instantly and then will not say what an album is
+    /// called, which is exactly the shape that used to turn into *this album is
+    /// missing, shall I remove it*.
+    enum Question: String, Sendable, Hashable {
+        case authorization
+        case collections
+        case folderPaths
+        case imageCount
+        case title
+        case enumerate
+        case assetExists
+        case resources
+        case write
+    }
+
+    /// Questions this library will not answer. Every one of them throws
+    /// `PhotoLibraryError.noAnswer`, which is what `BoundedPhotoLibrary` turns a
+    /// real timeout into.
+    private let unanswered: Set<Question>
+
+    private func answering(_ question: Question) throws {
+        guard unanswered.contains(question) else { return }
+        throw PhotoLibraryError.noAnswer(what: question.rawValue, within: .seconds(1))
+    }
+
     private let authorizationValue: LibraryAuthorization
     /// Collection identifier to title. Absent means it does not resolve, which
     /// is both "deleted" and "different library" and is deliberately not
@@ -56,8 +85,10 @@ final class FakePhotoLibrary: PhotoLibrary, @unchecked Sendable {
         resources: [String: [LibraryResource]] = [:],
         collections: [LibraryCollection]? = nil,
         grantedOnRequest: LibraryAuthorization? = nil,
-        folders: [String: [String]] = [:]
+        folders: [String: [String]] = [:],
+        unanswered: Set<Question> = []
     ) {
+        self.unanswered = unanswered
         self.grantedOnRequest = grantedOnRequest ?? authorization
         self.folderTree = folders
         self.authorizationValue = authorization
@@ -67,15 +98,24 @@ final class FakePhotoLibrary: PhotoLibrary, @unchecked Sendable {
         self.collectionList = collections
     }
 
-    var authorization: LibraryAuthorization { get async { authorizationValue } }
+    var authorization: LibraryAuthorization {
+        get async throws {
+            try answering(.authorization)
+            return authorizationValue
+        }
+    }
 
     /// Answers whatever the real one would after somebody decided, which a test
     /// sets up front — there is no prompt to raise here.
     func requestAuthorization() async -> LibraryAuthorization { grantedOnRequest }
 
-    func title(ofCollection identifier: String) async -> String? { titles[identifier] }
+    func title(ofCollection identifier: String) async throws -> String? {
+        try answering(.title)
+        return titles[identifier]
+    }
 
-    func collections() async -> [LibraryCollection] {
+    func collections() async throws -> [LibraryCollection] {
+        try answering(.collections)
         if let collectionList { return collectionList }
         return titles.map {
             LibraryCollection(identifier: $0.key, title: $0.value, kind: .userAlbum)
@@ -84,9 +124,13 @@ final class FakePhotoLibrary: PhotoLibrary, @unchecked Sendable {
 
     /// Nil for a collection that does not resolve, which is the same absence
     /// `title(ofCollection:)` reports and for the same reasons.
-    func folderPaths() async -> [String: [String]] { folderTree }
+    func folderPaths() async throws -> [String: [String]] {
+        try answering(.folderPaths)
+        return folderTree
+    }
 
-    func imageCount(ofCollection identifier: String) async -> Int? {
+    func imageCount(ofCollection identifier: String) async throws -> Int? {
+        try answering(.imageCount)
         guard titles[identifier] != nil else { return nil }
         return assets[identifier]?.count ?? 0
     }
@@ -96,22 +140,26 @@ final class FakePhotoLibrary: PhotoLibrary, @unchecked Sendable {
         inCollection identifier: String,
         _ body: (LibraryAsset) async throws -> Void
     ) async throws -> Bool {
+        try answering(.enumerate)
         guard titles[identifier] != nil else { return false }
         for asset in assets[identifier] ?? [] { try await body(asset) }
         return true
     }
 
-    func assetExists(_ identifier: String) async -> Bool {
-        assets.values.contains { $0.contains { $0.identifier == identifier } }
+    func assetExists(_ identifier: String) async throws -> Bool {
+        try answering(.assetExists)
+        return assets.values.contains { $0.contains { $0.identifier == identifier } }
     }
 
-    func resources(ofAsset identifier: String) async -> [LibraryResource] {
-        resourcesByAsset[identifier] ?? []
+    func resources(ofAsset identifier: String) async throws -> [LibraryResource] {
+        try answering(.resources)
+        return resourcesByAsset[identifier] ?? []
     }
 
     func write(
         _ resource: LibraryResource, ofAsset identifier: String, to destination: URL
     ) async throws -> Int64 {
+        try answering(.write)
         writes.withLock { $0.append(Write(asset: identifier, resource: resource)) }
         let bytes = Data(repeating: 0x2A, count: 1024)
         try bytes.write(to: destination)

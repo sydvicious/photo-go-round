@@ -209,12 +209,18 @@ struct RunCommand {
         // about half a minute of round trips, and it is paid once by whoever
         // opens a picker first — a catalog rebuilt per request would pay it
         // again on every poll and never finish.
-        let catalog = PhotosCollectionCatalog(library: SystemPhotoLibrary())
+        // **Bounded, and one library for both.** A PhotoKit call that never
+        // returns is what a wedged `photolibraryd` looks like from here, and an
+        // agent that waits on one stops answering the app — see
+        // `BoundedPhotoLibrary`. Sharing the instance is incidental; sharing the
+        // bounds is the point.
+        let photos = BoundedPhotoLibrary(SystemPhotoLibrary())
+        let catalog = PhotosCollectionCatalog(library: photos)
         let router = Router(
             pictures: endpoint,
             sources: SourceEndpoint(
                 databasePath: databasePath, preferences: preferences, bytes: store),
-            photos: PhotosEndpoint(catalog: catalog, library: SystemPhotoLibrary())
+            photos: PhotosEndpoint(catalog: catalog, library: photos)
         )
         // Where the service is, written where every local client can find it:
         // a preference domain is a name rather than a path, which is the only

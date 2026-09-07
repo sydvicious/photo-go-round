@@ -91,9 +91,16 @@ struct PhotosEndpoint: Sendable {
         case (Self.albumsPath, "GET"):
             return await albums(request, from: started)
         case (Self.authorizationPath, "GET"):
-            return report(
-                request, json(Consent(authorization: Self.name(await library.authorization))),
-                detail: "authorization read", from: started)
+            do {
+                let authorization = try await library.authorization
+                return report(
+                    request, json(Consent(authorization: Self.name(authorization))),
+                    detail: "authorization read", from: started)
+            } catch {
+                return report(
+                    request, Self.unavailable(error),
+                    detail: "library did not answer", from: started)
+            }
         case (Self.authorizationPath, "POST"):
             // **The only call in this project that can raise a prompt**, and it
             // is here because this is the one place a person has just asked for
@@ -120,7 +127,14 @@ struct PhotosEndpoint: Sendable {
     private func albums(
         _ request: HTTPListener.Request, from started: Date
     ) async -> HTTPListener.Response {
-        let authorization = await library.authorization
+        let authorization: LibraryAuthorization
+        do {
+            authorization = try await library.authorization
+        } catch {
+            return report(
+                request, Self.unavailable(error),
+                detail: "library did not answer", from: started)
+        }
         guard Self.canRead(authorization) else {
             // **Nothing is asked of PhotoKit here.** A library we may not read
             // answers empty anyway, and asking would spend round trips to be
@@ -132,7 +146,19 @@ struct PhotosEndpoint: Sendable {
                 detail: "not readable: \(Self.name(authorization))", from: started)
         }
 
-        let groups = await catalog.sections()
+        let groups: [LibrarySectionGroup]
+        do {
+            groups = try await catalog.sections()
+        } catch {
+            // **503 rather than an empty list.** A client handed `sections: []`
+            // would draw *this library has no collections* over a library full
+            // of photographs — the same mistake as reading a permission refusal
+            // as an empty library, which is why authorization travels with the
+            // list in the first place.
+            return report(
+                request, Self.unavailable(error),
+                detail: "library did not answer", from: started)
+        }
         let progress = await catalog.progress()
         let wire = Wire(
             authorization: Self.name(authorization),
@@ -154,6 +180,25 @@ struct PhotosEndpoint: Sendable {
             request, json(wire),
             detail: "\(total) collections, \(progress.counted) of \(progress.total) counted",
             from: started)
+    }
+
+    /// The agent is here and the library is not answering, which is neither a
+    /// refusal nor an empty library.
+    ///
+    /// **503, deliberately.** It says *ask again* rather than *there is nothing*
+    /// — and the panel already knows how to show the reason a service gave,
+    /// which is the sentence `PhotoLibraryError` writes for exactly this.
+    private static func unavailable(_ error: any Error) -> HTTPListener.Response {
+        let reason =
+            (error as? PhotoLibraryError)?.description ?? "the photo library did not answer"
+        Log.photos.error("photos endpoint: \(reason, privacy: .public)")
+        guard let bytes = try? SourceEndpoint.encoder().encode(Failure(error: reason)) else {
+            return .text(reason + "\n", status: 503, reason: "Service Unavailable")
+        }
+        return HTTPListener.Response(
+            status: 503, reason: "Service Unavailable",
+            headers: ["Content-Type": "application/json; charset=utf-8"],
+            body: .data(bytes))
     }
 
     /// `.limited` is an iOS concept macOS does not offer, and it is readable —

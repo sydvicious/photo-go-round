@@ -317,7 +317,8 @@ struct PhotosProviderTests {
             for locator in [album, "GONE/L0/040"] {
                 let answer = await provider.availability(of: photosSource(locator: locator))
                 if case .gone = answer {
-                    Issue.record("answered gone for \(locator) at \(await fake.authorization)")
+                    Issue.record(
+                        "answered gone for \(locator) at \((try? await fake.authorization) as Any)")
                 }
             }
         }

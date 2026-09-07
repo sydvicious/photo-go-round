@@ -121,7 +121,8 @@ public struct SourceStore {
             providers: [
                 FolderSourceProvider(fileAccess: fileAccess),
                 FileSourceProvider(fileAccess: fileAccess),
-                PhotosCollectionSourceProvider(library: SystemPhotoLibrary()),
+                PhotosCollectionSourceProvider(
+                    library: BoundedPhotoLibrary(SystemPhotoLibrary())),
             ],
             bytes: bytes
         )

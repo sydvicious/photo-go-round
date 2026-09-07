@@ -9,6 +9,19 @@ import Photos
 /// reach it; what is left here is translation, because translation is the part
 /// that cannot be tested without somebody's real photographs and a TCC grant.
 /// If a rule appears in this file, it is in the wrong file.
+///
+/// **Every PhotoKit call goes through `BlockingWork`, without exception.**
+/// Three of them did as of 2026-08-26; the rest ran synchronously on the
+/// cooperative pool, which is the fault `BlockingWork`'s own doc comment
+/// describes — a thread parked in a system call is one the runtime cannot use,
+/// and enough of them and nothing runs at all. `title(ofCollection:)`,
+/// `assetExists`, `resources(ofAsset:)`, and every index of `enumerateImages`
+/// were each a way for a wedged `photolibraryd` to take the agent down with it,
+/// which reaches a person as an app that has stopped showing photographs.
+///
+/// **The bound is not here.** That is `BoundedPhotoLibrary`, because a bound is
+/// a rule and rules live where a test can reach them. This file gives the calls
+/// a thread they are allowed to block; that one decides how long anybody waits.
 public struct SystemPhotoLibrary: PhotoLibrary {
 
     /// The bound this binding gives one fetch. See `CacheSettings`.
@@ -27,8 +40,18 @@ public struct SystemPhotoLibrary: PhotoLibrary {
     /// Read, never requested. `availability` is called from the scanner, on a
     /// timer, in a background process; raising a prompt from there is the
     /// unattributed prompt the whole design exists to avoid.
+    ///
+    /// **On `BlockingWork` like everything else.** It looks like a property
+    /// read and it is a round trip to `photolibraryd`; on a library that has
+    /// stopped answering it blocks exactly as the fetches do, and it is asked
+    /// first by every call in the provider — so a wedge here wedges everything
+    /// behind it.
     public var authorization: LibraryAuthorization {
-        get async { Self.map(PHPhotoLibrary.authorizationStatus(for: .readWrite)) }
+        get async throws {
+            try await BlockingWork.run {
+                Self.map(PHPhotoLibrary.authorizationStatus(for: .readWrite))
+            }
+        }
     }
 
     /// `.readWrite` for the same reason reading does: PhotoKit has no
@@ -53,17 +76,19 @@ public struct SystemPhotoLibrary: PhotoLibrary {
     /// Nil means it does not resolve — which is both "deleted" and "somebody
     /// switched system libraries", and PhotoKit cannot tell them apart either.
     /// An untitled collection that *does* resolve answers empty, not nil.
-    public func title(ofCollection identifier: String) async -> String? {
-        guard let collection = collection(identifier) else { return nil }
-        return collection.localizedTitle ?? ""
+    public func title(ofCollection identifier: String) async throws -> String? {
+        try await BlockingWork.run {
+            guard let collection = Self.resolve(identifier) else { return nil }
+            return collection.localizedTitle ?? ""
+        }
     }
 
     /// **Off the cooperative pool**, because this is 439 PhotoKit round trips
     /// on a real library and every one of them blocks. Parking a cooperative
     /// thread for that is how four concurrent walks stopped the agent answering
     /// picture requests on 2026-08-25.
-    public func collections() async -> [LibraryCollection] {
-        (try? await BlockingWork.run { Self.everyCollection() }) ?? []
+    public func collections() async throws -> [LibraryCollection] {
+        try await BlockingWork.run { Self.everyCollection() }
     }
 
     private static func everyCollection() -> [LibraryCollection] {
@@ -129,8 +154,8 @@ public struct SystemPhotoLibrary: PhotoLibrary {
         }
     }
 
-    public func folderPaths() async -> [String: [String]] {
-        (try? await BlockingWork.run { Self.walkFolders() }) ?? [:]
+    public func folderPaths() async throws -> [String: [String]] {
+        try await BlockingWork.run { Self.walkFolders() }
     }
 
     /// Descends the folder tree, recording where each album came out.
@@ -165,20 +190,14 @@ public struct SystemPhotoLibrary: PhotoLibrary {
 
     /// ~78 ms per collection, measured, whatever its size — so this is called
     /// deliberately and never in a loop that somebody is waiting on.
-    public func imageCount(ofCollection identifier: String) async -> Int? {
-        try? await BlockingWork.run {
+    public func imageCount(ofCollection identifier: String) async throws -> Int? {
+        try await BlockingWork.run {
             guard let collection = Self.resolve(identifier) else { return nil }
             return PHAsset.fetchAssets(in: collection, options: Self.imagesOnly()).count
         }
     }
 
     private static func resolve(_ identifier: String) -> PHAssetCollection? {
-        PHAssetCollection.fetchAssetCollections(
-            withLocalIdentifiers: [identifier], options: nil
-        ).firstObject
-    }
-
-    private func collection(_ identifier: String) -> PHAssetCollection? {
         PHAssetCollection.fetchAssetCollections(
             withLocalIdentifiers: [identifier], options: nil
         ).firstObject
@@ -193,41 +212,108 @@ public struct SystemPhotoLibrary: PhotoLibrary {
         return options
     }
 
+    /// How many assets one trip onto the blocking queue collects.
+    ///
+    /// **A compromise between two costs, and neither is memory.** One hop per
+    /// asset would put a queue round trip between every photograph in a 95,901
+    /// asset library; one hop for the whole album would hold a blocking thread
+    /// for the entire walk and hand back the collection this is written not to
+    /// build. Five hundred `LibraryAsset` values is on the order of tens of
+    /// kilobytes.
+    static let enumerationBatch = 500
+
     @discardableResult
     public func enumerateImages(
         inCollection identifier: String,
         _ body: (LibraryAsset) async throws -> Void
     ) async throws -> Bool {
-        guard let collection = collection(identifier) else { return false }
+        // The fetch happens once, off the cooperative pool. `PHFetchResult` is
+        // lazy — measured at 111 ms and no footprint movement for 95,901 assets
+        // — so this is not the album, it is the handle to it.
+        let album = try await BlockingWork.run { () -> Album? in
+            guard let collection = Self.resolve(identifier) else { return nil }
+            return Album(PHAsset.fetchAssets(in: collection, options: Self.imagesOnly()))
+        }
+        // Nil is the collection not resolving, which the provider reports as
+        // unavailable. A library that could not answer at all threw above and
+        // never reaches here — which is the distinction this whole change is
+        // about.
+        guard let album else { return false }
 
-        // Walked by index rather than collected. `PHFetchResult` is lazy on the
-        // fetch — measured at 111 ms and no footprint movement for 95,901
-        // assets — so this never materialises the album.
-        let assets = PHAsset.fetchAssets(in: collection, options: Self.imagesOnly())
-        for index in 0..<assets.count {
-            let asset = assets.object(at: index)
-            try await body(
-                LibraryAsset(
-                    identifier: asset.localIdentifier,
-                    pixelWidth: asset.pixelWidth,
-                    pixelHeight: asset.pixelHeight))
+        let total = await album.count
+        var index = 0
+        while index < total {
+            // **Read in batches on the album's own queue, handed to the sink on
+            // the cooperative pool.** `object(at:)` faults its window in from
+            // `photolibraryd`; doing that from an async context is what put a
+            // cooperative thread inside PhotoKit for every photograph in the
+            // library.
+            let batch = await album.assets(from: index)
+            guard !batch.isEmpty else { break }
+            index += batch.count
+            for asset in batch { try await body(asset) }
         }
         return true
     }
 
-    public func assetExists(_ identifier: String) async -> Bool {
-        asset(identifier) != nil
+    /// The fetch result, and the thread it is allowed to block.
+    ///
+    /// **An actor with a dispatch queue for an executor**, which is the one
+    /// construct that gives both halves of what this needs. The actor is what
+    /// lets a `PHFetchResult` — which is not `Sendable` — be held safely across
+    /// the whole walk, with no unchecked promise to the compiler: the value
+    /// never leaves, and only flattened `LibraryAsset` values come out. The
+    /// custom executor is what keeps `object(at:)` off the cooperative pool,
+    /// since faulting a window in from `photolibraryd` blocks whatever thread
+    /// asks. A plain actor would run on the cooperative pool and reintroduce
+    /// exactly the fault this file is being changed to remove.
+    ///
+    /// One queue per album, so two enumerations never wait on each other.
+    private actor Album {
+        private let fetched: PHFetchResult<PHAsset>
+        private let queue: DispatchSerialQueue
+
+        nonisolated var unownedExecutor: UnownedSerialExecutor {
+            queue.asUnownedSerialExecutor()
+        }
+
+        init(_ fetched: PHFetchResult<PHAsset>) {
+            self.fetched = fetched
+            self.queue = DispatchSerialQueue(
+                label: "com.sydpolk.photogoround.album", qos: .utility)
+        }
+
+        var count: Int { fetched.count }
+
+        /// One batch, flattened to values before anything leaves the actor.
+        func assets(from start: Int) -> [LibraryAsset] {
+            let end = min(start + SystemPhotoLibrary.enumerationBatch, fetched.count)
+            guard start < end else { return [] }
+            return (start..<end).map { position in
+                let asset = fetched.object(at: position)
+                return LibraryAsset(
+                    identifier: asset.localIdentifier,
+                    pixelWidth: asset.pixelWidth,
+                    pixelHeight: asset.pixelHeight)
+            }
+        }
     }
 
-    private func asset(_ identifier: String) -> PHAsset? {
+    public func assetExists(_ identifier: String) async throws -> Bool {
+        try await BlockingWork.run { Self.asset(identifier) != nil }
+    }
+
+    private static func asset(_ identifier: String) -> PHAsset? {
         PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject
     }
 
     // MARK: - Resources
 
-    public func resources(ofAsset identifier: String) async -> [LibraryResource] {
-        guard let asset = asset(identifier) else { return [] }
-        return PHAssetResource.assetResources(for: asset).map(Self.describe)
+    public func resources(ofAsset identifier: String) async throws -> [LibraryResource] {
+        try await BlockingWork.run {
+            guard let asset = Self.asset(identifier) else { return [] }
+            return PHAssetResource.assetResources(for: asset).map(Self.describe)
+        }
     }
 
     static func describe(_ resource: PHAssetResource) -> LibraryResource {
@@ -268,15 +354,34 @@ public struct SystemPhotoLibrary: PhotoLibrary {
     public func write(
         _ resource: LibraryResource, ofAsset identifier: String, to destination: URL
     ) async throws -> Int64 {
-        guard let asset = asset(identifier) else {
+        // **Both lookups off the cooperative pool.** They are two more fetches
+        // into `photolibraryd`, and the streaming below was never the only part
+        // of this call that could block.
+        //
+        // What comes back is the resource's *position*, not the resource: a
+        // `PHAssetResource` is not `Sendable` and has no business crossing a
+        // hop. Looking it up again below costs one more fetch against a call
+        // whose next act is to download a photograph.
+        let position = try await BlockingWork.run { () -> Int in
+            guard let asset = Self.asset(identifier) else {
+                throw PhotoLibraryError.assetMissing(identifier)
+            }
+            guard
+                let found = PHAssetResource.assetResources(for: asset).firstIndex(where: {
+                    Self.kind(of: $0.type) == resource.kind
+                        && $0.originalFilename == resource.originalFilename
+                })
+            else { throw PhotoLibraryError.noUsableResource(identifier) }
+            return found
+        }
+        guard let asset = Self.asset(identifier) else {
             throw PhotoLibraryError.assetMissing(identifier)
         }
-        guard
-            let match = PHAssetResource.assetResources(for: asset).first(where: {
-                Self.kind(of: $0.type) == resource.kind
-                    && $0.originalFilename == resource.originalFilename
-            })
-        else { throw PhotoLibraryError.noUsableResource(identifier) }
+        let resources = PHAssetResource.assetResources(for: asset)
+        guard position < resources.count else {
+            throw PhotoLibraryError.noUsableResource(identifier)
+        }
+        let match = resources[position]
 
         try? FileManager.default.removeItem(at: destination)
         guard FileManager.default.createFile(atPath: destination.path(percentEncoded: false), contents: nil)

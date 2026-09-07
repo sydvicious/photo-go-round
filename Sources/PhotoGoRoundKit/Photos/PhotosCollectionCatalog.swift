@@ -44,9 +44,27 @@ public actor PhotosCollectionCatalog {
     /// Starts the background count if it is not already running, so the first
     /// person to open a picker is what pays for it — an agent nobody opens a
     /// picker against never spends the 34 seconds at all.
-    public func sections() async -> [LibrarySectionGroup] {
-        let fresh = await library.collections()
-        if folders == nil { folders = await library.folderPaths() }
+    /// **Throws only when the library did not answer**, and changes nothing
+    /// when it does.
+    ///
+    /// The listing this holds is the last one that worked. Replacing it with the
+    /// empty array a failed fetch used to produce would say *this library has no
+    /// collections* about a library that has plenty — and would drop every count
+    /// paid for so far along with it.
+    public func sections() async throws -> [LibrarySectionGroup] {
+        let fresh = try await library.collections()
+        // **The folder walk is allowed to fail on its own.** Folders only
+        // disambiguate two albums of the same name; a listing without them is
+        // worth far more than no listing, and it is retried on the next ask
+        // because `folders` stays nil.
+        if folders == nil {
+            do {
+                folders = try await library.folderPaths()
+            } catch {
+                Log.photos.error(
+                    "folder walk failed, listing without folders: \(String(describing: error), privacy: .public)")
+            }
+        }
         apply(fresh)
         startCounting()
         return LibrarySectionGroup.grouped(withKnownCounts())
@@ -59,16 +77,30 @@ public actor PhotosCollectionCatalog {
     /// measurement that produced 78 ms apiece was serial; nothing suggests the
     /// daemon would answer several at once any faster, and a picker filling in
     /// slowly is not a problem worth risking the agent's responsiveness over.
+    /// **A library that stops answering ends the pass**, rather than being
+    /// asked again.
+    ///
+    /// Recording zero for it would be a lie that outlives the agent — counts do
+    /// not expire — and would show *0 photographs* beside an album holding
+    /// thirty thousand. Skipping without recording would leave it first in line
+    /// for ever and spin this loop against a wedged daemon. So the pass stops,
+    /// keeps what it has, and the next picker that opens starts a new one.
     public func countEverything() async {
         let started = Date()
         var done = 0
         while let next = nextUncounted() {
-            // Nil means the collection stopped resolving between the listing
-            // and now. Zero is recorded rather than left absent, so it is not
-            // retried on every pass forever.
-            let count = await library.imageCount(ofCollection: next) ?? 0
-            record(count, for: next)
-            done += 1
+            do {
+                // Nil means the collection stopped resolving between the listing
+                // and now — the library answered, and the answer was *no such
+                // album*. Zero is recorded for that, so it is not retried on
+                // every pass for ever.
+                record(try await library.imageCount(ofCollection: next) ?? 0, for: next)
+                done += 1
+            } catch {
+                Log.photos.error(
+                    "counting stopped after \(done, privacy: .public): \(String(describing: error), privacy: .public)")
+                break
+            }
         }
         guard done > 0 else { return }
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)

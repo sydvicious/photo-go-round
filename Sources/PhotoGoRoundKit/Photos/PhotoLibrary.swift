@@ -15,13 +15,24 @@ import PhotoGoRoundAgentAPI
 /// to take, what counts as gone, when to refuse to guess — is exercised with no
 /// library present at all. A seam that handed back `PHAsset` would move the
 /// untestable part one layer up and change nothing.
+///
+/// **Almost everything here throws, and that is the whole of the 2026-09-07
+/// change.** The values these calls answer with — `nil`, `[]`, `false` — all
+/// mean *the library says no*, and `nil` from `title(ofCollection:)` is what
+/// `availability` reads as `.missing`, which is what offers a person the button
+/// that removes an album and its photographs. A library that has stopped
+/// answering must not be able to reach that button. So *I did not get an answer*
+/// is a third thing, thrown rather than returned, and every caller has to decide
+/// what it means rather than inheriting the meaning of *no*.
+///
+/// See `PhotoLibraryError.noAnswer` and `BoundedPhotoLibrary`.
 public protocol PhotoLibrary: Sendable {
 
     /// What we are allowed to see. Read, never requested: `availability` is
     /// called from the scanner, on a timer, in a background process, and
     /// raising a TCC prompt from there is the unattributed prompt the whole
     /// design avoids. Asking is the service surface's job.
-    var authorization: LibraryAuthorization { get async }
+    var authorization: LibraryAuthorization { get async throws }
 
     /// Raises the consent prompt, and answers with whatever came back.
     ///
@@ -47,7 +58,7 @@ public protocol PhotoLibrary: Sendable {
     ///
     /// Grouping and ordering are not done here — `LibrarySectionGroup.grouped`
     /// is where those rules live, so they can be exercised without a library.
-    func collections() async -> [LibraryCollection]
+    func collections() async throws -> [LibraryCollection]
 
     /// Where each collection sits in the library's folder tree: identifier to
     /// the folder names containing it, outermost first.
@@ -58,20 +69,25 @@ public protocol PhotoLibrary: Sendable {
     ///
     /// A collection absent from the map is at the top level. Smart albums are
     /// always absent, because PhotoKit does not put them in folders.
-    func folderPaths() async -> [String: [String]]
+    func folderPaths() async throws -> [String: [String]]
 
     /// How many images one collection holds, or nil if it does not resolve.
     ///
     /// **Videos are excluded**, by the same predicate `enumerateImages` uses, so
     /// this is how many photographs would actually reach the pool rather than
     /// how many items Photos shows.
-    func imageCount(ofCollection identifier: String) async -> Int?
+    func imageCount(ofCollection identifier: String) async throws -> Int?
 
     /// The collection's title, or nil if it does not resolve.
     ///
     /// **Nil is not "deleted".** It is equally what a switched system library
     /// looks like, which is why the provider never answers `.gone` from it.
-    func title(ofCollection identifier: String) async -> String?
+    ///
+    /// **And a throw is not nil.** Nil is the library answering *there is no
+    /// such collection*; a throw is the library not answering. Only the first
+    /// may ever reach `.missing`, because `.missing` is what puts *Remove
+    /// missing albums* in front of somebody.
+    func title(ofCollection identifier: String) async throws -> String?
 
     /// Every image in the collection, one at a time.
     ///
@@ -89,14 +105,18 @@ public protocol PhotoLibrary: Sendable {
     ) async throws -> Bool
 
     /// Is this one asset still in the library?
-    func assetExists(_ identifier: String) async -> Bool
+    ///
+    /// False is *it is not there*, which deletes a photograph. A library that
+    /// cannot answer throws instead, and the provider turns that into
+    /// `.unknown`.
+    func assetExists(_ identifier: String) async throws -> Bool
 
     /// What an asset is made of, in the order the library lists them.
     ///
     /// Order is preserved because it is part of the hazard: on an edited Live
     /// Photo `.fullSizePairedVideo` sits immediately before `.fullSizePhoto`,
     /// so a rule that scans for the first "full size" anything takes a movie.
-    func resources(ofAsset identifier: String) async -> [LibraryResource]
+    func resources(ofAsset identifier: String) async throws -> [LibraryResource]
 
     /// Copies one resource's bytes to `destination` and returns what was
     /// written. Streams: a hundred-megabyte original is never held whole.
@@ -171,6 +191,14 @@ public enum PhotoLibraryError: Error, CustomStringConvertible, Sendable {
     case assetMissing(String)
     case noUsableResource(String)
     case writeFailed(String)
+    /// The library did not answer inside the time it was given.
+    ///
+    /// **Never a fact about the collection or the asset**, only about the
+    /// library — which is the entire reason it is an error rather than one of
+    /// the empty values the calls above can return. `what` names the call, so a
+    /// log line says which question went unanswered rather than only that one
+    /// did.
+    case noAnswer(what: String, within: Duration)
 
     public var description: String {
         switch self {
@@ -178,6 +206,17 @@ public enum PhotoLibraryError: Error, CustomStringConvertible, Sendable {
         case .assetMissing(let id): "no asset \(id)"
         case .noUsableResource(let id): "\(id) has no photo resource"
         case .writeFailed(let reason): reason
+        case .noAnswer(let what, let within):
+            "the photo library did not answer \(what) within \(within)"
         }
+    }
+
+    /// Whether this is the library failing to answer, as opposed to answering.
+    ///
+    /// The one question every caller in the kit has to ask before it decides
+    /// what an error means for somebody's photographs.
+    public var isNoAnswer: Bool {
+        if case .noAnswer = self { return true }
+        return false
     }
 }
