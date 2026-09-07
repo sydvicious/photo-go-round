@@ -58,25 +58,42 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
                 ))
         }
         guard resolved else {
-            return .unavailable(reason: "the album is not in this Photos library")
+            return .unavailable(reason: Self.albumMissingReason)
         }
         return .reachable
     }
+
+    /// What every question about an album that does not resolve answers, so
+    /// that enumerating, checking, and asking after availability all say the
+    /// same thing about the same fact.
+    static let albumMissingReason = "the album is not in this Photos library"
 
     // MARK: - Existence
 
     /// Is this one photograph still in the library?
     ///
-    /// **`.absent` is only ever said when the library was readable.** Answering
-    /// it while the library cannot be reached would delete photographs over a
-    /// permission prompt; answering `.unknown` when the truth is `.absent`
-    /// shows a picture somebody deleted, and some reasons a person deletes a
-    /// photograph are not benign. The scanner resolves the tie by asking
-    /// `availability` next.
+    /// **`.absent` is only ever said when the library was readable and the
+    /// album resolved.** Answering it while the library cannot be reached would
+    /// delete photographs over a permission prompt; answering `.unknown` when
+    /// the truth is `.absent` shows a picture somebody deleted, and some
+    /// reasons a person deletes a photograph are not benign. The scanner
+    /// resolves the tie by asking `availability` next.
+    ///
+    /// **The album is asked before the photograph.** Until 2026-09-07 only the
+    /// library was, and a Photos rebuild that renumbered two albums failed
+    /// every stored identifier against a library that was perfectly readable —
+    /// so each cached photograph was called absent and deleted as its turn came.
+    /// An album that is not there is the same fact `availability` reports as
+    /// offline, and it says nothing about the photographs: they are served out
+    /// of the cache and their rows stay until the person removes the album.
+    /// See `Missing Albums Plan.md`.
     public func existence(of externalID: String, in source: Source) async -> PhotoExistence {
         let authorization = await library.authorization
         guard authorization.canRead else {
             return .unknown(reason: Self.authorizationReason(authorization))
+        }
+        guard await library.title(ofCollection: source.locator) != nil else {
+            return .unknown(reason: Self.albumMissingReason)
         }
         return await library.assetExists(externalID) ? .present : .absent
     }
@@ -96,7 +113,7 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
             return .offline(reason: Self.authorizationReason(authorization))
         }
         guard await library.title(ofCollection: source.locator) != nil else {
-            return .offline(reason: "the album is not in this Photos library")
+            return .offline(reason: Self.albumMissingReason)
         }
         return .available
     }

@@ -115,6 +115,31 @@ struct PhotosProviderTests {
         }
     }
 
+    @Test("An album that does not resolve makes existence unknown, not absent")
+    func existenceIsUnknownWhenTheAlbumIsMissing() async {
+        // **The 2026-09-07 rebuild.** Photos renumbered two albums; every
+        // stored identifier failed against a library that was perfectly
+        // readable, and the answer was `.absent` for each — which deleted the
+        // cached copies one at a time as they came up to be shown. The album
+        // not resolving says nothing about its photographs: it is the same
+        // fact `availability` calls offline, and it has to be *unknown* here.
+        // Whether the asset happens to resolve on its own does not change that.
+        let library = FakePhotoLibrary(
+            titles: [:],
+            assets: [album: [LibraryAsset(identifier: "ASSET-1/L0/001")]])
+        let provider = PhotosCollectionSourceProvider(library: library)
+        let source = photosSource(locator: album)
+
+        for asset in ["ASSET-1/L0/001", "ASSET-99/L0/001"] {
+            let answer = await provider.existence(of: asset, in: source)
+            guard case .unknown(let reason) = answer else {
+                Issue.record("a missing album answered \(answer) for \(asset) instead of unknown")
+                continue
+            }
+            #expect(reason == "the album is not in this Photos library")
+        }
+    }
+
     // MARK: - Availability
 
     @Test("A resolvable album on a readable library is available")
