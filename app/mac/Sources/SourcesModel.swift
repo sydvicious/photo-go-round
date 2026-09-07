@@ -230,7 +230,9 @@ final class SourcesModel {
         }
         switch SourceAvailability.of(path: source.locator) {
         case .available: return (true, nil)
-        case .offline(let why), .gone(let why): return (false, why)
+        // A path is never `missing` — that is an album's state — but the enum
+        // has the case and this switch is exhaustive.
+        case .offline(let why), .gone(let why), .missing(let why): return (false, why)
         }
     }
 

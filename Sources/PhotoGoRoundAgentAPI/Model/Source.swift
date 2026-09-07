@@ -68,6 +68,11 @@ public struct Source: Sendable, Equatable, Identifiable {
     public let enabled: Bool
     /// Folder sources only.
     public let recursive: Bool?
+    /// What the source is called and where it sits, for a kind whose locator
+    /// does not name itself. Nil for a folder or a file. Captured when the
+    /// source is added and refreshed by every scan that finds it, so a missing
+    /// album can still be shown by the name it last had. Since 2026-09-07.
+    public let description: SourceDescription?
     /// A source that lost everything at once, rather than one whose contents
     /// were deleted.
     public let available: Bool
@@ -85,6 +90,7 @@ public struct Source: Sendable, Equatable, Identifiable {
         stampUUID: String? = nil,
         enabled: Bool = true,
         recursive: Bool? = nil,
+        description: SourceDescription? = nil,
         available: Bool = true,
         unavailableReason: String? = nil,
         unavailableAt: Date? = nil,
@@ -99,6 +105,7 @@ public struct Source: Sendable, Equatable, Identifiable {
         self.stampUUID = stampUUID
         self.enabled = enabled
         self.recursive = recursive
+        self.description = description
         self.available = available
         self.unavailableReason = unavailableReason
         self.unavailableAt = unavailableAt

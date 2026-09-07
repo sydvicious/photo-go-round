@@ -140,13 +140,16 @@ public struct SourceStore {
         recursive: Bool? = nil,
         bookmark: Data? = nil,
         stampUUID: String? = nil,
+        description: SourceDescription? = nil,
         now: Date = Date()
     ) throws -> Source {
         try database.transaction(.immediate) {
             try database.run(
                 """
-                INSERT INTO source (uuid, kind, locator, bookmark, stamp_uuid, enabled, recursive, added_at)
-                VALUES (:uuid, :kind, :locator, :bookmark, :stamp, 1, :recursive, :now);
+                INSERT INTO source (uuid, kind, locator, bookmark, stamp_uuid, enabled, recursive,
+                                    title, collection_kind, folders, added_at)
+                VALUES (:uuid, :kind, :locator, :bookmark, :stamp, 1, :recursive,
+                        :title, :collection_kind, :folders, :now);
                 """,
                 [
                     "uuid": .text(UUID().uuidString.lowercased()),
@@ -155,6 +158,9 @@ public struct SourceStore {
                     "bookmark": bookmark.map { SQLValue.blob($0) } ?? .null,
                     "stamp": SQLValue(stampUUID),
                     "recursive": recursive.map { SQLValue($0) } ?? .null,
+                    "title": SQLValue(description?.title),
+                    "collection_kind": SQLValue(description?.collectionKind),
+                    "folders": SQLValue(description?.foldersColumn),
                     "now": SQLValue(now),
                 ]
             )
@@ -323,9 +329,13 @@ public struct SourceStore {
 
         for spec in specs {
             guard let match = existing.first(where: { $0.locator == spec.locator }) else {
+                // The description is the preference's seed for a row that does
+                // not exist yet — a rebuilt database, or a source just added.
+                // A row that exists keeps its own, which every refresh renews.
                 try add(
                     kind: spec.kind, locator: spec.locator,
-                    recursive: spec.kind == .folder ? spec.recursive : nil, now: now
+                    recursive: spec.kind == .folder ? spec.recursive : nil,
+                    description: spec.description, now: now
                 )
                 added += 1
                 continue
@@ -675,6 +685,12 @@ public struct SourceStore {
             "DELETE FROM walk_seen WHERE source_id = :id;", ["id": .int(source.id)])
 
         try markAvailable(sourceID: source.id, scannedAt: now)
+        // What the album is called now, so a rename in Photos shows through
+        // and a later reconnect matches on where it last was. Written only
+        // when it changed: most refreshes find the same name.
+        if let description = await provider.describe(source), description != source.description {
+            try describe(sourceID: source.id, as: description)
+        }
 
         let result = ScanResult(
             sourceID: source.id, added: added, removed: removed,
@@ -718,6 +734,27 @@ public struct SourceStore {
         )
     }
 
+    /// Records what a source is called and where it sits, as its provider
+    /// reports it now. See `SchemaV11`.
+    public func describe(sourceID: Int64, as description: SourceDescription) throws {
+        try database.transaction(.immediate) {
+            try database.run(
+                """
+                UPDATE source
+                   SET title = :title, collection_kind = :kind, folders = :folders
+                 WHERE id = :id;
+                """,
+                [
+                    "title": .text(description.title), "kind": .text(description.collectionKind),
+                    "folders": SQLValue(description.foldersColumn), "id": .int(sourceID),
+                ]
+            )
+        }
+        Log.sources.info(
+            "source \(sourceID, privacy: .public) is called \(description.title, privacy: .public)"
+        )
+    }
+
     public func markAvailable(sourceID: Int64, scannedAt now: Date = Date()) throws {
         let wasUnavailable = try database.transaction(.immediate) {
             let was =
@@ -742,6 +779,7 @@ public struct SourceStore {
 
     private static let selectSourceSQL = """
         SELECT id, uuid, kind, locator, bookmark, stamp_uuid, enabled, recursive,
+               title, collection_kind, folders,
                available, unavailable_reason, unavailable_at, added_at, scanned_at
           FROM source
         """

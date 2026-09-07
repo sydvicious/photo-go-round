@@ -442,7 +442,7 @@ The latency budget is generous, and it is worth using. `PHAsset.fetchAssets(with
 
 Driven by `PHPhotoLibrary.authorizationStatus(for: .readOnly)`:
 
-- `.authorized` — ask whether the collection still resolves. It does: `.available`. It does not: `.offline`, with a reason naming the library switch as the likely cause.
+- `.authorized` — ask whether the collection still resolves. It does: `.available`. It does not: `.offline`, with a reason naming the library switch as the likely cause. **`.missing` rather than `.offline` since 2026-09-07**, a fourth case that everything serving, fetching, or dealing treats exactly as offline and that only the panel tells apart, because an album that is not in a readable library is the one kind of unavailable a person can remove or reconnect from there. See `Missing Albums Plan.md`.
 - `.limited` — this is an iOS concept and macOS does not offer it, but it is expressible and the provider should not crash on it. Treat as `.available`, since a limited grant still returns whatever it returns.
 - `.denied`, `.restricted` — `.offline`, with a reason that tells the user where to fix it.
 - `.notDetermined` — `.offline`. Notably **not** a place to raise the prompt: `availability` is called from the scanner, on a timer, in a background process, and prompting from there is exactly the baffling unattributed prompt the design avoids.

@@ -16,11 +16,11 @@ A Photos library rebuild on 2026-09-07 renumbered two albums. The agent could no
   - The pool predicate gains `source available OR cached_at IS NOT NULL`, by a join to `source`; no migration.
   - Tests in `DeckPoolTests`: held photographs of an unavailable source are dealt, unheld ones are not, and the pool count agrees. Three tests that asserted the old rule were rewritten to the new one.
   - Run it: the "no asset" fetch churn from a missing album stops.
-- **Phase 3 — The name is stored beside the identifier.** Title, collection kind, and folder path are captured from the catalog at add time and written to the preference entry and the source row.
-  - Migration 11: `title`, `collection_kind`, `folders` on `source`.
-  - Three optional keys on the preference dictionary; absent for folders and files.
-  - A successful refresh updates the stored title, so a rename shows through.
-  - The wire form's `title` falls back to the stored one, and a `missing` flag says the album is the thing that is gone.
+- **Phase 3 — complete, 2026-09-07. The name is stored beside the identifier.** Title, collection kind, and folder path are captured from the catalog at add time and written to the preference entry and the source row.
+  - Migration 11: `title`, `collection_kind`, `folders` on `source`; `folders` is a JSON array.
+  - Three optional keys on the preference dictionary; absent for folders and files. One `SourceDescription` value in Swift.
+  - A successful refresh renews the row, so a rename shows through; the preference keeps the add-time name as the seed.
+  - The wire form's `title` falls back to the stored one, and `missing` says the album is the thing that is gone — from a fourth `SourceAvailability` case.
 - **Phase 4 — The panel says so.** Under the chosen collections: "There are missing albums: *name*, *name*. Do you want to remove these references?" with a Remove button.
   - Missing albums leave the chosen-collections line and appear only here.
   - Remove deletes every listed source, as the picker's untick does today.
@@ -38,10 +38,13 @@ A Photos library rebuild on 2026-09-07 renumbered two albums. The agent could no
 - **An unavailable source deals only what it holds, whatever its kind.** Residency was removed as a general gate on 2026-09-05 because it paced a new source; this gate applies only to sources already marked unavailable, so a healthy source is untouched. It also covers an unmounted drive, which today costs a card per photograph.
 - **The identifier stays the locator; the name is stored beside it.** Decided 2026-09-07 over making the name the locator. Two same-named albums in one folder stay distinct, and the identity every other rule matches on does not change.
 - **The agent captures the name; the client sends nothing new.** Adding already resolves the identifier against PhotoKit, and the catalog has the title, kind, and folders in hand at that moment.
-- **The stored title follows a rename.** A refresh that resolves the album rewrites the title, so the stored name is what the album was last called, not what it was called when added.
+- **The stored title follows a rename.** A refresh that resolves the album rewrites the title, so the stored name is what the album was last called, not what it was called when added. **Built 2026-09-07 as: the row follows, the preference does not.** The preference is the seed a rebuilt database projects until its first refresh, seconds later; the row is what the panel reads and what Reconnect will match on. One writer for the fact that changes, and no preference write from the agent's own loop.
+- **`folders` is a JSON array, not a joined string.** Decided 2026-09-07 in the building. A Photos folder may be called anything, including something with a separator in it, and Reconnect's rule is exact or nothing.
+- **The three facts travel as one optional value.** `SourceDescription` on the row model and the preference record; three columns in the table. A title without a kind is a row nothing in this project writes, and it reads as no description rather than half of one.
+- **The source endpoint takes its providers as a parameter.** A test seam, nil in the agent. The production set asks PhotoKit, which has no grant under a test runner and says nothing, and "missing" is exactly the answer the v2 list has to be able to give.
 - **Reconnect rewrites the row and the preference in the same locked step.** Reconcile matches rows to preferences by locator; rewriting the preference alone would make reconcile remove the row, its cached bytes, and its directory, and add a stranger.
 - **A match is exact or it is not a match.** Kind, title, and folder path, and exactly one candidate. Smart albums match on kind alone, since their titles are Apple's and their kinds are unique.
-- **`missing` is a flag on the wire, not a string to compare.** The app must not recognise an album problem by matching the reason text.
+- **`missing` is a flag on the wire, not a string to compare.** The app must not recognise an album problem by matching the reason text. **Behind it, since 2026-09-07, is a fourth `SourceAvailability` case**, `.missing`, chosen over a second associated value on `.offline`: everything that serves, fetches, or deals treats it as offline, and only the endpoint reads it. The flag is present for every Photos source in v2 and absent for a folder or a file, and it is computed only for a source the scan has already marked unavailable.
 
 # Background
 
@@ -188,17 +191,26 @@ Switching the system library fails every album at once. Under this plan every Ph
 
 **A wall-clock bound in `ServeWaitTests` failed once under the full parallel run**, at 6.25 seconds against a 5 second limit, with the bytes landing at 300 ms. It passed three times alone and in the next full run. The limit is 15 seconds now and the fixture's wait is 30, so the assertion still distinguishes "noticed the bytes" from "waited the bound out". Syd's call, 2026-09-07.
 
+**A second test in that suite is fragile under load and was left alone.** *A card whose fetch fails during the wait is passed over for the new head* failed once with two waiting events instead of one: the background fetcher fails the head and fetches the next card on a fixed 200 ms delay, and under load the request moved to the new head before its bytes had landed and waited a second time. Five passes alone and two more full runs. A timing assumption in the test, not in the gate.
+
+**Phase 3, 2026-09-07.** Ten tests, 660 in all, and the Mac app builds against the changed model. Four departures from the text above, each recorded under Design Decisions: `folders` as JSON, one `SourceDescription` value, a `.missing` case, and a providers seam on the endpoint. The fifth is the one worth reading — the refresh renews the row and not the preference — because the plan's "updates the stored title" could have meant either.
+
+**The description is captured where the album is already being asked about.** `SourceStore.add` asks the provider whether each non-path locator resolves before it takes the lock; the same loop now asks for the description and hands it into the write, so the client sends `{kind, path}` exactly as before and `pgr_ctl` and a hand-written `defaults write` get the same name without knowing to ask.
+
+**The two albums that started this stay "040".** They were added before any name was stored, and the library cannot name them now, so nothing renews their rows. They will read as their identifiers until Phase 4 removes them or Phase 5 reconnects them. Every album added or refreshed from this build on carries its name.
+
+**The v1 list is untouched.** Neither the title fallback nor `missing` reaches it; v1 carries no Photos sources at all.
+
 ## Other plan documents this touches
 
-Amended 2026-09-07 for Phases 1 and 2:
+Amended 2026-09-07 for Phases 1 to 3:
 
-- `Apple Photos Plan.md` — the decision that a collection which stops resolving is `.offline`, and the *existence* and *availability* subsections.
-- `PLAN.md` — the *Sources* decisions on the moment-before-showing check and on the System Photo Library; the *Cache* decisions on dealing over everything and on every photo being dealt; the *What happens to a source that never comes back* discussion.
+- `Apple Photos Plan.md` — the decision that a collection which stops resolving is `.offline`, and the *existence* and *availability* subsections, the latter now naming `.missing`.
+- `PLAN.md` — the *Sources* decisions on the moment-before-showing check and on the System Photo Library; the *Cache* decisions on dealing over everything and on every photo being dealt; the *What happens to a source that never comes back* discussion; the source-as-preference section, which gains the three optional keys.
 - `Deck and Queue v2.md` — the readers of `cached_at`.
 
-Still to amend, with Phases 3 to 5:
+Still to amend, with Phases 4 and 5:
 
-- `PLAN.md` — the source-as-preference section gains the three optional keys.
 - `app/mac/FEATURES.md` — the Apple Photos group box's missing-albums line and its two buttons.
 
 # References

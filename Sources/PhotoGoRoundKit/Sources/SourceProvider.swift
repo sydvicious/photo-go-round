@@ -98,6 +98,17 @@ public protocol SourceProvider: Sendable {
     /// Only the agent can ask the library what an album is called.
     func title(of source: Source) async -> String?
 
+    /// What to call this source and where it sits, **as of now**, for a kind
+    /// whose locator does not name itself; nil when the source does not
+    /// resolve or when a path already says everything.
+    ///
+    /// `title(of:)` answers one string for a panel to draw; this answers the
+    /// three facts the store keeps beside the identifier so that a source
+    /// which stops resolving can still be shown by name and matched to its
+    /// successor. Asked when a source is added and on every refresh that finds
+    /// it. See `Missing Albums Plan.md`.
+    func describe(_ source: Source) async -> SourceDescription?
+
     /// Writes the bytes for one photo to `destination`.
     ///
     /// Only called for photos whose storage is `.materialized`. A referenced
@@ -133,6 +144,9 @@ extension SourceProvider {
 
     /// A path names itself.
     public func title(of source: Source) async -> String? { nil }
+
+    /// A path describes itself.
+    public func describe(_ source: Source) async -> SourceDescription? { nil }
 
     /// The whole source as one array.
     ///

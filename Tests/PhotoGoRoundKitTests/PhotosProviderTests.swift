@@ -148,6 +148,62 @@ struct PhotosProviderTests {
         #expect(await provider.availability(of: photosSource(locator: album)) == .available)
     }
 
+    @Test("An album that does not resolve is missing; a library that cannot be read is offline")
+    func missingIsNotOffline() async {
+        // The two are alike to everything that serves, fetches, or deals, and
+        // unlike to a person: an album that is not there can be removed or
+        // reconnected from the panel, a permission prompt cannot. So the
+        // provider says which, and the reason is the one it gives everywhere.
+        let readable = PhotosCollectionSourceProvider(library: library())
+        #expect(
+            await readable.availability(of: photosSource(locator: "GONE/L0/040"))
+                == .missing(reason: "the album is not in this Photos library"))
+
+        let denied = PhotosCollectionSourceProvider(library: library(authorization: .denied))
+        guard case .offline = await denied.availability(of: photosSource(locator: album)) else {
+            Issue.record("a denied library was not offline"); return
+        }
+    }
+
+    // MARK: - Description
+
+    @Test("An album describes itself by title, kind, and folders")
+    func describeAnswersTheThreeFacts() async {
+        let fake = FakePhotoLibrary(
+            titles: [album: "Kids 2019"],
+            collections: [
+                LibraryCollection(identifier: album, title: "Kids 2019", kind: .userAlbum)
+            ],
+            folders: [album: ["Family", "Trips"]])
+        let provider = PhotosCollectionSourceProvider(library: fake)
+
+        #expect(
+            await provider.describe(photosSource(locator: album))
+                == SourceDescription(
+                    title: "Kids 2019", collectionKind: "userAlbum", folders: ["Family", "Trips"]))
+    }
+
+    @Test("A smart album at the top level has no folders, and says so with an empty list")
+    func describeSmartAlbum() async {
+        let fake = FakePhotoLibrary(
+            titles: [album: "Favorites"],
+            collections: [LibraryCollection(identifier: album, title: "Favorites", kind: .favorites)])
+        let provider = PhotosCollectionSourceProvider(library: fake)
+
+        #expect(
+            await provider.describe(photosSource(locator: album))
+                == SourceDescription(title: "Favorites", collectionKind: "favorites", folders: []))
+    }
+
+    @Test("An album that does not resolve has no description, and neither does an unreadable library")
+    func describeAnswersNothingItCannotSee() async {
+        let provider = PhotosCollectionSourceProvider(library: library())
+        #expect(await provider.describe(photosSource(locator: "GONE/L0/040")) == nil)
+
+        let denied = PhotosCollectionSourceProvider(library: library(authorization: .denied))
+        #expect(await denied.describe(photosSource(locator: album)) == nil)
+    }
+
     @Test("Nothing this provider can be asked ever answers gone")
     func availabilityIsNeverGone() async {
         // Telling a deleted album from a switched library needs to know *which*

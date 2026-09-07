@@ -89,34 +89,54 @@ extension SourceStore {
         if let unsupported = requests.first(where: { provider(for: $0.kind) == nil })?.kind {
             throw EditFailure.unsupportedKind(unsupported)
         }
-        let unresolved = await unresolvedLocators(in: requests, now: now)
-        guard unresolved.isEmpty else { throw EditFailure.locatorsNotFound(unresolved) }
+        let resolution = await resolveLocators(in: requests, now: now)
+        guard resolution.unresolved.isEmpty else {
+            throw EditFailure.locatorsNotFound(resolution.unresolved)
+        }
 
-        return try write(requests, to: preferences, fileManager: fileManager, now: now)
+        return try write(
+            requests, describedAs: resolution.descriptions, to: preferences,
+            fileManager: fileManager, now: now)
     }
 
-    /// Which of the non-path locators name nothing.
+    /// Which of the non-path locators name nothing — and, for the ones that
+    /// name something, what it is called.
     ///
     /// A Photos album is validated by asking its own provider whether the
     /// collection still resolves — the same question `availability` answers for
     /// a source that already exists, asked one moment earlier. A library that
     /// cannot be read fails here too, and should: an album nobody can see is
     /// not one to accept and then report unavailable forever.
-    private func unresolvedLocators(in requests: [SourceRequest], now: Date) async -> [String] {
+    ///
+    /// **The description is captured here, in the same breath**, because this
+    /// is the one moment the agent is already asking the library about the
+    /// album, and the client sending a name it looked up itself would be a
+    /// second writer for one fact. See `Missing Albums Plan.md`, Phase 3.
+    private func resolveLocators(
+        in requests: [SourceRequest], now: Date
+    ) async -> (unresolved: [String], descriptions: [String: SourceDescription]) {
         var bad: [String] = []
+        var descriptions: [String: SourceDescription] = [:]
         for request in requests where !request.kind.isFileBacked {
             guard let provider = provider(for: request.kind) else { continue }
             let provisional = Source(
                 id: 0, uuid: "", kind: request.kind, locator: request.path, addedAt: now)
             let standing: SourceAvailability = await provider.availability(of: provisional)
-            if standing != .available { bad.append(request.path) }
+            guard standing == .available else {
+                bad.append(request.path)
+                continue
+            }
+            if let description = await provider.describe(provisional) {
+                descriptions[request.path] = description
+            }
         }
-        return bad
+        return (bad, descriptions)
     }
 
     /// The part that writes, and therefore the part that holds the lock.
     private func write(
-        _ requests: [SourceRequest], to preferences: Preferences,
+        _ requests: [SourceRequest], describedAs descriptions: [String: SourceDescription] = [:],
+        to preferences: Preferences,
         fileManager: FileManager, now: Date
     ) throws -> Addition {
         // The write and the reconcile are one act — see `SourceStore.editing`.
@@ -137,7 +157,11 @@ extension SourceStore {
         case .mismatched(let paths):
             throw EditFailure.pathsNotOfKind(paths)
         case .resolved(let resolved):
-            specs = resolved
+            specs = resolved.map { spec in
+                var described = spec
+                described.description = descriptions[spec.locator]
+                return described
+            }
         }
 
         let added = preferences.addSources(specs)

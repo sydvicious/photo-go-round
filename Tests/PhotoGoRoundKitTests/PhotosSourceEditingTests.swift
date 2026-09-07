@@ -59,6 +59,106 @@ struct PhotosSourceEditingTests {
         #expect(try store.all().first?.kind == .photosCollection)
     }
 
+    // MARK: - The name beside the identifier
+
+    @Test("Adding an album stores what it is called, in the row and in the preference")
+    func anAlbumIsStoredWithItsName() async throws {
+        // **The client sent the identifier and nothing else.** The agent was
+        // already asking the library whether the album resolves, and the
+        // name, the kind, and the folders come back in the same breath. One
+        // writer for the fact; `pgr_ctl` and a hand-written `defaults write`
+        // get the same name without knowing to ask.
+        let scratch = Scratch()
+        let library = FakePhotoLibrary(
+            titles: [album: "Kids 2019"],
+            assets: [album: [LibraryAsset(identifier: "ASSET-0/L0/001")]],
+            collections: [
+                LibraryCollection(identifier: album, title: "Kids 2019", kind: .userAlbum)
+            ],
+            folders: [album: ["Family", "Trips"]])
+        let store = store(try TestLibrary().database, library: library)
+        let expected = SourceDescription(
+            title: "Kids 2019", collectionKind: "userAlbum", folders: ["Family", "Trips"])
+
+        let addition = try await store.add(
+            [SourceRequest(kind: .photosCollection, path: album)], to: scratch.preferences)
+
+        #expect(addition.added.first?.description == expected)
+        #expect(try store.all().first?.description == expected)
+        #expect(scratch.preferences.sources.first?.description == expected)
+        // And the entry reads back through the plist round trip, folders as an
+        // array rather than a joined string.
+        let entry = try #require(
+            scratch.defaults.array(forKey: "sources")?.first as? [String: Any])
+        #expect(entry["title"] as? String == "Kids 2019")
+        #expect(entry["collectionKind"] as? String == "userAlbum")
+        #expect(entry["folders"] as? [String] == ["Family", "Trips"])
+    }
+
+    @Test("A preference entry from before the name was stored still loads, nameless")
+    func anOldEntryLoadsWithoutADescription() throws {
+        let spec = try #require(
+            SourceSpec(propertyList: ["kind": "photos_collection", "locator": album]))
+        #expect(spec.description == nil)
+        #expect(spec.locator == album)
+
+        // And a folder's entry never grows the three keys: its path names it.
+        let folder = SourceSpec.folder("/Pictures")
+        #expect(folder.propertyList["title"] == nil)
+        #expect(folder.propertyList["folders"] == nil)
+    }
+
+    @Test("A rebuilt database gets the name back from the preference, and a refresh renews it")
+    func theRowIsSeededAndThenRenewed() async throws {
+        // The preference carries the name the album had when it was added; the
+        // library is asked again on every refresh that finds the album, so a
+        // rename in Photos shows through without anybody re-adding anything.
+        let scratch = Scratch()
+        let renamed = FakePhotoLibrary(
+            titles: [album: "Kids 2019 — Maine"],
+            assets: [album: [LibraryAsset(identifier: "ASSET-0/L0/001")]],
+            collections: [
+                LibraryCollection(identifier: album, title: "Kids 2019 — Maine", kind: .userAlbum)
+            ])
+        scratch.preferences.setSources([
+            SourceSpec(
+                kind: .photosCollection, locator: album,
+                description: SourceDescription(title: "Kids 2019", collectionKind: "userAlbum"))
+        ])
+        let store = store(try TestLibrary().database, library: renamed)
+
+        try store.reconcile(with: scratch.preferences)
+        let seeded = try #require(try store.all().first)
+        #expect(seeded.description?.title == "Kids 2019", "the row is seeded from the preference")
+
+        await store.refresh(seeded)
+        let refreshed = try #require(try store.source(id: seeded.id))
+        #expect(refreshed.description?.title == "Kids 2019 — Maine", "the refresh renewed it")
+        #expect(
+            scratch.preferences.sources.first?.description?.title == "Kids 2019",
+            "the preference is the seed, not the record")
+    }
+
+    @Test("An album that has gone missing keeps the name it last had")
+    func aMissingAlbumKeepsItsName() async throws {
+        // The whole point: a refresh that cannot find the album marks the
+        // source unavailable and touches nothing else, so the panel can still
+        // say which album it is talking about.
+        let store = store(
+            try TestLibrary().database,
+            library: FakePhotoLibrary(titles: [:]))
+        let source = try store.add(
+            kind: .photosCollection, locator: album,
+            description: SourceDescription(title: "Kids 2019", collectionKind: "userAlbum"))
+
+        let result = await store.refresh(source)
+        let after = try #require(try store.source(id: source.id))
+
+        #expect(result.sourceUnavailable)
+        #expect(after.available == false)
+        #expect(after.description?.title == "Kids 2019")
+    }
+
     @Test("The identifier survives the slashes PhotoKit puts in one")
     func slashesInsideAreNotPathSeparators() async throws {
         // `PHAssetCollection.localIdentifier` has the form `UUID/L0/040`. It is

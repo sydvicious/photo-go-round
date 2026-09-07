@@ -52,7 +52,10 @@ struct SourceEndpointTests {
         let log = Collector()
         private let suite = scratchSuiteName("source-endpoint")
 
-        init() throws {
+        /// `providers` stands in for the agent's own when a test needs the
+        /// Photos side to answer — the production set asks PhotoKit, which
+        /// has no grant here and says nothing.
+        init(providers: [any SourceProvider]? = nil) throws {
             directory = URL.temporaryDirectory.appending(path: "pgr-src-\(UUID().uuidString)")
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
@@ -68,6 +71,7 @@ struct SourceEndpointTests {
             let collector = log
             endpoint = SourceEndpoint(
                 databasePath: path, preferences: preferences, bytes: bytes,
+                providers: providers,
                 log: { collector.record($0) })
         }
 
@@ -423,14 +427,79 @@ struct SourceEndpointTests {
     }
 
     /// A Photos source in the table, without going near PhotoKit.
-    private func insertAlbum(_ library: Library, locator: String) throws {
+    private func insertAlbum(
+        _ library: Library, locator: String, title: String? = nil, available: Bool = true
+    ) throws {
         try library.store.database.run(
             """
-            INSERT INTO source (uuid, kind, locator, enabled, available, added_at)
-            VALUES (:uuid, 'photos_collection', :locator, 1, 1, 0);
+            INSERT INTO source (uuid, kind, locator, enabled, available, title, collection_kind, added_at)
+            VALUES (:uuid, 'photos_collection', :locator, 1, :available, :title, :kind, 0);
             """,
-            ["uuid": .text(UUID().uuidString.lowercased()), "locator": .text(locator)]
+            [
+                "uuid": .text(UUID().uuidString.lowercased()), "locator": .text(locator),
+                "available": SQLValue(available), "title": SQLValue(title),
+                "kind": SQLValue(title.map { _ in "userAlbum" }),
+            ]
         )
+    }
+
+    // MARK: - Naming an album that is not there
+
+    /// A Photos library with nothing in it, so every album is missing and the
+    /// library itself is perfectly readable — the state a rebuild leaves the
+    /// agent in. Only the two calls `availability` and `title` make matter.
+    private struct EmptyLibrary: PhotoLibrary {
+        var authorization: LibraryAuthorization { get async { .authorized } }
+        func requestAuthorization() async -> LibraryAuthorization { .authorized }
+        func collections() async -> [LibraryCollection] { [] }
+        func folderPaths() async -> [String: [String]] { [:] }
+        func imageCount(ofCollection identifier: String) async -> Int? { nil }
+        func title(ofCollection identifier: String) async -> String? { nil }
+        @discardableResult
+        func enumerateImages(
+            inCollection identifier: String, _ body: (LibraryAsset) async throws -> Void
+        ) async throws -> Bool { false }
+        func assetExists(_ identifier: String) async -> Bool { false }
+        func resources(ofAsset identifier: String) async -> [LibraryResource] { [] }
+        func write(
+            _ resource: LibraryResource, ofAsset identifier: String, to destination: URL
+        ) async throws -> Int64 { 0 }
+    }
+
+    @Test("A missing album is named by what it was called, and says it is missing")
+    func aMissingAlbumIsNamedFromTheRow() async throws {
+        // **"040, 040" was the bug.** The library has no title to give for an
+        // album that is not in it, and the app's fallback is the identifier's
+        // last path component. The stored name is what the panel should say,
+        // and `missing` is what tells it the person can do something about it.
+        let library = try Library(providers: [
+            FolderSourceProvider(fileAccess: UnsandboxedFileAccess()),
+            PhotosCollectionSourceProvider(library: EmptyLibrary()),
+        ])
+        try insertAlbum(library, locator: "ALBUM/L0/040", title: "Kids 2019", available: false)
+
+        let listed = try sources(try await library.get("/v2/sources"))
+        let album = try #require(listed.first)
+        #expect(album.title == "Kids 2019")
+        #expect(album.missing == true)
+    }
+
+    @Test("A folder is never missing, and an album behind a permission prompt is not either")
+    func missingIsOnlyForAlbumsThatAreNotThere() async throws {
+        // The production provider asks PhotoKit, which has no grant in a test:
+        // that is offline, which a person fixes in System Settings rather than
+        // in the panel, so it is not `missing`.
+        let library = try Library()
+        let folder = library.folder("pictures", photographs: 1)
+        _ = try await library.post(#"[{"kind": "folder", "path": "\#(library.path(of: folder))"}]"#)
+        try insertAlbum(library, locator: "ALBUM/L0/041", title: "Favorites", available: false)
+
+        let listed = try sources(try await library.get("/v2/sources"))
+        let folderWire = try #require(listed.first { $0.kind == "folder" })
+        let albumWire = try #require(listed.first { $0.kind == "photos_collection" })
+        #expect(folderWire.missing == nil)
+        #expect(albumWire.missing == false)
+        #expect(albumWire.title == "Favorites", "the stored name still names it")
     }
 
     @Test("v1 lists only the kinds a v1 client can act on")

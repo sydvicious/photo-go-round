@@ -108,6 +108,12 @@ struct MigratorTests {
         // deleted, and a source that lost everything keeps its rows untouched.
         let photo = try #require(snapshot.tables.first { $0.name == "photo" })
         #expect(!photo.columns.contains { $0.name == "available" })
+
+        // A source carries its album's name beside its identifier since
+        // migration 11, so an album that stops resolving can still be named.
+        let source = try #require(snapshot.tables.first { $0.name == "source" })
+        let columns = Set(source.columns.map(\.name))
+        #expect(columns.isSuperset(of: ["title", "collection_kind", "folders"]))
     }
 
     @Test("The deal ordinal starts at zero and there can only ever be one of it")

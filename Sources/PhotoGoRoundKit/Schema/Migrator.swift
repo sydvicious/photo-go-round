@@ -21,6 +21,7 @@ public enum Migrator {
         Migration(version: 8, name: "the queue is a queue again", sql: SchemaV8.sql),
         Migration(version: 9, name: "one photograph, one row", sql: SchemaV9.sql),
         Migration(version: 10, name: "placement is random again, by rank", sql: SchemaV10.sql),
+        Migration(version: 11, name: "the album's name, beside its identifier", sql: SchemaV11.sql),
     ]
 
     /// The version a fully migrated database reports.

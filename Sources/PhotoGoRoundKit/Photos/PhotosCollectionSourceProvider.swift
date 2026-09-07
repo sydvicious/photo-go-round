@@ -113,7 +113,10 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
             return .offline(reason: Self.authorizationReason(authorization))
         }
         guard await library.title(ofCollection: source.locator) != nil else {
-            return .offline(reason: Self.albumMissingReason)
+            // `.missing` rather than `.offline` since 2026-09-07. Everything
+            // that serves, fetches, or deals treats the two alike; the panel
+            // does not, because this is the one a person can act on.
+            return .missing(reason: Self.albumMissingReason)
         }
         return .available
     }
@@ -127,6 +130,22 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
         guard await library.authorization.canRead else { return nil }
         let title = await library.title(ofCollection: source.locator)
         return (title?.isEmpty ?? true) ? nil : title
+    }
+
+    /// The album's title, kind, and folder path as the library reports them
+    /// now, or nil when it does not resolve.
+    ///
+    /// Two listing calls rather than one lookup, because PhotoKit has no
+    /// "this collection's folders" question — the folder tree is walked from
+    /// the top. Both are the cheap kind of call the catalog makes on every
+    /// picker open: milliseconds, not the half-minute that counting costs.
+    public func describe(_ source: Source) async -> SourceDescription? {
+        guard await library.authorization.canRead else { return nil }
+        guard let collection = await library.collections().first(where: { $0.identifier == source.locator })
+        else { return nil }
+        let folders = await library.folderPaths()[source.locator] ?? []
+        return SourceDescription(
+            title: collection.title, collectionKind: collection.kind.rawValue, folders: folders)
     }
 
     // MARK: - Materialize

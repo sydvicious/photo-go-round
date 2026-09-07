@@ -37,6 +37,12 @@ struct SourceEndpoint {
     /// photographs, and their cached bytes go with them rather than waiting for
     /// the next launch to notice nothing claims them.
     let bytes: PhotoStore
+    /// The providers to build each request's store with, or nil for the
+    /// agent's own — every kind, PhotoKit included. **A test seam**: the
+    /// production set asks a library that has no grant under a test runner
+    /// and says nothing, and a Photos album that is *missing* rather than
+    /// merely unreadable is exactly what the v2 list has to be able to say.
+    var providers: [any SourceProvider]? = nil
     /// The collection route. The member routes are this plus a `uuid`.
     ///
     /// **Two versions, and each is a whole set of routes.** A client picks one
@@ -124,6 +130,14 @@ struct SourceEndpoint {
         /// what an album is called, which is the whole reason this endpoint
         /// exists for kinds the app cannot see for itself.
         var title: String?
+        /// **v2 only, and only for a kind whose locator is not a path.** True
+        /// when the source is unavailable because the album it names is not
+        /// in a library that is — a rebuild renumbered it, or the library was
+        /// switched — which is the one kind of unavailable a person can act
+        /// on from the panel. False for an album that is there or one behind
+        /// a permission prompt; absent for a folder or a file. Since
+        /// 2026-09-07; see `Missing Albums Plan.md`.
+        var missing: Bool?
         /// How many photographs this source has put in the pool. Zero for a
         /// source added a moment ago, because the scan has not run yet.
         var photos: Int
@@ -193,7 +207,9 @@ struct SourceEndpoint {
         do {
             let database = try Database(path: databasePath)
             try Migrator.migrate(database)
-            store = SourceStore(database: database, bytes: bytes)
+            store =
+                providers.map { SourceStore(database: database, providers: $0, bytes: bytes) }
+                ?? SourceStore(database: database, bytes: bytes)
         } catch {
             Log.sources.error(
                 "could not open the library: \(String(describing: error), privacy: .public)")
@@ -429,7 +445,26 @@ struct SourceEndpoint {
     ) async -> Wire {
         // v1's shape does not change. Each version is a whole set, and a client
         // that asked for v1 gets exactly what v1 has always answered.
-        let title = version == .v2 ? await store.provider(for: source.kind)?.title(of: source) : nil
+        var title: String?
+        var missing: Bool?
+        if version == .v2, let provider = store.provider(for: source.kind) {
+            // The library's answer first, so a rename shows through at once;
+            // the stored name when the library has none to give, which is
+            // exactly the album that is not there any more.
+            title = await provider.title(of: source) ?? source.description?.title
+            if !source.kind.isFileBacked {
+                // Asked only of a source the scan has already written off:
+                // one it found is not missing, whatever the library says in
+                // the moment between.
+                if source.available {
+                    missing = false
+                } else if case .missing = await provider.availability(of: source) {
+                    missing = true
+                } else {
+                    missing = false
+                }
+            }
+        }
         return Wire(
             uuid: source.uuid,
             kind: source.kind.rawValue,
@@ -439,6 +474,7 @@ struct SourceEndpoint {
             available: source.available,
             unavailableReason: source.unavailableReason,
             title: title,
+            missing: missing,
             photos: (try? store.pool.size(forSource: source.id)) ?? 0,
             addedAt: source.addedAt,
             scannedAt: source.scannedAt

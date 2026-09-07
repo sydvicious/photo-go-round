@@ -1,6 +1,6 @@
 import Foundation
 
-/// Where a source stands right now — **three states, not two**.
+/// Where a source stands right now — **four states, not two**.
 ///
 /// The pair that is usually modelled, reachable and not, cannot express the
 /// difference between a drive that is unplugged and a folder that was deleted
@@ -8,6 +8,11 @@ import Foundation
 /// must change nothing, because everything comes back when the drive does, and
 /// the second means those photographs are never coming back and their rows and
 /// cached bytes are worth nothing.
+///
+/// The fourth, added 2026-09-07, is an album that is not in a library that is:
+/// it behaves exactly as offline everywhere the agent acts — nothing is
+/// deleted, the cache keeps serving — and differs only in what a person can do
+/// about it, which is the reason it is named. See `Missing Albums Plan.md`.
 public enum SourceAvailability: Sendable, Equatable {
     /// There, and readable.
     case available
@@ -17,6 +22,13 @@ public enum SourceAvailability: Sendable, Equatable {
     /// Confirmed not there, on a volume that is. Its photographs are gone with
     /// it, so their rows and their cached bytes are removed as each is reached.
     case gone(reason: String)
+    /// Not in a library that is readable — a Photos album renumbered by a
+    /// rebuild, or belonging to a library that has been switched away from.
+    /// **Treated as `offline` by everything that serves, fetches, or deals**,
+    /// because the two cannot be told apart and the second must delete
+    /// nothing. Named separately so the panel can list the album and offer to
+    /// remove or reconnect it, which is the one thing offline never needs.
+    case missing(reason: String)
 }
 
 extension SourceAvailability {

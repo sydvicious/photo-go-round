@@ -18,8 +18,20 @@ public struct SourceSpec: Sendable, Equatable, Hashable {
     public var recursive: Bool
     /// Disabling keeps the source but drops its photos from the deck.
     public var enabled: Bool
+    /// What the source is called and where it sits, for a kind whose locator
+    /// does not name itself. **Not part of its identity**: reconciliation and
+    /// duplicate detection match on the locator alone, and an entry written
+    /// before 2026-09-07, or by hand, loads without one. The agent captures it
+    /// when the source is added; the row, refreshed by every scan, is what a
+    /// panel reads. This is the seed a rebuilt database projects until its
+    /// first refresh. See `Missing Albums Plan.md`.
+    public var description: SourceDescription?
 
-    public init(kind: SourceKind, locator: String, recursive: Bool = false, enabled: Bool = true) {
+    public init(
+        kind: SourceKind, locator: String, recursive: Bool = false, enabled: Bool = true,
+        description: SourceDescription? = nil
+    ) {
+        self.description = description
         self.kind = kind
         // **One spelling, decided here.** The locator is the identity — removal,
         // reconciliation, and duplicate detection all match it as a bare string
@@ -53,7 +65,18 @@ public struct SourceSpec: Sendable, Equatable, Hashable {
     /// the whole reason preferences are the durable store rather than a file we
     /// invented a format for.
     var propertyList: [String: Any] {
-        ["kind": kind.rawValue, "locator": locator, "recursive": recursive, "enabled": enabled]
+        var list: [String: Any] = [
+            "kind": kind.rawValue, "locator": locator, "recursive": recursive, "enabled": enabled,
+        ]
+        // Three more keys for a source whose locator does not name itself, and
+        // none for one that does — a folder's entry reads exactly as it always
+        // has.
+        if let description {
+            list["title"] = description.title
+            list["collectionKind"] = description.collectionKind
+            list["folders"] = description.folders
+        }
+        return list
     }
 
     init?(propertyList: Any) {
@@ -66,11 +89,22 @@ public struct SourceSpec: Sendable, Equatable, Hashable {
         // trailing slash; the initialiser puts it back, so an old plist and a
         // new one describe the same source rather than two.
         let kind = SourceKind((dictionary["kind"] as? String) ?? SourceKind.folder.rawValue)
+        // A description needs its title and kind; folders default to none. An
+        // entry from before 2026-09-07 has neither and loads without one.
+        var description: SourceDescription?
+        if let title = dictionary["title"] as? String,
+            let collectionKind = dictionary["collectionKind"] as? String
+        {
+            description = SourceDescription(
+                title: title, collectionKind: collectionKind,
+                folders: (dictionary["folders"] as? [String]) ?? [])
+        }
         self.init(
             kind: kind,
             locator: locator,
             recursive: (dictionary["recursive"] as? Bool) ?? false,
-            enabled: (dictionary["enabled"] as? Bool) ?? true
+            enabled: (dictionary["enabled"] as? Bool) ?? true,
+            description: description
         )
     }
 }
