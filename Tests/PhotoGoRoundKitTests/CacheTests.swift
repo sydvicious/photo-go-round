@@ -753,11 +753,13 @@ struct CacheTests {
         #expect(result.cleared == 2)
         #expect(result.bytesFreed == 200)
         // The reachable source keeps everything. The cleared ones kept their
-        // rows too, and since 2026-09-05 rows are the pool: clearing is a
-        // storage operation, and reachability is not part of the deal.
+        // rows too: clearing is a storage operation, never a shuffle operation.
+        // They do leave the pool, though — since 2026-09-07 an unavailable
+        // source deals only what is held, and nothing of it is held now. They
+        // come back the moment the source does. See `Missing Albums Plan.md`.
         #expect(try fixture.cache.status().residentCount == 2)
         #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 4)
-        #expect(try fixture.deck.poolSize() == 4)
+        #expect(try fixture.deck.poolSize() == 2)
     }
 
     @Test("An explicit clear states its price before charging it")

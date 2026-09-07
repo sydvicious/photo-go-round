@@ -110,33 +110,31 @@ struct StarvedQueueTests {
 
     // MARK: - The one case where photographs really cannot be served
 
-    /// **Every source offline with nothing cached is a real "nothing to show",
-    /// and it is still not this one.**
+    /// **An offline source still deals what we hold of it.**
     ///
-    /// A source being unreachable says nothing about the pool: the rows are
-    /// still there, and dealing is pure database work that never touches a
-    /// volume. So the queue still fills, and the walk still has cards to walk —
-    /// it just cannot find bytes for any of them. That surfaces as `walked N`
-    /// with a skip line per card, never as `walked 0`.
+    /// A source being unreachable says nothing about the rows: they are still
+    /// there, and dealing is pure database work that never touches a volume.
+    /// What we hold serves from the cache, so the queue still fills with it and
+    /// the walk still has cards to walk. What we do not hold is a different
+    /// matter since 2026-09-07: it cannot be fetched from a volume that is not
+    /// there, so it waits outside the pool rather than costing a card per pass
+    /// — see `Missing Albums Plan.md`, Phase 2.
     ///
-    /// Which is what makes `walked 0` diagnostic: it means the queue was empty,
-    /// so the failure was in *dealing*, not in serving. This test exists to keep
-    /// the two apart, so a future change cannot quietly turn the honest case
-    /// into the broken-looking one.
-    @Test("Offline sources still deal — reachability is the fetch's problem, not the deck's")
+    /// Which changes what `walked 0` means. It still says the queue was empty,
+    /// so the failure was in *dealing*, not in serving — but every source
+    /// offline with nothing held is now an honest way to get there, and the
+    /// status line's pool count is what tells the two apart. This test keeps
+    /// the held half dealing, so a future change cannot quietly turn an
+    /// unmounted volume into a blank wall.
+    @Test("Offline sources still deal what is held — the cold half waits for the volume")
     func offlineSourcesStillFillTheQueue() throws {
-        // Reachability was tried as part of the deal on 2026-09-05, twice, and
-        // taken out again: what we hold of an unmounted volume serves from the
-        // cache, and what we do not fails its fetch and is dropped, so there is
-        // nothing for a gate here to decide. Held or cold, every photograph of
-        // an offline source is dealt.
         let library = try TestLibrary()
         let source = try library.addSource(locator: "/Volumes/gone/")
         let held = Set(try library.addPhotos(30, to: source, namePrefix: "held"))
         let cold = Set(try library.addPhotos(70, to: source, namePrefix: "cold", servable: false))
 
         // The source is unreachable, which is a fact about the volume and not
-        // about the pool. Enabled stays true: offline is not disabled.
+        // about the rows. Enabled stays true: offline is not disabled.
         try library.database.run(
             """
             UPDATE source
@@ -146,8 +144,12 @@ struct StarvedQueueTests {
             ["id": .int(source)]
         )
 
-        #expect(try library.deck.poolSize() == 100)
-        let dealt = Set(try library.drawSequence(count: 100, settings: DeckSettings(repeatWindowFraction: 1.0)))
-        #expect(dealt == held.union(cold), "an offline source stopped the deck from dealing")
+        #expect(try library.deck.poolSize() == 30)
+        let dealt = Set(try library.drawSequence(count: 30, settings: DeckSettings(repeatWindowFraction: 1.0)))
+        #expect(dealt == held, "an offline source stopped the deck from dealing what it holds")
+        #expect(dealt.isDisjoint(with: cold), "a card was spent on bytes that cannot be fetched")
+        #expect(
+            try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 100,
+            "waiting outside the pool is not leaving the library")
     }
 }

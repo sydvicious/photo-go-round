@@ -265,20 +265,42 @@ extension Deck {
     /// front of it. Decided 2026-09-05, after trying reachability as a gate and
     /// then as a gate with a door for held photographs, and wanting neither.
     ///
+    /// **With one exception, added 2026-09-07: a source that is unavailable
+    /// deals only what is held.** A Photos album that stopped resolving after
+    /// a library rebuild had its uncached photographs dealt, fetched, failed,
+    /// and — once the fetch failure stopped deleting them — dealt again on
+    /// every pass, a card each for nothing. A held photograph serves from the
+    /// cache whatever its source is doing, so it stays in; an unheld one from
+    /// a source that is not there cannot be fetched, so it waits outside the
+    /// pool until the scan marks the source available again, its row and its
+    /// history untouched. This is not residency as a gate: a healthy source
+    /// is dealt in full, bytes or not, exactly as before. See `Missing Albums
+    /// Plan.md`, Phase 2.
+    ///
     /// v1 selects still images only. The exclusion is a named predicate rather
     /// than an absence of video code, which is the difference between 2.0 being
     /// a feature and being an excavation.
+    ///
+    /// **Every query that uses this joins `source` as `s`** — see `population`.
+    /// `source_enabled` is carried on `photo` so the hot path need not join;
+    /// `available` is not, and a join to a table of ten rows is cheaper than a
+    /// second denormalised column to keep in step.
     static let availablePredicate = """
         p.source_enabled = 1 AND p.media_type = 'image'
+          AND (s.available = 1 OR p.cached_at IS NOT NULL)
         """
 
+    /// The `FROM` clause `availablePredicate` needs, so the alias it relies on
+    /// is spelled in one place.
+    static let population = "FROM photo p JOIN source s ON s.id = p.source_id"
+
     static let poolSizeSQL = """
-        SELECT COUNT(*) FROM photo p
+        SELECT COUNT(*) \(population)
          WHERE \(availablePredicate);
         """
 
     static let unusedCountSQL = """
-        SELECT COUNT(*) FROM photo p
+        SELECT COUNT(*) \(population)
          WHERE \(availablePredicate)
            AND (p.last_dealt_seq IS NULL OR p.last_dealt_seq <= :threshold);
         """

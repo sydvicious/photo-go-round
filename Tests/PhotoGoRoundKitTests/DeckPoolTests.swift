@@ -17,6 +17,12 @@ import Testing
 /// dropped. See the plan's *Deal over everything, and the queue fetches its own
 /// cards*.
 ///
+/// **One exception since 2026-09-07: a source the scan has marked unavailable
+/// deals only what is held.** Its unheld photographs cannot be fetched and
+/// stopped being deleted when the fetch failed, so dealing them bought a card
+/// per pass for nothing. They wait outside the pool until the source is back.
+/// See `Missing Albums Plan.md`, Phase 2.
+///
 /// This suite replaces the one that asserted residency as the gate. Two of its
 /// cases — a servable subset ending its pass, and waiting below fraction 1.0 —
 /// were about a population that no longer exists as a distinct thing; the pass
@@ -109,8 +115,8 @@ struct DeckPoolTests {
         #expect(try library.deck.unusedInCurrentPass() == 50)
     }
 
-    @Test("an unreachable source is dealt like any other, held or not")
-    func reachabilityIsNotAGate() throws {
+    @Test("an unavailable source deals only what is held, and everything once it is back")
+    func unavailableSourcesDealOnlyWhatIsHeld() throws {
         let library = try TestLibrary()
         let near = try library.addSource(locator: "/near")
         let far = try library.addSource(locator: "/far")
@@ -118,16 +124,31 @@ struct DeckPoolTests {
         let farHeld = Set(try library.addPhotos(2, to: far, namePrefix: "far-held"))
         let farCold = Set(try library.addPhotos(2, to: far, namePrefix: "far-cold", servable: false))
 
-        // The scan marks the share unmounted. The deal does not read that
-        // column: what we hold serves from the cache, and what we do not fails
-        // its fetch and is dropped, so there is nothing for the deal to decide.
+        // The scan marks the share unmounted — or the album missing, since
+        // 2026-09-07. What we hold serves from the cache and is dealt; what we
+        // do not hold cannot be fetched from a source that is not there, and a
+        // card spent on it buys a failed fetch and nothing else. So it waits
+        // out the source's absence outside the pool. See `Missing Albums
+        // Plan.md`, Phase 2.
         try library.database.run(
             "UPDATE source SET available = 0 WHERE id = :id;", ["id": .int(far)])
 
+        #expect(try library.deck.poolSize() == 6)
+        #expect(try library.deck.repeatWindow(settings: .default) == 3)
+        let dealt = Set(try library.drawSequence(count: 6, settings: DeckSettings(repeatWindowFraction: 1.0)))
+        #expect(dealt == nearPhotos.union(farHeld))
+        #expect(dealt.isDisjoint(with: farCold), "nothing unheld from an unavailable source is dealt")
+
+        // The share comes back, and the cold photographs with it — their rows
+        // and their history were never touched. Having never been dealt they
+        // are the only eligible cards until the pass ends, so the next two
+        // deals are exactly them.
+        try library.database.run(
+            "UPDATE source SET available = 1 WHERE id = :id;", ["id": .int(far)])
+
         #expect(try library.deck.poolSize() == 8)
-        #expect(try library.deck.repeatWindow(settings: .default) == 4)
-        let dealt = Set(try library.drawSequence(count: 8, settings: DeckSettings(repeatWindowFraction: 1.0)))
-        #expect(dealt == nearPhotos.union(farHeld).union(farCold))
+        let restored = Set(try library.drawSequence(count: 2, settings: DeckSettings(repeatWindowFraction: 1.0)))
+        #expect(restored == farCold)
     }
 
     @Test("the window is a fraction of the library, not of the cache")

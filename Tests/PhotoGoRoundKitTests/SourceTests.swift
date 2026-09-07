@@ -545,8 +545,11 @@ struct SourceTests {
 
         #expect(result.sourceUnavailable)
         #expect(result.removed == 0)
-        // Still in the pool, too: reachability is not part of the deal.
-        #expect(try library.deck.poolSize() == 2)
+        #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 2)
+        // Out of the pool while the drive is away, though: these are referenced
+        // photographs with nothing in the cache, and an unavailable source deals
+        // only what is held. Since 2026-09-07; see `Missing Albums Plan.md`.
+        #expect(try library.deck.poolSize() == 0)
     }
 
     // MARK: - Enabling and removing

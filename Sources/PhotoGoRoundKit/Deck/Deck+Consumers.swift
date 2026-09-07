@@ -423,18 +423,18 @@ extension Deck {
         """
 
     static let candidateCountSQL = """
-        SELECT COUNT(*) FROM photo p WHERE \(candidatePredicate);
+        SELECT COUNT(*) \(Deck.population) WHERE \(candidatePredicate);
         """
 
     static let dealablePopulationSQL = """
-        SELECT COUNT(*) FROM photo p
+        SELECT COUNT(*) \(Deck.population)
          WHERE \(Deck.availablePredicate)
            AND p.render_failures < \(Deck.renderFailureLimit);
         """
 
     static let candidateSQL = """
         SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
-          FROM photo p JOIN source s ON s.id = p.source_id
+          \(Deck.population)
          WHERE \(candidatePredicate)
          ORDER BY p.shuffle_key
          LIMIT 1 OFFSET :offset;

@@ -89,7 +89,13 @@ struct ServeWaitTests {
 
     @Test("A cold head card is waited for, and served when its bytes land")
     func waitsAndServes() async throws {
-        let fixture = try await Fixture(photos: ["a.png"], wait: .seconds(10))
+        // The bound is thirty seconds and the assertion is fifteen, so the
+        // assertion still says something: the bytes land at 300 ms, and a
+        // request that took longer than fifteen seconds to notice did not
+        // notice, it waited the bound out. Fifteen rather than five since
+        // 2026-09-07, when a full parallel run starved this to six seconds
+        // and failed it for nothing.
+        let fixture = try await Fixture(photos: ["a.png"], wait: .seconds(30))
         defer { fixture.cleanUp() }
         try fixture.dealAll()
 
@@ -102,7 +108,7 @@ struct ServeWaitTests {
         #expect(served.card.externalID == "a.png")
         #expect(fixture.waited() == 1, "the request did not say it was waiting")
         #expect(fixture.dropped().isEmpty)
-        #expect(clock.now - started < .seconds(5), "the request waited out its whole bound")
+        #expect(clock.now - started < .seconds(15), "the request waited out its whole bound")
         #expect(fixture.queued == 0)
     }
 

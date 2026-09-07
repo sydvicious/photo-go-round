@@ -8,13 +8,13 @@ A Photos library rebuild on 2026-09-07 renumbered two albums. The agent could no
 
 # Phases
 
-- **Phase 1 — The provider tells the truth.** Existence asks whether the album resolves before it asks whether the photograph does. An album that is not there answers *unknown*, and serving and fetching already do the right thing with that.
+- **Phase 1 — complete, 2026-09-07. The provider tells the truth.** Existence asks whether the album resolves before it asks whether the photograph does. An album that is not there answers *unknown*, and serving and fetching already do the right thing with that.
   - `existence(of:in:)` resolves the collection first; unresolved is `.unknown("the album is not in this Photos library")`.
-  - Tests against `FakePhotoLibrary` for all four answers.
+  - Tests against `FakePhotoLibrary` for all four answers, and `MissingAlbumTests` replaying the rebuild through the cache.
   - Run it: a cached photograph from a missing album is served, marked unconfirmed, and its row stays.
-- **Phase 2 — An unavailable source deals only what it holds.** The deck's population excludes photographs whose source is unavailable and whose bytes are not here, for every kind.
-  - The pool predicate gains `source available OR cached_at IS NOT NULL`.
-  - Tests in `DeckPoolTests`: held photographs of an unavailable source are dealt, unheld ones are not, and the pool count agrees.
+- **Phase 2 — complete, 2026-09-07. An unavailable source deals only what it holds.** The deck's population excludes photographs whose source is unavailable and whose bytes are not here, for every kind.
+  - The pool predicate gains `source available OR cached_at IS NOT NULL`, by a join to `source`; no migration.
+  - Tests in `DeckPoolTests`: held photographs of an unavailable source are dealt, unheld ones are not, and the pool count agrees. Three tests that asserted the old rule were rewritten to the new one.
   - Run it: the "no asset" fetch churn from a missing album stops.
 - **Phase 3 — The name is stored beside the identifier.** Title, collection kind, and folder path are captured from the catalog at add time and written to the preference entry and the source row.
   - Migration 11: `title`, `collection_kind`, `folders` on `source`.
@@ -174,12 +174,31 @@ Switching the system library fails every album at once. Under this plan every Ph
 - **Phase 5.** `PhotosSourceEditingTests`: reconnect with one match rewrites row and preference and keeps the uuid; with none or two it throws and changes nothing; a reconcile after a reconnect adds and removes nothing. `photogorounddTests` for the endpoint's three answers.
 - **From nothing.** The reproduction that started this: rename a user album in Photos, watch the panel list it as missing with Reconnect enabled, reconnect it, and confirm the source keeps its uuid and the next refresh repopulates it.
 
+## What running it found
+
+**Phase 1, 2026-09-07.** The tests failed first exactly as the log had: the cache served nothing because it had deleted the held photograph, and the failed fetch took the row. The fix was one guard in the provider. The reason string was already spelled in two places and is now one constant. Serving and the fetch-failure path needed no change: both already treat *unknown* as "keep the row", and serving already marks the picture unconfirmed with the reason.
+
+**The rebuild is replayed against the database, not the fake library.** `MissingAlbumTests` builds a Photos source on the fake, refreshes and fetches one card, then rewrites the source's locator and every asset identifier in the rows to values the library has never heard of. That is what a rebuild looks like from the agent's side — the library moved on and the rows describe a world that is gone — and it needed no second fake.
+
+**Phase 2, 2026-09-07.** The join was taken over the denormalised column and cost nothing measurable; the whole suite runs in the same five seconds it did. `Deck.population` is the one `FROM` clause every population query shares, so the alias the predicate relies on is spelled once.
+
+**Three tests asserted the old rule by name and were rewritten.** *Offline sources still deal — reachability is the fetch's problem, not the deck's* in `StarvedQueueTests` had made the point that `walked 0` was diagnostic because an offline source still filled the queue; it now asserts the held half deals and the cold half does not, and its comment says what `walked 0` means now. *An unreachable folder leaves every row untouched* in `SourceTests` now expects a pool of zero beside two untouched rows. *Clearing unavailable sources frees only what can never be fetched again* in `CacheTests` now expects the cleared photographs to leave the pool, since nothing of them is held.
+
+**A restore assertion tripped over pass mechanics.** The new pool test first asserted that eight draws after the source returned would deal all eight photographs. They do not: the two cold ones are the only eligible cards until the pass ends, the pass then reshuffles, and eight draws over a reshuffled eight miss one. The assertion became "the next two deals are exactly the cold ones", which is the stronger claim anyway.
+
+**A wall-clock bound in `ServeWaitTests` failed once under the full parallel run**, at 6.25 seconds against a 5 second limit, with the bytes landing at 300 ms. It passed three times alone and in the next full run. The limit is 15 seconds now and the fixture's wait is 30, so the assertion still distinguishes "noticed the bytes" from "waited the bound out". Syd's call, 2026-09-07.
+
 ## Other plan documents this touches
 
-Flagged, not edited:
+Amended 2026-09-07 for Phases 1 and 2:
 
-- `Apple Photos Plan.md` — "`.absent` is only ever said when the library was readable" becomes "when the library was readable and the album resolved". The section at line 448 on `.gone` stands.
-- `PLAN.md` — the *Cache* decision that reachability is not a gate on dealing gains the exception for unavailable sources; the *Sources* decision that a switched library is treated as unavailable gains the panel; the source-as-preference section gains the three optional keys.
+- `Apple Photos Plan.md` — the decision that a collection which stops resolving is `.offline`, and the *existence* and *availability* subsections.
+- `PLAN.md` — the *Sources* decisions on the moment-before-showing check and on the System Photo Library; the *Cache* decisions on dealing over everything and on every photo being dealt; the *What happens to a source that never comes back* discussion.
+- `Deck and Queue v2.md` — the readers of `cached_at`.
+
+Still to amend, with Phases 3 to 5:
+
+- `PLAN.md` — the source-as-preference section gains the three optional keys.
 - `app/mac/FEATURES.md` — the Apple Photos group box's missing-albums line and its two buttons.
 
 # References

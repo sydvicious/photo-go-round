@@ -64,8 +64,10 @@ struct TestLibrary {
     ///
     /// The deck stopped reading that column on 2026-09-05 — it deals every
     /// available photograph, bytes or not — so this decides nothing about
-    /// dealing any more. It stays because tests about serving and residency
-    /// want the library to say the bytes are here.
+    /// dealing from a source that is available. It decides everything for one
+    /// that is not: since 2026-09-07 an unavailable source deals only what is
+    /// held. Tests about serving and residency also want the library to say
+    /// the bytes are here.
     @discardableResult
     func addPhotos(
         _ count: Int,

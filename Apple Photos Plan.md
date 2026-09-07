@@ -47,7 +47,7 @@ The window is showing a test folder. Every architectural claim this project has 
 - **The spike changes nothing in the kit.** A measurement that requires a schema, a provider, and a registration to run is not a spike, it is Phase 2 with a worse name.
 - **`.readWrite` authorization, because there is no read-only level.** `PHAccessLevel` has exactly `.addOnly` and `.readWrite`, and `.addOnly` grants writing only. Reading an album requires `.readWrite`; the usage string is where the asymmetry gets explained.
 - **Storage is always `.materialized`.** There is no path to reference. A Photos asset's bytes are ours only once we have copied them. **Re-examined after the spike found that Photos retains downloaded originals, and upheld: the double storage cost is worth paying.**
-- **A collection that stops resolving is `.offline`, never `.gone`.** `PLAN.md` is explicit: switching system libraries fails every stored identifier at once, and answering `.gone` would delete a library over it.
+- **A collection that stops resolving is `.offline`, never `.gone`.** `PLAN.md` is explicit: switching system libraries fails every stored identifier at once, and answering `.gone` would delete a library over it. **And since 2026-09-07 its photographs are *unknown*, never `.absent`.** `existence` asked only whether the library was readable, so a rebuild that renumbered two albums answered `.absent` for every cached photograph in them against a perfectly readable library and deleted each as its turn came — the same fact `availability` was calling offline. The album is asked before the photograph now. See `Missing Albums Plan.md`.
 - **`.fullSizePhoto` when present, `.photo` otherwise, matched on exact resource type.** The first is the edited render, the second the original. Measured against a real Live Photo, the resource to avoid is **`.fullSizePairedVideo`** rather than `.pairedVideo`: it sits immediately before `.fullSizePhoto` in the list and is called `FullSizeRender.mov` against the photo's `FullSizeRender.heic`, so any prefix, position, or filename heuristic takes a movie.
 - **Videos are excluded at the fetch**, by `PHFetchOptions.predicate` on `mediaType == PHAssetMediaType.image.rawValue`, so they never enter the row set at all.
 - **`requestData` rather than `writeData` for materialize.** Both stream. Only `requestData` returns a request id and can be cancelled — an abandoned `writeData` keeps running in the daemon and may still deliver its file, so a source that times out repeatedly accumulates work we can neither see nor stop.
@@ -434,6 +434,8 @@ Fetch by local identifier. A result means present, an empty result means absent 
 
 `.unknown` is returned only when authorization is not granted, which is a genuine claim about reachability rather than about effort. The doc comment on `existence` is unusually pointed about this — answering `.unknown` when the truth is `.absent` shows the photo, and some reasons a person deletes a photograph are not benign.
 
+**Amended 2026-09-07: `.unknown` is also the answer when the album does not resolve.** The paragraph above assumed the only way for an identifier to fail against a readable library was a switch, which `availability` catches. A rebuild is the other way: Photos renumbered two albums and every asset in them, the library stayed readable, `availability` said offline, and `existence` — never having looked at the album — said `.absent` for each cached photograph as it came up to be shown, and deleted it. So the collection is fetched first, and an empty result there is *unknown* with the same reason `availability` gives. `.absent` is only ever said when the library was readable *and the album resolved*. See `Missing Albums Plan.md`.
+
 The latency budget is generous, and it is worth using. `PHAsset.fetchAssets(withLocalIdentifiers:)` is a local database query, so this is fast anyway — but the contract says take the time to be right, and if a future version of this needs a network round trip to answer honestly, it should take it.
 
 ### availability
@@ -446,6 +448,8 @@ Driven by `PHPhotoLibrary.authorizationStatus(for: .readOnly)`:
 - `.notDetermined` — `.offline`. Notably **not** a place to raise the prompt: `availability` is called from the scanner, on a timer, in a background process, and prompting from there is exactly the baffling unattributed prompt the design avoids.
 
 `.gone` is never returned by this provider. That is deliberate and total. The only thing that would justify it is knowing an album was deleted while the library was demonstrably present and readable — and distinguishing that from a library switch requires knowing which library we are talking to, which `PLAN.md` says there is no public way to ask. So the expensive mistake is unavailable to us by construction, which is a good place to be.
+
+That still held on 2026-09-07, and it was not enough on its own: the deletion this rule exists to prevent happened anyway, one photograph at a time, through `existence`. The two questions now agree — see the amendment under *existence* — and what happens to a missing album after that is `Missing Albums Plan.md`: it keeps serving from the cache, its unheld photographs are not dealt, and the panel names it with Remove and Reconnect.
 
 ### materialize
 
