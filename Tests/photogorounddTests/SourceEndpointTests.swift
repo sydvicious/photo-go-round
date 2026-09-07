@@ -521,6 +521,48 @@ struct SourceEndpointTests {
         )
     }
 
+    /// **Where an album sits, sent because the panel draws the same tree the
+    /// picker does.** Both are already stored beside the identifier for
+    /// reconnecting, so this costs no library call — and without them the panel
+    /// could only ever draw a flat list, in a different order from the window a
+    /// person chose the album in.
+    @Test("A collection carries what kind it is and the folders holding it")
+    func aCollectionCarriesWhereItSits() async throws {
+        let library = try rebuiltLibrary(successors: [])
+        library.preferences.setSources([
+            SourceSpec(
+                kind: .photosCollection, locator: "LIB/L0/040",
+                description: SourceDescription(
+                    title: "Iceland", collectionKind: "userAlbum", folders: ["Trips", "2019"]))
+        ])
+        try library.store.reconcile(with: library.preferences)
+
+        let album = try #require(try sources(try await library.get("/v2/sources")).first)
+        #expect(album.collectionKind == "userAlbum")
+        #expect(album.folders == ["Trips", "2019"])
+    }
+
+    /// **v1 is a whole set and does not change.** A client that asked for it
+    /// gets exactly what it has always answered, the same rule `title` and
+    /// `missing` already follow.
+    @Test("v1 is told neither the kind nor the folders")
+    func v1IsUnchanged() async throws {
+        let library = try rebuiltLibrary(successors: [])
+        library.preferences.setSources([
+            SourceSpec(
+                kind: .photosCollection, locator: "LIB/L0/040",
+                description: SourceDescription(
+                    title: "Iceland", collectionKind: "userAlbum", folders: ["Trips"]))
+        ])
+        try library.store.reconcile(with: library.preferences)
+
+        // v1 admits no Photos sources at all, so the absence is the whole
+        // answer — and asserting it is what would catch a v2 field leaking into
+        // a shape a v1 client parses.
+        let listed = try sources(try await library.get("/v1/sources"))
+        #expect(listed.allSatisfy { $0.collectionKind == nil && $0.folders == nil })
+    }
+
     @Test("The list says which missing albums can be reconnected")
     func theListSaysWhatIsReconnectable() async throws {
         let library = try rebuiltLibrary(successors: [Self.renumbered])

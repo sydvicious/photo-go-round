@@ -129,6 +129,12 @@ struct PhotosEndpointTests {
 
     /// The whole reason listing and counting are separate: 34 seconds for a real
     /// library, and nobody waits for that to see the names.
+    ///
+    /// **Structural since 2026-09-07, not a scheduling accident.** The endpoint
+    /// used to read the listing and the progress as two actor hops, and the
+    /// background count could run between them — so what it reported described
+    /// a different moment from what it returned. `PhotosCollectionCatalog.listing`
+    /// answers both at once.
     @Test("Names come back before any counts do")
     func namesBeforeCounts() async throws {
         let body = try wire(await Self.endpoint(Self.stocked).route(Self.get()))

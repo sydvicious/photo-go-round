@@ -24,8 +24,27 @@ final class CollectionsModel {
     /// parameters, and the picker asking the agent for itself is the same
     /// arrangement as every other surface in this app.
     private(set) var existing: [SourceService.Source] = []
-    /// What went wrong with the last thing asked, in words meant to be read.
+    /// What went wrong with the last thing a person **asked for**, in words
+    /// meant to be read: applying a set of ticks, or granting access.
     private(set) var trouble: String?
+
+    /// Why the last read did not work, when it did not.
+    ///
+    /// **Separate from `trouble`, and quieter**, exactly as in `SourcesModel`.
+    /// This picker polls every few seconds while counts are arriving, and a
+    /// poll that failed is not something anybody clicked. Reporting it beside
+    /// the Done button puts a failure notice under a list that is still
+    /// perfectly good, every few seconds, for as long as the library is unwell.
+    ///
+    /// **Shown only when there is nothing else to show** — which here means
+    /// `library == nil`, the picker having never managed to read one. A picker
+    /// that has three hundred albums on screen keeps them and says nothing.
+    ///
+    /// `SourcesModel` spells that condition `hasRead`, because an empty source
+    /// list is ambiguous — nothing found and nothing asked look identical. Here
+    /// it is not: `library` is nil until an answer lands, so the state already
+    /// exists and a second flag beside it could only ever disagree with it.
+    private(set) var readFailure: String?
     private(set) var isWorking = false
 
     /// Identifiers currently ticked. Seeded from the sources that already
@@ -95,6 +114,7 @@ final class CollectionsModel {
     /// asked than a blank panel, and the answer replaces them either way.
     func load() async {
         trouble = nil
+        readFailure = nil
         seeded = false
         await refresh()
     }
@@ -122,9 +142,13 @@ final class CollectionsModel {
                 seeded = true
             }
             library = try await service.collections()
-            trouble = nil
+            readFailure = nil
         } catch {
-            trouble = SourcesModel.explain(error)
+            // Recorded and logged, not put beside the controls: a poll that
+            // failed is not something this window did. See `readFailure`.
+            readFailure = SourcesModel.explain(error)
+            Log.sources.error(
+                "picker: read failed — \(self.readFailure ?? "", privacy: .public)")
         }
     }
 
@@ -169,7 +193,7 @@ final class CollectionsModel {
             out.append(
                 PickerNode(
                     id: favorites.identifier, title: favorites.title, depth: 0,
-                    collection: favorites, children: []))
+                    item: favorites, children: []))
         }
 
         out += visible.map { section in
@@ -177,12 +201,12 @@ final class CollectionsModel {
                 id: section.section,
                 title: section.title,
                 depth: 0,
-                collection: nil,
-                children: Self.nodes(
+                item: nil,
+                children: PickerNode.tree(
                     // Removed from wherever it would otherwise have sorted, so
                     // it is at the top *instead of* rather than as well as.
-                    in: section.collections.filter { $0.kind != Self.favoritesKind },
-                    below: [], under: section.section, depth: 1))
+                    of: section.collections.filter { $0.kind != Self.favoritesKind },
+                    under: section.section, depth: 1))
         }
         return out
     }
@@ -199,59 +223,12 @@ final class CollectionsModel {
 
     /// The rows to draw beneath one section right now, in order, flattened.
     ///
-    /// **Flattened here rather than recursed in the view.** A SwiftUI function
-    /// returning `some View` cannot call itself — the opaque type would be
-    /// defined in terms of itself — and nesting stacks inside a `LazyVStack`
-    /// would cost the laziness anyway. A shut folder contributes its own row
-    /// and nothing under it, so a closed tree builds nothing it does not draw.
+    /// **The rule lives in `FolderNode`**, so the panel draws the same tree
+    /// this window does. It was written here first, when the panel had a flat
+    /// list; two copies of thirty lines of sorting and recursion agree until
+    /// somebody edits one.
     func rows(under section: PickerNode) -> [PickerNode] {
-        var out: [PickerNode] = []
-        func walk(_ nodes: [PickerNode]) {
-            for node in nodes {
-                out.append(node)
-                guard !node.isAlbum, !isCollapsed(node.id) else { continue }
-                walk(node.children)
-            }
-        }
-        walk(section.children)
-        return out
-    }
-
-    /// Splits one level: the collections that stop here, and the folders that
-    /// go deeper.
-    ///
-    /// **Folders before albums, each sorted by name**, which is what Photos
-    /// does and what somebody scanning for a name expects.
-    private static func nodes(
-        in collections: [SourceService.Library.Collection],
-        below path: [String],
-        under prefix: String,
-        depth: Int
-    ) -> [PickerNode] {
-        let here = collections.filter { $0.folders.count == path.count }
-        let deeper = collections.filter { $0.folders.count > path.count }
-
-        var folders: [PickerNode] = []
-        for name in Set(deeper.map { $0.folders[path.count] })
-            .sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending })
-        {
-            let mine = deeper.filter { $0.folders[path.count] == name }
-            let id = "\(prefix)/\(name)"
-            folders.append(
-                PickerNode(
-                    id: id, title: name, depth: depth, collection: nil,
-                    children: nodes(in: mine, below: path + [name], under: id, depth: depth + 1)))
-        }
-
-        let albums =
-            here
-            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-            .map {
-                PickerNode(
-                    id: $0.identifier, title: $0.title, depth: depth, collection: $0,
-                    children: [])
-            }
-        return folders + albums
+        PickerNode.rows(under: section.children, isCollapsed: isCollapsed)
     }
 
     func isCollapsed(_ section: String) -> Bool { collapsed.contains(section) }
@@ -277,7 +254,7 @@ final class CollectionsModel {
     }
 
     func chosen(under node: PickerNode) -> Chosen {
-        let albums = node.albums
+        let albums = node.items
         guard !albums.isEmpty else { return .none }
         let ticked = albums.reduce(0) { $0 + (chosen.contains($1.identifier) ? 1 : 0) }
         if ticked == 0 { return .none }
@@ -290,7 +267,7 @@ final class CollectionsModel {
     /// checkbox on this platform completes the set; somebody who wants it empty
     /// clicks once more and gets that.
     func chooseAll(under node: PickerNode) {
-        let identifiers = node.albums.map(\.identifier)
+        let identifiers = node.items.map(\.identifier)
         if chosen(under: node) == .all {
             chosen.subtract(identifiers)
         } else {
@@ -301,7 +278,7 @@ final class CollectionsModel {
     /// How many albums are ticked anywhere beneath a node, so anything twisted
     /// shut still says whether something inside it is in play.
     func chosenCount(under node: PickerNode) -> Int {
-        node.albums.reduce(0) { $0 + (chosen.contains($1.identifier) ? 1 : 0) }
+        node.items.reduce(0) { $0 + (chosen.contains($1.identifier) ? 1 : 0) }
     }
 
     var chosenCount: Int { chosen.count }

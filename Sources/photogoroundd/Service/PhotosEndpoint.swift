@@ -92,7 +92,10 @@ struct PhotosEndpoint: Sendable {
             return await albums(request, from: started)
         case (Self.authorizationPath, "GET"):
             do {
-                let authorization = try await library.authorization
+                let budget = RequestBudget()
+                let authorization = try await budget.require("authorization") { [library] in
+                    try await library.authorization
+                }
                 return report(
                     request, json(Consent(authorization: Self.name(authorization))),
                     detail: "authorization read", from: started)
@@ -127,9 +130,15 @@ struct PhotosEndpoint: Sendable {
     private func albums(
         _ request: HTTPListener.Request, from started: Date
     ) async -> HTTPListener.Response {
+        // **One budget for the whole reply.** Authorization and the listing are
+        // two library calls with a bound each; added up they are a response
+        // whose length nobody upstream can predict. Shared, they are one.
+        let budget = RequestBudget()
         let authorization: LibraryAuthorization
         do {
-            authorization = try await library.authorization
+            authorization = try await budget.require("authorization") { [library] in
+                try await library.authorization
+            }
         } catch {
             return report(
                 request, Self.unavailable(error),
@@ -146,9 +155,11 @@ struct PhotosEndpoint: Sendable {
                 detail: "not readable: \(Self.name(authorization))", from: started)
         }
 
-        let groups: [LibrarySectionGroup]
+        let listing: (sections: [LibrarySectionGroup], counted: Int, total: Int)
         do {
-            groups = try await catalog.sections()
+            listing = try await budget.require("collections") { [catalog] in
+                try await catalog.listing()
+            }
         } catch {
             // **503 rather than an empty list.** A client handed `sections: []`
             // would draw *this library has no collections* over a library full
@@ -159,7 +170,7 @@ struct PhotosEndpoint: Sendable {
                 request, Self.unavailable(error),
                 detail: "library did not answer", from: started)
         }
-        let progress = await catalog.progress()
+        let groups = listing.sections
         let wire = Wire(
             authorization: Self.name(authorization),
             sections: groups.map { group in
@@ -172,13 +183,13 @@ struct PhotosEndpoint: Sendable {
                             kind: $0.kind.rawValue, count: $0.count, folders: $0.folders)
                     })
             },
-            counted: progress.counted,
-            total: progress.total)
+            counted: listing.counted,
+            total: listing.total)
 
         let total = groups.reduce(0) { $0 + $1.collections.count }
         return report(
             request, json(wire),
-            detail: "\(total) collections, \(progress.counted) of \(progress.total) counted",
+            detail: "\(total) collections, \(listing.counted) of \(listing.total) counted",
             from: started)
     }
 

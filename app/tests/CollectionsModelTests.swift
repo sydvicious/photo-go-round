@@ -138,6 +138,29 @@ struct CollectionsModelTests {
                 transport: agent.transport()))
     }
 
+    /// The same separation the panel makes: `trouble` is what a person asked
+    /// for and did not get; a poll that failed is recorded quietly and leaves
+    /// what is on screen alone.
+    @Test("A failed poll says nothing beside Done; a failed apply does")
+    func onlyActionsSpeakBesideDone() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds(library: Self.library([("albums", "Albums", [Self.album("A1", "Sunsets")])]))
+        let model = Self.model(agent, scratch, read: .milliseconds(50), write: .milliseconds(50))
+        await model.load()
+
+        agent.goesSilent()
+        await model.refresh()
+        #expect(model.trouble == nil)
+        #expect(model.readFailure != nil)
+        #expect(model.visible.count == 1)
+
+        // Something the person clicked, failing: that is what the line is for.
+        model.chosen = ["A1"]
+        #expect(await model.apply() == false)
+        #expect(model.trouble != nil)
+    }
+
     // MARK: - An agent that is running and stuck
 
     /// **Applying must never leave the picker locked.** `apply` sets
@@ -178,7 +201,10 @@ struct CollectionsModelTests {
         agent.goesSilent()
         await model.load()
 
-        #expect(model.trouble != nil)
+        // Recorded quietly rather than shown beside Done: a poll that failed is
+        // not something this window did. See `CollectionsModel.readFailure`.
+        #expect(model.trouble == nil)
+        #expect(model.readFailure != nil)
         // Still there, and still named.
         #expect(model.visible.first?.collections.first?.title == "Sunsets")
     }
@@ -531,7 +557,7 @@ struct CollectionsModelTests {
     /// **A `Window` scene's model outlives its window**, so without this the
     /// second visit opens showing why the first one failed — *the agent is not
     /// answering*, about an agent that is answering fine now.
-    @Test("Reopening the picker forgets the last visit's trouble and asks again")
+    @Test("Reopening the picker forgets the last visit's failure and asks again")
     func reopeningForgetsTheLastFailure() async {
         let scratch = Scratch()
         let agent = Agent()
@@ -539,13 +565,13 @@ struct CollectionsModelTests {
         let model = Self.model(agent, scratch, read: .milliseconds(50))
         agent.goesSilent()
         await model.load()
-        #expect(model.trouble != nil)
+        #expect(model.readFailure != nil)
 
         // The window closes and opens again, against an agent that is fine now.
         agent.speaksAgain()
         await model.load()
 
-        #expect(model.trouble == nil)
+        #expect(model.readFailure == nil)
         #expect(model.visible.count == 1)
     }
 

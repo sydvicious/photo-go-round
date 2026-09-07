@@ -36,7 +36,10 @@ struct CollectionPickerView: View {
         if let library = model.library, !library.isReadable {
             unauthorized(library.authorization)
         } else if model.library == nil {
-            message(model.trouble ?? "Asking the agent what is in your library…")
+            // **The read failure, and only here.** This is the one branch with
+            // nothing else on screen, so the words are the whole answer rather
+            // than an interruption over a list that is still good.
+            message(model.readFailure ?? "Asking the agent what is in your library…")
         } else if model.visible.isEmpty {
             message("This photo library has no collections.")
         } else {
@@ -50,13 +53,13 @@ struct CollectionPickerView: View {
                 ForEach(model.tree) { top in
                     // An album at the top of the tree is Favorites, which has no
                     // heading and nothing under it.
-                    if let collection = top.collection {
+                    if let collection = top.item {
                         row(collection, depth: 0, prominent: true)
                     } else {
                         Section {
                             if !model.isCollapsed(top.id) {
                                 ForEach(model.rows(under: top)) { node in
-                                    if let collection = node.collection {
+                                    if let collection = node.item {
                                         row(collection, depth: node.depth)
                                     } else {
                                         twisty(node, isSection: false)

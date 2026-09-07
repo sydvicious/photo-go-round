@@ -30,6 +30,42 @@ final class SourcesModel {
     /// **A missing album is not in play and is not listed here.** It has its
     /// own line — see `missingCollections` — and appearing in both would show
     /// "Kids 2019" once as chosen and once as gone.
+    /// The chosen collections as Photos arranges them: Favorites on top, then
+    /// folders and albums, each sorted by name.
+    ///
+    /// **The same tree the picker draws, from the same builder.** Somebody who
+    /// ticked *Trips › 2019 › Iceland* in that window must find it filed the
+    /// same way here; a flat alphabetical list would be a second arrangement of
+    /// one library, and the one they did not choose it in.
+    ///
+    /// An agent from before 2026-09-07 sends no folders, so every collection
+    /// reads as top-level and this degrades to a sorted list — which is exactly
+    /// what it was before.
+    var collectionTree: [SourceNode] {
+        let chosen = photoCollections
+        var out: [SourceNode] = []
+        // **Favorites above the rest, on its own.** It is an album by every
+        // technical measure and is not one by any other: the album a person
+        // means when they say "the good ones". Photos puts it above its sidebar
+        // sections, the picker puts it above its own, and so does this.
+        if let favorites = chosen.first(where: \.isFavorites) {
+            out.append(
+                SourceNode(
+                    id: favorites.uuid, title: favorites.name, depth: 0,
+                    item: favorites, children: []))
+        }
+        // Removed from wherever it would otherwise have sorted, so it is at the
+        // top *instead of* rather than as well as.
+        return out + SourceNode.tree(of: chosen.filter { !$0.isFavorites })
+    }
+
+    /// The tree flattened to rows. Nothing here collapses: everything in this
+    /// list is a collection somebody chose, and hiding one behind a twisty
+    /// would be hiding the state it was put here to show.
+    var collectionRows: [SourceNode] {
+        SourceNode.rows(under: collectionTree)
+    }
+
     var photoCollections: [SourceService.Source] {
         Self.byName(sources.filter { $0.isPhotosCollection && !$0.isMissing })
     }
@@ -161,8 +197,33 @@ final class SourcesModel {
     /// it has to do anyway, since something else may have removed the row.
     func load() async {
         trouble = nil
+        readFailure = nil
         await refresh()
     }
+
+    /// Whether the agent has ever answered a read.
+    ///
+    /// **So the panel can tell *nothing here* from *nothing asked yet*.** An
+    /// empty list means one of those before the first answer lands and the other
+    /// after, and saying "No sources" in the first case states a fact nobody has
+    /// established — over a library that may hold a hundred folders. The picker
+    /// has always drawn this distinction; this is Settings catching up.
+    private(set) var hasRead = false
+
+    /// Why the last read did not work, when it did not.
+    ///
+    /// **Separate from `trouble`, and quieter.** `trouble` is what happened to
+    /// something a person just clicked; this is a poll on a timer that nobody
+    /// asked for failing. Reporting the second one where the first is reported
+    /// put a sentence about the photo library into the folders-and-files panel,
+    /// over a list whose contents are on a disk this app can see for itself.
+    ///
+    /// **Shown only when there is nothing else to show** — the same rule the
+    /// window follows for a photograph: what is up stays up, and the words
+    /// appear only when there has never been anything. So a panel that has a
+    /// list keeps it and says nothing; a panel that has never managed to read
+    /// one says why instead of claiming to be still looking for ever.
+    private(set) var readFailure: String?
 
     /// Asks the agent what it has. Never throws: this is called on a timer, on a
     /// doorbell, and after every change, and a failure is something to *show*,
@@ -175,7 +236,8 @@ final class SourcesModel {
             Log.sources.notice(
                 "panel: read \(listed.count, privacy: .public) sources, selection \(self.selection ?? "none", privacy: .public)"
             )
-            trouble = nil
+            readFailure = nil
+            hasRead = true
             // A source removed by something else — `pgr_ctl`, another window —
             // must not leave the panel with a selection pointing at nothing,
             // because every button reads the selection to decide what it does.
@@ -192,7 +254,11 @@ final class SourcesModel {
                 }
             }
         } catch {
-            trouble = Self.explain(error)
+            // Recorded and logged, not put on screen beside the controls: see
+            // `readFailure`. A poll that failed is not something this panel did.
+            readFailure = Self.explain(error)
+            Log.sources.error(
+                "panel: read failed — \(self.readFailure ?? "", privacy: .public)")
         }
     }
 
@@ -301,19 +367,16 @@ final class SourcesModel {
         }
 
         // The list is re-read either way, because a refusal says nothing about
-        // what else has changed since. **Then the failure is put back**: the
-        // reload succeeds — listing works fine when a change was refused — and
-        // it clears `trouble` on its way, which would erase the only account of
-        // why the thing the user just asked for did not happen.
+        // what else has changed since.
         //
-        // `refresh` rather than `load`: a change happens *inside* a visit, and
-        // the two clear `trouble` at different moments. `refresh` clears it only
-        // when a read succeeds; `load` clears it up front, which would blank
-        // whatever is on screen for the length of the read and then put this
-        // failure back — a flicker saying nothing is wrong, in the middle of
-        // reporting that something is.
+        // `refresh` rather than `load`: a change happens *inside* a visit, so
+        // there is nothing stale to forget.
         await refresh()
-        if let failure { trouble = failure }
+        // **Set last, and to nil on success.** `trouble` belongs entirely to
+        // actions now — the read above no longer touches it — so this is both
+        // how a refusal reaches the screen and how the next thing that works
+        // takes it away.
+        trouble = failure
     }
 
     // MARK: - Where a source stands, asked here rather than remembered

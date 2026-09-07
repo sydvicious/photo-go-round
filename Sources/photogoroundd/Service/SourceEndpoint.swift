@@ -130,6 +130,23 @@ struct SourceEndpoint {
         /// what an album is called, which is the whole reason this endpoint
         /// exists for kinds the app cannot see for itself.
         var title: String?
+        /// What kind of collection this is — `LibraryCollectionKind`'s raw
+        /// value, `favorites` and `userAlbum` and the rest.
+        ///
+        /// **v2 only, and only for a kind whose locator is not a path.** The
+        /// panel reads it for one thing the picker already does: Favorites is
+        /// an album by every technical measure and is not one by any other, so
+        /// it sits above the rest rather than alphabetically among them.
+        var collectionKind: String?
+        /// The folders containing it, outermost first; empty at the top level
+        /// of the library and for every smart album, which Photos never puts in
+        /// a folder.
+        ///
+        /// **v2 only.** It is what lets the panel draw the same tree the picker
+        /// does, rather than a flat list in a different order from the window a
+        /// person chose these in. Already stored beside the identifier for
+        /// reconnecting, so sending it costs no library call.
+        var folders: [String]?
         /// **v2 only, and only for a kind whose locator is not a path.** True
         /// when the source is unavailable because the album it names is not
         /// in a library that is — a rebuild renumbered it, or the library was
@@ -260,9 +277,15 @@ struct SourceEndpoint {
         _ request: HTTPListener.Request, store: SourceStore, version: Version
     ) async -> HTTPListener.Response {
         do {
+            // **One budget for the list, not one per source.** A person with
+            // twenty albums must not pay twenty bounds to be told the library is
+            // not answering; the first source to run it out settles it for the
+            // rest, which then answer from what the store already knows.
+            let budget = RequestBudget()
             var sources: [Wire] = []
             for source in try store.all() where version.admits(source.kind) {
-                sources.append(await wire(source, store: store, version: version))
+                sources.append(
+                    await wire(source, store: store, version: version, budget: budget))
             }
             return answer(
                 request, json(sources),
@@ -320,9 +343,13 @@ struct SourceEndpoint {
                 },
                 to: preferences)
 
+            // Shared across everything this add created, for the same reason
+            // the listing shares one.
+            let budget = RequestBudget()
             var created: [Wire] = []
             for source in addition.added {
-                created.append(await wire(source, store: store, version: version))
+                created.append(
+                    await wire(source, store: store, version: version, budget: budget))
             }
             return answer(
                 request,
@@ -492,7 +519,8 @@ struct SourceEndpoint {
     /// looking either, because for a Photos or Google album the scan is the only
     /// thing that can look.
     private func wire(
-        _ source: Source, store: SourceStore, version: Version = .v1
+        _ source: Source, store: SourceStore, version: Version = .v1,
+        budget: RequestBudget = RequestBudget()
     ) async -> Wire {
         // v1's shape does not change. Each version is a whole set, and a client
         // that asked for v1 gets exactly what v1 has always answered.
@@ -503,19 +531,33 @@ struct SourceEndpoint {
             // The library's answer first, so a rename shows through at once;
             // the stored name when the library has none to give, which is
             // exactly the album that is not there any more.
-            title = await provider.title(of: source) ?? source.description?.title
+            // **Every library question here is best-effort, and spends the
+            // response's budget.** Asking is what lets a rename in Photos show
+            // through at once, which is worth a fast round trip and worth
+            // nothing at all against a library that has stopped answering — and
+            // this runs once per source, so on a list it is the difference
+            // between one bound and twenty.
+            title =
+                await budget.attempt({ await provider.title(of: source) }).flatMap { $0 }
+                ?? source.description?.title
             if !source.kind.isFileBacked {
                 // Asked only of a source the scan has already written off:
                 // one it found is not missing, whatever the library says in
                 // the moment between.
                 if source.available {
                     missing = false
-                } else if case .missing = await provider.availability(of: source) {
+                } else if case .some(.missing) = await budget.attempt({
+                    await provider.availability(of: source)
+                }) {
                     missing = true
                     // The same rule `reconnect` applies, asked ahead of time
                     // so the panel can enable the button honestly.
-                    reconnectable = await provider.successors(of: source).count == 1
+                    reconnectable =
+                        await budget.attempt({ await provider.successors(of: source) })?.count == 1
                 } else {
+                    // **False when the budget is gone, never nil-and-guessed.**
+                    // A library that did not answer has said nothing about this
+                    // album, and `missing` is the flag that offers to remove it.
                     missing = false
                 }
             }
@@ -529,6 +571,10 @@ struct SourceEndpoint {
             available: source.available,
             unavailableReason: source.unavailableReason,
             title: title,
+            // Straight from what the store kept when the album was added or
+            // last scanned — no library call, and no guess when there is none.
+            collectionKind: version == .v2 ? source.description?.collectionKind : nil,
+            folders: version == .v2 ? source.description?.folders : nil,
             missing: missing,
             reconnectable: reconnectable,
             photos: (try? store.pool.size(forSource: source.id)) ?? 0,

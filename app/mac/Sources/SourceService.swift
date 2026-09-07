@@ -49,12 +49,10 @@ struct SourceService {
 
     /// Reading: the source list, and the library's contents.
     ///
-    /// **Short, because these are polled.** `SourcesModel` re-reads on a timer
-    /// and `CollectionsModel` re-reads while counts are still arriving, so an
-    /// answer that has not come in ten seconds is better reported than waited
-    /// for — the next attempt is along shortly and the panel goes on showing
-    /// what it last had.
-    static let defaultReadLimit = Duration.seconds(10)
+    /// **The number and the reasoning both live in `ServiceTiming`**, beside the
+    /// agent's own budget — because either one alone says nothing, and the bug
+    /// this fixes was exactly that they were kept apart until they were equal.
+    static let defaultReadLimit = ServiceTiming.clientReadLimit
 
     /// Changing: adding, removing, configuring, reconnecting.
     ///
@@ -99,6 +97,14 @@ struct SourceService {
         /// something. Only the agent can ask the library what an album is
         /// called.
         var title: String?
+        /// What kind of collection this is, as `LibraryCollectionKind` spells
+        /// it. Absent for a folder or a file, and for an agent from before
+        /// 2026-09-07 — which is why Favorites being on top degrades to
+        /// alphabetical rather than to a crash.
+        var collectionKind: String?
+        /// The folders containing it, outermost first; empty at the top level.
+        /// Absent for a folder or a file, and for an older agent.
+        var folders: [String]?
         /// True for a Photos album that is not in a library that is — a
         /// rebuild renumbered it, or the library was switched — which is the
         /// one kind of unavailable a person can act on here. Absent for a
@@ -110,25 +116,34 @@ struct SourceService {
         var photos: Int
         var scannedAt: Date?
 
-        var id: String { uuid }
+        nonisolated var id: String { uuid }
 
-        var isMissing: Bool { missing == true }
-        var isReconnectable: Bool { reconnectable == true }
+        nonisolated var isMissing: Bool { missing == true }
+        nonisolated var isReconnectable: Bool { reconnectable == true }
 
         /// What to call it in a list: the last path component, which is the part
         /// a person recognises. The full path is shown underneath and in
         /// Configure.
-        var name: String {
+        nonisolated var name: String {
             if let title, !title.isEmpty { return title }
             let leaf = URL(filePath: locator).lastPathComponent
             return leaf.isEmpty ? locator : leaf
         }
 
-        var isFolder: Bool { kind == "folder" }
+        /// What Photos would call the path to it. Empty at the top level.
+        nonisolated var folderPath: [String] { folders ?? [] }
+
+        /// **Favorites, which is filed as an album and is not one.** It is the
+        /// album a person means when they say "the good ones", and burying it
+        /// alphabetically among three hundred others is filing it correctly and
+        /// hiding it. The picker puts it above its sections; so does the panel.
+        nonisolated var isFavorites: Bool { collectionKind == "favorites" }
+
+        nonisolated var isFolder: Bool { kind == "folder" }
         /// An album, smart album, or Favorites in the system Photos library.
         /// These are listed in their own panel and are not added, removed, or
         /// configured by the controls that serve the file-backed ones.
-        var isPhotosCollection: Bool { kind == "photos_collection" }
+        nonisolated var isPhotosCollection: Bool { kind == "photos_collection" }
     }
 
     /// Why an ask did not work, in the terms the panel has something to say
@@ -203,11 +218,11 @@ struct SourceService {
             /// level of the library.
             var folders: [String] = []
 
-            var id: String { identifier }
+            nonisolated var id: String { identifier }
 
             /// What Photos would call the path to it, for a row that has to
             /// say which of two same-named albums it is.
-            var folderPath: String { folders.joined(separator: " › ") }
+            nonisolated var folderPath: String { folders.joined(separator: " › ") }
         }
     }
 

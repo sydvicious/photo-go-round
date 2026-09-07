@@ -164,7 +164,8 @@ struct SourcesModelTests {
         uuid: String, kind: String = "folder", locator: String = "/x/Pictures",
         recursive: Bool? = true, photos: Int = 3, available: Bool = true,
         scanned: Bool = true, title: String? = nil, missing: Bool? = nil,
-        reconnectable: Bool? = nil
+        reconnectable: Bool? = nil, collectionKind: String? = nil,
+        folders: [String]? = nil
     ) -> [String: Any] {
         var entry: [String: Any] = [
             "uuid": uuid, "kind": kind, "locator": locator, "enabled": true,
@@ -175,7 +176,18 @@ struct SourcesModelTests {
         if let title { entry["title"] = title }
         if let missing { entry["missing"] = missing }
         if let reconnectable { entry["reconnectable"] = reconnectable }
+        if let collectionKind { entry["collectionKind"] = collectionKind }
+        if let folders { entry["folders"] = folders }
         return entry
+    }
+
+    /// A Photos album as the v2 list describes one, with where it sits.
+    static func album(
+        uuid: String, title: String, folders: [String] = [], kind: String = "userAlbum"
+    ) -> [String: Any] {
+        entry(
+            uuid: uuid, kind: "photos_collection", locator: "LIB-\(uuid)/L0/0\(uuid)",
+            recursive: nil, photos: 4, title: title, collectionKind: kind, folders: folders)
     }
 
     /// A Photos album as the v2 list describes one.
@@ -229,6 +241,40 @@ struct SourcesModelTests {
             interval: .milliseconds(20), retry: .milliseconds(20))
     }
 
+    /// **"No sources" is a fact, and the panel used to state it before anybody
+    /// had looked.** Opening Settings against a slow agent showed an empty list
+    /// captioned *No sources* for the whole read, and then an error on top of
+    /// it — two wrong things about a library that may hold a hundred folders.
+    @Test("The panel does not claim there are no sources before it has asked")
+    func emptinessIsNotClaimedBeforeReading() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.entry(uuid: "a")])
+        let model = model(agent, scratch)
+
+        #expect(!model.hasRead)
+
+        await model.load()
+
+        #expect(model.hasRead)
+        #expect(model.sources.count == 1)
+    }
+
+    /// A read that failed has established nothing either, so the panel must not
+    /// start claiming emptiness on the strength of one.
+    @Test("A failed read does not count as having looked")
+    func aFailedReadEstablishesNothing() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.goesSilent()
+        let model = model(agent, scratch, read: .milliseconds(50))
+
+        await model.load()
+
+        #expect(!model.hasRead)
+        #expect(model.sources.isEmpty)
+    }
+
     // MARK: - An agent that is running and stuck
 
     /// **The guarantee: the panel cannot be locked for ever.**
@@ -265,13 +311,40 @@ struct SourcesModelTests {
         #expect(clock.now - started < .milliseconds(500))
     }
 
+    /// **`trouble` belongs to actions, and to nothing else.** A poll that
+    /// failed used to put its sentence beside the controls — so a photo library
+    /// that had stopped answering filled the folders-and-files panel with a
+    /// message about Photos, over a list whose contents are on a disk this app
+    /// can see for itself, triggered by a timer nobody touched.
+    @Test("A failed poll says nothing beside the controls; a failed action does")
+    func onlyActionsSpeakBesideTheControls() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([Self.entry(uuid: "a")])
+        let model = model(agent, scratch, read: .milliseconds(50), write: .milliseconds(50))
+        await model.load()
+
+        // A poll that fails: recorded, but not beside the controls.
+        agent.goesSilent()
+        await model.refresh()
+        #expect(model.trouble == nil)
+        #expect(model.readFailure != nil)
+        // And the list it already had is still there.
+        #expect(model.sources.count == 1)
+
+        // Something the person clicked, failing: that is what the line is for.
+        model.selection = "a"
+        await model.removeSelected()
+        #expect(model.trouble != nil)
+    }
+
     // MARK: - Opening the panel again
 
     /// **A `Window` scene's model outlives its window**, so without this the
     /// second visit draws showing why the first one failed — and against a
     /// silent agent it would keep saying so for the whole read bound before the
     /// fresh answer replaced it.
-    @Test("Reopening the panel forgets the last visit's trouble and asks again")
+    @Test("Reopening the panel forgets the last visit's failure and asks again")
     func reopeningForgetsTheLastFailure() async {
         let scratch = Scratch()
         let agent = Agent()
@@ -279,13 +352,13 @@ struct SourcesModelTests {
         let model = model(agent, scratch, read: .milliseconds(50))
         agent.goesSilent()
         await model.load()
-        #expect(model.trouble != nil)
+        #expect(model.readFailure != nil)
 
         // The window closes and opens again, against an agent that is fine now.
         agent.speaksAgain()
         await model.load()
 
-        #expect(model.trouble == nil)
+        #expect(model.readFailure == nil)
         #expect(model.sources.count == 1)
     }
 
@@ -325,9 +398,12 @@ struct SourcesModelTests {
 
         await model.load()
 
-        let trouble = model.trouble ?? ""
-        #expect(trouble.contains("not answering"))
-        #expect(!trouble.contains("is not running"))
+        // Recorded quietly rather than shown beside the controls: a poll that
+        // failed is not something this panel did. See `SourcesModel.readFailure`.
+        #expect(model.trouble == nil)
+        let failure = model.readFailure ?? ""
+        #expect(failure.contains("not answering"))
+        #expect(!failure.contains("is not running"))
     }
 
     /// The panel keeps asking, so an agent that comes back is picked up without
@@ -344,13 +420,79 @@ struct SourcesModelTests {
         // Waited for rather than slept through: the retry interval is 20 ms and
         // a loaded machine does not promise to honour it, so a fixed sleep here
         // is either slow or flaky and usually both.
-        try await Self.until({ model.trouble != nil }, "the silence being noticed")
+        try await Self.until({ model.readFailure != nil }, "the silence being noticed")
 
         agent.speaksAgain()
-        try await Self.until({ model.trouble == nil }, "the panel recovering")
+        try await Self.until({ model.readFailure == nil }, "the panel recovering")
         model.endPolling()
 
         #expect(model.sources.count == 1)
+    }
+
+    // MARK: - How the collections are arranged
+
+    /// **The panel must file an album where the picker did.** Somebody who
+    /// ticked *Trips › 2019 › Iceland* in that window has to find it filed the
+    /// same way here; a flat alphabetical list would be a second arrangement of
+    /// one library, and the one they did not choose it in.
+    @Test("Collections are arranged in the library's folders, folders before albums")
+    func collectionsKeepTheirFolders() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([
+            Self.album(uuid: "1", title: "Zebra"),
+            Self.album(uuid: "2", title: "Iceland", folders: ["Trips", "2019"]),
+            Self.album(uuid: "3", title: "Apple"),
+        ])
+        let model = model(agent, scratch)
+        await model.load()
+
+        let rows = model.collectionRows
+        // Folders first, each sorted by name; then the albums that sit at this
+        // level, also sorted. Depth carries the indentation.
+        #expect(rows.map(\.title) == ["Trips", "2019", "Iceland", "Apple", "Zebra"])
+        #expect(rows.map(\.depth) == [0, 1, 2, 0, 0])
+        // A folder is not a source and can never be acted on.
+        #expect(rows.first?.item == nil)
+        #expect(rows.first(where: { $0.title == "Iceland" })?.item?.uuid == "2")
+    }
+
+    /// **Favorites above the rest, on its own.** It is an album by every
+    /// technical measure and is not one by any other — the album a person means
+    /// when they say "the good ones". Photos puts it above its sidebar sections,
+    /// the picker puts it above its own, and so does this.
+    @Test("Favorites sits on top rather than alphabetically among the others")
+    func favoritesIsHoisted() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([
+            Self.album(uuid: "1", title: "Apple"),
+            Self.album(uuid: "2", title: "Favorites", kind: "favorites"),
+        ])
+        let model = model(agent, scratch)
+        await model.load()
+
+        // Above "Apple", which it would otherwise sort below.
+        #expect(model.collectionRows.map(\.title) == ["Favorites", "Apple"])
+        // At the top *instead of* rather than as well as.
+        #expect(model.collectionRows.filter { $0.title == "Favorites" }.count == 1)
+    }
+
+    /// An agent from before folders were sent says nothing about them, and the
+    /// panel must degrade to what it drew before rather than to nothing.
+    @Test("An agent that sends no folders still lists every collection")
+    func olderAgentsStillList() async {
+        let scratch = Scratch()
+        let agent = Agent()
+        agent.holds([
+            Self.entry(uuid: "1", kind: "photos_collection", recursive: nil, title: "Zebra"),
+            Self.entry(uuid: "2", kind: "photos_collection", recursive: nil, title: "Apple"),
+        ])
+        let model = model(agent, scratch)
+        await model.load()
+
+        #expect(model.collectionRows.map(\.title) == ["Apple", "Zebra"])
+        #expect(model.collectionRows.allSatisfy { $0.depth == 0 })
     }
 
     // MARK: - Reading
@@ -380,7 +522,12 @@ struct SourcesModelTests {
         await model.load()
 
         #expect(model.sources.isEmpty)
-        #expect(model.trouble?.contains("agent is not running") == true)
+        // **Said, but only where there is nothing else to say it over.** The
+        // panel has never read a list, so this is what the empty state draws
+        // instead of claiming there are no sources.
+        #expect(!model.hasRead)
+        #expect(model.readFailure?.contains("agent is not running") == true)
+        #expect(model.trouble == nil)
     }
 
     // MARK: - The selection, and what the buttons read from it

@@ -51,6 +51,20 @@ public actor PhotosCollectionCatalog {
     /// empty array a failed fetch used to produce would say *this library has no
     /// collections* about a library that has plenty — and would drop every count
     /// paid for so far along with it.
+    /// The listing and how far counting has got, **read together**.
+    ///
+    /// Two calls could not be: `sections` starts the background pass, so a
+    /// `progress` asked for afterwards is a second actor hop the counting task
+    /// can slip in front of — and the numbers a client is handed would then
+    /// describe a moment other than the listing beside them. One hop, one
+    /// answer.
+    public func listing() async throws -> (
+        sections: [LibrarySectionGroup], counted: Int, total: Int
+    ) {
+        let groups = try await sections()
+        return (groups, counts.count, listed.count)
+    }
+
     public func sections() async throws -> [LibrarySectionGroup] {
         let fresh = try await library.collections()
         // **The folder walk is allowed to fail on its own.** Folders only

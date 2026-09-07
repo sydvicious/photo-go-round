@@ -41,9 +41,16 @@ struct SourcesSettingsView: View {
         // with the second panel: 360 was the list on its own, and keeping it
         // would have let the window shrink until the list it encloses was a
         // couple of rows tall.
+        //
+        // **480 since the collections became a list of their own.** Four
+        // collection rows and five folder rows are 306 points between them
+        // before either heading, the buttons beside the collections, or the
+        // controls under the folders — and at 440 the two lists were squeezing
+        // each other rather than scrolling, which is the whole thing bounding
+        // them was for.
         .frame(
             minWidth: 520, idealWidth: 520, maxWidth: .infinity,
-            minHeight: 440, idealHeight: 440, maxHeight: .infinity)
+            minHeight: 480, idealHeight: 480, maxHeight: .infinity)
         // Both, and deliberately: the first is the panel being opened, the
         // second is this app starting up with it already open. Neither can be
         // assumed from the other.
@@ -75,7 +82,7 @@ struct SourcesSettingsView: View {
     /// collections are in play, and a way to change it. The collections *are*
     /// sources underneath, and the lower panel deliberately does not show them.
     private var photosPanel: some View {
-        GroupBox {
+        Panel("Apple Photos") {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     chosenCollections
@@ -93,11 +100,13 @@ struct SourcesSettingsView: View {
                     }
                     missingControls
                 }
+                .padding(8)
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            heading("Apple Photos")
+            // **Padding on the column, not on the panel.** Putting it on the
+            // whole `HStack` inset the list from the box as well, which read as
+            // the first collection row being taller than the rest. The list
+            // wants to reach the border; the buttons beside it do not.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
     }
 
@@ -113,6 +122,10 @@ struct SourcesSettingsView: View {
                 .foregroundStyle(Color.orange)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                // Its own, for the same reason: the list above it reaches the
+                // border and this must not.
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
         }
     }
 
@@ -170,43 +183,160 @@ struct SourcesSettingsView: View {
         return collections.contains { $0.scannedAt == nil } ? "\(held) so far" : held
     }
 
-    /// **A `GroupBox` label is caption-sized by default**, which reads as a
-    /// footnote attached to the box rather than as the name of a section. These
-    /// two are the only structure the panel has, so they say so.
-    private func heading(_ text: String) -> some View {
-        Text(text).font(.headline)
-    }
+    /// How tall a row is, near enough: a 24-point icon with two points of
+    /// padding either side, plus what `List` adds around it.
+    private static let rowHeight: CGFloat = 34
 
+    /// **Four collections at the smallest the window goes**, and a scroll bar
+    /// past that. Between three and five was the ask; four is the middle of it.
+    /// It is a floor rather than a height — dragging the window taller shows
+    /// more collections, not a taller empty box.
+    private static let collectionRows = 4
+
+    /// **Five folders at the smallest the window goes**, and a scroll bar past
+    /// that. A floor is what stops the number of sources deciding how much
+    /// window everything else gets; before this the folder list simply grew
+    /// until it had pushed the rest off the bottom.
+    private static let fileRows = 5
+
+    /// The collections in play, each saying where it stands.
+    ///
+    /// **It was a comma-joined sentence of names until 2026-09-07**, capped at
+    /// three lines so that ticking forty of them could not push the folder list
+    /// off the bottom of the window. What that could not say is the thing most
+    /// worth saying: *this one is not reachable*. A library that had stopped
+    /// answering left its albums looking exactly like albums that were fine,
+    /// and the only source state anywhere in this window was in the folder list
+    /// underneath.
+    ///
+    /// A bounded, scrolling list solves the same layout problem the truncation
+    /// was there for, and has somewhere to put the state.
     @ViewBuilder
     private var chosenCollections: some View {
         if model.photoCollections.isEmpty {
-            Text("No collections selected.")
+            // Padded on its own, because the list beside it deliberately is
+            // not: words touching the border read as a mistake, a list reaching
+            // it reads as a list.
+            Text(
+                model.hasRead
+                    ? "No collections selected."
+                    : model.readFailure ?? "Looking for collections…")
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
         } else {
-            // Plain commas rather than a list formatter: this is an inventory,
-            // and "Favorites, Live Photos, and Kids" reads like a sentence
-            // somebody wrote.
-            // **Three lines, then it truncates.** Wrapping without a bound
-            // means the number of collections chosen decides how much of the
-            // window is left for the list of folders, and a person who checked
-            // forty of them would have pushed it off the bottom.
-            Text(model.photoCollections.map(\.name).joined(separator: ", "))
-                .textSelection(.enabled)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
+            List(model.collectionRows) { node in
+                if let collection = node.item {
+                    collectionRow(collection, depth: node.depth)
+                } else {
+                    folderRow(node.title, depth: node.depth)
+                }
+            }
+            // **`.plain`, not `.inset`.** The inset style pads its content on
+            // every side by an amount it does not expose, and inside a box of
+            // our own that reads as the first row being taller than the rest
+            // rather than as a margin. The stripes were the only reason to want
+            // it, and `alternatingRowBackgrounds` gives those to a plain list.
+            .listStyle(.plain)
+            .alternatingRowBackgrounds()
+            // **A floor, not a height.** Four rows is what it must never drop
+            // below; past that the window's own height decides, and dragging it
+            // taller shows more collections rather than more empty box.
+            .frame(
+                minHeight: Self.rowHeight * CGFloat(Self.collectionRows),
+                maxHeight: .infinity)
         }
+    }
+
+    /// One collection: what it is called, where it sits in the library, and
+    /// where it stands.
+    ///
+    /// **No file icon**, because a collection is not a file — the locator is an
+    /// identifier, and `NSWorkspace.icon(forFile:)` on one produces the generic
+    /// document icon, which says nothing and looks like a mistake.
+    /// A folder in the library's tree: a label and nothing else.
+    ///
+    /// **Photos folders hold albums rather than photographs**, so there is no
+    /// state to report and nothing to act on — which is why this draws no
+    /// status column rather than an empty one.
+    private func folderRow(_ title: String, depth: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder")
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+            Text(title)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .padding(.leading, CGFloat(depth) * Self.indent)
+    }
+
+    /// How far one level of the library's folder tree steps in.
+    private static let indent: CGFloat = 14
+
+    private func collectionRow(_ source: SourceService.Source, depth: Int) -> some View {
+        let standing = Self.standing(of: source)
+        return HStack(spacing: 8) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+            Text(source.name)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            Text(standing.words)
+                .font(.caption)
+                .foregroundStyle(standing.isTrouble ? Color.orange : .secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                // The reasons are whole sentences now — "the photo library did
+                // not answer enumerateImages within 10.0 seconds" — so the
+                // column truncates and hovering gives the whole thing.
+                .help(standing.words)
+        }
+        .padding(.vertical, 2)
+        .padding(.leading, CGFloat(depth) * Self.indent)
+    }
+
+    /// Where a source the app cannot see for itself stands.
+    ///
+    /// **Only the agent can answer this**, unlike a folder — there is no path to
+    /// `stat`. So this reads what the last scan concluded, which is exactly what
+    /// the agent sends and what `wire` is careful never to guess at.
+    ///
+    /// **The words carry it and the colour only underlines it**, the same rule
+    /// the folder rows and the missing-albums line already follow.
+    static func standing(of source: SourceService.Source) -> (words: String, isTrouble: Bool) {
+        if source.isMissing { return ("not in this library", true) }
+        if !source.available { return (source.unavailableReason ?? "unavailable", true) }
+        // Added a moment ago and not yet walked. Saying "0 photos" would be a
+        // claim rather than a delay — the same reason a folder says "scanning…".
+        if source.scannedAt == nil { return ("scanning…", false) }
+        return (source.photos == 1 ? "1 photo" : "\(source.photos.formatted()) photos", false)
     }
 
     /// What we already had, with a box drawn round it and a name put on it.
     private var filesPanel: some View {
-        GroupBox {
+        Panel("Folders and Files") {
             VStack(spacing: 0) {
                 list
+                // **A drawn rule rather than `Divider()`.** A `Divider` is a
+                // hairline in a colour chosen for a window background, and this
+                // sits on `controlBackgroundColor` inside a panel — where it is
+                // there, and invisible. The same token the panel's own border
+                // uses, so the two read as one drawing.
+                //
+                // The picker has a `Divider` in the same place and keeps it: it
+                // is on the window background, which is what that colour was
+                // picked against.
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(height: 1)
                 controls
             }
             .frame(maxHeight: .infinity)
-        } label: {
-            heading("Folders and Files")
         }
     }
 
@@ -227,8 +357,15 @@ struct SourcesSettingsView: View {
                     }
             }
         }
-        .listStyle(.inset(alternatesRowBackgrounds: true))
+        // `.plain` with stripes, for the reason the collections list above
+        // says: the inset style's own padding is what pushed the first row down.
+        .listStyle(.plain)
+        .alternatingRowBackgrounds()
         .disabled(model.isWorking)
+        // A floor rather than a height, for the same reason the collections
+        // list has one: five rows is the least it may be, and a taller window
+        // spends its extra height on both lists rather than on padding.
+        .frame(minHeight: Self.rowHeight * CGFloat(Self.fileRows), maxHeight: .infinity)
         .overlay { if model.fileSources.isEmpty { empty } }
     }
 
@@ -274,12 +411,32 @@ struct SourcesSettingsView: View {
         return source.photos == 1 ? "1 photo" : "\(source.photos) photos"
     }
 
+    /// **What this list has in it, and nothing else.**
+    ///
+    /// It used to show `model.trouble` here instead of "No sources", which put
+    /// whatever had last gone wrong into the middle of the panel at title size.
+    /// A photo library that stopped answering therefore filled the folders-and-
+    /// files half of Settings with a sentence about Photos — a part of the
+    /// window it says nothing about, over a list whose contents are on a disk
+    /// this app can see for itself.
+    ///
+    /// Trouble belongs in the status line beside the controls, where it is
+    /// reported without displacing anything. This says one thing: there are no
+    /// folders or files yet.
     private var empty: some View {
         VStack(spacing: 6) {
-            Text(model.trouble ?? "No sources")
+            // **Not "No sources" until somebody has looked.** An empty list
+            // before the first answer means nothing has been asked, and saying
+            // there are none states a fact nobody has established — over a
+            // library that may hold a hundred folders.
+            //
+            // A read that failed is reported *here and only here*: this is the
+            // one case with nothing else to show, so the words are the whole
+            // answer rather than an interruption over a list.
+            Text(model.hasRead ? "No sources" : model.readFailure ?? "Looking for sources…")
                 .font(.title3)
                 .multilineTextAlignment(.center)
-            if model.trouble == nil {
+            if model.hasRead {
                 Text("Add a folder or a few photos to get started.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -352,7 +509,12 @@ struct SourcesSettingsView: View {
 
             // The failure from the last thing asked, beside the controls that
             // asked it rather than in a dialog that has to be dismissed.
-            if let trouble = model.trouble, !model.fileSources.isEmpty {
+            //
+            // **Unconditional now.** It used to be hidden when there were no
+            // file sources, because the empty state showed it instead — so the
+            // one place a failure could not be reported quietly was the one
+            // where it took over the panel.
+            if let trouble = model.trouble {
                 Text(trouble)
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -506,5 +668,51 @@ struct ConfigureSourceView: View {
         }
         .padding(20)
         .frame(width: 420)
+    }
+}
+
+/// A named section of the Settings window: a heading, and a box holding it.
+///
+/// **Hand-drawn rather than a `GroupBox`, since 2026-09-07.** `GroupBox` insets
+/// its content by an amount it does not expose, which pushed the whole of each
+/// panel down inside its own border — read from the window as the first row of
+/// each list being taller than the rest. Every attempt to remove it from the
+/// list was aimed at the wrong thing, because the list was not what had moved.
+///
+/// The border, the fill, and the padding are all things this window has an
+/// opinion about, so it states them rather than inheriting an opinion it cannot
+/// see. **A heading rather than a `GroupBox` label** for the reason that label
+/// was overridden before this existed: the default is caption-sized, which reads
+/// as a footnote attached to a box rather than as the name of a section.
+private struct Panel<Content: View>: View {
+    private let title: String
+    private let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    /// Matches the radius AppKit uses for a box of this kind, so the two panels
+    /// look like the rest of the system rather than like each other only.
+    private static var radius: CGFloat { 6 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.headline)
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Color(nsColor: .controlBackgroundColor))
+                // Clipped rather than inset: a list inside should reach the
+                // border and take its corners from it, which is what makes the
+                // first row start where the box starts.
+                .clipShape(RoundedRectangle(cornerRadius: Self.radius))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Self.radius)
+                        .strokeBorder(Color(nsColor: .separatorColor))
+                }
+        }
+        .frame(maxHeight: .infinity)
     }
 }
