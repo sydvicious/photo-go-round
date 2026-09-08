@@ -2,6 +2,82 @@
 
 Photo-Go-Round is a personal photo-shuffle system: a background agent maintains a SQLite "deck" of photos drawn from Apple Photos albums, arbitrary disk folders, and eventually Google Photos, caches them on disk at full resolution, and hands them to whatever wants to display them — desktop wallpaper, screensaver, widgets, and apps across Apple's platforms.
 
+# Running it
+
+## The agent
+
+```
+./Scripts/photogoroundd
+```
+
+Builds first, so a stale binary is never run. Development deployment: everything under `.build`, preference domain `com.sydpolk.photogoround.dev`. `--prod` for the real library, typed on purpose.
+
+The kernel assigns the port and the agent publishes it; `--port 9000` pins one instead. Sources are named once and written through to preferences:
+
+```
+./Scripts/photogoroundd --add-folder ~/Pictures/Wallpaper
+./Scripts/photogoroundd --add-folder --recursive ~/Pictures/Trips
+```
+
+Inspecting and configuring, with or without the agent running:
+
+```
+"$(swift build --show-bin-path)/pgr_ctl" status
+```
+
+## The screensaver
+
+```
+./Scripts/make-saver-bundle.sh --install
+```
+
+Builds the Xcode target, copies it to `~/Library/Screen Savers`, and kills `legacyScreenSaver` and `ScreenSaverEngine` — both cache the previous build for the life of the process, so without that a rebuild silently runs the old one.
+
+Then select it, under Screen Saver → Other:
+
+```
+open "x-apple.systempreferences:com.apple.ScreenSaver-Settings.extension"
+```
+
+**Nothing loads a saver that is not selected**, and an unselected one produces an empty log that looks exactly like a bundle that failed to load. If `legacyScreenSaver` appears nowhere in the log, no legacy saver was loaded at all and the bundle is not the problem.
+
+`--spike` builds the Phase 1 sandbox probe instead, which links nothing and draws diagnostics.
+
+## Testing the screensaver
+
+The agent must be running; the saver is a client.
+
+```
+open -a /System/Library/CoreServices/ScreenSaverEngine.app
+```
+
+Runs the selected saver without waiting for the idle timer. Move the mouse to dismiss.
+
+```
+/usr/bin/log show --info --last 10m \
+    --predicate 'subsystem == "com.sydpolk.photogoround" AND category == "saver"'
+```
+
+`log` is a zsh builtin, hence the full path; `--info` is required or the per-photograph lines are filtered out.
+
+What a healthy run looks like:
+
+- `agent on port N via suite` or `via file` — `file` means the sandbox refused the preference domain and the fallback recovered.
+- One `new loop for display <uuid>` per screen, and `joined the loop … now N views` for every extra view. A second `new loop` for the same screen is a bug.
+- `showing card C deal D at WxH`, once per photograph, with every view of one display reporting the same card and deal.
+- On dismissal, every `new loop` matched by a `loop stopped`. A `started` with neither a `stopped` nor a `gone` is a loop still asking with nothing on screen.
+
+Counting an overnight run:
+
+```
+/usr/bin/log show --info --last 12h \
+    --predicate 'subsystem == "com.sydpolk.photogoround" AND category == "saver"' | grep -c "showing card"
+```
+
+## Xcode
+
+Every product is a target in `app/Photo-Go-Round.xcodeproj` — app, tests, `Photo-Go-Round Saver`, `Photo-Go-Round Saver Spike`, `Photo-Go-Round Server`, `pgr_ctl` — so anything can be run under the debugger. `swift build` and `swift test` are unchanged and remain how the suites run.
+
 # Rationale
 
 This is a decades-old itch, chased through a friend's "Desktop Picture" extension on classic Mac OS in 1992 and through Mac OS X's built-ins from 2001 onward. The tooling has been better and worse over the years, but not once in all that time has any of it handled the actual request: *take this giant blob of photos and do something nice with it.* Apple's screensaver still has only the display half solved — the transitions and layouts are genuinely beautiful — while its selection GUI chokes outright on folders holding large numbers of pictures, and what it does show is low-resolution cached thumbnails rather than originals pulled down from iCloud. Splitting the *library* problem (what to show, in what order, cached where) from the *display* problem (how to show it) is the seam where every previous attempt broke; getting it right means one deck feeds every surface, and adding a surface later — a tvOS top shelf, a Vision Pro picture frame — is a display-layer job rather than a rewrite.
