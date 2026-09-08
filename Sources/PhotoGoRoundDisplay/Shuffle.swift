@@ -1,11 +1,8 @@
-import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
 import Observation
-import PhotoGoRoundDisplay
 import PhotoGoRoundAgentAPI
-import os
 
 /// Asks the agent for a picture, decodes it, and holds the one on screen.
 ///
@@ -15,20 +12,28 @@ import os
 /// Blanking a window because the *next* picture is late would be a worse answer
 /// than the stale picture, and the same rule keeps a screensaver from going
 /// black mid-session when the cache is cleared under it.
+///
+/// **Shared by every surface as of Phase 2, and it names none of them.** The
+/// window and the screensaver run this same loop; what differs is the
+/// `consumer` it announces itself as, the deployment it was pointed at, and
+/// the size it says it is drawing at. Nothing here knows what a window is, and
+/// there is deliberately no `NSScreen` in the signature — a display's identity
+/// arrives as the string the view worked out, so this file compiles anywhere
+/// the library does.
 @MainActor
 @Observable
-final class Shuffle {
+public final class Shuffle {
 
     /// The picture on screen, decoded and ready to draw.
-    private(set) var shown: Frame?
+    public private(set) var shown: Frame?
     /// Why there is nothing new, when there is a reason worth saying. Present
     /// alongside `shown`, which is what lets a stale picture stay up.
-    private(set) var trouble: Trouble?
+    public private(set) var trouble: Trouble?
 
-    struct Frame {
-        let image: CGImage
-        let picture: ServedPicture
-        var size: CGSize { CGSize(width: image.width, height: image.height) }
+    public struct Frame {
+        public let image: CGImage
+        public let picture: ServedPicture
+        public var size: CGSize { CGSize(width: image.width, height: image.height) }
     }
 
     /// The empty states, of which the wire can distinguish exactly two.
@@ -38,7 +43,7 @@ final class Shuffle {
     /// the pool, which is the point of the service being the interface. The
     /// fourth is one that section predates: with no agent there is nobody to
     /// answer at all.
-    enum Trouble: Equatable {
+    public enum Trouble: Equatable {
         /// **Said only after three empty answers in a row.** See
         /// `emptyAnswersBeforeSaying`: one `204` is a queue turning over, not a
         /// library with nothing in it, and the first picture to arrive takes
@@ -56,10 +61,13 @@ final class Shuffle {
         /// saying nothing.
         case silent(String)
 
-        /// Bouncing letters are Phase 6's treatment and land with the empty
-        /// state proper; this is the words, which is the part that has to be
-        /// right first.
-        var words: String {
+        /// **These are the words, and nothing here moves them.** Which
+        /// surface owns the motion was ambiguous for a while — `FEATURES.md`
+        /// said the app built it so the saver could inherit it, and this
+        /// comment said it was the saver's — and the screensaver's v1 defers
+        /// motion entirely, so neither has it yet. See `Screensaver Plan.md`,
+        /// *The empty state without motion*.
+        public var words: String {
             switch self {
             case .noPhotos: "No Photos Available"
             case .noAgent: "No agent"
@@ -72,7 +80,7 @@ final class Shuffle {
         /// The window veils the photograph and names the trouble in its title
         /// for these and not for `noPhotos`, which is a library somebody can
         /// fix by adding a source and not a sign anything is broken.
-        var isAgentTrouble: Bool {
+        public var isAgentTrouble: Bool {
             switch self {
             case .noPhotos: false
             case .noAgent, .silent: true
@@ -81,7 +89,7 @@ final class Shuffle {
 
         /// What to say in a log line — the words plus whatever detail came
         /// with them.
-        var line: String {
+        public var line: String {
             switch self {
             case .noPhotos: "no photos"
             case .noAgent(let why): "no agent: \(why)"
@@ -93,13 +101,13 @@ final class Shuffle {
     /// How long a picture stays up. Not yet a preference: *Everything
     /// user-settable is a user default* is held back to Beyond 0.1, and a
     /// number nobody has looked at yet is not worth a key.
-    static let defaultDwell = Duration.seconds(10)
+    public static let defaultDwell = Duration.seconds(10)
     /// A cold start answers `204` until the first downloads land, so this is
     /// how quickly a fresh library starts showing something.
-    private static let defaultWhenEmpty = Duration.seconds(3)
+    public static let defaultWhenEmpty = Duration.seconds(3)
     /// Longer, because a missing agent is not going to fix itself in a tick and
     /// hammering a closed port helps nobody.
-    private static let defaultWhenAbsent = Duration.seconds(5)
+    public static let defaultWhenAbsent = Duration.seconds(5)
     /// A picture that will not decode costs this much before the next is asked
     /// for — enough that a library of broken files cannot spin.
     private static let whenUndecodable = Duration.milliseconds(250)
@@ -118,6 +126,13 @@ final class Shuffle {
     private static let emptyAnswersBeforeSaying = 3
 
     private let source: PictureSource
+    /// What this surface calls itself on the wire, and in its own log lines.
+    ///
+    /// **A parameter rather than a constant, because there are two of these
+    /// now.** The deck keys a consumer's history on it, so a screensaver
+    /// announcing itself as `app` would share the window's row and neither
+    /// would be readable afterwards.
+    private let consumer: String
     /// The three waits, injected for the same reason `SourcesModel` takes its
     /// poll interval: a test that waits ten real seconds to watch one picture
     /// give way to the next is a test nobody will run.
@@ -134,13 +149,15 @@ final class Shuffle {
     /// or it is not a streak.
     private var emptyAnswers = 0
 
-    init(
+    public init(
         source: PictureSource,
+        consumer: String,
         dwell: Duration = Shuffle.defaultDwell,
         whenEmpty: Duration = Shuffle.defaultWhenEmpty,
         whenAbsent: Duration = Shuffle.defaultWhenAbsent
     ) {
         self.source = source
+        self.consumer = consumer
         self.dwell = dwell
         self.whenEmpty = whenEmpty
         self.whenAbsent = whenAbsent
@@ -151,21 +168,33 @@ final class Shuffle {
     /// `MacHostEnvironment` is asked for its preferences rather than a domain
     /// being spelled here, so the app and the agent cannot disagree about which
     /// deployment they are in — including when `PGR_PREFS_SUITE` moves it.
-    convenience init() {
-        let environment = MacHostEnvironment(deployment: .development)
-        self.init(source: PictureClient(preferences: environment.preferences))
+    ///
+    /// **The deployment is a parameter and still defaults to development.** It
+    /// was hardcoded while the window was the only surface; a shipped saver
+    /// talks to production, and the default is what keeps every development run
+    /// off a real library — see `Deployment`.
+    public convenience init(consumer: String, deployment: Deployment = .development) {
+        let environment = MacHostEnvironment(deployment: deployment)
+        self.init(
+            source: PictureClient(preferences: environment.preferences),
+            consumer: consumer)
     }
 
-    /// The view saying how big it is, in pixels, and which screen it is on.
+    /// The view saying how big it is, in pixels, and which display it is on.
     ///
     /// Asking at the size actually being drawn is the whole point of the
     /// endpoint taking a box. A resize does not fetch a new picture — that
     /// would spend a card on a window drag — so the one on screen is scaled
     /// until the next arrives at the new size.
-    func draws(at pixels: PixelSize, on screen: NSScreen?) {
+    ///
+    /// **The display arrives as a string the view worked out**, rather than as
+    /// an `NSScreen` this file would have to know about. That is what keeps the
+    /// loop free of AppKit, and it puts the identifier next to the only code
+    /// that has a screen in hand anyway — see `PictureLayerView.identifier(of:)`.
+    public func draws(at pixels: PixelSize, on displayID: String?) {
         guard pixels.width > 0, pixels.height > 0 else { return }
         box = pixels
-        displayID = Self.identifier(of: screen)
+        self.displayID = displayID
         if loop == nil { begin() }
     }
 
@@ -184,7 +213,7 @@ final class Shuffle {
         guard let box else { return whenEmpty }
         do {
             guard let picture = try await source.next(
-                consumer: "app", displayID: displayID, fitting: box)
+                consumer: consumer, displayID: displayID, fitting: box)
             else {
                 emptyAnswers += 1
                 // Below the threshold nothing is said at all — not even that
@@ -227,7 +256,7 @@ final class Shuffle {
     private func note(_ next: Trouble?) {
         defer { trouble = next }
         guard next != trouble else {
-            if let next { Log.deck.debug("shuffle: still \(next.line, privacy: .public)") }
+            if let next { Log.deck.debug("\(self.consumer, privacy: .public): still \(next.line, privacy: .public)") }
             return
         }
         switch next {
@@ -235,10 +264,10 @@ final class Shuffle {
             // Only worth a line if something had gone wrong. A first picture
             // arriving is not news.
             if trouble != nil {
-                Log.deck.notice("shuffle: answering again, showing pictures")
+                Log.deck.notice("\(self.consumer, privacy: .public): answering again, showing pictures")
             }
         case .some(let trouble):
-            Log.deck.notice("shuffle: \(trouble.line, privacy: .public)")
+            Log.deck.notice("\(self.consumer, privacy: .public): \(trouble.line, privacy: .public)")
         }
     }
 
@@ -246,6 +275,15 @@ final class Shuffle {
         switch failure {
         case .noPortPublished:
             .noAgent("nothing has published a port — the agent is not running")
+        // **The words are "No agent" and the log line is not.** For the person
+        // looking at the glass these are the same predicament — there is nothing
+        // either of them can do — so this does not earn a fourth set of words.
+        // For whoever reads the log afterwards they are nothing alike, and that
+        // is where the distinction is spent. A `Trouble` case of its own would
+        // change what a window says, which is Syd's call rather than this
+        // file's.
+        case .portUnreadable(let reason):
+            .noAgent("the port could not be read — \(reason)")
         case .unreachable(let port, let reason):
             .noAgent("nothing is listening on \(port) — \(reason)")
         case .refused(let status):
@@ -274,17 +312,5 @@ final class Shuffle {
             else { return nil }
             return Decoded(image: image)
         }.value?.image
-    }
-
-    /// `CGDisplayCreateUUIDFromDisplayID`, which survives reboots and cable
-    /// swaps where the transient `CGDirectDisplayID` does not — so a monitor is
-    /// one consumer rather than a new row every time it wakes.
-    private static func identifier(of screen: NSScreen?) -> String? {
-        guard
-            let number = screen?.deviceDescription[
-                NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
-            let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue()
-        else { return nil }
-        return CFUUIDCreateString(nil, uuid) as String
     }
 }

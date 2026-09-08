@@ -21,7 +21,12 @@ public struct Preferences: @unchecked Sendable {
     private let defaults: UserDefaults
     /// The domain the values live in, remembered because forcing a re-read
     /// requires naming it — see `reload`.
-    private let domain: String?
+    ///
+    /// **Public since Phase 2 of `Screensaver Plan.md`**, because a client that
+    /// the sandbox refuses has to find the same domain's `.plist` on disk, and
+    /// asking which domain this is beats spelling it a second time somewhere it
+    /// could drift. `nil` means standard defaults, which have no single file.
+    public let domain: String?
     /// Called after the source list is read and before it is written back, so a
     /// test can do what another process would: change the list in the window a
     /// read-modify-write leaves open.

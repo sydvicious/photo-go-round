@@ -1,5 +1,6 @@
+#if canImport(AppKit)
+
 import AppKit
-import PhotoGoRoundDisplay
 import SwiftUI
 
 /// The photograph, in a layer, on black.
@@ -9,7 +10,11 @@ import SwiftUI
 /// on the render server, so it stays smooth while this process is busy decoding
 /// the next photograph. Per-frame drawing would stutter at exactly the moment
 /// somebody would notice.
-final class PictureLayerView: NSView {
+///
+/// **AppKit is why this file is the only conditional one in the library.**
+/// `Shuffle` and the geometry beside it compile anywhere; a view does not, and
+/// `PLAN.md` has an iOS app and an iOS widget waiting behind Phase 6.
+public final class PictureLayerView: NSView {
 
     /// Where the photograph sits. Its frame is computed rather than left to
     /// `contentsGravity`, because the pan needs the letterbox as a number and a
@@ -18,10 +23,16 @@ final class PictureLayerView: NSView {
     private var photoSize: CGSize = .zero
     private var reported: PixelSize?
 
-    /// The size this view is about to draw at, in pixels, whenever it changes.
-    var draws: ((PixelSize, NSScreen?) -> Void)?
+    /// The size this view is about to draw at, in pixels, and the display it is
+    /// on, whenever either changes.
+    ///
+    /// **The display arrives as a string rather than an `NSScreen`**, because
+    /// `Shuffle` is shared with surfaces that have no AppKit and no window. This
+    /// is the only place in the project holding a screen, so it is the place
+    /// that turns one into an identifier.
+    public var draws: ((PixelSize, String?) -> Void)?
 
-    override init(frame frameRect: NSRect) {
+    public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         // Black rather than a dark grey: on OLED and XDR panels the letterbox
@@ -34,9 +45,9 @@ final class PictureLayerView: NSView {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not loaded from a nib") }
+    public required init?(coder: NSCoder) { fatalError("not loaded from a nib") }
 
-    func show(_ frame: Shuffle.Frame?) {
+    public func show(_ frame: Shuffle.Frame?) {
         guard let frame else { return }
         photoSize = frame.size
         // No implicit animation on the swap: the cross-fade is its own thing
@@ -46,7 +57,7 @@ final class PictureLayerView: NSView {
         needsLayout = true
     }
 
-    override func layout() {
+    public override func layout() {
         super.layout()
         withoutAnimation {
             pictureLayer.frame = AspectFit.rect(of: photoSize, in: bounds.size)
@@ -57,7 +68,7 @@ final class PictureLayerView: NSView {
     /// A backing-scale change is a resolution change even when the view's size
     /// in points has not moved — dragging the window to a display of a
     /// different density is the case.
-    override func viewDidChangeBackingProperties() {
+    public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         report()
     }
@@ -70,7 +81,23 @@ final class PictureLayerView: NSView {
         let pixels = PixelSize(width: Int(backing.width), height: Int(backing.height))
         guard pixels != reported else { return }
         reported = pixels
-        draws?(pixels, window?.screen)
+        draws?(pixels, Self.identifier(of: window?.screen))
+    }
+
+    /// `CGDisplayCreateUUIDFromDisplayID`, which survives reboots and cable
+    /// swaps where the transient `CGDirectDisplayID` does not — so a monitor is
+    /// one consumer rather than a new row every time it wakes.
+    ///
+    /// Moved here from `Shuffle` in Phase 2. It is the one thing in that loop
+    /// that needed AppKit, and it belongs beside the screen rather than beside
+    /// the request.
+    public static func identifier(of screen: NSScreen?) -> String? {
+        guard
+            let number = screen?.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+            let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue()
+        else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
     }
 
     private func withoutAnimation(_ body: () -> Void) {
@@ -82,19 +109,26 @@ final class PictureLayerView: NSView {
 }
 
 /// SwiftUI's side of it, which is a wrapper and nothing more.
-struct PictureDisplay: NSViewRepresentable {
-    let frame: Shuffle.Frame?
-    let draws: (PixelSize, NSScreen?) -> Void
+public struct PictureDisplay: NSViewRepresentable {
+    private let frame: Shuffle.Frame?
+    private let draws: (PixelSize, String?) -> Void
 
-    func makeNSView(context: Context) -> PictureLayerView {
+    public init(frame: Shuffle.Frame?, draws: @escaping (PixelSize, String?) -> Void) {
+        self.frame = frame
+        self.draws = draws
+    }
+
+    public func makeNSView(context: Context) -> PictureLayerView {
         let view = PictureLayerView(frame: .zero)
         view.draws = draws
         view.show(frame)
         return view
     }
 
-    func updateNSView(_ view: PictureLayerView, context: Context) {
+    public func updateNSView(_ view: PictureLayerView, context: Context) {
         view.draws = draws
         view.show(frame)
     }
 }
+
+#endif

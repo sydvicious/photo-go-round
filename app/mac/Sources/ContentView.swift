@@ -1,9 +1,14 @@
+import PhotoGoRoundDisplay
 import SwiftUI
 
 /// The window's whole contents: the photograph, and the words that appear when
 /// there has never been one.
 struct ContentView: View {
-    @State private var shuffle = Shuffle()
+    /// **The consumer name is the app's, and it is a parameter now.** The loop
+    /// moved into `PhotoGoRoundDisplay` in Phase 2 of `Screensaver Plan.md` so
+    /// the screensaver could run the same one; the deck keys a consumer's
+    /// history on this string, so the two must not share it.
+    @State private var shuffle = Shuffle(consumer: "app")
 
     /// The name, and what is wrong with it when something is.
     ///
@@ -22,8 +27,8 @@ struct ContentView: View {
             // Always mounted, even with nothing to show. It is the thing that
             // knows how big the window is, and nothing is asked for until it
             // has said so.
-            PictureDisplay(frame: shuffle.shown) { pixels, screen in
-                shuffle.draws(at: pixels, on: screen)
+            PictureDisplay(frame: shuffle.shown) { pixels, display in
+                shuffle.draws(at: pixels, on: display)
             }
 
             // Over the photograph while the agent cannot be reached.

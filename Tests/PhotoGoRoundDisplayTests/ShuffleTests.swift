@@ -4,17 +4,20 @@ import ImageIO
 import Testing
 import UniformTypeIdentifiers
 
-import PhotoGoRoundDisplay
-@testable import Photo_Go_Round
+@testable import PhotoGoRoundDisplay
 
-/// What the window does when the agent stops answering.
+/// What a surface does when the agent stops answering.
+///
+/// Moved out of the app's test bundle in Phase 2, along with the loop itself.
+/// The rule below is the deck's first duty and it should not have needed Xcode
+/// to run.
 ///
 /// **The rule being defended is that a picture already on screen is never taken
 /// down.** It is the deck's first duty: a stale photograph is a better answer
 /// than a blank window, and a person looking at one has no way to tell a slow
 /// agent from a broken one — so the trouble is reported *beside* the picture
 /// rather than instead of it.
-@Suite("The window when the agent goes quiet")
+@Suite("A surface when the agent goes quiet")
 @MainActor
 struct ShuffleTests {
 
@@ -75,7 +78,7 @@ struct ShuffleTests {
 
     private static func shuffle(_ source: some PictureSource) -> Shuffle {
         Shuffle(
-            source: source,
+            source: source, consumer: "test",
             dwell: .milliseconds(20), whenEmpty: .milliseconds(20),
             whenAbsent: .milliseconds(20))
     }

@@ -49,6 +49,16 @@ public struct PictureClient: PictureSource {
         /// Nothing has published a port. The agent is not running, or has not
         /// finished starting its listener.
         case noPortPublished
+        /// A preference domain exists and this process cannot see into it, so
+        /// whether a port is published is unknown.
+        ///
+        /// **Not `noPortPublished`, and the difference is the whole reason this
+        /// case exists.** Inside `legacyScreenSaver`'s sandbox an unreadable
+        /// domain looks exactly like an empty one, and reporting *the agent is
+        /// not running* about an agent that is running perfectly well sends
+        /// somebody to the one place the fault is not. Measured 2026-09-07; see
+        /// `ServicePort`.
+        case portUnreadable(reason: String)
         /// A port is published and nothing is answering there. A crash leaves
         /// the value behind, so this is the ordinary shape of *the agent died*.
         case unreachable(port: UInt16, reason: String)
@@ -72,13 +82,22 @@ public struct PictureClient: PictureSource {
     /// published rather than promising something is listening — the same
     /// distinction `pgr_ctl status` draws.
     public var address: URL? {
-        preferences.servicePort.flatMap { URL(string: "http://localhost:\($0)") }
+        guard case .published(let port, _) = ServicePort.read(preferences) else { return nil }
+        return URL(string: "http://localhost:\(port)")
     }
 
     public func next(
         consumer: String, displayID: String?, fitting box: PixelSize?
     ) async throws -> ServedPicture? {
-        guard let port = preferences.servicePort else { throw Failure.noPortPublished }
+        // **Not `preferences.servicePort` directly.** A sandboxed client is
+        // handed an empty suite rather than a refusal, so the lookup has to be
+        // able to say *unknown* as well as *none*. See `ServicePort`.
+        let port: UInt16
+        switch ServicePort.read(preferences) {
+        case .published(let found, _): port = found
+        case .none: throw Failure.noPortPublished
+        case .unreadable(let reason): throw Failure.portUnreadable(reason: reason)
+        }
 
         var components = URLComponents()
         components.scheme = "http"
