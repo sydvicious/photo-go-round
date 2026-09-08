@@ -252,11 +252,22 @@ public struct Preferences: @unchecked Sendable {
     /// it has usually had twenty pictures' worth of time. This is the bound
     /// for when it has not. Spent once per request: when it runs out the cold
     /// card is dropped from the queue — next time it is dealt, maybe the bytes
-    /// will be there — and the request takes the first card whose bytes are
-    /// here without waiting again. Sixty seconds, decided 2026-09-05; zero
-    /// means never wait.
+    /// will be there — and every cold card behind it is dropped on sight.
+    /// Zero means never wait, and still drops.
+    ///
+    /// **Two seconds, and it is measured rather than chosen.** It was sixty
+    /// from 2026-09-05, which was sized for a wait that happened once and then
+    /// got out of the way; the rule above spends it on the head of every
+    /// request, so it has to finish well inside the client's own bound —
+    /// `PictureClient.defaultLimit` is five seconds. Of 181 cold head cards
+    /// observed on 2026-09-07, 97 eventually landed, and of those 76% landed
+    /// within two seconds of reaching the head, 83% within three; the median
+    /// residual was 1.16 s. Two seconds is where the curve flattens. Not
+    /// waiting at all would throw away a picture that was a second away, and
+    /// three buys seven more cards in exchange for another second charged to
+    /// all 181.
     public var serveWait: Duration {
-        .seconds(number(.serveWaitSeconds, default: 60, in: 0...3600))
+        .seconds(number(.serveWaitSeconds, default: 2, in: 0...3600))
     }
 
     // MARK: - Sources

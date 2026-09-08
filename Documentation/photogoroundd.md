@@ -206,9 +206,15 @@ the queue fetches its own cards behind the screen, so by the time a card reaches
 the head its bytes are usually here. When they are not, the request waits up to
 `serveWaitSeconds` for them. If they land, that is the picture. If the wait runs
 out, the card is dropped — it was dealt but no bytes were served, and next time
-it is dealt maybe they will be — and the request takes the first queued card
-whose bytes are here, without waiting again. A card whose source has stopped
-answering is dropped without waiting.
+it is dealt maybe they will be — and the request takes the new head, dropping
+that too if its bytes are not here, until it meets a card that can be served or
+the queue is empty. A card whose source has stopped answering is dropped without
+waiting.
+
+The wait is spent once per request; every cold card after it is dropped on sight.
+A dropped card keeps its photograph, which goes back into the deck's contention,
+and does not cancel a fetch already running for it: those bytes are still kept
+when they land, and the next deal of that photograph finds them here.
 
 The card leaves the queue as it is handed over, and it leaves whether or not the
 download to the client completes. There is no reservation and nothing to reclaim
@@ -350,7 +356,7 @@ without restarting it and without any cooperation:
 | `repeatWindowFraction` | how much of the library must pass before a photo repeats | 0.5 |
 | `queueSize` | cards to keep queued. A target, not a ceiling. Also how far ahead of the screen the cache fetches, since the queue fetches its own cards | 20 |
 | `queueRefreshIntervalSeconds` | how often to top the queue up; serving tops it up too | 5 |
-| `serveWaitSeconds` | how long a request waits for the head card's bytes before dropping that card and taking the first card that has bytes; 0 never waits | 60 |
+| `serveWaitSeconds` | how long a request waits for the head card's bytes before dropping that card; spent once, after which every cold card met is dropped without waiting. 0 never waits, and still drops | 2 |
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
 | `maintenanceIntervalSeconds` | how often to evict at the byte ceiling | 30 |
 | `downloadConcurrency` | fetches running at once, across all sources | 4 |

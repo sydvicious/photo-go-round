@@ -39,6 +39,10 @@ final class Shuffle {
     /// fourth is one that section predates: with no agent there is nobody to
     /// answer at all.
     enum Trouble: Equatable {
+        /// **Said only after three empty answers in a row.** See
+        /// `emptyAnswersBeforeSaying`: one `204` is a queue turning over, not a
+        /// library with nothing in it, and the first picture to arrive takes
+        /// the words back down.
         case noPhotos
         case noAgent(String)
         /// The agent accepted the connection and never answered.
@@ -57,7 +61,7 @@ final class Shuffle {
         /// right first.
         var words: String {
             switch self {
-            case .noPhotos: "No photos"
+            case .noPhotos: "No Photos Available"
             case .noAgent: "No agent"
             case .silent: "Not answering"
             }
@@ -99,6 +103,19 @@ final class Shuffle {
     /// A picture that will not decode costs this much before the next is asked
     /// for — enough that a library of broken files cannot spin.
     private static let whenUndecodable = Duration.milliseconds(250)
+    /// Empty answers in a row before the words go up.
+    ///
+    /// **One `204` is not news.** The agent's request drops every cold card it
+    /// meets, so a request that arrives just as the queue turns over can walk
+    /// off the end of it and answer empty while the fetcher is landing the next
+    /// twenty cards — a gap of one refresh, not an empty library. Saying *No
+    /// Photos Available* for that and taking it back three seconds later is a
+    /// flicker that tells somebody nothing true.
+    ///
+    /// Three, against `whenEmpty` of three seconds, is about ten seconds of
+    /// consistently nothing before the words appear — one dwell, and past any
+    /// refresh the agent could still be inside.
+    private static let emptyAnswersBeforeSaying = 3
 
     private let source: PictureSource
     /// The three waits, injected for the same reason `SourcesModel` takes its
@@ -112,6 +129,10 @@ final class Shuffle {
     private var box: PixelSize?
     private var displayID: String?
     private var loop: Task<Void, Never>?
+    /// Empty answers since the last one that was not. Reset by anything else
+    /// the agent says, including a failure — a streak is *consecutive* empties
+    /// or it is not a streak.
+    private var emptyAnswers = 0
 
     init(
         source: PictureSource,
@@ -165,9 +186,15 @@ final class Shuffle {
             guard let picture = try await source.next(
                 consumer: "app", displayID: displayID, fitting: box)
             else {
-                note(.noPhotos)
+                emptyAnswers += 1
+                // Below the threshold nothing is said at all — not even that
+                // the trouble has cleared. An empty answer is not the agent
+                // answering again; it is the agent saying it has nothing, and
+                // whatever was already up stays up and keeps its words.
+                if emptyAnswers >= Self.emptyAnswersBeforeSaying { note(.noPhotos) }
                 return whenEmpty
             }
+            emptyAnswers = 0
             guard let image = await Self.decode(picture.data) else {
                 // The service skips a photograph that will not render and
                 // retires it after three tries; this is the same failure on
@@ -179,9 +206,11 @@ final class Shuffle {
             note(nil)
             return dwell
         } catch let failure as PictureClient.Failure {
+            emptyAnswers = 0
             note(Self.trouble(from: failure))
             return whenAbsent
         } catch {
+            emptyAnswers = 0
             note(.noAgent(error.localizedDescription))
             return whenAbsent
         }
@@ -225,7 +254,7 @@ final class Shuffle {
         // and did not answer inside the limit, which is a running agent that is
         // stuck rather than one that is gone.
         case .silent(let port, let limit):
-            .silent("the agent on \(port) said nothing within \(limit)")
+            .silent("the agent on \(port) said nothing within \(limit.spokenSeconds)")
         }
     }
 

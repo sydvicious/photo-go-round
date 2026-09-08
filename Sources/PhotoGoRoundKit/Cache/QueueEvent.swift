@@ -141,7 +141,7 @@ public enum QueueEvent: Sendable, Equatable {
         case .nothingToShow(let walked, let because):
             "SERVE: nothing to show — \(because), walked \(walked)"
         case .caching(let photo, let source, let within):
-            "CACHE: fetching \(Self.name(photo, source)) — up to \(within)"
+            "CACHE: fetching \(Self.name(photo, source)) — up to \(within.spokenSeconds)"
         case .cacheUnnecessary(let photo, let source):
             "CACHE: \(Self.name(photo, source)) is already here, skipping it"
         case .cached(let photo, let source, let bytes):

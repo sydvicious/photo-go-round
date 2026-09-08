@@ -303,8 +303,10 @@ public struct PhotoCache {
 
     /// Fetches one photograph's bytes into the cache.
     ///
-    /// **Called by the queue's fetcher, never by serving.** The card is already
-    /// on the queue and keeps its place; this lands its bytes behind it.
+    /// **Called by the queue's fetcher, never by serving.** The card is on the
+    /// queue when this starts and this lands its bytes behind it — though a
+    /// request that met the card cold may have dropped it in the meantime, which
+    /// changes nothing here: the bytes belong to the photograph.
     ///
     /// Answers false when there was nothing to do or nothing could be done: it
     /// is already held, its source is unreachable, its provider is missing, or
@@ -387,11 +389,16 @@ public struct PhotoCache {
             return false
         }
 
-        // **Nothing about the queue changes here.** The card whose bytes these
-        // are is already on the queue — that is why they were fetched — and it
-        // keeps its place. The v1 starvation, where a fetched card had left the
-        // queue and had a one-in-the-library chance of coming back, cannot
-        // recur: the card never left.
+        // **Nothing about the queue changes here**, including when the card
+        // these bytes were fetched for is no longer on it. Usually it is, and
+        // keeps its place — that is why they were fetched. But a request that
+        // met it cold will have dropped it out from under this fetch, which is
+        // what the short serve wait is for, and the bytes are adopted just the
+        // same: they are the photograph's, not the card's, and the next deal of
+        // it finds them here. The v1 starvation, where a fetched card had left
+        // the queue and had a one-in-the-library chance of coming back, cannot
+        // recur either way — that was the *deck* forgetting it, and the row is
+        // untouched here.
         log(
             .cached(
                 photo: card.externalID, source: card.sourceID,
@@ -484,11 +491,18 @@ public struct PhotoCache {
     ///
     /// Called whatever the outcome, including for work that was abandoned —
     /// a claim left behind sidelines a photograph for the whole timeout.
+    ///
+    /// **Only the success is reported from here.** A failure is reported by the
+    /// lane, through `fetchFailed`, because this runs inside work the lane may
+    /// already have given up on: reporting the failure here as well would count
+    /// an abandoned fetch twice, once when its lane wrote it off and once more
+    /// when it finally came back.
     public func finishFetch(_ card: DeckCard, landed: Bool) {
         try? deck.releaseClaim(photoID: card.id)
         if landed {
-            // Anything at all from a source clears its account. An occasional
-            // timeout on a working source is weather.
+            // One fetch that produced bytes pays off one failure. An occasional
+            // timeout on a working source is weather; see `SourceBench`, where
+            // the bucket and the reason it is not a reset are written down.
             bench?.succeeded(card.sourceID)
         }
     }
@@ -555,6 +569,29 @@ public struct PhotoCache {
         return benched
     }
 
+    /// A fetch that answered, and answered with nothing. Answers the bench it
+    /// earned, if any.
+    ///
+    /// **The bench could not see this until 2026-09-07, and that made it
+    /// inert.** `fetchTimedOut` was its only informant, and that fires only when
+    /// the host's outer `FetchDeadline` gives up — which stopped happening at
+    /// all once `SystemPhotoLibrary.write` was taken off the cooperative pool
+    /// and its own sixty-second limit began firing on time. The two bounds are
+    /// equal, so the inner one now always wins and the outer one never speaks.
+    /// Measured the same evening: 116 failed fetches, no call to `failed`, no
+    /// bench.
+    ///
+    /// A fetch that produced no bytes is a fetch that produced no bytes,
+    /// whichever bound noticed. Both say so now.
+    @discardableResult
+    public func fetchFailed(_ card: DeckCard) -> Duration? {
+        let benched = bench?.failed(card.sourceID)
+        if let benched {
+            log(.sourcePaused(source: card.sourceID, until: benched))
+        }
+        return benched
+    }
+
     /// A fetch the provider failed, and what it means about the photograph.
     ///
     /// **Only a confirmed absence deletes.** The provider is asked the same
@@ -612,14 +649,28 @@ public struct PhotoCache {
     /// the fetcher dropped it, and the request moves to the new head; or the
     /// wait runs out.
     ///
-    /// **The wait is spent once per request.** When it runs out the cold card
-    /// is dropped from the queue — the card was dealt but no bytes were served;
-    /// such is life, and next time it is dealt maybe the bytes will be there —
-    /// and the request takes the first queued card whose bytes *are* here,
-    /// without waiting again. Nothing else is dropped: the cards it passes over
-    /// are still being fetched and keep their places. A card whose source is
-    /// benched is dropped without waiting at all, because nothing is fetching
-    /// it and nothing will for at least a minute.
+    /// **The wait is spent once per request, and every cold card the request
+    /// meets leaves the queue.** When the wait runs out the head is dropped —
+    /// the card was dealt but no bytes were served; such is life, and next time
+    /// it is dealt maybe the bytes will be there. The request then takes the
+    /// new head, and drops that too if it is cold, until it meets a card whose
+    /// bytes are here or the queue is empty. A card whose source is benched is
+    /// dropped without waiting at all, because nothing is fetching it and
+    /// nothing will for at least a minute.
+    ///
+    /// **The cards it passes over used to keep their places, and that was the
+    /// fault.** They were still being fetched, so leaving them looked like the
+    /// generous reading; what it means in practice is that the next request
+    /// meets them again, in the same order, ahead of every card that could have
+    /// been shown. A run of photographs the network will not deliver settles at
+    /// the head and each request pays for the whole run. Measured 2026-09-07
+    /// with the network off: twenty cards queued, seventeen of them warm, both
+    /// windows stalled behind one that was not.
+    ///
+    /// Dropping is cheap, which is what makes the rule safe. The photograph
+    /// keeps its row and goes back into the deck's contention; the fetch
+    /// running for it is not cancelled and its bytes are still adopted when they
+    /// land, so the next deal of it finds them here.
     ///
     /// Three other things can still go wrong between dealing a card and serving
     /// it, all rare: its source lost its provider, a referenced file is gone
@@ -646,17 +697,13 @@ public struct PhotoCache {
         var patience = serveWait
 
         while true {
-            // The head — or, once the wait is spent, the first card with bytes.
-            let candidate: (card: DeckCard, bytes: URL?)?
-            if patience > .zero {
-                candidate = try queue.peek().first.map { ($0, try bytesHere(for: $0)) }
-            } else {
-                candidate = try firstQueuedWithBytes()
-            }
-            guard let (card, foundBytes) = candidate else {
+            // **Always the head.** Every turn either serves it or takes it off
+            // the queue, so the head is the only card a request ever looks at.
+            guard let card = try queue.peek().first else {
                 log(.nothingToShow(walked: skipped, because: "out of cards"))
                 return nil
             }
+            let foundBytes = try bytesHere(for: card)
 
             // Neither guard below is a photograph that has *gone*, so neither
             // deletes anything. A missing source row is only reachable as a
@@ -692,7 +739,26 @@ public struct PhotoCache {
                 // learning what the bench already knows.
                 if bench?.isBenched(card.sourceID) == true {
                     skipped += 1
-                    dropUnfetched(card, because: "its source is not answering")
+                    dropCold(card, because: "its source is not answering")
+                    continue
+                }
+
+                // **The wait is spent once, and afterwards a cold card is
+                // dropped on sight.** It used to keep its place while the
+                // request walked past it, which is the fault this rule exists
+                // to remove: the card is met again by the next request, and the
+                // one after that, so a run of photographs the network will not
+                // deliver settles at the head of the queue and every request
+                // pays for all of them. Measured 2026-09-07 with the network
+                // off — twenty cards queued, seventeen of them warm, and both
+                // windows stalled behind one that was not.
+                //
+                // Dropping costs a deal and not a photograph: the row stays in
+                // the pool, the fetch that is running for it is not cancelled,
+                // and its bytes are simply here the next time it is dealt.
+                guard patience > .zero else {
+                    skipped += 1
+                    dropCold(card, because: "its bytes are not here and the wait is spent")
                     continue
                 }
 
@@ -710,7 +776,7 @@ public struct PhotoCache {
                 case .timedOut:
                     skipped += 1
                     patience = .zero
-                    dropUnfetched(card, because: "its bytes did not arrive in \(serveWait)")
+                    dropCold(card, because: "its bytes did not arrive in \(serveWait)")
                     continue
                 }
             }
@@ -769,9 +835,11 @@ public struct PhotoCache {
     }
 
     /// How long a request may wait for the head card's bytes. The host sets it
-    /// from `Preferences.serveWait`; sixty seconds unless told otherwise, and
-    /// zero never waits.
-    public var serveWait: Duration = .seconds(60)
+    /// from `Preferences.serveWait`, where the two seconds are measured and the
+    /// measurement is written down; zero never waits. Cold cards are dropped
+    /// either way — the wait decides how long one is given first, not whether
+    /// it keeps its place.
+    public var serveWait: Duration = .seconds(2)
 
     /// Asked to make sure the card a request is waiting on is being fetched.
     /// The agent wires it to the queue fetcher's kick, which is absorbed when
@@ -786,13 +854,26 @@ public struct PhotoCache {
         try residentURL(forPhoto: card.id)
     }
 
-    /// The first queued card, head first, whose bytes are here. For a request
-    /// that has spent its wait and is not waiting again.
-    private func firstQueuedWithBytes() throws -> (card: DeckCard, bytes: URL?)? {
-        for card in try queue.peek(max(queue.nominalSize * 2, 64)) {
-            if let url = try bytesHere(for: card) { return (card, url) }
-        }
-        return nil
+    /// A cold card leaving the queue at a request's hand.
+    ///
+    /// **The claim is left alone, and that is the whole difference from
+    /// `dropUnfetched`.** The claim belongs to the fetch, not to the card's
+    /// place in the queue, and serving drops cards out from under fetches that
+    /// are still running — that is the point of the short wait. Releasing it
+    /// here would let a re-deal of this photograph hand it to a second lane
+    /// while the first is still streaming, and both write `staging/<uuid>` at
+    /// once: one corrupt image, which reaches a person as a photograph that
+    /// retires itself after three render failures.
+    ///
+    /// Nothing is lost by leaving it. A card no lane has reached is unclaimed
+    /// already, so this is a no-op for it; a card being fetched has its claim
+    /// released by `finishFetch` when the fetch ends, and `Deck.claimTimeout`
+    /// is the backstop above that.
+    private func dropCold(_ card: DeckCard, because reason: String) {
+        guard (try? queue.remove(photoID: card.id)) == true else { return }
+        log(
+            .cacheDropped(
+                photo: card.externalID, source: card.sourceID, because: reason, queued: depth()))
     }
 
     private enum Waited {

@@ -71,7 +71,7 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
             // as an empty enumeration would delete a library's worth of rows,
             // which is the same mistake as reading a switched library as an
             // emptied one.
-            return .unavailable(reason: error.description)
+            return .unavailable(reason: error.sentence)
         }
         guard resolved else {
             return .unavailable(reason: Self.albumMissingReason)
@@ -81,10 +81,13 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
 
     /// What to put in front of a person when the library would not answer.
     ///
-    /// The error already says which question went unanswered and for how long,
-    /// which is exactly what belongs in a source's `unavailableReason`.
+    /// **The readable form, not the log's.** This lands in a source's
+    /// `unavailableReason`, which the Settings panel draws in a column beside
+    /// the album's name — so it has to be a sentence rather than the call that
+    /// went unanswered and the bound it missed. Those are in the log, once, at
+    /// the moment they happened.
     static func reason(_ error: any Error) -> String {
-        if let library = error as? PhotoLibraryError { return library.description }
+        if let library = error as? PhotoLibraryError { return library.sentence }
         return String(describing: error)
     }
 

@@ -46,6 +46,26 @@ public enum PathAvailability {
         return "no longer at this path"
     }
 
+    /// The same fact, as a sentence beside a name in a window.
+    ///
+    /// **A network volume that is not mounted is the ordinary case, not an
+    /// error.** A laptop leaves the house; a NAS goes to sleep. *Volume not
+    /// mounted* is the machine's phrasing of that and reads like something has
+    /// gone wrong; **not online** is what has actually happened, and it says the
+    /// thing worth knowing — that it will come back.
+    ///
+    /// The noun comes from the kind because a person is looking at a row that
+    /// says *file* or *folder* everywhere else in the window, and a reason that
+    /// says neither reads as being about something else.
+    public static func sentence(for url: URL, kind: SourceKind) -> String {
+        let noun = kind == .file ? "File" : "Folder"
+        if !volumeIsMounted(for: url) { return "\(noun) is not online." }
+        if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
+            return "\(noun) is not readable."
+        }
+        return "\(noun) is no longer there."
+    }
+
     public static func volumeIsMounted(for url: URL) -> Bool {
         guard
             let mounted = FileManager.default.mountedVolumeURLs(

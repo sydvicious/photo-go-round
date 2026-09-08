@@ -76,7 +76,7 @@ public struct BoundedPhotoLibrary: PhotoLibrary {
             return try await Deadline.run(within: limit, work)
         } catch let expired as Deadline.Expired {
             Log.photos.error(
-                "library did not answer \(what, privacy: .public) within \(expired.limit.totalSeconds, privacy: .public)s"
+                "library did not answer \(what, privacy: .public) within \(expired.limit.spokenSeconds, privacy: .public)"
             )
             throw PhotoLibraryError.noAnswer(what: what, within: expired.limit)
         }

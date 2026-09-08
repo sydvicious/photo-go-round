@@ -207,7 +207,24 @@ public enum PhotoLibraryError: Error, CustomStringConvertible, Sendable {
         case .noUsableResource(let id): "\(id) has no photo resource"
         case .writeFailed(let reason): reason
         case .noAnswer(let what, let within):
-            "the photo library did not answer \(what) within \(within)"
+            "the photo library did not answer \(what) within \(within.spokenSeconds)"
+        }
+    }
+
+    /// The same fact, for somebody who is not reading a log.
+    ///
+    /// **`description` names the call and the bound because that is what a log
+    /// is for.** On screen it is worse than useless: nobody outside this
+    /// codebase knows what `enumerateImages` is, and *within 7.999945958
+    /// seconds* is the arithmetic of a budget leaking into a sentence. What a
+    /// person needs is which thing is unwell and that it is not their fault.
+    public var sentence: String {
+        switch self {
+        case .noAnswer: "Photos is not responding."
+        case .notAuthorized: "Photo-Go-Round cannot read your Photos library."
+        case .assetMissing: "That photograph is no longer in the library."
+        case .noUsableResource: "That photograph has no image to show."
+        case .writeFailed(let reason): reason
         }
     }
 

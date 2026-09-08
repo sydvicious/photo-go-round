@@ -200,9 +200,11 @@ struct PhotosEndpoint: Sendable {
     /// — and the panel already knows how to show the reason a service gave,
     /// which is the sentence `PhotoLibraryError` writes for exactly this.
     private static func unavailable(_ error: any Error) -> HTTPListener.Response {
-        let reason =
-            (error as? PhotoLibraryError)?.description ?? "the photo library did not answer"
-        Log.photos.error("photos endpoint: \(reason, privacy: .public)")
+        let library = error as? PhotoLibraryError
+        // The log gets the call and the bound; the client gets the sentence.
+        Log.photos.error(
+            "photos endpoint: \(library?.description ?? String(describing: error), privacy: .public)")
+        let reason = library?.sentence ?? "Photos is not responding."
         guard let bytes = try? SourceEndpoint.encoder().encode(Failure(error: reason)) else {
             return .text(reason + "\n", status: 503, reason: "Service Unavailable")
         }

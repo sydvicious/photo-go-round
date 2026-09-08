@@ -399,7 +399,17 @@ final class SourcesModel {
         case .available: return (true, nil)
         // A path is never `missing` — that is an album's state — but the enum
         // has the case and this switch is exhaustive.
-        case .offline(let why), .gone(let why), .missing(let why): return (false, why)
+        //
+        // **The window's phrasing, not the wire's.** The reasons the enum
+        // carries are written for `pgr source list`; a row beside a folder's
+        // name wants a sentence, and one that says *folder* rather than
+        // *volume*. See `PathAvailability.sentence(for:kind:)`.
+        case .offline, .gone, .missing:
+            return (
+                false,
+                PathAvailability.sentence(
+                    for: URL(filePath: source.locator), kind: SourceKind(source.kind))
+            )
         }
     }
 
@@ -434,7 +444,7 @@ final class SourcesModel {
         // connection; something inside it is stuck. Sending somebody to start
         // an agent that is already started is worse than saying nothing.
         case SourceService.Failure.silent(let limit):
-            "The agent accepted the connection and said nothing for \(limit). "
+            "The agent accepted the connection and said nothing for \(limit.spokenSeconds). "
                 + "It is running but not answering."
         case SourceService.Failure.notFound(let paths):
             paths.count == 1

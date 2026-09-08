@@ -4,14 +4,24 @@ import Testing
 @testable import PhotoGoRoundAgentAPI
 @testable import PhotoGoRoundKit
 
-/// **Serving waits for the head card's bytes, once, and then moves on.**
+/// **Serving waits for the head card's bytes, once, and then empties the queue
+/// ahead of itself.**
 ///
 /// Decided 2026-09-05. A card is dealt whether or not its bytes are here, the
 /// queue's fetcher goes and gets them, and a request that reaches a card before
 /// they land waits — up to `serveWait` — for one of three things: the bytes
 /// land, the card leaves the queue because its fetch failed, or the wait runs
-/// out. When it runs out the card is dropped and the request takes the first
-/// card whose bytes are here, without waiting again.
+/// out.
+///
+/// **What happens after the wait changed on 2026-09-07.** The request used to
+/// drop the head and then walk past the cold cards behind it, leaving them
+/// queued because they were still being fetched. That is what let a run of
+/// photographs the network could not deliver settle at the head of the queue,
+/// where every subsequent request met them again in the same order — measured
+/// with the network off: twenty cards queued, seventeen warm, both windows
+/// stalled behind the three that were not. Now the request takes the new head
+/// and drops it too if it is cold, until it meets a card it can serve or the
+/// queue is empty.
 ///
 /// File-backed, because the fetch that lands mid-wait runs on a second
 /// connection the way the agent's fetcher does.
@@ -61,6 +71,11 @@ struct ServeWaitTests {
         var queued: Int { (try? cache.queue.size()) ?? 0 }
         var pooled: Int {
             (try? library.database.scalarInt("SELECT COUNT(*) FROM photo;")) ?? 0
+        }
+        /// Whether a lane's claim is still on this photograph.
+        func claimed(_ photoID: Int64) throws -> Bool {
+            try library.database.scalarInt(
+                "SELECT COUNT(*) FROM photo WHERE id = \(photoID) AND claimed_at IS NOT NULL;") == 1
         }
 
         /// Fetches every queued card on its own connection, after a pause —
@@ -139,7 +154,7 @@ struct ServeWaitTests {
         #expect(try fixture.cache.queue.contains(photoID: head.id) == false)
     }
 
-    @Test("With no warm card after the wait, the request answers nothing and drops only the head")
+    @Test("With no warm card after the wait, every cold card is dropped and nothing is served")
     func timeoutWithNothingWarm() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"], wait: .milliseconds(200))
         defer { fixture.cleanUp() }
@@ -147,12 +162,73 @@ struct ServeWaitTests {
 
         #expect(try await fixture.cache.serve() == nil)
 
-        // One wait, one drop. The second card was never waited on and keeps its
-        // place for the fetcher to reach.
+        // **One wait, two drops.** The wait is spent on the head; the card
+        // behind it is dropped on sight rather than left where it is. Leaving
+        // it is what let a queue fill with cards that could never be served —
+        // every request would meet them again, in order, ahead of the cards
+        // that could.
         #expect(fixture.waited() == 1)
-        #expect(fixture.dropped().count == 1)
-        #expect(fixture.queued == 1)
-        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 1"))
+        #expect(fixture.dropped().count == 2)
+        #expect(fixture.queued == 0)
+        #expect(fixture.pooled == 2, "a dropped card must keep its row")
+        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 2"))
+    }
+
+    @Test("Cold cards ahead of a warm one are dropped, and the warm one is served")
+    func coldCardsAheadOfAWarmOneAreDropped() async throws {
+        // The night this was written for: a queue whose head is a run of
+        // photographs iCloud will not deliver, with a folder photograph behind
+        // them whose bytes have been on the disk all along.
+        let cold = (1...6).map { "cold\($0).png" }
+        let fixture = try await Fixture(photos: cold + ["warm.png"], wait: .milliseconds(200))
+        defer { fixture.cleanUp() }
+        try fixture.dealAll()
+
+        // Bytes go to whichever card the deck put *last*, so that every other
+        // card stands between the request and it. Which photograph that is is
+        // the deck's business and not this test's — asking the queue is what
+        // makes the arrangement hold however it dealt.
+        let queued = try fixture.cache.queue.peek(16)
+        #expect(queued.count == 7)
+        let warm = try #require(queued.last)
+        _ = try await fixture.cache.cache(photoID: warm.id)
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let served = try #require(try await fixture.cache.serve())
+
+        #expect(served.card.id == warm.id)
+        // One wait, not six: the rest are dropped on sight.
+        #expect(fixture.waited() == 1)
+        #expect(fixture.dropped().count == 6)
+        #expect(fixture.queued == 0, "the cold cards must not still be queued")
+        #expect(fixture.pooled == 7, "dropping a card keeps its photograph")
+        #expect(
+            clock.now - started < .seconds(2),
+            "a request spent more than its one wait walking cold cards")
+    }
+
+    @Test("A card dropped for want of bytes keeps its claim, because its fetch may still be running")
+    func droppingAColdCardLeavesTheClaimAlone() async throws {
+        let fixture = try await Fixture(photos: ["a.png"], wait: .milliseconds(200))
+        defer { fixture.cleanUp() }
+        try fixture.dealAll()
+
+        // The claim a lane takes before it fetches. Serving is about to drop
+        // the card out from under that fetch.
+        let head = try #require(fixture.head)
+        #expect(try Deck(database: fixture.library.database).claim(photoID: head.id) == true)
+
+        #expect(try await fixture.cache.serve() == nil)
+
+        // **The claim outlives the queue place.** It belongs to the fetch, not
+        // to the card's position: released here, a re-deal of this photograph
+        // would let a second lane stream into the same staging file as the
+        // first, and the two would write one corrupt image between them.
+        #expect(fixture.queued == 0)
+        #expect(
+            try fixture.claimed(head.id) == true,
+            "serving released a claim held by a fetch that is still running")
     }
 
     @Test("A card from a benched source is dropped without waiting")
@@ -207,7 +283,7 @@ struct ServeWaitTests {
         #expect(fixture.dropped().isEmpty, "the fetcher removed it; serving should not have dropped anything")
     }
 
-    @Test("A wait of zero never waits and never drops")
+    @Test("A wait of zero never waits, and drops every cold card it meets")
     func zeroWaitNeverWaits() async throws {
         let fixture = try await Fixture(photos: ["a.png"], wait: .zero)
         defer { fixture.cleanUp() }
@@ -215,12 +291,15 @@ struct ServeWaitTests {
 
         #expect(try await fixture.cache.serve() == nil)
 
-        // Nothing has bytes, so nothing is served; and with no wait there was
-        // nothing to run out, so nothing is dropped either. Only the fetcher's
-        // own failure drops a card now.
+        // Nothing has bytes, so nothing is served, and nothing is waited for.
+        // **The card still goes**, which is the change: a wait of zero means
+        // *never wait for bytes*, not *leave cold cards where they are*. The
+        // second reading is the one that fills a queue with cards no request
+        // can ever get past.
         #expect(fixture.waited() == 0)
-        #expect(fixture.dropped().isEmpty)
-        #expect(fixture.queued == 1)
+        #expect(fixture.dropped().count == 1)
+        #expect(fixture.queued == 0)
+        #expect(fixture.pooled == 1)
     }
 
     @Test("A warm head is served at once, with no wait said")

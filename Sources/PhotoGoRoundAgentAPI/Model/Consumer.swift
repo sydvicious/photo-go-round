@@ -73,4 +73,15 @@ extension Duration {
         let (whole, attoseconds) = components
         return Double(whole) + Double(attoseconds) / 1e18
     }
+
+    /// Whole seconds, for a sentence somebody reads.
+    ///
+    /// **`Duration`'s own description is a debugging form.** A bound computed
+    /// from what is left of a budget prints as "7.999945958 seconds", which is
+    /// noise in prose and different on every run — so it is also useless in a
+    /// log somebody is comparing against yesterday's.
+    public var spokenSeconds: String {
+        let seconds = Int(totalSeconds.rounded())
+        return seconds == 1 ? "1 second" : "\(seconds) seconds"
+    }
 }

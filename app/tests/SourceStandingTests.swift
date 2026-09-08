@@ -46,11 +46,25 @@ struct SourceStandingTests {
         #expect(standing.reason == nil)
     }
 
-    @Test("A folder on an unmounted volume says so")
+    /// **"Not online" rather than "volume not mounted".** A laptop leaves the
+    /// house and a NAS goes to sleep; that is the ordinary case, not an error,
+    /// and the machine's phrasing of it reads like something has gone wrong.
+    /// The noun matches the row, which says *folder* everywhere else.
+    @Test("A folder on an unmounted volume says it is not online")
     func anUnmountedVolumeIsOffline() throws {
         let standing = SourcesModel.state(of: try source(locator: "/Volumes/NotMounted/Pictures"))
         #expect(!standing.available)
-        #expect(standing.reason == "volume not mounted")
+        #expect(standing.reason == "Folder is not online.")
+    }
+
+    /// The same fact about a file says *file*, because that is what its row
+    /// calls it.
+    @Test("A file on an unmounted volume says file, not folder")
+    func anUnmountedFileSaysFile() throws {
+        let standing = SourcesModel.state(
+            of: try source(kind: "file", locator: "/Volumes/NotMounted/One.jpg"))
+        #expect(!standing.available)
+        #expect(standing.reason == "File is not online.")
     }
 
     @Test("A folder deleted from a volume that is mounted says something different")
@@ -63,7 +77,9 @@ struct SourceStandingTests {
 
         let standing = SourcesModel.state(of: try source(locator: inside.path(percentEncoded: false)))
         #expect(!standing.available)
-        #expect(standing.reason == "no longer at this path")
+        // Deleted from a volume that is right there is a different fact from a
+        // volume that is away, and must not read as temporary.
+        #expect(standing.reason == "Folder is no longer there.")
     }
 
     @Test("A single file is checked the same way")

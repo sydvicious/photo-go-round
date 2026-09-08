@@ -61,7 +61,7 @@ public enum Deadline {
             self.limit = limit
         }
 
-        public var description: String { "no answer within \(limit)" }
+        public var description: String { "no answer within \(limit.spokenSeconds)" }
     }
 
     /// Runs `work` and throws `Expired` if `limit` passes first.

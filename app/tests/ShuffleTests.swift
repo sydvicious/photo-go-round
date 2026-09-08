@@ -73,7 +73,7 @@ struct ShuffleTests {
         return bytes as Data
     }
 
-    private static func shuffle(_ source: Stub) -> Shuffle {
+    private static func shuffle(_ source: some PictureSource) -> Shuffle {
         Shuffle(
             source: source,
             dwell: .milliseconds(20), whenEmpty: .milliseconds(20),
@@ -179,5 +179,87 @@ struct ShuffleTests {
 
         #expect(shuffle.trouble == .noPhotos)
         #expect(shuffle.shown == nil)
+    }
+
+    /// Answers empty a fixed number of times and then never answers again, so a
+    /// test can hold the loop still at a chosen point in the streak.
+    ///
+    /// **A stub that simply answers empty for ever cannot make this claim.**
+    /// The loop turns every twenty milliseconds, so by the time a poll observes
+    /// two empties it may already have had five, and an assertion about *how
+    /// many it took* would pass against a `Shuffle` that says so on the first.
+    /// Stopping the loop dead at the count under test is what makes the
+    /// difference observable.
+    private final class Countdown: PictureSource, @unchecked Sendable {
+        private let lock = NSLock()
+        private var remaining: Int
+
+        init(empties: Int) { remaining = empties }
+
+        /// True once every empty answer has been given and the next ask is the
+        /// one being held.
+        var spent: Bool { lock.withLock { remaining == 0 } }
+
+        func next(
+            consumer: String, displayID: String?, fitting box: PixelSize?
+        ) async throws -> ServedPicture? {
+            let answer = lock.withLock { () -> Bool in
+                guard remaining > 0 else { return false }
+                remaining -= 1
+                return true
+            }
+            guard answer else {
+                try await Task.sleep(for: .seconds(60))
+                return nil
+            }
+            return nil
+        }
+    }
+
+    /// **One empty answer is a queue turning over, not an empty library.** The
+    /// agent's request drops every cold card it meets, so a request that lands
+    /// mid-turnover can walk off the end of the queue and answer `204` while
+    /// the fetcher is filling it again. Saying *No Photos Available* for that
+    /// and taking it back three seconds later tells somebody nothing true.
+    @Test("Two empty answers say nothing")
+    func twoEmptyAnswersSayNothing() async throws {
+        let source = Countdown(empties: 2)
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+
+        // Both empties given, and the third ask is held for the rest of the
+        // test — so the streak can never reach three and this is a settled
+        // state rather than a moment passed through.
+        try await Self.until({ source.spent }, "two empty answers")
+
+        #expect(shuffle.trouble == nil, "two empty answers put the words up")
+        #expect(shuffle.shown == nil)
+    }
+
+    @Test("Three empty answers in a row say No Photos Available")
+    func threeEmptyAnswersSayIt() async throws {
+        let source = Countdown(empties: 3)
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+
+        try await Self.until({ shuffle.trouble != nil }, "the streak being noticed")
+
+        #expect(shuffle.trouble == .noPhotos)
+        #expect(shuffle.trouble?.words == "No Photos Available")
+        #expect(shuffle.trouble?.isAgentTrouble == false, "an empty library is not the agent's fault")
+    }
+
+    /// The other half of the rule: the words come down on the first picture.
+    @Test("A picture after the streak takes the words back down")
+    func aPictureClearsTheStreak() async throws {
+        let source = Stub(.empty)
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.trouble == .noPhotos }, "the streak being noticed")
+
+        source.answers(.picture(try Self.onePixelPNG()))
+        try await Self.until({ shuffle.shown != nil }, "a picture after the streak")
+
+        #expect(shuffle.trouble == nil)
     }
 }

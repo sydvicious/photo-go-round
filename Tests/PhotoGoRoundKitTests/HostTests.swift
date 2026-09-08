@@ -297,11 +297,15 @@ struct HostTests {
         #expect(suite.preferences.scanInterval == .seconds(1))
     }
 
-    @Test("The serve wait is sixty seconds, may be zero, and is clamped at an hour")
+    @Test("The serve wait is two seconds, may be zero, and is clamped at an hour")
     func serveWaitDefaultsAndClamps() {
         let suite = Suite()
-        #expect(suite.preferences.serveWait == .seconds(60))
-        #expect(suite.preferences.effectiveValue(for: .serveWaitSeconds) == "60")
+        // Two, not the sixty it was until 2026-09-07: the wait is spent on the
+        // head of every request now, so it has to finish well inside the
+        // client's own five-second bound. The measurement behind the number is
+        // written down beside it in `Preferences.serveWait`.
+        #expect(suite.preferences.serveWait == .seconds(2))
+        #expect(suite.preferences.effectiveValue(for: .serveWaitSeconds) == "2")
         #expect(Preferences.allKeys.contains(.serveWaitSeconds), "pgr_ctl get would not list it")
 
         // Zero is a value, not an error: it means never wait.

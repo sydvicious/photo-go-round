@@ -155,6 +155,10 @@ struct RunCommand {
                     return .timedOut
                 }
                 guard landed.lower() else {
+                    // **Told to the bench, the same as a timeout is.** Which of
+                    // the two bounds noticed says nothing about the source; a
+                    // fetch that produced no bytes is what the bench counts.
+                    cache.fetchFailed(card)
                     cache.dropUnfetched(card, because: "its fetch failed")
                     return .failed
                 }

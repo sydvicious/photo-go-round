@@ -52,4 +52,21 @@ enum BlockingWork {
             }
         }
     }
+
+    /// Runs `body` on a thread that is allowed to block, and does **not** wait
+    /// for it.
+    ///
+    /// For blocking work that answers through a callback rather than by
+    /// returning — the shape `PHAssetResourceManager.requestData` has, where
+    /// finding the resource blocks but starting the stream does not, and the
+    /// bytes arrive later on a queue of PhotoKit's own. `run` cannot express
+    /// that: its continuation resumes when the closure returns, which here is
+    /// long before the answer.
+    ///
+    /// **The caller keeps the obligation to finish.** Nothing here reports that
+    /// `body` threw, returned, or never came back, so whatever the caller is
+    /// suspended on must be resolvable from inside `body` and from its deadline.
+    static func detached(_ body: @escaping @Sendable () -> Void) {
+        queue.async(execute: body)
+    }
 }

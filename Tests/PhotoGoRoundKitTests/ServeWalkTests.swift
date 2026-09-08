@@ -173,21 +173,22 @@ struct ServeWalkTests {
 
     // MARK: - Nothing to show
 
-    @Test("A cold library deals; a request waits on the head, drops it, and answers nothing")
+    @Test("A cold library deals; a request waits once, drops every card, and answers nothing")
     func aColdLibraryDealsAndServingWaits() async throws {
         // The deck deals every available photograph, so a cold library fills
         // the queue with cards whose bytes are not here. With nothing fetching,
-        // a request waits its bound on the head card, drops it, finds no card
-        // with bytes, and answers nothing. The other card keeps its place: it
-        // was never waited on. See `ServeWaitTests` for the wait itself.
+        // a request waits its bound on the head card and then empties the queue
+        // ahead of itself — one wait, and a drop for every card it meets. See
+        // `ServeWaitTests` for the wait itself.
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
 
         #expect(try fixture.dealAll() == 2)
         #expect(try await fixture.cache.serve() == nil)
         #expect(fixture.heard.count { if case .waiting = $0 { true } else { false } } == 1)
-        #expect(fixture.heard.count { if case .cacheDropped = $0 { true } else { false } } == 1)
-        #expect(fixture.queued == 1, "a card that was never waited on was dropped")
-        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 1"))
+        #expect(fixture.heard.count { if case .cacheDropped = $0 { true } else { false } } == 2)
+        #expect(fixture.queued == 0)
+        #expect(fixture.pooled == 2, "dropping a card must keep its photograph")
+        #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 2"))
     }
 
     @Test("The card actually served is still checked against its source")

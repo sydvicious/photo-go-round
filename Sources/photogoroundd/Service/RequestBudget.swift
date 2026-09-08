@@ -29,8 +29,16 @@ struct RequestBudget {
     static let `default` = ServiceTiming.responseBudget
 
     private let deadline: ContinuousClock.Instant
+    /// What this budget was given, as opposed to what is left of it.
+    ///
+    /// **Reported instead of the remainder.** A failure raised from what was
+    /// left printed as *within 7.999945958 seconds* — the arithmetic of a
+    /// budget leaking into a sentence, and a different number every run, which
+    /// makes a log impossible to compare against yesterday's.
+    private let limit: Duration
 
     init(_ limit: Duration = RequestBudget.default) {
+        self.limit = limit
         deadline = .now + limit
     }
 
@@ -62,12 +70,12 @@ struct RequestBudget {
         _ what: String, _ work: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         guard !isSpent else {
-            throw PhotoLibraryError.noAnswer(what: what, within: .zero)
+            throw PhotoLibraryError.noAnswer(what: what, within: limit)
         }
         do {
             return try await Deadline.run(within: remaining, work)
-        } catch let expired as Deadline.Expired {
-            throw PhotoLibraryError.noAnswer(what: what, within: expired.limit)
+        } catch is Deadline.Expired {
+            throw PhotoLibraryError.noAnswer(what: what, within: limit)
         }
     }
 }

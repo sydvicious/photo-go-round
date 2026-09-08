@@ -354,50 +354,21 @@ public struct SystemPhotoLibrary: PhotoLibrary {
     public func write(
         _ resource: LibraryResource, ofAsset identifier: String, to destination: URL
     ) async throws -> Int64 {
-        // **Both lookups off the cooperative pool.** They are two more fetches
-        // into `photolibraryd`, and the streaming below was never the only part
-        // of this call that could block.
-        //
-        // What comes back is the resource's *position*, not the resource: a
-        // `PHAssetResource` is not `Sendable` and has no business crossing a
-        // hop. Looking it up again below costs one more fetch against a call
-        // whose next act is to download a photograph.
-        let position = try await BlockingWork.run { () -> Int in
-            guard let asset = Self.asset(identifier) else {
-                throw PhotoLibraryError.assetMissing(identifier)
-            }
-            guard
-                let found = PHAssetResource.assetResources(for: asset).firstIndex(where: {
-                    Self.kind(of: $0.type) == resource.kind
-                        && $0.originalFilename == resource.originalFilename
-                })
-            else { throw PhotoLibraryError.noUsableResource(identifier) }
-            return found
-        }
-        guard let asset = Self.asset(identifier) else {
-            throw PhotoLibraryError.assetMissing(identifier)
-        }
-        let resources = PHAssetResource.assetResources(for: asset)
-        guard position < resources.count else {
-            throw PhotoLibraryError.noUsableResource(identifier)
-        }
-        let match = resources[position]
-
         try? FileManager.default.removeItem(at: destination)
         guard FileManager.default.createFile(atPath: destination.path(percentEncoded: false), contents: nil)
         else { throw PhotoLibraryError.writeFailed("could not create \(destination.lastPathComponent)") }
         let handle = try FileHandle(forWritingTo: destination)
-
-        let options = PHAssetResourceRequestOptions()
-        options.isNetworkAccessAllowed = true
-
         let sink = ChunkSink(handle: handle)
+
         do {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<Void, any Error>) in
                 let once = ResumeOnce(continuation)
                 let request = RequestHandle()
-                let deadline = Task {
+                // **Detached, so the limit is not a child of whatever called
+                // this.** It is the only thing that ends a request PhotoKit has
+                // stopped making progress on.
+                let deadline = Task.detached {
                     try? await Task.sleep(for: Self.fetchLimit)
                     request.cancel()
                     once.finish(PhotoLibraryError.writeFailed("no answer within \(Self.fetchLimit)"))
@@ -416,10 +387,50 @@ public struct SystemPhotoLibrary: PhotoLibrary {
                     deadline.cancel()
                     once.finish(error)
                 }
-                request.track(
-                    PHAssetResourceManager.default().requestData(
-                        for: match, options: options,
-                        dataReceivedHandler: received, completionHandler: completed))
+
+                // **The lookup and the request together, on a thread that is
+                // allowed to block, and nothing PhotoKit hands back leaves this
+                // closure.** A `PHAssetResource` is not `Sendable`, so finding
+                // it and starting the stream cannot be split across a hop; and
+                // both `fetchAssets` and `assetResources` are round trips into
+                // `photolibraryd` that answer at their leisure or not at all.
+                //
+                // **This is the fault that cost sixteen minutes of dead agent
+                // on 2026-09-07, and the file's own header had already
+                // forbidden it.** The lookup was hoisted into `BlockingWork` on
+                // 2026-08-26 and then done a second time underneath it, bare, on
+                // the cooperative thread. With `downloadConcurrency` at 8 and a
+                // pool of about ten threads, eight lanes parked eight of them
+                // inside a wedged `photolibraryd` and the runtime had nothing
+                // left to run anything on. It is not a deadlock and does not
+                // look like one: no lock is held, no cycle exists, the process
+                // simply stops. What names it unmistakably is that the *timers*
+                // stopped — the 60-second limit above was measured firing at
+                // 961 seconds, and the unified log was blank for the whole of
+                // the interval.
+                BlockingWork.detached {
+                    guard let asset = Self.asset(identifier) else {
+                        deadline.cancel()
+                        once.finish(PhotoLibraryError.assetMissing(identifier))
+                        return
+                    }
+                    guard
+                        let match = PHAssetResource.assetResources(for: asset).first(where: {
+                            Self.kind(of: $0.type) == resource.kind
+                                && $0.originalFilename == resource.originalFilename
+                        })
+                    else {
+                        deadline.cancel()
+                        once.finish(PhotoLibraryError.noUsableResource(identifier))
+                        return
+                    }
+                    let options = PHAssetResourceRequestOptions()
+                    options.isNetworkAccessAllowed = true
+                    request.track(
+                        PHAssetResourceManager.default().requestData(
+                            for: match, options: options,
+                            dataReceivedHandler: received, completionHandler: completed))
+                }
             }
         } catch {
             try? handle.close()

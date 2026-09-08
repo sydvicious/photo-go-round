@@ -77,15 +77,21 @@ struct HostileProviderTests {
         #expect(bench.isBenched(7))
     }
 
-    @Test("Anything at all from a source clears its account")
+    @Test("An occasional timeout on a working source is weather")
     func successIsWeatherProof() {
-        // An occasional timeout on a working source is weather, not a reason to
-        // stop asking.
+        // Still the rule, and still what the bench is for — but a success pays
+        // off one failure now rather than the whole account. **Zeroing made the
+        // bench unreachable for a half-downloaded Photos album**, where the
+        // local photographs that answered kept wiping the record of the iCloud
+        // ones that never would; see `SourceBenchTests` for that shape and the
+        // measurement behind it.
+        //
+        // A source failing once between runs of successes never accumulates.
         let bench = SourceBench(pauseAfter: 4, firstPause: .seconds(60))
-        for _ in 0..<3 { _ = bench.failed(7) }
-        bench.succeeded(7)
-
-        for _ in 0..<3 { #expect(bench.failed(7) == nil) }
+        for _ in 0..<20 {
+            #expect(bench.failed(7) == nil)
+            bench.succeeded(7)
+        }
         #expect(!bench.isBenched(7))
     }
 
