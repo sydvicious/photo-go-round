@@ -9,6 +9,14 @@
 /* Begin PBXBuildFile section */
 		AA0000000000000000000013 /* PhotoGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000011 /* PhotoGoRoundAgentAPI */; };
 		AA0000000000000000000014 /* PhotoGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000012 /* PhotoGoRoundDisplay */; };
+		AA00000000000000000000A9 /* PhotoGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000AB /* PhotoGoRoundAgentAPI */; };
+		AA00000000000000000000AA /* PhotoGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000AC /* PhotoGoRoundDisplay */; };
+		AA00000000000000000000C9 /* PhotoGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000CC /* PhotoGoRoundAgentAPI */; };
+		AA00000000000000000000CA /* PhotoGoRoundKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000CD /* PhotoGoRoundKit */; };
+		AA00000000000000000000CB /* Console in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000CE /* Console */; };
+		AA00000000000000000000D9 /* PhotoGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000DC /* PhotoGoRoundAgentAPI */; };
+		AA00000000000000000000DA /* PhotoGoRoundKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000DD /* PhotoGoRoundKit */; };
+		AA00000000000000000000DB /* Console in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000DE /* Console */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -26,6 +34,10 @@
 		AA0000000000000000000030 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-RoundTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000082 /* FEATURES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FEATURES.md; sourceTree = "<group>"; };
+		AA00000000000000000000A1 /* Photo-Go-Round.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-Round.saver"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000000B1 /* Photo-Go-Round Spike.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-Round Spike.saver"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000000C1 /* Photo-Go-Round Server.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Photo-Go-Round Server.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000000D1 /* pgr_ctl */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = pgr_ctl; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,7 +52,44 @@
 			path = mac/Sources;
 			sourceTree = "<group>";
 		};
+		AA00000000000000000000A5 /* Sources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			name = Sources;
+			path = saver/Sources;
+			sourceTree = "<group>";
+		};
+		AA00000000000000000000B5 /* Sources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			name = Spike;
+			path = saver/Spike/Sources;
+			sourceTree = "<group>";
+		};
+		AA00000000000000000000C5 /* photogoroundd */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			name = photogoroundd;
+			path = ../Sources/photogoroundd;
+			sourceTree = "<group>";
+		};
+		AA00000000000000000000D5 /* pgr_ctl */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA00000000000000000000DF /* Exceptions for "pgr_ctl" folder in "pgr_ctl" target */,
+			);
+			name = pgr_ctl;
+			path = ../Sources/pgr_ctl;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA00000000000000000000DF /* Exceptions for "pgr_ctl" folder in "pgr_ctl" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = AA00000000000000000000D0 /* pgr_ctl */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		000000000000000130000000 /* Frameworks */ = {
@@ -48,6 +97,34 @@
 			files = (
 				AA0000000000000000000013 /* PhotoGoRoundAgentAPI in Frameworks */,
 				AA0000000000000000000014 /* PhotoGoRoundDisplay in Frameworks */,
+			);
+		};
+		AA00000000000000000000A3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				AA00000000000000000000A9 /* PhotoGoRoundAgentAPI in Frameworks */,
+				AA00000000000000000000AA /* PhotoGoRoundDisplay in Frameworks */,
+			);
+		};
+		AA00000000000000000000B3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		AA00000000000000000000C3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				AA00000000000000000000C9 /* PhotoGoRoundAgentAPI in Frameworks */,
+				AA00000000000000000000CA /* PhotoGoRoundKit in Frameworks */,
+				AA00000000000000000000CB /* Console in Frameworks */,
+			);
+		};
+		AA00000000000000000000D3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				AA00000000000000000000D9 /* PhotoGoRoundAgentAPI in Frameworks */,
+				AA00000000000000000000DA /* PhotoGoRoundKit in Frameworks */,
+				AA00000000000000000000DB /* Console in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -59,6 +136,10 @@
 				AA0000000000000000000031 /* Config */,
 				62C4AE00303557B800A88363 /* mac */,
 				AA0000000000000000000081 /* Sources */,
+				AA00000000000000000000A5 /* Sources */,
+				AA00000000000000000000B5 /* Spike */,
+				AA00000000000000000000C5 /* photogoroundd */,
+				AA00000000000000000000D5 /* pgr_ctl */,
 				AA0000000000000000000061 /* tests */,
 				000000000000000000000020 /* Products */,
 			);
@@ -69,6 +150,10 @@
 			children = (
 				000000000000000000000120 /* Photo-Go-Round.app */,
 				AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */,
+				AA00000000000000000000A1 /* Photo-Go-Round.saver */,
+				AA00000000000000000000B1 /* Photo-Go-Round Spike.saver */,
+				AA00000000000000000000C1 /* Photo-Go-Round Server.app */,
+				AA00000000000000000000D1 /* pgr_ctl */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -133,6 +218,91 @@
 			productReference = AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		AA00000000000000000000A0 /* Photo-Go-Round Saver */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000000A6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Saver" */;
+			buildPhases = (
+				AA00000000000000000000A2 /* Sources */,
+				AA00000000000000000000A3 /* Frameworks */,
+				AA00000000000000000000A4 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000000A5 /* Sources */,
+			);
+			name = "Photo-Go-Round Saver";
+			packageProductDependencies = (
+				AA00000000000000000000AB /* PhotoGoRoundAgentAPI */,
+				AA00000000000000000000AC /* PhotoGoRoundDisplay */,
+			);
+			productName = "Photo-Go-Round Saver";
+			productReference = AA00000000000000000000A1 /* Photo-Go-Round.saver */;
+			productType = "com.apple.product-type.bundle";
+		};
+		AA00000000000000000000B0 /* Photo-Go-Round Saver Spike */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000000B6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Saver Spike" */;
+			buildPhases = (
+				AA00000000000000000000B2 /* Sources */,
+				AA00000000000000000000B3 /* Frameworks */,
+				AA00000000000000000000B4 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000000B5 /* Spike */,
+			);
+			name = "Photo-Go-Round Saver Spike";
+			productName = "Photo-Go-Round Saver Spike";
+			productReference = AA00000000000000000000B1 /* Photo-Go-Round Spike.saver */;
+			productType = "com.apple.product-type.bundle";
+		};
+		AA00000000000000000000C0 /* Photo-Go-Round Server */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000000C6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Server" */;
+			buildPhases = (
+				AA00000000000000000000C2 /* Sources */,
+				AA00000000000000000000C3 /* Frameworks */,
+				AA00000000000000000000C4 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000000C5 /* photogoroundd */,
+			);
+			name = "Photo-Go-Round Server";
+			packageProductDependencies = (
+				AA00000000000000000000CC /* PhotoGoRoundAgentAPI */,
+				AA00000000000000000000CD /* PhotoGoRoundKit */,
+				AA00000000000000000000CE /* Console */,
+			);
+			productName = "Photo-Go-Round Server";
+			productReference = AA00000000000000000000C1 /* Photo-Go-Round Server.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AA00000000000000000000D0 /* pgr_ctl */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000000D6 /* Build configuration list for PBXNativeTarget "pgr_ctl" */;
+			buildPhases = (
+				AA00000000000000000000D2 /* Sources */,
+				AA00000000000000000000D3 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000000D5 /* pgr_ctl */,
+			);
+			name = pgr_ctl;
+			packageProductDependencies = (
+				AA00000000000000000000DC /* PhotoGoRoundAgentAPI */,
+				AA00000000000000000000DD /* PhotoGoRoundKit */,
+				AA00000000000000000000DE /* Console */,
+			);
+			productName = pgr_ctl;
+			productReference = AA00000000000000000000D1 /* pgr_ctl */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -167,12 +337,31 @@
 			targets = (
 				000000000000000100000000 /* Photo-Go-Round */,
 				AA0000000000000000000063 /* Photo-Go-RoundTests */,
+				AA00000000000000000000A0 /* Photo-Go-Round Saver */,
+				AA00000000000000000000B0 /* Photo-Go-Round Saver Spike */,
+				AA00000000000000000000C0 /* Photo-Go-Round Server */,
+				AA00000000000000000000D0 /* pgr_ctl */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		000000000000000140000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		AA00000000000000000000A4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		AA00000000000000000000B4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		AA00000000000000000000C4 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -186,6 +375,26 @@
 			);
 		};
 		AA0000000000000000000062 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		AA00000000000000000000A2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		AA00000000000000000000B2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		AA00000000000000000000C2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		AA00000000000000000000D2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
 			);
@@ -449,6 +658,174 @@
 			};
 			name = Release;
 		};
+		AA00000000000000000000A7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Saver" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = saver/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@loader_path/../Frameworks";
+				MACH_O_TYPE = mh_bundle;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.saver;
+				PRODUCT_NAME = "Photo-Go-Round";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				WRAPPER_EXTENSION = saver;
+			};
+			name = Debug;
+		};
+		AA00000000000000000000A8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Saver" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = saver/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@loader_path/../Frameworks";
+				MACH_O_TYPE = mh_bundle;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.saver;
+				PRODUCT_NAME = "Photo-Go-Round";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				WRAPPER_EXTENSION = saver;
+			};
+			name = Release;
+		};
+		AA00000000000000000000B7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = saver/Spike/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@loader_path/../Frameworks";
+				MACH_O_TYPE = mh_bundle;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.saver.spike;
+				PRODUCT_NAME = "Photo-Go-Round Spike";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				WRAPPER_EXTENSION = saver;
+			};
+			name = Debug;
+		};
+		AA00000000000000000000B8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = saver/Spike/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@loader_path/../Frameworks";
+				MACH_O_TYPE = mh_bundle;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.saver.spike;
+				PRODUCT_NAME = "Photo-Go-Round Spike";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				WRAPPER_EXTENSION = saver;
+			};
+			name = Release;
+		};
+		AA00000000000000000000C7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Server" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				ENABLE_APP_SANDBOX = NO;
+				EXECUTABLE_NAME = photogoroundd;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = agent/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.server;
+				PRODUCT_NAME = "Photo-Go-Round Server";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		AA00000000000000000000C8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Server" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				ENABLE_APP_SANDBOX = NO;
+				EXECUTABLE_NAME = photogoroundd;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = agent/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.server;
+				PRODUCT_NAME = "Photo-Go-Round Server";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		AA00000000000000000000D7 /* Debug configuration for PBXNativeTarget "pgr_ctl" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ../Sources/pgr_ctl/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_NAME = pgr_ctl;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		AA00000000000000000000D8 /* Release configuration for PBXNativeTarget "pgr_ctl" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ../Sources/pgr_ctl/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_NAME = pgr_ctl;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -476,6 +853,38 @@
 			);
 			defaultConfigurationName = Release;
 		};
+		AA00000000000000000000A6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Saver" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000000000000A7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Saver" */,
+				AA00000000000000000000A8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Saver" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		AA00000000000000000000B6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Saver Spike" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000000000000B7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */,
+				AA00000000000000000000B8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		AA00000000000000000000C6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Server" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000000000000C7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Server" */,
+				AA00000000000000000000C8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Server" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		AA00000000000000000000D6 /* Build configuration list for PBXNativeTarget "pgr_ctl" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000000000000D7 /* Debug configuration for PBXNativeTarget "pgr_ctl" */,
+				AA00000000000000000000D8 /* Release configuration for PBXNativeTarget "pgr_ctl" */,
+			);
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -493,6 +902,38 @@
 		AA0000000000000000000012 /* PhotoGoRoundDisplay */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PhotoGoRoundDisplay;
+		};
+		AA00000000000000000000AB /* PhotoGoRoundAgentAPI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoGoRoundAgentAPI;
+		};
+		AA00000000000000000000AC /* PhotoGoRoundDisplay */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoGoRoundDisplay;
+		};
+		AA00000000000000000000CC /* PhotoGoRoundAgentAPI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoGoRoundAgentAPI;
+		};
+		AA00000000000000000000CD /* PhotoGoRoundKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoGoRoundKit;
+		};
+		AA00000000000000000000CE /* Console */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Console;
+		};
+		AA00000000000000000000DC /* PhotoGoRoundAgentAPI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoGoRoundAgentAPI;
+		};
+		AA00000000000000000000DD /* PhotoGoRoundKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoGoRoundKit;
+		};
+		AA00000000000000000000DE /* Console */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Console;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

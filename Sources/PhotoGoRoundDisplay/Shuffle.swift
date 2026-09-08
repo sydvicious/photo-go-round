@@ -198,6 +198,25 @@ public final class Shuffle {
         if loop == nil { begin() }
     }
 
+    /// Stops asking, and **keeps what is on screen**.
+    ///
+    /// **Because the host process outlives the session.** `legacyScreenSaver`
+    /// serves many screensaver sessions from one process — measured in the
+    /// Phase 1 spike, where two view instances shared a pid 32 seconds apart —
+    /// so a surface that starts a loop per session and never ends one
+    /// accumulates them, each asking the agent for a photograph on its own
+    /// tick, in a process nobody restarts.
+    ///
+    /// `shown` and `trouble` survive deliberately. Starting again after a wake
+    /// then has a photograph to put up immediately rather than a black frame
+    /// while the first request is in flight, which is *Always have something to
+    /// show* applied to the surface it was written for. Asking again is
+    /// `draws(at:on:)`, which starts the loop whenever there is not one.
+    public func stop() {
+        loop?.cancel()
+        loop = nil
+    }
+
     private func begin() {
         loop = Task { [weak self] in
             while !Task.isCancelled {

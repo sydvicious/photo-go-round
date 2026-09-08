@@ -252,6 +252,65 @@ struct ShuffleTests {
         #expect(shuffle.trouble?.isAgentTrouble == false, "an empty library is not the agent's fault")
     }
 
+    // MARK: - Stopping, and starting again
+
+    /// **The screensaver's whole reason for having a stop.** The host process
+    /// outlives a session, so a surface that starts a loop per session and never
+    /// ends one leaves them all asking — see `Shuffle.stop`.
+    @Test("Stopping ends the asking")
+    func stoppingEndsTheAsking() async throws {
+        let source = Stub(.picture(try Self.onePixelPNG()))
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ source.callCount > 1 }, "the loop turning")
+
+        shuffle.stop()
+        // One ask may already be in flight when the cancel lands, so this
+        // settles rather than asserting on the next instant.
+        try await Task.sleep(for: .milliseconds(200))
+        let after = source.callCount
+        try await Task.sleep(for: .milliseconds(200))
+
+        #expect(source.callCount == after, "the loop kept asking after stop")
+    }
+
+    /// **A stop must not cost the photograph.** Waking the machine would
+    /// otherwise show black until the first request came back, which is
+    /// *Always have something to show* broken by the surface it was written for.
+    @Test("A stop keeps the picture, and asking again resumes")
+    func aStopKeepsThePicture() async throws {
+        let source = Stub(.picture(try Self.onePixelPNG()))
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.shown != nil }, "a first picture")
+        let shown = try #require(shuffle.shown)
+
+        shuffle.stop()
+        #expect(shuffle.shown?.picture == shown.picture, "the picture went down on stop")
+
+        try await Task.sleep(for: .milliseconds(200))
+        let whileStopped = source.callCount
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ source.callCount > whileStopped }, "asking again after a restart")
+    }
+
+    /// Starting twice without a stop between must not leave two loops running,
+    /// because the engine does exactly that.
+    @Test("Asking again while already running does not start a second loop")
+    func restartingIsIdempotent() async throws {
+        let source = Stub(.empty)
+        let shuffle = Self.shuffle(source)
+        let box = PixelSize(width: 100, height: 100)
+        shuffle.draws(at: box, on: nil)
+        shuffle.draws(at: box, on: nil)
+        shuffle.draws(at: box, on: nil)
+
+        // Three loops would ask about three times as often as one. The window is
+        // generous so this measures the rate rather than the scheduler.
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(source.callCount < 40, "more than one loop appears to be running")
+    }
+
     /// The other half of the rule: the words come down on the first picture.
     @Test("A picture after the streak takes the words back down")
     func aPictureClearsTheStreak() async throws {

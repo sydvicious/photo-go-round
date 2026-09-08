@@ -21,6 +21,6 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>NSPrincipalClass</key>
-	<string>PGRScreenSaverView</string>
+	<string>PGRSpikeView</string>
 </dict>
 </plist>

@@ -12,15 +12,19 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
-	<string>BNDL</string>
+	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.1</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
-	<key>NSPrincipalClass</key>
-	<string>PGRScreenSaverView</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo-Go-Round reads your photo library so it can shuffle your photos onto your desktop and screensaver. Nothing is ever uploaded or shared.</string>
 </dict>
 </plist>

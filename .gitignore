@@ -67,3 +67,8 @@ fastlane/test_output
 build/
 
 *.xcworkspacedata
+
+# Clang module cache that lands inside the project bundle when xcodebuild is
+# driven from a script rather than from Xcode. Build output, tens of megabytes,
+# thousands of files.
+*.xcodeproj/-Xcc/

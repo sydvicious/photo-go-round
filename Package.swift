@@ -32,6 +32,10 @@ let package = Package(
         // links the same fit and the same pan rather than reimplementing
         // what this phase was supposed to have rehearsed.
         .library(name: "PhotoGoRoundDisplay", targets: ["PhotoGoRoundDisplay"]),
+        // A product only so the Xcode targets can link it. The two executables
+        // are Xcode targets as well as package ones now, and an Xcode target
+        // reaches a package's *products* — a bare target is invisible to it.
+        .library(name: "Console", targets: ["Console"]),
         .executable(name: "photogoroundd", targets: ["photogoroundd"]),
         // Internal, and never shipped. It is a product so that `swift run
         // pgr_ctl` works; nothing about that puts it in a distributed bundle.

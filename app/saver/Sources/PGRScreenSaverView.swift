@@ -1,244 +1,321 @@
 import AppKit
-import Foundation
 import OSLog
+import PhotoGoRoundDisplay
 import ScreenSaver
 
-/// The Phase 1 spike: a `.saver` that draws no photographs and answers two
-/// questions about the sandbox it was loaded into.
+/// The screensaver: one photograph at a time, sized to fit, on black.
 ///
-/// **It links nothing.** Not `PhotoGoRoundDisplay`, not the kit, not the agent
-/// API — a stub that fails to load tells you nothing if it had four chances to
-/// fail. Everything here is Foundation and `ScreenSaver`, so a failure is the
-/// host refusing *us* rather than refusing something we brought.
+/// **It is the app's window with the chrome taken off, and that is literal.**
+/// The loop that asks the agent for a picture, the layer that draws it, and the
+/// fit that sizes it are all `PhotoGoRoundDisplay`, shared with the window
+/// rather than reimplemented here. What this file adds is a `ScreenSaverView`'s
+/// lifecycle and nothing else.
 ///
-/// The questions, in the order they matter:
+/// **The loop belongs to the display, not to this view** — see
+/// `DisplayShuffles`, and the measurement that put it there. A view borrows its
+/// display's loop and gives it back; it never owns one.
 ///
-/// 1. **Can it reach the agent at all?** `legacyScreenSaver`'s entitlements
-///    grant `com.apple.security.network.client`, so this should work; the point
-///    of asking anyway is that entitlements describe the container a process was
-///    signed into rather than the profile it ends up running under.
-/// 2. **Can it find the agent?** The port is published into a preference domain
-///    owned by another application, and there is no `shared-preference-read`
-///    exception in the host's grant. This is the one with no prior.
-///
-/// Both are asked with the port pinned, so that a failure of one is never read
-/// as a failure of the other. See `Screensaver Plan.md`.
+/// **No pan and no cross-fade in v1**, by decision on 2026-09-07. Both are
+/// deferred rather than dropped; `Pan` is already in the display library with
+/// its geometry tested, waiting for the phase that turns it on. See
+/// `Screensaver Plan.md`.
 @objc(PGRScreenSaverView)
 public final class PGRScreenSaverView: ScreenSaverView {
 
-    /// The agent this spike talks to, started with `--port 9000`. Pinned rather
-    /// than discovered *on purpose*: discovery is question two, and a spike that
-    /// needed it to answer question one could only ever fail at both together.
-    private static let pinnedPort = 9000
-
-    /// The development domain, which is what the window talks to. A saver that
-    /// can read this can read the production one.
-    private static let preferenceDomain = "com.sydpolk.photogoround.dev"
-
-    /// Same subsystem and category as `Log.saver`, spelled out because this
-    /// bundle deliberately links nothing.
     private static let log = Logger(subsystem: "com.sydpolk.photogoround", category: "saver")
 
-    /// What was found, drawn on the glass as well as logged.
+    /// The photograph. A subview rather than this view's own layer, because it
+    /// is the same one the window uses and it owns its own geometry.
+    private let picture = PictureLayerView(frame: .zero)
+
+    /// The words, when there has never been a photograph.
     ///
-    /// **Both, and that is not redundancy.** The log is the diagnostic and holds
-    /// everything; the screen answers "did the bundle load at all" in the time it
-    /// takes to look, which is the failure mode `PLAN.md` warns is silent and
-    /// maximally unhelpful.
-    private var lines: [String] = ["Photo-Go-Round saver spike", ""]
-    private var checked = false
+    /// **Sitting still would be a burn-in hazard**, so it is repositioned once
+    /// per dwell below. That is a placeholder for the bouncing empty state,
+    /// which is deferred with the rest of the motion and is not this.
+    private let words = NSTextField(labelWithString: "")
+
+    /// The display's loop, borrowed. Never created here and never discarded
+    /// here — `DisplayShuffles` owns both ends of that.
+    private var shuffle: Shuffle?
+
+    /// Whether the engine currently wants this view animating. Attaching is
+    /// gated on it so that a layout arriving before or after `startAnimation`
+    /// lands the same way.
+    private var running = false
+
+    /// The registry key this view is currently holding a claim on.
+    ///
+    /// **`nonisolated(unsafe)` for `deinit` alone.** Every read and write is on
+    /// the main actor; `deinit` runs after the last reference is gone, when
+    /// nothing else can be touching it, and it has to know whether a claim is
+    /// still outstanding.
+    nonisolated(unsafe) private var claimed: String?
+
+    /// The last size the view said it was, so a loop joined *after* layout
+    /// still learns how big this display is.
+    private var lastBox: PixelSize?
+
+    /// Which display this view is on, **resolved fresh every time it is asked
+    /// for rather than cached.**
+    ///
+    /// Caching it was a bug with a measurement: on 2026-09-08 one view keyed
+    /// itself to `unknown` and its sibling to the real UUID, so two views on one
+    /// screen took two loops and drew twice the screen's share. The cause is
+    /// that the identity was taken at first layout, and `NSWindow.screen` is nil
+    /// until the window has actually been placed on one — `window != nil` is not
+    /// the same question. Reading it live means the answer corrects itself the
+    /// moment the window lands.
+    private var currentDisplay: String? {
+        PictureLayerView.identifier(of: window?.screen)
+    }
+
+    /// The card last put on the glass, so a picture is logged once when it
+    /// arrives rather than on every observation that fires.
+    private var showing: Int64?
+
+    /// Which instance a line came from. The host reuses its process and makes
+    /// more than one view per display, so without this the log is several
+    /// conversations interleaved with no way to tell them apart.
+    nonisolated var instance: String {
+        String(UInt(bitPattern: ObjectIdentifier(self)) & 0xffff, radix: 16)
+    }
 
     public override init?(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)
-        animationTimeInterval = 1.0 / 4.0
+
+        // Nothing is animated per frame; see `animateOneFrame`. The interval
+        // still has to be something the engine will accept.
+        animationTimeInterval = 1
+
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+
+        picture.autoresizingMask = [.width, .height]
+        picture.frame = bounds
+        addSubview(picture)
+
+        words.textColor = .white
+        words.alignment = .center
+        words.isHidden = true
+        addSubview(words)
+
+        picture.draws = { [weak self] pixels, display in
+            guard let self else { return }
+            self.lastBox = pixels
+            // `display` is ignored: this view resolves its own, live, because
+            // the value the layout pass had may predate the window landing on a
+            // screen. See `currentDisplay`.
+            _ = display
+            if self.running { self.attach() }
+        }
+
+        // **Every instantiation says so.** The host makes views this file does
+        // not control the number or the purpose of, and a run where nothing is
+        // on screen has to be able to say whether a view was even made.
+        Self.log.notice(
+            "saver[\(self.instance, privacy: .public)]: created, preview=\(isPreview, privacy: .public), \(Int(frame.width), privacy: .public)x\(Int(frame.height), privacy: .public)")
     }
 
     /// Required because the class is instantiated through the Objective-C
-    /// runtime. One of the three configuration traps that make a Swift `.saver`
-    /// silently not appear — see `PLAN.md`, *Swift everywhere*.
+    /// runtime — one of the three configuration traps in `PLAN.md`'s *Swift
+    /// everywhere, including the screensaver*.
     public required init?(coder: NSCoder) {
         super.init(coder: coder)
-        animationTimeInterval = 1.0 / 4.0
+    }
+
+    /// **Gives the claim back even if nothing else did.** If a claim is still
+    /// outstanding here, neither `stopAnimation` nor losing a window reached
+    /// this view, and without this the display's loop would run for ever.
+    deinit {
+        let outstanding = claimed
+        Self.log.notice(
+            "saver[\(self.instance, privacy: .public)]: gone\(outstanding == nil ? "" : ", with a claim outstanding", privacy: .public)")
+        guard let outstanding else { return }
+        // No `self` crosses this boundary — only the key, by value.
+        Task { @MainActor in DisplayShuffles.release(outstanding) }
     }
 
     public override var hasConfigureSheet: Bool { false }
     public override var configureSheet: NSWindow? { nil }
 
+    // MARK: - Lifecycle
+
     public override func startAnimation() {
         super.startAnimation()
-        // The preview instance runs the checks too. It is a second process-side
-        // instantiation with the same sandbox, and if the two ever disagree that
-        // is worth knowing before Phase 4 builds a thumbnail on the assumption
-        // they do not.
-        guard !checked else { return }
-        checked = true
-        Task { @MainActor in await runChecks() }
-    }
 
-    // MARK: - The checks
-
-    @MainActor
-    private func runChecks() async {
-        say("--- where we are ---")
-        say("preview: \(isPreview)")
-        say("pid: \(getpid())  uid: \(getuid())")
-        // Paths are `.public` here and nowhere else in this project. The
-        // convention keeps them private; a spike whose entire purpose is to find
-        // out which paths are reachable cannot report `<private>` and be of any
-        // use. It ships once and is deleted.
-        say("bundle: \(Bundle(for: Self.self).bundlePath)")
-        say("NSHomeDirectory: \(NSHomeDirectory())")
-        say("real home: \(Self.realHome())")
-        say("sandboxed: \(NSHomeDirectory() != Self.realHome())")
-
-        say("")
-        say("--- Q2: finding the port ---")
-        let viaPreferences = checkPreferenceRead()
-        let viaFile = checkPlistRead()
-
-        say("")
-        say("--- Q1: reaching the agent, port \(Self.pinnedPort) pinned ---")
-        // Both spellings, because they are not the same question. `localhost`
-        // resolves through libinfo, which reaches `mDNSResponder` over a Mach
-        // lookup the host's exception list does not name — so it can fail where
-        // a literal address succeeds. `PictureClient` builds its URL with
-        // `localhost` today, which would make that a bug in shipping code rather
-        // than a curiosity.
-        await request(host: "127.0.0.1", port: Self.pinnedPort)
-        await request(host: "localhost", port: Self.pinnedPort)
-
-        // Only worth asking when discovery produced something and it is not the
-        // pinned one; otherwise it repeats a request just made.
-        if let discovered = viaPreferences ?? viaFile, discovered != Self.pinnedPort {
-            say("")
-            say("--- the discovered port, \(discovered) ---")
-            await request(host: "127.0.0.1", port: discovered)
-        }
-
-        say("")
-        say("--- done ---")
-    }
-
-    /// Question two, the way every client asks it today: `UserDefaults` through
-    /// `cfprefsd`, which arbitrates per domain and has no exception for ours.
-    private func checkPreferenceRead() -> Int? {
-        guard let defaults = UserDefaults(suiteName: Self.preferenceDomain) else {
-            say("cfprefs: UserDefaults(suiteName:) returned nil")
-            return nil
-        }
-        guard defaults.object(forKey: "servicePort") != nil else {
-            say("cfprefs: opened the suite, no servicePort in it")
-            return nil
-        }
-        let port = defaults.integer(forKey: "servicePort")
-        say("cfprefs: servicePort = \(port)")
-        return port > 0 ? port : nil
-    }
-
-    /// The fallback, and the reason the whole-filesystem read exception matters:
-    /// an ordinary `open(2)` on the plist rather than a Mach round trip to the
-    /// preferences daemon.
-    ///
-    /// **The path is built from the real home, not `NSHomeDirectory()`,** which
-    /// inside the sandbox names the host's container and holds nothing of ours.
-    private func checkPlistRead() -> Int? {
-        let path = "\(Self.realHome())/Library/Preferences/\(Self.preferenceDomain).plist"
-        say("plist: \(path)")
-        guard let data = FileManager.default.contents(atPath: path) else {
-            say("plist: unreadable")
-            return nil
-        }
-        say("plist: read \(data.count) bytes")
-        guard
-            let any = try? PropertyListSerialization.propertyList(
-                from: data, options: [], format: nil),
-            let dictionary = any as? [String: Any]
-        else {
-            say("plist: would not parse")
-            return nil
-        }
-        guard let port = dictionary["servicePort"] as? Int else {
-            say("plist: parsed \(dictionary.count) keys, no servicePort")
-            return nil
-        }
-        say("plist: servicePort = \(port)")
-        return port
-    }
-
-    /// Question one. The same shape of request `PictureClient` makes, without
-    /// its deadline or its failure taxonomy — this reports what happened rather
-    /// than deciding what it means.
-    private func request(host: String, port: Int) async {
-        var components = URLComponents()
-        components.scheme = "http"
-        components.host = host
-        components.port = port
-        components.path = "/v1/next"
-        components.queryItems = [
-            URLQueryItem(name: "consumer", value: "saver-spike"),
-            URLQueryItem(name: "w", value: "1920"),
-            URLQueryItem(name: "h", value: "1080"),
-        ]
-        guard let url = components.url else {
-            say("\(host): could not build a URL")
+        // **The preview never serves.** Serving pops the queue, so a thumbnail
+        // that asked would spend photographs nobody sees — and with one shared
+        // queue it would spend the wallpaper's too. The real thumbnail is
+        // Phase 4's; this is the guard that keeps browsing settings free.
+        //
+        // It says so out loud: returning here in silence made a preview
+        // instance and a view that never started produce identical logs, which
+        // is exactly the question that had to be answered on 2026-09-08.
+        guard !isPreview else {
+            Self.log.notice(
+                "saver[\(self.instance, privacy: .public)]: preview, not serving")
+            words.stringValue = "Photo-Go-Round"
+            words.isHidden = false
+            needsLayout = true
             return
         }
 
-        let started = Date()
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-            guard let http = response as? HTTPURLResponse else {
-                say("\(host): answered, and not with HTTP")
-                return
-            }
-            let card = http.value(forHTTPHeaderField: "X-PGR-Card") ?? "-"
-            say("\(host): \(http.statusCode), \(data.count) bytes, card \(card), \(elapsed) ms")
-        } catch {
-            say("\(host): \(error.localizedDescription)")
+        Self.log.notice(
+            "saver[\(self.instance, privacy: .public)]: startAnimation, window=\(self.window != nil, privacy: .public), box=\(self.lastBox != nil, privacy: .public)")
+
+        running = true
+        attach()
+    }
+
+    public override func stopAnimation() {
+        super.stopAnimation()
+        guard !isPreview else { return }
+        Self.log.notice("saver[\(self.instance, privacy: .public)]: stopAnimation")
+        running = false
+        release()
+    }
+
+    /// **The guard for a view the engine forgot.** A view belonging to a
+    /// finished session has no window, whoever is still holding a pointer to
+    /// it — and a claim it never gives back would keep the display's loop
+    /// asking all day with nothing on screen.
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        Self.log.notice(
+            "saver[\(self.instance, privacy: .public)]: window=\(self.window != nil, privacy: .public), running=\(self.running, privacy: .public)")
+        if window == nil {
+            release()
+        } else if running {
+            attach()
         }
     }
 
-    // MARK: - Saying it
-
-    /// The true home. `NSHomeDirectory()` is rewritten to the container inside a
-    /// sandbox; `getpwuid` reads the password database and is not.
-    private static func realHome() -> String {
-        guard let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir else {
-            return NSHomeDirectory()
-        }
-        return String(cString: directory)
-    }
-
-    @MainActor
-    private func say(_ line: String) {
-        Self.log.notice("saver: \(line, privacy: .public)")
-        lines.append(line)
-        needsDisplay = true
-    }
-
-    // MARK: - Drawing
-
-    public override func draw(_ rect: NSRect) {
-        NSColor.black.setFill()
-        rect.fill()
-
-        let size = max(11.0, min(20.0, bounds.height / 46))
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular),
-            .foregroundColor: NSColor.white,
-        ]
-        var y = bounds.height - size * 3
-        for line in lines {
-            (line as NSString).draw(
-                at: NSPoint(x: size * 2, y: y), withAttributes: attributes)
-            y -= size * 1.4
-            if y < size { break }
-        }
-    }
-
-    /// Nothing per-frame. The pan will be a layer animation for the reason
-    /// `PLAN.md` gives — per-frame drawing stutters exactly when somebody would
-    /// notice — and there is nothing to animate here in any case.
+    /// **Deliberately empty.** `ScreenSaverView`'s per-frame callback is the
+    /// wrong tool: a layer animation runs on the render server and stays smooth
+    /// while this process is decoding the next photograph, which is exactly
+    /// when per-frame drawing would stutter. The pan will be a `CABasicAnimation`
+    /// for that reason, and there is nothing to animate yet regardless.
     public override func animateOneFrame() {}
+
+    // MARK: - Borrowing the display's loop
+
+    /// **Cheap and idempotent, so it can be called from anywhere the answer
+    /// might have changed** — starting, gaining a window, and every layout. A
+    /// view that first attached under `unknown` moves itself to the real
+    /// display's loop as soon as the window is placed, which costs one card and
+    /// says so in the log.
+    private func attach() {
+        let display = currentDisplay
+        let key = DisplayShuffles.key(for: display)
+
+        // Already on this display's loop: nothing to claim, just make sure it
+        // is running and knows the current size. `draws` starts a loop only
+        // when there is not one, so this is safe to call repeatedly — which the
+        // engine does.
+        if claimed == key, let shuffle {
+            if let lastBox { shuffle.draws(at: lastBox, on: display) }
+            return
+        }
+
+        // A different display, or none yet: give back what we hold first.
+        if let previous = claimed {
+            Self.log.notice(
+                "saver[\(self.instance, privacy: .public)]: display resolved \(previous, privacy: .public) -> \(key, privacy: .public)")
+        }
+        release()
+
+        let shuffle = DisplayShuffles.attach(displayID: display)
+        self.shuffle = shuffle
+        claimed = key
+        observe()
+        // Whatever is already on that loop belongs on this glass immediately,
+        // rather than after the first request comes back.
+        render()
+        if let lastBox { shuffle.draws(at: lastBox, on: display) }
+        Self.log.notice(
+            "saver[\(self.instance, privacy: .public)]: showing display \(key, privacy: .public)")
+    }
+
+    private func release() {
+        guard let key = claimed else { return }
+        claimed = nil
+        shuffle = nil
+        DisplayShuffles.release(key)
+    }
+
+    // MARK: - Drawing what the loop has
+
+    private func observe() {
+        withObservationTracking {
+            _ = shuffle?.shown
+            _ = shuffle?.trouble
+        } onChange: { [weak self] in
+            // `onChange` fires *before* the value is written, so the read has
+            // to happen on the next turn — and re-registering is how tracking
+            // continues past the first change.
+            Task { @MainActor in
+                self?.render()
+                self?.observe()
+            }
+        }
+    }
+
+    private func render() {
+        // Passing `nil` shows nothing rather than clearing, which is the rule:
+        // a picture already on screen is never taken down.
+        picture.show(shuffle?.shown)
+
+        // **One line per photograph, at info.** The gate for this phase is an
+        // evening, and with nothing at all a saver that ran perfectly and one
+        // that showed a single picture and stalled produce identical logs.
+        if let frame = shuffle?.shown, frame.picture.card != showing {
+            showing = frame.picture.card
+            let size = frame.picture.pixels
+            Self.log.info(
+                """
+                saver[\(self.instance, privacy: .public)]: showing card \
+                \(frame.picture.card ?? -1, privacy: .public) deal \
+                \(frame.picture.deal ?? -1, privacy: .public) at \
+                \(size?.width ?? 0, privacy: .public)x\(size?.height ?? 0, privacy: .public)
+                """)
+        }
+
+        if shuffle?.shown != nil {
+            words.isHidden = true
+        } else if let trouble = shuffle?.trouble {
+            words.stringValue = trouble.words
+            words.isHidden = false
+        }
+        // Moved on every change, which with a ten-second dwell is roughly once
+        // per dwell — enough that nothing sits in one place all night.
+        needsLayout = true
+    }
+
+    public override func layout() {
+        super.layout()
+        // The window may only now have landed on a screen, which is when a view
+        // that attached under `unknown` can find its real display.
+        if running { attach() }
+        picture.frame = bounds
+        words.font = .systemFont(ofSize: max(24, bounds.height / 12), weight: .thin)
+        words.sizeToFit()
+        words.frame.origin = wordsOrigin()
+    }
+
+    /// Centred, then nudged by a slowly changing offset so a label that stays
+    /// up for hours does not stay in one place for hours.
+    private func wordsOrigin() -> NSPoint {
+        let slack = NSSize(
+            width: max(0, bounds.width - words.frame.width),
+            height: max(0, bounds.height - words.frame.height))
+        guard slack.width > 0 || slack.height > 0 else { return .zero }
+        // A cheap wander rather than a bounce: the bouncing empty state is the
+        // deferred treatment, and pretending this is it would be worse than
+        // being plainly a placeholder.
+        let step = Double(Int(Date().timeIntervalSinceReferenceDate) / 10)
+        let x = (sin(step * 0.7) + 1) / 2
+        let y = (cos(step * 0.4) + 1) / 2
+        return NSPoint(x: slack.width * x, y: slack.height * y)
+    }
 }

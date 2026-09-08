@@ -1,53 +1,56 @@
 #!/bin/bash
 #
-# Assembles the Phase 1 spike as "Photo-Go-Round.saver".
+# Builds and installs "Photo-Go-Round.saver" — the Mac screensaver.
 #
-# swiftc rather than an Xcode target, deliberately. The spike links nothing —
-# not the display library, not the kit — because a stub that fails to load tells
-# you nothing if it had four chances to fail. One file, two frameworks, and a
-# plist is the whole of it, and it keeps the project file untouched until Phase 3
-# knows what shape the real target wants.
+# The bundle is an Xcode target now, so this drives xcodebuild rather than
+# assembling anything itself. Xcode builds, because that is where the thing can
+# be debugged; this script deploys, because Xcode has no idea about
+# ~/Library/Screen Savers or about the two caches that have to be cleared before
+# a rebuild is the thing that actually runs.
 #
-# Three settings carry the entire risk of a Swift .saver, and all three are here
-# rather than in code: the wrapper extension is .saver, NSPrincipalClass matches
-# @objc(PGRScreenSaverView) exactly, and the linker emits a loadable bundle. Get
-# any of them wrong and the saver silently does not appear in System Settings,
-# with no error anywhere.
+# --spike builds the Phase 1 probe instead, which links nothing at all and still
+# answers "is the sandbox letting us out" on a macOS release that changes the
+# host's entitlements under us.
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$REPO/app/saver/Sources/PGRScreenSaverView.swift"
-PLIST="$REPO/app/saver/Info.plist"
-OUTPUT_DIR="$REPO/build"
-SIGN_IDENTITY="-"
+PROJECT="$REPO/app/Photo-Go-Round.xcodeproj"
+BUILD_DIR="$REPO/build/xcode"
+CONFIGURATION="Debug"
 INSTALL=0
+SPIKE=0
 
 usage() {
     cat <<'HELPTEXT'
-Assembles "Photo-Go-Round.saver" — the Phase 1 sandbox spike.
+Builds "Photo-Go-Round.saver" — the Mac screensaver.
 
 USAGE
   ./Scripts/make-saver-bundle.sh [options]
 
 OPTIONS
-  --output <dir>    Where to build. Default: ./build
-  --sign <identity> Codesign identity. Default "-" (ad-hoc), which the host
-                    accepts because it sets disable-library-validation.
+  --spike           Build the sandbox probe instead: "Photo-Go-Round Spike.saver".
+  --release         Build the Release configuration instead of Debug.
   --install         Copy the result to ~/Library/Screen Savers and stop the
                     hosts holding the previous build.
   -h, --help        This.
 
 AFTERWARDS
-  Start an agent on the pinned port the spike asks for:
+  The saver is a client and needs the agent running:
 
-    ./Scripts/photogoroundd --port 9000
+    ./Scripts/photogoroundd
 
-  Run the saver without waiting for an idle timer:
+  Choose it in System Settings, under Screen Saver -> Other. Nothing loads a
+  saver that is not selected, and an unselected one looks exactly like one that
+  failed to load - an empty log and no error anywhere:
+
+    open "x-apple.systempreferences:com.apple.ScreenSaver-Settings.extension"
+
+  Run it without waiting for an idle timer:
 
     open -a /System/Library/CoreServices/ScreenSaverEngine.app
 
-  Read what it found:
+  Watch what it did:
 
     /usr/bin/log show --info --last 10m \
         --predicate 'subsystem == "com.sydpolk.photogoround" AND category == "saver"'
@@ -56,46 +59,38 @@ HELPTEXT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --output) OUTPUT_DIR="$2"; shift 2 ;;
-        --sign) SIGN_IDENTITY="$2"; shift 2 ;;
+        --spike) SPIKE=1; shift ;;
+        --release) CONFIGURATION="Release"; shift ;;
         --install) INSTALL=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
-BUNDLE="$OUTPUT_DIR/Photo-Go-Round.saver"
-SDK="$(xcrun --sdk macosx --show-sdk-path)"
+if [[ "$SPIKE" -eq 1 ]]; then
+    TARGET="Photo-Go-Round Saver Spike"
+    NAME="Photo-Go-Round Spike"
+else
+    TARGET="Photo-Go-Round Saver"
+    NAME="Photo-Go-Round"
+fi
 
-rm -rf "$BUNDLE"
-mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
-cp "$PLIST" "$BUNDLE/Contents/Info.plist"
+xcodebuild build \
+    -project "$PROJECT" \
+    -target "$TARGET" \
+    -configuration "$CONFIGURATION" \
+    SYMROOT="$BUILD_DIR/Products" \
+    OBJROOT="$BUILD_DIR/Intermediates.noindex" \
+    >/dev/null
 
-# -bundle is what makes this loadable by another process rather than a dylib
-# something links. The deployment target matches Package.swift's macOS floor so
-# the spike runs on the same machines everything else does.
-xcrun swiftc \
-    -sdk "$SDK" \
-    -target arm64-apple-macosx26.0 \
-    -O \
-    -module-name PhotoGoRoundSaver \
-    -framework ScreenSaver \
-    -framework AppKit \
-    -Xlinker -bundle \
-    -o "$BUNDLE/Contents/MacOS/PhotoGoRound" \
-    "$SOURCE"
-
-# Ad-hoc is enough because the host disables library validation, but a bundle
-# assembled after the linker signed the binary has an invalid signature until
-# this runs — and an invalid one does not load at all.
-codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$BUNDLE" >/dev/null 2>&1
-
+BUNDLE="$BUILD_DIR/Products/$CONFIGURATION/$NAME.saver"
+[[ -d "$BUNDLE" ]] || { echo "expected a bundle at $BUNDLE and there is none" >&2; exit 1; }
 echo "built $BUNDLE"
 
 if [[ "$INSTALL" -eq 1 ]]; then
     DESTINATION="$HOME/Library/Screen Savers"
     mkdir -p "$DESTINATION"
-    rm -rf "$DESTINATION/Photo-Go-Round.saver"
+    rm -rf "$DESTINATION/$NAME.saver"
     cp -R "$BUNDLE" "$DESTINATION/"
     echo "installed to $DESTINATION"
 
