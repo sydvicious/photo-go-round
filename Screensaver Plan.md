@@ -31,13 +31,15 @@ This project exists because Apple's screensaver has the display half solved and 
   - **The loop belongs to the display, not to the view** — `DisplayShuffles`. This is the phase's one real correction and it cost two runs to find: macOS does **not** make one view per display, it makes several, and each one starting its own loop drew twice the screen's share out of a shared queue. See *The host outlives the session*.
   - **A view gives its claim back three ways**: `stopAnimation`, losing its window, and `deinit`. The window guard is not belt-and-braces — in the 09:14 run one of the two views never received `stopAnimation` at all and only the window check released it.
   - **The display is resolved live, never cached.** Caching it at first layout keyed one view to `unknown` and its sibling to the real UUID, so the registry did not dedupe them at all. `window != nil` is not the same question as *the window is on a screen*.
+  - **And a view that never resolves one adopts the machine's sole identified display**, rather than running a second loop for ever. Live resolution fixes a window that lands on a screen *later*; it does nothing for one that never reports a screen at all, which happened again at 09:42 and cost two more cards a dwell.
   - A picture already showing is never taken down, and now survives a stop and start — `Shuffle.stop()` cancels the loop and keeps `shown`, so a joining view inherits the photograph in the same millisecond rather than after a request.
   - The preview never serves, and says so in the log. That is the guard, not Phase 4's thumbnail.
+  - **Confirmed 09:53 on 2026-09-08**: one `new loop`, one `joined the loop … now 2 views`, both views reporting the same card and deal, no `unknown` loop, and a refcounted teardown that used both release paths — the window guard for one view, `stopAnimation` for the other.
   - **Exit gate: it is the screensaver on the machine for an evening, and it is still showing photographs in the morning.** Not yet met — it needs a night. What proves it: `grep -c "showing card"` for the count, and every `new loop` having a matching `loop stopped`.
-- **Phase 4 — preview, and the empty state.** The two cases that are not "a photograph arrives".
-  - **Preview must not consume the queue,** and the wire has no way to peek today. See *Preview has no answer on the wire*. Phase 1 never saw a preview instance instantiated at all, which may make this cheaper than planned — establish that before building for it.
-  - The empty state is words on black, since motion is out of scope — which raises a burn-in question v1 has to answer somehow. See *The empty state without motion*.
-  - **Exit gate:** browsing the Screen Saver pane in System Settings for a minute costs the queue nothing, and an agent that is stopped produces words rather than a black rectangle.
+- **Phase 4 — the empty state. Preview left it, 2026-09-08.** What began as two cases is one: the preview turned out not to be a problem anybody has. See *The preview cannot be live, and need not be*.
+  - **Preview is done and cost nothing.** The instance is created at 0x0, laid out at 0x0, never drawn and never started, so it cannot consume the queue whatever it does. The `isPreview` guard already in the saver is the whole of it.
+  - The empty state is words on black, since motion is out of scope — which raises a burn-in question v1 has to answer somehow. See *The empty state without motion*. The wandering label is built; whether that is where it stays is the phase's real question.
+  - **Exit gate:** an agent that is stopped produces words rather than a black rectangle, and they are not sitting still.
 
 # Design Decisions
 
@@ -48,6 +50,7 @@ This project exists because Apple's screensaver has the display half solved and 
 - **Discovery reads the plist as a file, because the suite comes back empty rather than refusing. Measured, not predicted.** `UserDefaults(suiteName:)` hands a sandboxed process a domain that opens cleanly and holds nothing, so the failure is indistinguishable from *the agent published no port*; an ordinary `open(2)` on the same `.plist` returns the right value, which the whole-filesystem read exception permits.
 - **Xcode builds, scripts deploy. Decided 2026-09-08, reversing the entry below it.** Every product is an Xcode target — app, tests, saver, saver spike, agent, `pgr_ctl` — because a target is a thing that can be debugged in Xcode when it needs to be. The package and `swift test` stay exactly as they were, and the scripts stay for deployment, which is the half Xcode knows nothing about: `~/Library/Screen Savers`, the two caches that must be cleared, the LaunchAgent plist. See *Two build systems over one set of sources*.
 - **The empty-state label wanders once per dwell. Decided 2026-09-08.** Kept despite motion being deferred, because a static label overnight is the burn-in hazard `PLAN.md`'s *The empty state* exists to avoid. It is a placeholder for the bouncing treatment and is not it.
+- **The preview cannot be made live, so it is left alone. Measured 2026-09-08.** System Settings instantiates the principal class at 0x0, lays it out at 0x0, never calls `draw` on it and never calls `startAnimation`; the thumbnail is a snapshot the system captured from a real run. The `isPreview` guard stays because it is correct and free, not because it is holding anything back.
 - **The picture loop is keyed to the display, not to the view.** macOS makes more views than there are screens; the consumer is the display, which is what the deck's `(kind, displayID)` identity already assumes. Views borrow the loop and give it back.
 - **A display's identity reaches the loop as a string, not an `NSScreen`.** The view is the only thing holding a screen, so it is the thing that turns one into an identifier — which leaves `Shuffle` free of AppKit and compiling wherever the library does.
 - **The saver ships no motion but keeps the layer.** `PictureLayerView` is already layer-backed with a computed frame, which is what the pan will need — reverting it to a drawn image would be work done twice.
@@ -149,7 +152,7 @@ Fallback 1 is therefore the mechanism rather than a fallback. The remaining two 
 
 **`Shuffle`'s name is worth a second look once it moves.** In the app it names what the window is doing. In a library shared by three surfaces it names a class that is really "the picture loop", and `Shuffle` is also the word this project uses for the deck's ordering — a different concept entirely, which is now one import away from the first. Not a blocker, and renaming it churns a test file for a word; flagged rather than decided.
 
-## Preview has no answer on the wire
+## The preview cannot be live, and need not be
 
 `ScreenSaverView` is instantiated a second time with `isPreview: true` for the thumbnail in the Screen Saver pane. `PLAN.md` is emphatic about what must not happen: "if it did, idly browsing screensaver settings would consume pictures nobody ever sees, and with a shared queue those are then spent for the wallpaper too."
 
@@ -164,7 +167,21 @@ Four ways out:
 
 I would ship the placeholder for v1 and leave `/v1/peek` for whenever a second surface wants it, but this is a product judgment and it is Syd's. Listed under *Not yet decided*.
 
-**A loose thread from Phase 1 worth pulling before any of that is built.** The stub logged `preview:` on every instantiation and **never once reported `true`** — not while the saver was selected in System Settings, and not while the Screen Saver pane was open in front of it. Either the pane renders legacy savers from a static thumbnail without instantiating the principal class, or it instantiates it somewhere the log did not reach. If it is the former, the entire preview problem is a phantom and Phase 4 loses half its scope. That is worth ten minutes of deliberately opening the pane and watching the log before it is worth an endpoint.
+**Measured 2026-09-08, and every option above is an answer to a question the OS does not ask.**
+
+```
+saver[2d00]: created, preview=true, 0x0
+saver[2d00]: window=true, running=false
+saver[2d00]: preview laid out at 0x0
+```
+
+The preview instance is created, put in a window, and laid out — **at zero by zero**. `draw` is never called on it and neither is `startAnimation`. It has no area to draw in and is never asked to. So it cannot spend a card no matter what it does, and it cannot show anything either: the thumbnail in System Settings is a snapshot the system captured while the saver was genuinely running, which is why it shows a photograph and does not cycle.
+
+**There is a documented way to start a preview that never starts, and it does not apply.** A `Timer` from `init` calling `startAnimation`, which needs an idempotent `startAnimation` — this saver already has one. But that workaround is for `FB9835060`, where `init` and `draw` were called and only `startAnimation` was missed, and Apple fixed that in Ventura. What is happening here is not that bug: a view with no area that is never drawn cannot be rescued by being started. It would spend a card per dwell to render nothing.
+
+**So the rule in `PLAN.md` stands and turns out to be free.** *Preview mode must not consume the queue* is satisfied by the guard already in the saver — `isPreview` returns before anything is claimed — and there was never a cost to weigh against a thumbnail. `GET /v1/peek` is not needed for this; if it is ever built it will be for a reason of its own.
+
+Worth keeping in mind that third-party savers are stuck on `legacyScreenSaver` because the modern engine is private to Apple, so this is not a limitation that improves on its own.
 
 ## The empty state without motion
 
@@ -261,7 +278,6 @@ What cannot be unit-tested is the part that is new: whether a bundle loads, whet
 
 Listed rather than asked, one at a time as they come up:
 
-- **The preview thumbnail:** shipped placeholder, static card, a new `/v1/peek`, or one card per settings visit. My preference is the placeholder for v1 — and there may be nothing to decide: across every run to 2026-09-08 no instance has ever reported `preview=true`, and the saver now logs that path explicitly, so continued silence is evidence rather than an absence of instrumentation.
 - **How a stale published port is handled**, which the file fallback inherits and the spike did not exercise: the agent synchronizes after publishing, or the client tolerates a stale value and retries.
 - **Whether `Trouble` gains a case for an unreadable port.** `PictureClient` distinguishes it; the window does not, and says "No agent" for both. They are the same predicament for the person looking at the glass and nothing alike in the log, which is where the distinction is currently spent.
 - **Whether `Shuffle` keeps its name** once it is shared by three surfaces and sits one import away from the deck's own use of the word.
@@ -271,6 +287,8 @@ Listed rather than asked, one at a time as they come up:
 ## What this left stale in PLAN.md
 
 **Applied 2026-09-07 and again 2026-09-08, at Syd's instruction, and annotated rather than overwritten** — `PLAN.md`'s own house style keeps a wrong argument visible when the error is easy to make again, so each of these is a marked correction beside the original text rather than a replacement of it. One typo was corrected in passing and flagged in place: the sandbox section's closing line said the spike "determines the shape of Phase 5", meaning Phase 6.
+
+A third round, later on 2026-09-08, rewrote *Preview mode must not consume the queue*: the rule stands and is free, because the preview instance has no area and is never started, so there is no live preview to trade against it.
 
 The second round, 2026-09-08, corrected three more things: *Screensaver v1*'s "one instance per display" (macOS makes more views than screens, measured), *The empty state* (the wandering label is built and kept), and *The agent: registration and permissions* (everything is an Xcode target; the scripts own deployment).
 
@@ -294,3 +312,5 @@ The six from the first round, as they stood:
 - `/System/Library/Frameworks/ScreenSaver.framework/PlugIns/legacyScreenSaver.appex` — the host, and the entitlements read from it on 2026-09-07 against macOS 27.0.
 - `~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/` — the host's container, present on this machine, along with an `.x86-64` sibling carrying identical entitlements.
 - Apple: `ScreenSaverView` class reference; App Sandbox temporary exception entitlements.
+- Apple Developer Forums, [legacyScreenSaver — blank Preview in Monterey 12.1](https://developer.apple.com/forums/thread/698019) — `FB9835060`, the timer workaround, and its fix in Ventura.
+- Apple Developer Forums, [Is there any future for screensavers on macOS?](https://developer.apple.com/forums/thread/797121) — third-party savers are confined to `legacyScreenSaver` because the modern engine is private.

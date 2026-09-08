@@ -74,6 +74,19 @@ public final class PGRScreenSaverView: ScreenSaverView {
     /// arrives rather than on every observation that fires.
     private var showing: Int64?
 
+    /// What the preview instance has been sized to, logged when it changes.
+    ///
+    /// **Instrumentation for one question.** On 2026-09-08 the preview was
+    /// created at 0x0 and never started, and System Settings showed a captured
+    /// still instead. Whether that view is ever *given* a size decides whether a
+    /// live preview is possible at all: the documented workaround for a preview
+    /// that never starts — a timer from `init` calling `startAnimation`, which
+    /// this class already tolerates — can do nothing for a view with no area.
+    /// Apple's own fix for that bug shipped in Ventura (FB9835060), so this is
+    /// not that bug and is more likely deliberate.
+    private var previewSize: CGSize?
+    private var previewDrew = false
+
     /// Which instance a line came from. The host reuses its process and makes
     /// more than one view per display, so without this the log is several
     /// conversations interleaved with no way to tell them apart.
@@ -134,6 +147,18 @@ public final class PGRScreenSaverView: ScreenSaverView {
         guard let outstanding else { return }
         // No `self` crosses this boundary — only the key, by value.
         Task { @MainActor in DisplayShuffles.release(outstanding) }
+    }
+
+    /// Only ever overridden to answer the preview question: the forum thread on
+    /// FB9835060 reports `draw` being called on an instance that never starts,
+    /// so whether ours is asked to draw at all is worth knowing. Once per
+    /// instance, and nothing else happens here.
+    public override func draw(_ rect: NSRect) {
+        super.draw(rect)
+        guard isPreview, !previewDrew else { return }
+        previewDrew = true
+        Self.log.notice(
+            "saver[\(self.instance, privacy: .public)]: preview asked to draw \(Int(rect.width), privacy: .public)x\(Int(rect.height), privacy: .public)")
     }
 
     public override var hasConfigureSheet: Bool { false }
@@ -206,8 +231,11 @@ public final class PGRScreenSaverView: ScreenSaverView {
     /// display's loop as soon as the window is placed, which costs one card and
     /// says so in the log.
     private func attach() {
-        let display = currentDisplay
-        let key = DisplayShuffles.key(for: display)
+        // Not this view's raw answer: a view that cannot name its screen adopts
+        // the machine's only identified one rather than starting a second loop.
+        // See `DisplayShuffles.effectiveKey`.
+        let key = DisplayShuffles.effectiveKey(for: currentDisplay)
+        let display = DisplayShuffles.displayID(for: key)
 
         // Already on this display's loop: nothing to claim, just make sure it
         // is running and knows the current size. `draws` starts a loop only
@@ -225,7 +253,7 @@ public final class PGRScreenSaverView: ScreenSaverView {
         }
         release()
 
-        let shuffle = DisplayShuffles.attach(displayID: display)
+        let shuffle = DisplayShuffles.attach(key: key)
         self.shuffle = shuffle
         claimed = key
         observe()
@@ -294,6 +322,11 @@ public final class PGRScreenSaverView: ScreenSaverView {
 
     public override func layout() {
         super.layout()
+        if isPreview, bounds.size != previewSize {
+            previewSize = bounds.size
+            Self.log.notice(
+                "saver[\(self.instance, privacy: .public)]: preview laid out at \(Int(self.bounds.width), privacy: .public)x\(Int(self.bounds.height), privacy: .public)")
+        }
         // The window may only now have landed on a screen, which is when a view
         // that attached under `unknown` can find its real display.
         if running { attach() }

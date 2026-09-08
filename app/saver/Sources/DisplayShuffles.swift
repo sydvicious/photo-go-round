@@ -41,12 +41,39 @@ enum DisplayShuffles {
 
     private static var entries: [String: Entry] = [:]
 
-    static func key(for displayID: String?) -> String { displayID ?? unknownDisplay }
+    /// Which loop a view on this display belongs to.
+    ///
+    /// **An unidentified view on a machine with exactly one identified display
+    /// is on that display**, and adopting it is the difference between three
+    /// views sharing a loop and three views sharing a loop while a fourth runs
+    /// its own. Measured 2026-09-08: `9e00` never resolved a screen, kept the
+    /// `unknown` key, and spent deals 29692 and 29693 on its own while the other
+    /// three shared 29694.
+    ///
+    /// Resolving live rather than caching fixes a window that lands on a screen
+    /// *later*; it does nothing for one that never reports a screen at all, which
+    /// is what this is for. Two or more identified displays make the guess
+    /// ambiguous, so it is not made.
+    ///
+    /// It is a guess, and it is a safe one: the worst case is that two views of
+    /// one screen share a loop, which is what we want anyway.
+    static func effectiveKey(for displayID: String?) -> String {
+        if let displayID { return displayID }
+        let identified = entries.keys.filter { $0 != unknownDisplay }
+        guard identified.count == 1, let sole = identified.first else { return unknownDisplay }
+        return sole
+    }
 
-    /// The loop for this display, joining one that exists or starting one that
+    /// The display a key names, or `nil` for the unidentified one — which is
+    /// what goes on the wire, so an adopted view asks as the display it adopted
+    /// rather than as nobody.
+    static func displayID(for key: String) -> String? {
+        key == unknownDisplay ? nil : key
+    }
+
+    /// The loop for this key, joining one that exists or starting one that
     /// does not.
-    static func attach(displayID: String?) -> Shuffle {
-        let key = key(for: displayID)
+    static func attach(key: String) -> Shuffle {
         if var entry = entries[key] {
             entry.views += 1
             entries[key] = entry
@@ -56,6 +83,9 @@ enum DisplayShuffles {
         }
         let environment = MacHostEnvironment(deployment: .development)
         reportPort(environment.preferences)
+        if key == unknownDisplay {
+            log.notice("saver: starting a loop for a view whose display is unidentified")
+        }
         let shuffle = Shuffle(
             source: PictureClient(preferences: environment.preferences),
             consumer: ConsumerKind.screensaver.rawValue)
