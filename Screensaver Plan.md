@@ -26,7 +26,7 @@ This project exists because Apple's screensaver has the display half solved and 
   - **Log lines carry the consumer** — `app: no photos`, not `shuffle: no photos` — because two surfaces on one subsystem are otherwise indistinguishable.
   - **Divergence from this plan, and it is a simplification.** The plan said AppKit would go behind `#if canImport(AppKit)`. AppKit came out of `Shuffle` altogether instead: `draws(at:on:)` takes a `String?` display identifier, and `CGDisplayCreateUUIDFromDisplayID` moved to `PictureLayerView.identifier(of:)`, which is the only code holding a screen anyway. One conditional file rather than two, and `Shuffle` compiles cross-platform outright — which is what Phases 4 and 5 of `PLAN.md` will want.
   - **Exit gate: `swift test` passes and the app looks and behaves exactly as it did.** Met. 731 tests across four targets; the app and its test bundle build; the window run and confirmed unchanged.
-- **Phase 3 — built and working 2026-09-08; the gate is still pending.** The saver shows photographs: a `ScreenSaverView` hosting a `PictureLayerView`, driven by `Shuffle`, at ten seconds a picture. Everything is an Xcode target now — see *Xcode builds, scripts deploy*.
+- **Phase 3 — complete, 2026-09-09.** The saver shows photographs: a `ScreenSaverView` hosting a `PictureLayerView`, driven by `Shuffle`, at ten seconds a picture. Everything is an Xcode target now — see *Xcode builds, scripts deploy*.
   - `animateOneFrame()` is never implemented; the loop is a `Task`, not a frame callback.
   - **The loop belongs to the display, not to the view** — `DisplayShuffles`. This is the phase's one real correction and it cost two runs to find: macOS does **not** make one view per display, it makes several, and each one starting its own loop drew twice the screen's share out of a shared queue. See *The host outlives the session*.
   - **A view gives its claim back three ways**: `stopAnimation`, losing its window, and `deinit`. The window guard is not belt-and-braces — in the 09:14 run one of the two views never received `stopAnimation` at all and only the window check released it.
@@ -35,11 +35,16 @@ This project exists because Apple's screensaver has the display half solved and 
   - A picture already showing is never taken down, and now survives a stop and start — `Shuffle.stop()` cancels the loop and keeps `shown`, so a joining view inherits the photograph in the same millisecond rather than after a request.
   - The preview never serves, and says so in the log. That is the guard, not Phase 4's thumbnail.
   - **Confirmed 09:53 on 2026-09-08**: one `new loop`, one `joined the loop … now 2 views`, both views reporting the same card and deal, no `unknown` loop, and a refcounted teardown that used both release paths — the window guard for one view, `stopAnimation` for the other.
-  - **Exit gate: it is the screensaver on the machine for an evening, and it is still showing photographs in the morning.** Not yet met — it needs a night. What proves it: `grep -c "showing card"` for the count, and every `new loop` having a matching `loop stopped`.
-- **Phase 4 — the empty state. Preview left it, 2026-09-08.** What began as two cases is one: the preview turned out not to be a problem anybody has. See *The preview cannot be live, and need not be*.
-  - **Preview is done and cost nothing.** The instance is created at 0x0, laid out at 0x0, never drawn and never started, so it cannot consume the queue whatever it does. The `isPreview` guard already in the saver is the whole of it.
-  - The empty state is words on black, since motion is out of scope — which raises a burn-in question v1 has to answer somehow. See *The empty state without motion*. The wandering label is built; whether that is where it stays is the phase's real question.
-  - **Exit gate:** an agent that is stopped produces words rather than a black rectangle, and they are not sitting still.
+  - **Exit gate: it is the screensaver on the machine for an evening, and it is still showing photographs in the morning.** Met, overnight 2026-09-08 into 2026-09-09. **3,034 photographs, 00:05:38 to 08:59:52, zero non-200 responses** — and 341 an hour in every one of the eight full hours, without drifting by a count. One photograph every 10.56 seconds is a ten-second dwell plus the round trip; two loops on that display would have shown about 682 an hour. The flat number is the proof, not the total.
+  - **It had to be counted from the agent's side, and that is a finding of its own.** The saver's per-photograph line is `.info`, which is memory-only, so it had evaporated by morning; the run was countable only because the agent's `served status=… consumer=screensaver` line is `.notice`. `Log.swift` states the rule — "state transitions worth reconstructing after the fact must be `.notice` or higher" — and the number that mattered was on the wrong side of it. See `TODO.md`, *Metrics in the database*.
+- **Phase 4 — complete, 2026-09-09.** The bouncing treatment `PLAN.md` has described from the beginning, in `EmptyStateView` and `BouncePath`.
+  - **Built once, in the display library, and mounted by the window and the saver alike** — which settles the standoff where `FEATURES.md` said the app would build it "so Phase 6 inherits it" while `Shuffle.swift` called it "Phase 6's treatment", and neither did.
+  - Two lines: the words, and underneath them what to do. An empty library says *Use the Settings panel in the application to add images.*, because nothing is broken — nobody has added any.
+  - **A missing agent and a wedged one are one message on screen**, at Syd's direction: to the user they are the same predicament. `Trouble.line` keeps them apart for the log.
+  - One `CAKeyframeAnimation` over a path that closes on itself, so it repeats for ever with no seam and nothing to reschedule. Constant speed, pure reflection, an angle drawn away from both axes, and stillness when there is less than 24 points to travel through.
+  - **Preview left this phase and came back as something else.** It is live and costs a card per dwell; what is left is a decision to record rather than code to write. See *The preview is live, and it is an ordinary instance*.
+  - **Exit gate: an agent that is stopped produces words rather than a black rectangle, and they are not sitting still.** Met. The words appear and move, confirmed in all three surfaces — the window, the screensaver, and the settings preview. *Closed on the no-photos state; the agent-stopped wording had not been looked at on screen when this was marked, and it is a placeholder in the window regardless until the Install and Launch buttons exist. See `TODO.md`, `Installing by launching the app`.*
+  - **Two things went to `TODO.md` rather than holding the phase open**: the words are illegible at the settings preview's scale, and there is nothing on screen at all for the first ten seconds of an empty library.
 
 # Design Decisions
 
@@ -50,7 +55,7 @@ This project exists because Apple's screensaver has the display half solved and 
 - **Discovery reads the plist as a file, because the suite comes back empty rather than refusing. Measured, not predicted.** `UserDefaults(suiteName:)` hands a sandboxed process a domain that opens cleanly and holds nothing, so the failure is indistinguishable from *the agent published no port*; an ordinary `open(2)` on the same `.plist` returns the right value, which the whole-filesystem read exception permits.
 - **Xcode builds, scripts deploy. Decided 2026-09-08, reversing the entry below it.** Every product is an Xcode target — app, tests, saver, saver spike, agent, `pgr_ctl` — because a target is a thing that can be debugged in Xcode when it needs to be. The package and `swift test` stay exactly as they were, and the scripts stay for deployment, which is the half Xcode knows nothing about: `~/Library/Screen Savers`, the two caches that must be cleared, the LaunchAgent plist. See *Two build systems over one set of sources*.
 - **The empty-state label wanders once per dwell. Decided 2026-09-08.** Kept despite motion being deferred, because a static label overnight is the burn-in hazard `PLAN.md`'s *The empty state* exists to avoid. It is a placeholder for the bouncing treatment and is not it.
-- **The preview cannot be made live, so it is left alone. Measured 2026-09-08.** System Settings instantiates the principal class at 0x0, lays it out at 0x0, never calls `draw` on it and never calls `startAnimation`; the thumbnail is a snapshot the system captured from a real run. The `isPreview` guard stays because it is correct and free, not because it is holding anything back.
+- **The settings preview is live, and it consumes the queue. Measured 2026-09-09, correcting the day before.** The `isPreview: true` instance is an inert 0x0 probe, but the pane's actual preview is an ordinary `isPreview: false` view in another host process, which starts and serves like any other surface. So *Preview mode must not consume the queue* is not met and cannot be met by that guard — see *The preview is live, and it is an ordinary instance*. The guard stays because a probe should not serve either; it is simply not what was protecting anything.
 - **The picture loop is keyed to the display, not to the view.** macOS makes more views than there are screens; the consumer is the display, which is what the deck's `(kind, displayID)` identity already assumes. Views borrow the loop and give it back.
 - **A display's identity reaches the loop as a string, not an `NSScreen`.** The view is the only thing holding a screen, so it is the thing that turns one into an identifier — which leaves `Shuffle` free of AppKit and compiling wherever the library does.
 - **The saver ships no motion but keeps the layer.** `PictureLayerView` is already layer-backed with a computed frame, which is what the pan will need — reverting it to a drawn image would be work done twice.
@@ -152,38 +157,48 @@ Fallback 1 is therefore the mechanism rather than a fallback. The remaining two 
 
 **`Shuffle`'s name is worth a second look once it moves.** In the app it names what the window is doing. In a library shared by three surfaces it names a class that is really "the picture loop", and `Shuffle` is also the word this project uses for the deck's ordering — a different concept entirely, which is now one import away from the first. Not a blocker, and renaming it churns a test file for a word; flagged rather than decided.
 
-## The preview cannot be live, and need not be
+## The preview is live, and it is an ordinary instance
 
 `ScreenSaverView` is instantiated a second time with `isPreview: true` for the thumbnail in the Screen Saver pane. `PLAN.md` is emphatic about what must not happen: "if it did, idly browsing screensaver settings would consume pictures nobody ever sees, and with a shared queue those are then spent for the wallpaper too."
 
-It then says the solution is that "preview peeks at the queue without draining it, which the queue supports directly." **That sentence is left over from before Phase 1.5** — it was true when a client opened the database and could run whatever query it liked. It is not true now. The agent serves exactly one picture route, `GET /v1/next`, and serving pops the queue; there is no peek, and a client that never opens the database has no other way in. `/v1/sources` and `/v2/photos` do not help.
+It then says the solution is that "preview peeks at the queue without draining it, which the queue supports directly." **That sentence predates *The service is the interface***: the agent exposes one picture route, `GET /v1/next`, and serving pops. The queue still supports a peek; the wire does not expose it.
 
-Four ways out:
+**Two measurements a day apart, and the first was read wrongly. The error is kept because it is an easy one to make again.**
 
-- **A shipped placeholder.** One photograph inside the `.saver`, drawn when `isPreview` is true. Costs nothing, never touches the queue, and is what most third-party savers do. It is also a small lie: the thumbnail shows something that is not your library.
-- **A static card.** The name on black, or the empty-state words. Honest, ugly, and it makes a correctly configured saver look broken at exactly the moment somebody is deciding whether to use it — which is the argument `PLAN.md` makes *for* the bouncing empty state appearing in the preview thumbnail.
-- **Add `GET /v1/peek`.** The head of the queue without popping it, at a size, decoded and encoded the same way. It is a small endpoint and the queue genuinely does support it. But it is an agent change made for a thumbnail, and it hands every client a way to look at a picture without spending it — which is a capability worth introducing on purpose rather than as a side effect.
-- **Serve, but only once, and cache the result.** The preview spends exactly one card for the life of the settings pane. Cheapest to build and it violates the rule as stated, though "one card per visit to System Settings" is a very different cost from "one every ten seconds while the pane is open".
-
-I would ship the placeholder for v1 and leave `/v1/peek` for whenever a second surface wants it, but this is a product judgment and it is Syd's. Listed under *Not yet decided*.
-
-**Measured 2026-09-08, and every option above is an answer to a question the OS does not ask.**
+2026-09-08 found this and stopped looking:
 
 ```
 saver[2d00]: created, preview=true, 0x0
-saver[2d00]: window=true, running=false
 saver[2d00]: preview laid out at 0x0
 ```
 
-The preview instance is created, put in a window, and laid out — **at zero by zero**. `draw` is never called on it and neither is `startAnimation`. It has no area to draw in and is never asked to. So it cannot spend a card no matter what it does, and it cannot show anything either: the thumbnail in System Settings is a snapshot the system captured while the saver was genuinely running, which is why it shows a photograph and does not cycle.
+An `isPreview: true` instance with no area, never drawn and never started. The conclusion drawn was that no live preview was possible and the thumbnail had to be a captured still — which fitted what was on screen, because the pane showed a photograph that did not cycle.
 
-**There is a documented way to start a preview that never starts, and it does not apply.** A `Timer` from `init` calling `startAnimation`, which needs an idempotent `startAnimation` — this saver already has one. But that workaround is for `FB9835060`, where `init` and `draw` were called and only `startAnimation` was missed, and Apple fixed that in Ventura. What is happening here is not that bug: a view with no area that is never drawn cannot be rescued by being started. It would spend a card per dwell to render nothing.
+2026-09-09, with the empty state built, the pane was seen animating *and* changing pictures. The log says why:
 
-**So the rule in `PLAN.md` stands, but not because it won an argument.** *Preview mode must not consume the queue* is satisfied by the guard already in the saver — `isPreview` returns before anything is claimed — and it costs nothing only because there is no live preview to trade against it. `GET /v1/peek` is not needed for this; if it is ever built it will be for a reason of its own.
+```
+pid 80193  saver[4f00]: created, preview=true, 0x0          ← never started
+pid 80125  saver[9500]: created, preview=false, 1800x1169
+pid 80125  saver[9500]: startAnimation, window=true, box=true
+pid 80125  saver[9500]: joined the loop … now 1 views
+pid 80125  saver[9500]: showing card 1 deal 36000
+```
 
-**The trade was available and Syd would have taken it.** Said on 2026-09-08, after the measurement: *"I actually would have relaxed 'Preview must not consume the queue'."* A card per dwell while the settings pane is open was a price worth paying for a thumbnail showing his own photographs — so the four options above were four ways around a rule that was never the obstacle, and *relax the rule* belonged in the list. The reason this ends where it does is the OS refusing to draw the view, not the cost being unattractive. Worth remembering the next time a line in this plan looks like it forbids a surface showing something: the plan is Syd's, and this is the axis he bends it on.
+**Two processes.** The `isPreview: true` instance is a 0x0 probe — System Settings asking the class questions, `hasConfigureSheet` among them — and it is exactly as inert as the first measurement said. The pane's actual preview is an ordinary `isPreview: false` view in a *different* `legacyScreenSaver` process, created seconds later, which starts, joins the display's loop, and serves cards like any other surface.
 
-Worth keeping in mind that third-party savers are stuck on `legacyScreenSaver` because the modern engine is private to Apple, so this is not a limitation that improves on its own.
+**Where the reading went wrong** is worth naming precisely: one instance was observed, it happened to be the one whose flag matched the question being asked, and nothing checked for a second process doing the work. A fact about that instance was taken as a fact about the feature. The tell was in the log the whole time — the pid column was different.
+
+Consequences, in the order they cost anything:
+
+- **`PLAN.md`'s *Preview mode must not consume the queue* is not met, and cannot be met by this mechanism.** Browsing the pane runs a real instance and spends a card per dwell. The `isPreview` guard in the saver protects nothing, because the view doing the work does not carry the flag. There is no clean way to opt out either: the preview view is indistinguishable from a genuine one except by frame size, and guessing from that is the same kind of inference that produced this error.
+- **It is nevertheless the outcome Syd wanted.** He said on 2026-09-08 that he would have relaxed that rule for a preview showing his own photographs. The OS relaxed it for us. What remains is a decision to record in `PLAN.md`, not code to write.
+- **The four options are moot** — shipped placeholder, static card, `GET /v1/peek`, one card per settings visit. There is nothing to build; the preview already shows the library, live and cycling.
+- **The documented workaround for a preview that never starts is still irrelevant**, now for a second reason. `FB9835060` — a `Timer` from `init` calling `startAnimation`, fixed in Ventura — would start the 0x0 probe, which is not the view anybody sees.
+
+**It works, and not well. Syd, 2026-09-09: "I don't think that the preview works all that well, but it is something."** Recorded so that nobody later reads the paragraphs above as a claim that this is finished. Three things are wrong with it and only the first is ours: the empty state's text is illegible at that scale; the photograph is drawn for an 1800-point view and then shrunk into a tile, so it is seen at a fraction of the size it was fetched for; and it spends a card per dwell for as long as the pane is open. None of that is worth work today — it is better than the generic placeholder it replaced, and the alternatives were all worse — but *acceptable* is the claim being made here, not *good*.
+
+**The sizing problem it left behind.** The preview view is 1800x1169 and is then scaled down into a small pane, so the empty state's font, fitted to 1800 points, arrives illegible. The view cannot tell it is being scaled. See `TODO.md`, *The empty state is sized for the view, not for how it is shown*.
+
 
 ## The empty state without motion
 
@@ -290,7 +305,7 @@ Listed rather than asked, one at a time as they come up:
 
 **Applied 2026-09-07 and again 2026-09-08, at Syd's instruction, and annotated rather than overwritten** — `PLAN.md`'s own house style keeps a wrong argument visible when the error is easy to make again, so each of these is a marked correction beside the original text rather than a replacement of it. One typo was corrected in passing and flagged in place: the sandbox section's closing line said the spike "determines the shape of Phase 5", meaning Phase 6.
 
-A third round, later on 2026-09-08, rewrote *Preview mode must not consume the queue*: the rule stands and is free, because the preview instance has no area and is never started, so there is no live preview to trade against it.
+A third round, later on 2026-09-08, rewrote *Preview mode must not consume the queue* — and got it wrong. A fourth, on 2026-09-09, corrected it: the preview is live, it is an ordinary instance in another process, and the rule is not being met. Both rounds are left in `PLAN.md`, the second correcting the first in place.
 
 The second round, 2026-09-08, corrected three more things: *Screensaver v1*'s "one instance per display" (macOS makes more views than screens, measured), *The empty state* (the wandering label is built and kept), and *The agent: registration and permissions* (everything is an Xcode target; the scripts own deployment).
 

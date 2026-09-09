@@ -30,6 +30,8 @@ USAGE
 
 OPTIONS
   --spike           Build the sandbox probe instead: "Photo-Go-Round Spike.saver".
+  --output <dir>    Where to build. Default: ./build/xcode. Point it outside the
+                    checkout to leave nothing behind in it.
   --release         Build the Release configuration instead of Debug.
   --install         Copy the result to ~/Library/Screen Savers and stop the
                     hosts holding the previous build.
@@ -60,6 +62,7 @@ HELPTEXT
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --spike) SPIKE=1; shift ;;
+        --output) BUILD_DIR="$2"; shift 2 ;;
         --release) CONFIGURATION="Release"; shift ;;
         --install) INSTALL=1; shift ;;
         -h|--help) usage; exit 0 ;;

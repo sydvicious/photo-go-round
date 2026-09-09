@@ -124,23 +124,34 @@ struct ShuffleTests {
         #expect(shuffle.shown?.picture == shown.picture)
         // The words, not the whole sentence: how `Duration` renders itself is
         // not this test's business.
-        #expect(shuffle.trouble?.words == "Not answering")
+        #expect(shuffle.trouble?.words == "Photo-Go-Round Is Not Running")
     }
 
-    /// **Not "No agent".** The agent is running and stuck; the words in the
-    /// title bar are what send somebody to look in the right place.
-    @Test("Silence is titled as not answering, and an absent agent as no agent")
-    func silenceAndAbsenceReadDifferently() async throws {
-        let source = Stub(.failure(.silent(port: 9000, limit: .seconds(5))))
-        let shuffle = Self.shuffle(source)
-        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
-        try await Self.until({ shuffle.trouble != nil }, "the silence being noticed")
-        #expect(shuffle.trouble?.words == "Not answering")
+    /// **One predicament, one message — and the distinction kept where it pays.**
+    /// A missing agent and a wedged one are the same thing to whoever is looking
+    /// at the screen: nothing is arriving and there is one thing to do about it.
+    /// They are nothing alike to whoever is reading the log afterwards, which is
+    /// where `line` keeps them apart.
+    @Test("A missing agent and a wedged one read alike on screen and apart in the log")
+    func absenceAndSilenceReadTheSame() {
+        let absent = Shuffle.Trouble.noAgent("nothing has published a port")
+        let wedged = Shuffle.Trouble.silent("the agent on 9000 said nothing within 5 seconds")
 
-        source.answers(.failure(.noPortPublished))
-        try await Self.until(
-            { shuffle.trouble?.words == "No agent" }, "the absence being noticed")
-        #expect(shuffle.trouble?.words == "No agent")
+        #expect(absent.words == wedged.words)
+        #expect(absent.detail == wedged.detail)
+
+        #expect(absent.line != wedged.line)
+        #expect(absent.line.contains("no agent"))
+        #expect(wedged.line.contains("not answering"))
+    }
+
+    /// The words never carry the reason, so nothing on the glass depends on a
+    /// string written for a log.
+    @Test("What is shown never leaks the diagnostic it was built with")
+    func theReasonStaysInTheLog() {
+        let trouble = Shuffle.Trouble.noAgent("nothing is listening on 9000 — connection refused")
+        #expect(trouble.detail?.contains("9000") == false)
+        #expect(trouble.line.contains("9000"))
     }
 
     /// Both veil the photograph and name themselves in the title; an empty

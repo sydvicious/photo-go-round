@@ -47,9 +47,11 @@ struct ContentView: View {
             // better answer than a blank window, so trouble that arrives after
             // one is showing stays out of the way.
             if shuffle.shown == nil, let trouble = shuffle.trouble {
-                Text(trouble.words)
-                    .font(.system(size: 64, weight: .thin))
-                    .foregroundStyle(.white)
+                // The same view the screensaver mounts. It moves, which matters
+                // less in a window than on a panel left on all night — but one
+                // empty state built once is the point, and this is where it can
+                // be looked at with a debugger attached.
+                EmptyStateDisplay(words: trouble.words, detail: trouble.detail)
             }
         }
         .background(.black)

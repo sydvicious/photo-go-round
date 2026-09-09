@@ -67,12 +67,15 @@ What a healthy run looks like:
 - `showing card C deal D at WxH`, once per photograph, with every view of one display reporting the same card and deal.
 - On dismissal, every `new loop` matched by a `loop stopped`. A `started` with neither a `stopped` nor a `gone` is a loop still asking with nothing on screen.
 
-Counting an overnight run:
+Counting an overnight run — **from the agent, not the saver**. The saver's per-photograph line is `.info`, which is memory-only and gone by morning; the agent's serve line is `.notice` and persists:
 
 ```
-/usr/bin/log show --info --last 12h \
-    --predicate 'subsystem == "com.sydpolk.photogoround" AND category == "saver"' | grep -c "showing card"
+/usr/bin/log show --last 12h \
+    --predicate 'subsystem == "com.sydpolk.photogoround" AND category == "deck"' \
+    | grep -c "consumer=screensaver"
 ```
+
+A healthy night is a flat rate: a ten-second dwell is about 341 an hour, and roughly double that means two loops are running for one display.
 
 ## Xcode
 
@@ -2132,9 +2135,17 @@ The "expand" half of the requirement carries a quality caveat worth stating plai
 
 **Preview mode must not consume the queue.** `ScreenSaverView` is instantiated with `isPreview: true` for the thumbnail in System Settings. That instance must not serve — if it did, idly browsing screensaver settings would consume pictures nobody ever sees, and with a shared queue those are then spent for the wallpaper too. Preview peeks at the queue without draining it, which the queue supports directly. **That last sentence is stale, and the correction matters more than the sentence did.** It was written when a client opened the database and could run whatever query it liked; since *The service is the interface* the agent exposes exactly one picture route, `GET /v1/next`, and serving pops. The queue still supports a peek — the *wire* does not, and a client that never opens the database has no other way in. So preview looked like it needed an answer that does not exist: a photograph shipped inside the bundle, a static card, a new `GET /v1/peek`, or one card spent per visit to the settings pane.
 
+**The paragraph immediately below is wrong, and is kept because the mistake in it is an easy one. Read the correction after it.**
+
 **It needs none of them. Measured 2026-09-08, and this rule turns out to be free.** System Settings does instantiate the principal class with `isPreview: true` — but it creates it at **zero by zero**, lays it out at zero by zero, never calls `draw` on it, and never calls `startAnimation`. A view with no area that is never drawn cannot spend a card whatever it does, and cannot show anything either: the thumbnail in the settings pane is a snapshot the system captured while the saver was genuinely running, which is why it shows a photograph and does not cycle.
 
-So the requirement is met by refusing to serve when `isPreview` is true, which is three lines and costs nothing, and *there is no live preview to be had*. The documented workaround for a preview that never starts — a `Timer` from `init` calling `startAnimation` — is for `FB9835060`, which Apple fixed in Ventura and which is a different fault: there, `init` and `draw` were called and only the start was missed. Starting a zero-area view that is never drawn would spend a card per dwell to render nothing. See `Screensaver Plan.md`, *The preview cannot be live, and need not be*.
+So the requirement is met by refusing to serve when `isPreview` is true, which is three lines and costs nothing, and *there is no live preview to be had*. The documented workaround for a preview that never starts — a `Timer` from `init` calling `startAnimation` — is for `FB9835060`, which Apple fixed in Ventura and which is a different fault: there, `init` and `draw` were called and only the start was missed. Starting a zero-area view that is never drawn would spend a card per dwell to render nothing.
+
+**Corrected 2026-09-09. The preview is live, and this rule is not being met.** Everything above about the `isPreview: true` instance is accurate and beside the point: it is a 0x0 probe System Settings uses to ask the class questions. The pane's actual preview is an ordinary **`isPreview: false`** view, in a *different* `legacyScreenSaver` process, which starts, joins the display's loop, and serves cards like any other surface — observed animating and cycling photographs. So browsing the Screen Saver pane spends a card per dwell, and the `isPreview` guard protects nothing, because the view doing the work does not carry the flag.
+
+**What went wrong in the reading is the part worth keeping.** One instance was observed; it was the one whose flag matched the question being asked; nothing checked whether a second process was doing the work. A fact about that instance was taken as a fact about the feature, and the tell — a different pid — was in the log the whole time.
+
+There is no clean way to refuse, either: the preview view is indistinguishable from a genuine one except by frame size, and inferring from that is the same move that caused this. So the requirement above needs a decision rather than an implementation — and it is close to one already made, since relaxing it was called acceptable on 2026-09-08 in exchange for a preview showing real photographs. See `Screensaver Plan.md`, *The preview is live, and it is an ordinary instance*.
 
 **One instance per display, and each is its own consumer.** macOS creates a separate `ScreenSaverView` for every attached screen. Each serves from the same queue, so the displays show different photos simply because serving removes the entry, and each computes its own pan against its own aspect ratio.
 

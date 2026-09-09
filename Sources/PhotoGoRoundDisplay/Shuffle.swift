@@ -67,11 +67,35 @@ public final class Shuffle {
         /// comment said it was the saver's — and the screensaver's v1 defers
         /// motion entirely, so neither has it yet. See `Screensaver Plan.md`,
         /// *The empty state without motion*.
+        /// **A missing agent and a wedged one say the same thing here.** Syd,
+        /// 2026-09-09: "to the user, 'no agent' and 'stuck agent' are the same
+        /// thing." Nothing is arriving and there is one thing to do about it,
+        /// so two messages would be a distinction drawn for the implementer's
+        /// benefit. The difference is real and it survives in `line`, where
+        /// whoever is diagnosing it can see which one happened.
         public var words: String {
             switch self {
             case .noPhotos: "No Photos Available"
-            case .noAgent: "No agent"
-            case .silent: "Not answering"
+            case .noAgent, .silent: "Photo-Go-Round Is Not Running"
+            }
+        }
+
+        /// The line underneath the words: **what to do, never what went wrong.**
+        ///
+        /// The reason a failure was constructed with is a fact about the agent
+        /// and not an instruction to anybody, so it stays in `line` and out of
+        /// this. Nothing is broken when there are no photographs — nobody has
+        /// added any — and nothing the person can read will unstick a wedged
+        /// agent, so both cases name a place to go instead.
+        ///
+        /// **The agent wording is wrong inside the app and right inside the
+        /// saver**, because the app *is* the application it tells you to open.
+        /// It stands until the first-launch work gives the window its Install
+        /// and Launch buttons, which is what it should show instead.
+        public var detail: String? {
+            switch self {
+            case .noPhotos: "Use the Settings panel in the application to add images."
+            case .noAgent, .silent: "Open the Photo-Go-Round application to start it."
             }
         }
 

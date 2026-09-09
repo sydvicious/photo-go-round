@@ -28,12 +28,11 @@ public final class PGRScreenSaverView: ScreenSaverView {
     /// is the same one the window uses and it owns its own geometry.
     private let picture = PictureLayerView(frame: .zero)
 
-    /// The words, when there has never been a photograph.
-    ///
-    /// **Sitting still would be a burn-in hazard**, so it is repositioned once
-    /// per dwell below. That is a placeholder for the bouncing empty state,
-    /// which is deferred with the rest of the motion and is not this.
-    private let words = NSTextField(labelWithString: "")
+    /// The words, when there has never been a photograph — the same view the
+    /// window mounts, drifting and reflecting off the edges. It replaced a
+    /// label that was nudged once per dwell, which was a stopgap against
+    /// burn-in and said so.
+    private let empty = EmptyStateView(frame: .zero)
 
     /// The display's loop, borrowed. Never created here and never discarded
     /// here — `DisplayShuffles` owns both ends of that.
@@ -108,10 +107,9 @@ public final class PGRScreenSaverView: ScreenSaverView {
         picture.frame = bounds
         addSubview(picture)
 
-        words.textColor = .white
-        words.alignment = .center
-        words.isHidden = true
-        addSubview(words)
+        empty.autoresizingMask = [.width, .height]
+        empty.frame = bounds
+        addSubview(empty)
 
         picture.draws = { [weak self] pixels, display in
             guard let self else { return }
@@ -180,8 +178,7 @@ public final class PGRScreenSaverView: ScreenSaverView {
         guard !isPreview else {
             Self.log.notice(
                 "saver[\(self.instance, privacy: .public)]: preview, not serving")
-            words.stringValue = "Photo-Go-Round"
-            words.isHidden = false
+            empty.show(words: "Photo-Go-Round", detail: nil)
             needsLayout = true
             return
         }
@@ -310,14 +307,10 @@ public final class PGRScreenSaverView: ScreenSaverView {
         }
 
         if shuffle?.shown != nil {
-            words.isHidden = true
+            empty.show(words: nil, detail: nil)
         } else if let trouble = shuffle?.trouble {
-            words.stringValue = trouble.words
-            words.isHidden = false
+            empty.show(words: trouble.words, detail: trouble.detail)
         }
-        // Moved on every change, which with a ten-second dwell is roughly once
-        // per dwell — enough that nothing sits in one place all night.
-        needsLayout = true
     }
 
     public override func layout() {
@@ -331,24 +324,6 @@ public final class PGRScreenSaverView: ScreenSaverView {
         // that attached under `unknown` can find its real display.
         if running { attach() }
         picture.frame = bounds
-        words.font = .systemFont(ofSize: max(24, bounds.height / 12), weight: .thin)
-        words.sizeToFit()
-        words.frame.origin = wordsOrigin()
-    }
-
-    /// Centred, then nudged by a slowly changing offset so a label that stays
-    /// up for hours does not stay in one place for hours.
-    private func wordsOrigin() -> NSPoint {
-        let slack = NSSize(
-            width: max(0, bounds.width - words.frame.width),
-            height: max(0, bounds.height - words.frame.height))
-        guard slack.width > 0 || slack.height > 0 else { return .zero }
-        // A cheap wander rather than a bounce: the bouncing empty state is the
-        // deferred treatment, and pretending this is it would be worse than
-        // being plainly a placeholder.
-        let step = Double(Int(Date().timeIntervalSinceReferenceDate) / 10)
-        let x = (sin(step * 0.7) + 1) / 2
-        let y = (cos(step * 0.4) + 1) / 2
-        return NSPoint(x: slack.width * x, y: slack.height * y)
+        empty.frame = bounds
     }
 }
