@@ -224,7 +224,7 @@ The displays then show different photographs for free, because serving pops the 
 Two things to watch on a multi-display machine, neither of which is a v1 blocker:
 
 - **The queue drains twice as fast**, or three times, and the fastest consumer sets the pace the producers have to keep. `PLAN.md` says the correct degradation is fewer photographs rather than a stall, so the failure mode should be visibly benign. The evening-long exit gate is where that gets observed.
-- **`consumer=` is one string for every display.** The wire distinguishes them by `display=`, which is what the consumer table is keyed on, so this is probably already right — but it is worth confirming against the endpoint rather than assuming, since a shared consumer row with two displays writing to it is the kind of thing that looks fine for an hour.
+- **`consumer=` is one string for every display.** The wire distinguishes them by `display=`, which is what the consumer table is keyed on, so this is probably already right — but it is worth confirming against the endpoint rather than assuming, since a shared consumer row with two displays writing to it is the kind of thing that looks fine for an hour. **2026-09-10:** the agent's served line gains `display=`, decided in `Wallpaper Plan.md` and built with its Phase 1, which makes this checkable from the agent's side.
 
 ## The host outlives the session
 
@@ -264,7 +264,7 @@ This supersedes the earlier decision to assemble the saver with `swiftc` from a 
 
 **The risk of two build systems is real and it appeared on the first day.** The agent target failed to compile sources that `swift build` accepts — two `sending 'store' risks causing data races` errors in `SourceEndpoint.swift` — because the Xcode target had `SWIFT_APPROACHABLE_CONCURRENCY = YES` and the package does not. It changes isolation inference, so the same file was being compiled under different rules by the two systems. Removed from the agent and `pgr_ctl`; the app and saver keep it, having been written under it. **That setting is the first place to look when the two disagree again**, and they will.
 
-**What the Xcode side does not do yet.** The agent target produces the `LSUIElement` bundle but not the `Contents/Library/LaunchAgents/` plist — that is still `make-agent-bundle.sh`, which is consistent with scripts owning deployment. There are no shared schemes; Xcode autocreates them per user on first open.
+**What the Xcode side does not do yet.** The agent target produces the `LSUIElement` bundle but not the `Contents/Library/LaunchAgents/` plist — that is still `make-agent-bundle.sh`, which is consistent with scripts owning deployment. There are no shared schemes; Xcode autocreates them per user on first open. **2026-09-10:** the shipping route is a per-user plist in `~/Library/LaunchAgents` with the binary left in the app bundle, not the in-bundle plist `SMAppService` wants — see `PLAN.md`, *The agent: registration and permissions*.
 
 ## Building, installing, and reloading
 

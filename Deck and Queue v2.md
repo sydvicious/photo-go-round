@@ -425,7 +425,7 @@ There is no rollback path and none is wanted: a v6 build reading a v7 database i
 # References
 
 - `PLAN.md` — *The deck algorithm*, *The repeat window*, *Selecting at a random offset*, *Deal over everything, and try at the moment of need*, *Dealing is paced by serving*, *The queue is not a queue*, *The queue-size sweep*, *The caps, and the arithmetic that will break them*, *Surviving a source that will not answer*, *Cold start*, *Eviction*. This plan supersedes the second half of that list; the first half survives unchanged.
-- `2026-08-24 Fable Audit.md` — the still-open list, and the bugs whose fixes this plan deletes along with their machinery.
+- `audits/2026-08-24 Fable Audit.md` — the still-open list, and the bugs whose fixes this plan deletes along with their machinery. The audit was declared closed on 2026-09-10.
 - `Sources/PhotoGoRoundKit/Deck/Deck.swift`, `Deck+Consumers.swift` — the shuffle, the pass, the window, the claim.
 - `Sources/PhotoGoRoundKit/Cache/PhotoCache.swift`, `PhotoQueue.swift`, `CacheQueue.swift`, `QueueFiller.swift`, `PhotoStore.swift` — everything this plan rearranges.
 - `Sources/photogoroundd/RunCommand.swift` — `FillerBox`, the gauge, the bridge.

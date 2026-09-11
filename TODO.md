@@ -28,16 +28,17 @@ The saver's tile in the Screen Saver pane is the system's generic placeholder �
 `PLAN.md`'s *Platform and distribution* says Developer ID direct, on the grounds that "a sandboxed app cannot install a `.saver` bundle, so App Store distribution and a screensaver are mutually exclusive." That is the decision to re-examine rather than the answer.
 
 - **Answer this first, because it ends the item if it is no:** is there any App Store-legal mechanism in 2026 for an app to deliver a screensaver? If not, the rest is moot and the note stands.
-- **The agent is the harder half, not the saver.** It is unsandboxed by design: it opens SQLite and the cache directly, binds a localhost listener, holds the Photos TCC grant, and registers as a LaunchAgent through `SMAppService`. Sandboxing it means an App Group container for the database and cache, `com.apple.security.network.server` for the listener, `network.client` for everything that asks, and re-testing every path that touches a file.
+- **The agent is the harder half, not the saver.** It is unsandboxed by design: it opens SQLite and the cache directly, binds a localhost listener, holds the Photos TCC grant, and registers as a LaunchAgent through `SMAppService`. Sandboxing it means an App Group container for the database and cache, `com.apple.security.network.server` for the listener, `network.client` for everything that asks, and re-testing every path that touches a file. *2026-09-10: it registers as a per-user plist in `~/Library/LaunchAgents`, not through `SMAppService`.*
 - **`pgr_ctl` is not a constraint here.** It is a debugging tool and need not ship at all, so a sandboxed build simply leaves it out and it keeps the direct database access that is the rig's whole premise. The consequence worth knowing is that the shipped configuration would then be one nothing exercises from a terminal — a fact to hold, not a problem to solve.
 - Worth noting the widget already forces part of this: an app extension is sandboxed on macOS whether we like it or not, which is why the agent serves over HTTP rather than sharing a store.
+- **The wallpaper's files would move.** They are in `~/Library/Application Support/com.sydpolk.photogoround.wallpaper.{dev|prod}/` for now; Syd, 2026-09-10: "we will probably have to move it if we want to sandbox." See `Wallpaper Plan.md`, *The file on disk*.
 - **The animated-preview item that was here is withdrawn, 2026-09-09: we already have one.** It said that if the App Store were unreachable, private API would be on the table for getting a fully animated preview like Apple's own savers have. The premise was a wrong reading — the pane runs an ordinary live instance of our saver and it animates and cycles photographs. Nothing needs reverse-engineering. The general point survives in a smaller form: shipping Developer ID direct means no review, so private API is not disqualifying if some *other* need for it appears.
 
 ## Installing by launching the app
 
 Installing Photo-Go-Round should be the whole of installing Photo-Go-Round. **Needs its own plan document.**
 
-- **The agent half is already designed** and not built: `app/mac/FEATURES.md`, *The app brings its own agent* — `photogoroundd` inside the app bundle at `Contents/Library/LoginItems/`, registered with `SMAppService.agent(plistName:)`. See also `PLAN.md`, *An installer is probably unnecessary*.
+- **The agent half is already designed** and not built: `app/mac/FEATURES.md`, *The app brings its own agent* — `photogoroundd` inside the app bundle at `Contents/Library/LoginItems/`, registered with `SMAppService.agent(plistName:)`. See also `PLAN.md`, *An installer is probably unnecessary*. **Changed 2026-09-10:** the agent installs as a per-user plist in `~/Library/LaunchAgents`, with the binary left in the app bundle — "this needs to support multiple users on the same machine."
 - **The saver half is not designed at all.** An unsandboxed Developer ID app can copy `Photo-Go-Round.saver` into `~/Library/Screen Savers` itself, which is what `Scripts/make-saver-bundle.sh --install` does today by hand.
 - **Selecting it is probably not ours to do.** Installing a screensaver and making it the user's screensaver are different acts, and the second one is theirs.
 - **Updating is the part that bites.** `legacyScreenSaver` caches the loaded bundle for the life of its process and System Settings caches its list, so replacing an installed saver means killing both — the script already does this, and an app doing it silently to a running screensaver needs thought.
@@ -46,6 +47,17 @@ Installing Photo-Go-Round should be the whole of installing Photo-Go-Round. **Ne
 - **The empty state's agent wording is a placeholder that is wrong in one of the two places it appears.** It reads "Open the Photo-Go-Round application to start it", which is right on the screensaver and absurd in the window, because the window *is* the application. The buttons above are what the window should show instead. Until then the text stands, knowingly.
 - **A missing agent and a wedged one are one state to the user** — implemented 2026-09-09, one message on screen and the distinction kept in the log. The buttons inherit that: whatever they offer has to cover both starting an agent that is not there and dealing with one that is running and not answering.
 - **The first run has a race nothing has exercised.** The saver finds the port by reading `~/Library/Preferences/<domain>.plist` directly, because the sandbox will not hand it the domain. On a genuinely first launch that file may not exist yet, and `cfprefsd` buffers writes, so there is a window after the agent starts where the saver still says nothing is running. It self-heals on the next request; whether that is acceptable as somebody's first impression is a first-launch decision. See `Screensaver Plan.md`, *Not yet decided*.
+
+## A menu-bar app for shipping
+
+Syd, 2026-09-10: *"make a menubar app for final shipping of this. The full desktop app is useful, but we are probably not going to ship it."* **Needs its own plan document.**
+
+- **The window stays**, as the development instrument it already is — `PLAN.md`, *The Mac app as instrument panel*. It just probably is not what ships.
+- **Everything that currently hangs off the app needs a home in it**: the Settings panel for sources, the Install Agent and Launch Agent buttons from *Installing by launching the app* above, the wallpaper's pause control, and the About box.
+- **The empty state's wording points at "the Photo-Go-Round application"**, which would then mean the menu-bar item.
+- **It may be the wallpaper's host, or sit beside a separate wallpaper binary.** `Wallpaper Plan.md` Phase 2 expects the wallpaper to be its own binary, installed per user in `~/Library/LaunchAgents`; a menu-bar app is the other common shape for a rotator. Which one runs the wallpaper is decided there.
+- How it starts at login — a login item, or a per-user LaunchAgent like the agent — is open.
+- `app/mac/FEATURES.md` already sketches *A menu bar app* — a status item, and an item that brings the window up — and is where this starts.
 
 ## Metrics in the database
 
@@ -69,24 +81,36 @@ The agent should answer for its own configuration over HTTP, and its preference 
 
 ## Design the wallpaper
 
-`PLAN.md` Phase 7. **Needs its own plan document.** A good deal of it is already argued there and should be read before anything is designed: *Wallpaper mechanics and their limits*, and *Wallpaper is asserted continuously, never set once*.
+`PLAN.md` Phase 7. **Needs its own plan document.** **Planned in `Wallpaper Plan.md`, 2026-09-10**, which settles most of what is below; the entries are left as they were written, with corrections marked. A good deal of it is already argued there and should be read before anything is designed: *Wallpaper mechanics and their limits*, and *Wallpaper is asserted continuously, never set once*.
 
-- **What is already settled there**: `NSWorkspace.setDesktopImageURL(_:for:options:)` per `NSScreen`, with fill mode in the options dictionary; the wallpaper is an invariant that is re-asserted rather than set once, because macOS reverts it on its own; reassert on wake, screen-parameter changes, Space changes, session activation and agent launch; do not fight a user who sets their own; log every correction; and rotation on a `DispatchSourceTimer` checking wall-clock so it survives sleep.
+- **What is already settled there**: `NSWorkspace.setDesktopImageURL(_:for:options:)` per `NSScreen`, with fill mode in the options dictionary; the wallpaper is an invariant that is re-asserted rather than set once, because macOS reverts it on its own; reassert on wake, screen-parameter changes, Space changes, session activation and agent launch; do not fight a user who sets their own; log every correction; and rotation on a `DispatchSourceTimer` checking wall-clock so it survives sleep. *2026-09-10: the fill colour is left to System Settings; putting files back is limited to launch, display and Space changes for now; the timer became per-display stored change times.*
 - **The empty state is different from every other surface's**: leave the existing desktop alone. An empty deck is not a reason to vandalise somebody's desktop.
 
 **What is genuinely open, and the first one is the interesting one:**
 
 - **Wallpaper needs a *file path*, and no other surface does.** Every consumer so far is handed bytes over HTTP and draws them; `setDesktopImageURL` takes a URL the system reads, and keeps reading, for as long as that image is the desktop. So this surface needs a stable file on disk that outlives the request — the cache has one, but the cache is a staging area the deck is free to evict.
-- **Decided, 2026-09-09: it writes its own, one file per display, in the container.** The wallpaper fetches an image per display and writes each to its own file — **deployment-scoped, alongside the database**, rather than at any hardcoded path. So `<container>/wallpapers/` : `~/Library/Containers/com.sydpolk.photogoround/wallpapers/` in production, `.build/pgr-container/wallpapers/` in development, and wherever `--container` or `PGR_CONTAINER` points when either is given.
+- **Decided, 2026-09-09: it writes its own, one file per display, in the container.** The wallpaper fetches an image per display and writes each to its own file — **deployment-scoped, alongside the database**, rather than at any hardcoded path. So `<container>/wallpapers/` : `~/Library/Containers/com.sydpolk.photogoround/wallpapers/` in production, `.build/pgr-container/wallpapers/` in development, and wherever `--container` or `PGR_CONTAINER` points when either is given. **Location reversed 2026-09-10:** "the app should not need to see the agent's container." The files live in `~/Library/Application Support/com.sydpolk.photogoround.wallpaper.{dev|prod}/`. One file per display, named by its UUID, scoped by deployment and never swept — all of that stands.
   - **It takes the cache's eviction out of the question entirely** — the wallpaper owns the bytes it is displaying, so nothing the deck does to the cache can pull the desktop out from under it.
   - **The file name carries the display's UUID**, which is the identity the deck already keys a consumer on and the same one `PictureLayerView.identifier(of:)` produces.
   - **Being deployment-scoped is the point, not a detail.** The database, cache and preference domain already move together so a development run cannot touch a real library; a hardcoded path would have let a development agent overwrite the wallpapers a production one was displaying.
-  - `HostEnvironment` already vends `databaseURL` and `cacheRoot`; this is a third of the same kind, and resolving it there rather than at the call site is what keeps the deployment split honest.
+  - `HostEnvironment` already vends `databaseURL` and `cacheRoot`; this is a third of the same kind, and resolving it there rather than at the call site is what keeps the deployment split honest. *Reversed with it: `HostEnvironment` gains nothing, and the wallpaper resolves its own directory from the deployment.*
   - **The files must outlive the process that wrote them.** macOS keeps reading whatever the desktop image URL points at, so anything that tidies them up blanks the desktop — they are not cache and must not be swept like it.
-- **Who owns the loop.** Phase 7 says "scheduled by the server". The agent is unsandboxed and already holds the bytes, so it can call `NSWorkspace` itself — but that makes the agent a consumer of its own queue rather than purely a server, which is a shape change worth arguing rather than assuming. The alternative is a client like every other surface, which then hits the file-path problem above from the wrong side of the wire.
+- **Who owns the loop.** Phase 7 says "scheduled by the server". The agent is unsandboxed and already holds the bytes, so it can call `NSWorkspace` itself — but that makes the agent a consumer of its own queue rather than purely a server, which is a shape change worth arguing rather than assuming. The alternative is a client like every other surface, which then hits the file-path problem above from the wrong side of the wire. **Answered 2026-09-10: a client.** Syd: "The agent's job is just to serve pictures." The file-path problem goes away because the client owns its files.
 - **Its rate is nothing like the screensaver's.** Hours rather than ten seconds, against a shared queue that a long screensaver session can roll the whole library through — `PLAN.md` already accepts that the wallpaper therefore sees a near-random sample rather than a slow walk, and that is worth confirming still reads as correct once it is running.
-- **Per-Space is a known hole**: the call sets the current Space on that screen only, and there is no public API to enumerate Spaces. The mitigation on record is re-applying on `activeSpaceDidChangeNotification`.
-- **A pause control** is named in `PLAN.md` as the obvious way to stop us reasserting; where it lives — Settings panel, menu bar — is not decided.
+- **Per-Space is a known hole**: the call sets the current Space on that screen only, and there is no public API to enumerate Spaces. The mitigation on record is re-applying on `activeSpaceDidChangeNotification`. *2026-09-10: re-applied at launch and on display and Space changes.*
+- **A pause control** is named in `PLAN.md` as the obvious way to stop us reasserting; where it lives — Settings panel, menu bar — is not decided. *2026-09-10: the app's* Also set wallpapers *checkbox is the first way to stop it; whether a separate pause is still wanted is open in `Wallpaper Plan.md`.*
+
+## What System Settings › Wallpaper needs from us
+
+Syd, 2026-09-10: *"Add a TODO.md item to see what we need to do in System Settings -> Wallpapers."* Nothing is known yet; these are questions to answer by looking, on macOS 27, since the pane was rewritten in Sonoma.
+
+- **What the pane shows once we have set a file** — our picture as a custom photo, the file's name, something else — and whether anything it offers would quietly undo us.
+- **Its own rotation.** If the pane is set to change the picture on a schedule, `WallpaperAgent` rotates on its own and the two would fight. Whether setting a URL turns that off, or the user has to.
+- **The fill colour.** The wallpaper uses the colour chosen here: where it lives in the pane on 27, and whether it is per display or per Space. See `Wallpaper Plan.md`, *The fit*.
+- **Showing on all Spaces.** Whether the pane has such an option on 27, and whether it reaches a file set through `setDesktopImageURL`. If so it could do more for the per-Space hole than re-applying on every Space change.
+- **Dynamic and Aerial wallpapers.** What happens when one is selected and we set a still over it, and whether it comes back on its own — a candidate for the reversions `PLAN.md`'s *Wallpaper is asserted continuously* describes.
+- **What the user should be told**, if anything, when *Also set wallpapers* is ticked.
+- Whatever this turns up goes into `Wallpaper Plan.md` before its Phase 1 is built, since several of these could change what Phase 1 does.
 
 ## Removing every source leaves the window showing a photograph
 
@@ -127,3 +151,17 @@ A directory named `-Xcc` appeared inside `app/Photo-Go-Round.xcodeproj`, holding
 - **The cause is not currently reproducible.** The directory was created at 09:30:22 on 2026-09-09, during a batch of `xcodebuild` runs, and nothing since has written to it.
 - **Two false verdicts were reached before the right measurement.** The first compared directory mtimes after a build that had nothing to compile; the second compared directory mtimes again, which do not change when files are written *inside* a directory. Only counting recently-written files under the tree answers the question.
 - Worth checking if it returns: whether it correlates with a change to the package graph rather than with any one build, since it appeared shortly after `Console` was made a library product.
+
+## Build products out of the repo
+
+Syd, 2026-09-10: *"all build products you produce should be in ~/.claude/build, not in the repo"*, and *"any that I am expected to produce should be in DerivedData somewhere."* The first is in effect for Claude already; the second is not met by the scripts.
+
+- **What writes into the checkout today:**
+  - `Scripts/make-saver-bundle.sh` defaults to `./build/xcode`.
+  - `Scripts/make-agent-bundle.sh` defaults to `./build`, and runs `swift build` into `./.build`.
+  - `Scripts/photogoroundd` runs `swift build` into `./.build`.
+- **The catch: `.build` also holds the development library**, which is data, not a build product: `.build/pgr-container` and `.build/pgr-cache`. `MacHostEnvironment.buildDirectory` finds it by walking up from the executable to a directory named `.build`, and a binary with no `.build` above it — anything Xcode built — falls back to the source tree `#filePath` names.
+- **Only the agent and `pgr_ctl` open it.** The app and the saver use `MacHostEnvironment` for the preference domain alone, which does not depend on `.build` — and Syd, 2026-09-10: "the app should not need to see the agent's container." So what can split is the agent and the rig: moving one's build and not the other's would have `pgr_ctl` reading one library while the agent serves another.
+- **What has to be designed**: where development storage lives once no build does, and how every process finds the same place without a `.build` to walk to. `--container` and `PGR_CONTAINER` already exist for moving it by hand; the question is the default.
+- `Scripts/scrub-dev.sh` hardcodes `$REPO/.build/pgr-container`, `$REPO/.build/pgr-cache` and a `pgrep` on `$REPO/.build/…photogoroundd`, and follows whatever is decided.
+- The `build/` and `.build/` lines in `.gitignore` can go once nothing writes there.
