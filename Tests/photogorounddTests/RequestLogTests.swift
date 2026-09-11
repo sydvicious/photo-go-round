@@ -91,6 +91,22 @@ struct RequestLogTests {
         #expect(entry.milliseconds >= 0)
     }
 
+    /// Consumers are keyed on `(kind, display)`, so two displays of one surface
+    /// are two consumers — and the line has to say which, or they read as one.
+    @Test("A record carries the display it was asked for, and none when it names none")
+    func recordCarriesTheDisplay() async throws {
+        let collector = Collector()
+        let (endpoint, cleanup) = try endpoint(collector)
+        defer { cleanup() }
+
+        _ = await endpoint.route(
+            try request(
+                "GET /v1/next?consumer=wallpaper&display=37D8832A-2D66-02CA-B9F7-8F30A301B230&w=3600&h=2338 HTTP/1.1"))
+        _ = await endpoint.route(try request("GET /v1/next?consumer=app&w=1&h=1 HTTP/1.1"))
+
+        #expect(collector.all.map(\.display) == ["37D8832A-2D66-02CA-B9F7-8F30A301B230", nil])
+    }
+
     @Test("A client that does not name itself is recorded as anonymous")
     func unnamedConsumer() async throws {
         let collector = Collector()
@@ -125,6 +141,18 @@ struct RequestLogTests {
             bytes: 0, milliseconds: 0.4)
 
         #expect(entry.summary == "screensaver · 1920x1080 · 0.4ms")
+    }
+
+    @Test("The display follows the consumer on the line")
+    func summaryNamesTheDisplay() {
+        let entry = PictureEndpoint.Served(
+            status: 204, detail: "no photos available", consumer: "wallpaper",
+            display: "37D8832A-2D66-02CA-B9F7-8F30A301B230",
+            width: "3600", height: "2338", card: nil, deal: nil,
+            bytes: 0, milliseconds: 0.4)
+
+        #expect(entry.summary
+            == "wallpaper · display 37D8832A-2D66-02CA-B9F7-8F30A301B230 · 3600x2338 · 0.4ms")
     }
 
     @Test("A request with no size asked for says so by omission")

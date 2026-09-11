@@ -270,8 +270,8 @@ that keeps failing to answer is left alone for a while, doubling each time, so
 one dead share cannot hold every fetch lane. Nothing is fetched beyond the
 queue's cards.
 
-Every request is logged to the console with the consumer, the size asked for, the
-deal ordinal, the bytes, and the latency.
+Every request is logged to the console with the consumer, the display it named,
+the size asked for, the deal ordinal, the bytes, and the latency.
 
 ### Sources
 

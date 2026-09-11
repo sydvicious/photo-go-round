@@ -1,5 +1,6 @@
 import AppKit
 import PhotoGoRoundAgentAPI
+import PhotoGoRoundDisplay
 import os
 import SwiftUI
 import UniformTypeIdentifiers
@@ -16,6 +17,9 @@ struct SourcesSettingsView: View {
     static let windowID = "sources-settings"
 
     @Environment(\.openWindow) private var openWindow
+    /// The app's wallpaper, which the checkbox under the panels turns on and
+    /// off. Handed in by `PhotoGoRoundApp` from `AppDelegate`.
+    @Environment(Wallpaper.self) private var wallpaper
 
     @State private var model = SourcesModel()
     /// The row whose options are open. A value rather than a flag, so the sheet
@@ -35,6 +39,7 @@ struct SourcesSettingsView: View {
         VStack(spacing: 12) {
             photosPanel
             filesPanel
+            wallpaperCheckbox
         }
         .padding(12)
         // The width floor is what this was pinned at. The height floor grew
@@ -73,6 +78,25 @@ struct SourcesSettingsView: View {
                 Task { await model.setRecursive(recursive, of: source.uuid) }
             }
         }
+    }
+
+    // MARK: - The wallpaper
+
+    /// Syd, 2026-09-10: "a checkbox which says 'Also set wallpapers'."
+    ///
+    /// **Off until ticked**, and unticking leaves the desktop as it is. Not in
+    /// a panel of its own: it is one switch, and a box around one checkbox is
+    /// more frame than content. Where it finally lives is the menu-bar app's
+    /// question — see `Wallpaper Plan.md`, *The* Also set wallpapers
+    /// *checkbox*.
+    private var wallpaperCheckbox: some View {
+        Toggle(
+            "Also set wallpapers",
+            isOn: Binding(
+                get: { wallpaper.isEnabled },
+                set: { wallpaper.setEnabled($0) }))
+        .toggleStyle(.checkbox)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - The panels

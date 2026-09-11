@@ -71,9 +71,10 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - Leave a development agent alone if one is already serving on the same preference domain; two agents on one library is the failure this must not cause.
   - Say what happened when registration is refused. It is the one failure that leaves the window with nothing to show and no way for the user to fix it, which is why it is the one that names somewhere to write to: "Problem launching the agent. Contact support@sydpolk.com."
   - `Scripts/make-agent-bundle.sh` and `pgr_ctl register` stay the rig's way in; decide whether the script is subsumed by a copy phase.
-- *Also set wallpapers* — a checkbox that turns the wallpaper on. **Not built.** Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wallpapers'."
-  - While it is ticked, the app runs the wallpaper: a new picture on each display every thirty minutes. Unticking stops it and leaves the desktop as it is.
-  - Designed in `Wallpaper Plan.md`, which owns where the setting is stored and what it defaults to.
+- *Also set wallpapers* — a checkbox that turns the wallpaper on. **Built 2026-09-10**, under the two panels in the Settings window. Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wallpapers'."
+  - While it is ticked, the app runs the wallpaper: a new picture on each display every `intervalSeconds`, a preference in the wallpaper's own domain that is sixty seconds for now. Unticking stops it and leaves the desktop as it is.
+  - **Off until ticked.** Claude's pick when building; what it defaults to is still open in `Wallpaper Plan.md`, which owns the design.
+  - `AppDelegate` hosts it; the loop itself is `Wallpaper`, in `PhotoGoRoundDisplay`, so a binary of its own can host it later.
 - *A menu bar app* — the picture window becomes something the app can show rather than the app itself. **Not built.**
   - **Probably the shipping form, 2026-09-10:** "The full desktop app is useful, but we are probably not going to ship it." See TODO.md, *A menu-bar app for shipping*.
   - A status item, and an item that brings the window up.

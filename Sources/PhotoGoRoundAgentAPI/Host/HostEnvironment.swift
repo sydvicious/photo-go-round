@@ -43,7 +43,10 @@ public enum Deployment: String, Sendable {
 
     /// The bundle identifier, which is also the preference domain and the last
     /// path component of both production directories.
-    static let identifier = "com.sydpolk.photogoround"
+    ///
+    /// Public so the wallpaper's own domains are spelled from this rather than
+    /// from a second copy of it — see `WallpaperHome`.
+    public static let identifier = "com.sydpolk.photogoround"
 
     /// The database's name inside the storage root, in every deployment. Public
     /// because the hosts name it in their usage text as well as opening it.

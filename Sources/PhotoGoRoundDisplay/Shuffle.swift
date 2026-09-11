@@ -314,7 +314,9 @@ public final class Shuffle {
         }
     }
 
-    private static func trouble(from failure: PictureClient.Failure) -> Trouble {
+    /// Internal rather than private so the wallpaper logs a failure in the same
+    /// words the window and the saver do.
+    static func trouble(from failure: PictureClient.Failure) -> Trouble {
         switch failure {
         case .noPortPublished:
             .noAgent("nothing has published a port — the agent is not running")

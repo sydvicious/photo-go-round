@@ -71,6 +71,14 @@ struct PictureEndpoint {
         /// one was not.
         var detail: String
         var consumer: String
+        /// Which display asked, when the client named one.
+        ///
+        /// **Consumers are keyed on `(kind, display)`**, so without this two
+        /// displays of one surface read as one in the log, and a count per
+        /// display — the wallpaper's twice an hour on each — cannot be taken
+        /// from the agent's side. Added 2026-09-10; `Wallpaper Plan.md`, *What
+        /// the agent logs*.
+        var display: String? = nil
         var width: String?
         var height: String?
         var card: Int64?
@@ -105,6 +113,7 @@ struct PictureEndpoint {
         /// Everything after the name, and the only place that wording lives.
         var summary: String {
             var parts = [consumer]
+            if let display { parts.append("display \(display)") }
             if let sourceID { parts.append("source \(sourceID)") }
             if let width, let height { parts.append("\(width)x\(height)") }
             if let deal { parts.append("deal #\(deal)") }
@@ -128,6 +137,7 @@ struct PictureEndpoint {
             Log.deck.notice(
                 """
                 served status=\(status, privacy: .public) consumer=\(consumer, privacy: .public) \
+                display=\(display ?? "none", privacy: .public) \
                 card=\(card ?? 0, privacy: .public) deal=\(deal ?? 0, privacy: .public) \
                 bytes=\(bytes, privacy: .public) \
                 source=\(sourceID ?? 0, privacy: .public) \
@@ -198,6 +208,7 @@ struct PictureEndpoint {
                 status: status,
                 detail: detail,
                 consumer: request.query("consumer") ?? "anonymous",
+                display: request.query("display"),
                 width: request.query("w"),
                 height: request.query("h"),
                 card: card?.id,
