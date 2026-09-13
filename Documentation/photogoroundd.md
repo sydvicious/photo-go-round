@@ -194,7 +194,16 @@ The agent listens on localhost, on the port `pgr_ctl status` prints — see
 `X-PGR-Pixels` the size produced when a box was asked for — original bytes
 carry no such header, since nothing was decoded to measure — and `X-PGR-Card`,
 `X-PGR-Deal`, `X-PGR-Source` and
-`X-PGR-Storage` describing the photograph and its place in the shuffle. `204 No
+`X-PGR-Storage` describing the photograph and its place in the shuffle.
+`X-PGR-Name` and `X-PGR-Source-Name` say what a person calls them, percent-encoded
+because a header is ASCII and a filename is not: the name is a Photos
+photograph's original filename, or its identifier — a folder photograph's path
+inside the folder — when none is recorded, **with its extension removed**, since
+the format sent is the one `Accept` chose rather than the original's; the source
+name is a folder's or a
+file's path, or `Photos › Trips › Holiday` for an album. **A Photos photograph's
+filename is recorded when its original is fetched**, so one fetched before
+version 12 of the database is named by its identifier until it is fetched again. `204 No
 Content` means nothing could be served: the queue is empty, or nothing on it has
 its bytes yet and the request's one wait is spent. It is an ordinary answer
 rather than an error — a fresh library replies this way until the first fetch
@@ -270,8 +279,11 @@ that keeps failing to answer is left alone for a while, doubling each time, so
 one dead share cannot hold every fetch lane. Nothing is fetched beyond the
 queue's cards.
 
-Every request is logged to the console with the consumer, the display it named,
-the size asked for, the deal ordinal, the bytes, and the latency.
+Every request is logged to the console with the photograph's name, the consumer,
+the display it named, the source's row id and name, the size asked for, the deal
+ordinal, the bytes, and the latency. A photograph with a recorded filename is
+named by it with its identifier beside it, `IMG_0042.HEIC (C3D4…/L0/001)`; the
+queue's own lines name it the same way.
 
 ### Sources
 
@@ -335,6 +347,110 @@ notice nothing claims them.
 
 Enabling, disabling, and refreshing are not here. They stay in `pgr_ctl`, which
 keeps the database and preferences and never makes a web request.
+
+### Dashboard
+
+    GET /dashboard                             a page for a browser
+    GET /v1/dashboard                          what the page shows, as JSON
+    GET /v1/dashboard/thumbnail?photo=<id>     a small JPEG of one photograph
+
+The agent prints the dashboard's address when its listener is ready. **The page
+redraws itself every second**, and says `not answering` when the agent stops
+replying.
+
+It shows the last picture served, with a caption, and how many photographs the database holds, how many originals the cache
+holds, how many cards are queued against `queueSize`, the bytes the cache
+occupies against its ceiling, the free space on the cache's volume against the
+floor below which fetching stops, how many pictures each consumer has been
+handed since the agent launched, what serving and dealing found in the cache and what
+eviction took from it since then, and the errors the agent has reported since
+then.
+
+    {"photos": 5093, "cached": 212, "queued": 18, "queueSize": 20,
+     "cacheBytes": 624000000, "cacheCeilingBytes": 1000000000,
+     "freeBytes": 212000000000, "freeFloorBytes": 5000000000,
+     "served": {"app": 14, "wallpaper": 2},
+     "serveLookups": {"hits": 15, "landed": 1, "timedOut": 0, "leftDuringWait": 0,
+                      "droppedWithoutWaiting": 3},
+     "fetchLookups": {"hits": 4, "misses": 31, "fetched": 27, "failed": 1, "timedOut": 2},
+     "last": {"photo": 4821, "consumer": "app", "at": "2026-09-12T17:14:31Z",
+              "source": "/Volumes/Photos/2019", "name": "Rice Homecoming.jpeg",
+              "externalID": "Rice Homecoming.jpeg"},
+     "evictions": {"photos": 36, "bytesFreed": 106000000, "passes": 4,
+                   "lastAt": "2026-09-12T17:10:02Z", "lastCeilingHalved": false},
+     "errors": [{"kind": "cache.timed-out.source-6", "count": 4,
+                 "message": "CACHE: IMG_0042.HEIC (C3D4…/L0/001) (source 6) did not answer in 60 seconds",
+                 "firstSeen": "2026-09-12T15:40:02Z", "lastSeen": "2026-09-12T17:12:55Z"}],
+     "since": "2026-09-12T14:02:11Z", "at": "2026-09-12T17:14:40Z"}
+
+**`last` is the picture most recently handed over** with a `200`, and is absent
+until one has been. `source` is what `X-PGR-Source-Name` said, and `name` is
+what `X-PGR-Name` said with the extension kept, since this names the original
+file rather than the bytes sent; both are taken when it was served, so a source
+removed since keeps the name it was served under. `externalID` is the
+identifier, which for a folder photograph is the same as `name`.
+
+**`errors` is one row per kind of trouble, most recently seen first.** Every red
+line on the agent's console and every error it logs is recorded under a kind — a
+short fixed name such as `cache.timed-out.source-6` or
+`serve.library-unavailable` — so an error that keeps happening is one row with a
+`count` rather than a new line each time. `message` is the most recent report's
+words, since the photograph or the queue depth on a line changes while the
+trouble does not. A kind about one source ends in that source's row id. A red
+line with no kind is grouped by its exact words, and `kind` is then absent. An
+event reported both on the console and in the log is recorded once. At most 100
+kinds are kept; past that, the one seen longest ago gives way. The record starts
+empty at launch and is not kept.
+
+The thumbnail fits 480 pixels either way and is never enlarged. **Asking for one
+takes no card and counts as nothing served.** It is drawn from the original, in
+the cache or in place: a photograph that is not here — evicted since it was
+served, or its file gone — is `404`, and so is an id the database does not
+hold. `photo` missing or not a number is `400`; an original that will not
+decode is `422`.
+
+`freeBytes` is absent when the volume will not say. `served` counts only `200`s,
+keyed by the `consumer` each request named, including `cli` and `anonymous`.
+`served`, `serveLookups`, `fetchLookups`, and `evictions` start empty at launch
+and are not kept.
+
+**Preferences are read on every request**, so a changed `cacheByteCeiling` or
+`queueSize` is in the next reading once the agent has re-read its preferences —
+at once after `pgr_ctl` or the app writes one, within thirty seconds after a
+bare `defaults write`. The cache itself shrinks to a lowered ceiling at the next
+maintenance pass, so the page can show it over its ceiling until then.
+
+**A serve lookup is a queued card reaching the head of the queue with its photograph
+stored in the cache** — materialized, not referenced in place, which never
+touches the cache. It is a hit when the original is there. Otherwise it is a
+miss, and a miss ends one of four ways: `landed`, the request waited and the
+bytes arrived; `timedOut`, it waited and they did not; `leftDuringWait`, the
+card's fetch failed while it was waited for; or `droppedWithoutWaiting`, the
+request's one wait was already spent or the card's source is benched. Misses are
+the sum of those four. A request can meet several cold cards before it serves
+one, and each is a miss, so hits and misses together can exceed pictures served.
+
+**A fetch lookup is a materialized card being dealt.** It is a hit when the
+original is already in the cache, and a miss when it is not and the card goes
+to the queue's fetcher; on a large library most are misses. `fetched`, `failed`,
+and `timedOut` count what became of each fetch since launch — including fetches
+for cards dealt before it, so on a restart they can briefly exceed `misses` —
+and a miss whose card was served or dropped before its fetch finished has no
+outcome. It is counted at the deal because the fetcher only ever asks for cards
+whose originals are not held. Referenced photographs are counted on neither
+side.
+
+**`evictions` counts what the agent's maintenance took from the cache.**
+`photos` and `bytesFreed` are totals across `passes`, the maintenance passes
+that evicted anything; `lastAt` is when the most recent of those ran, absent
+until one has. `lastCeilingHalved` says that pass was aiming at half the byte
+ceiling because free space was below `cacheCriticalFreeBytes`, so it was the disk
+driving eviction rather than the cache's size. `pgr_ctl cache evict` and
+`cache clear` run in another process and are not counted, and neither are bytes
+that left because their photograph or source left the library.
+
+Neither route writes to the request log, since an open page asks once a second.
+Anything other than `GET` is refused with `405`.
 
 ## PREFERENCES
 

@@ -815,7 +815,9 @@ struct CacheTests {
         // Halved: running out of disk degrades into a smaller cache rather
         // than a full volume, which on macOS is a bad day for everything else
         // running.
-        #expect(try starved.evictIfNeeded().evicted > 0)
+        let result = try starved.evictIfNeeded()
+        #expect(result.evicted > 0)
+        #expect(result.ceilingHalved, "the pass did not say it was aiming at half the ceiling")
         #expect(try starved.status().bytesOnDisk <= 750)
     }
 
@@ -833,7 +835,9 @@ struct CacheTests {
                 byteCeiling: 1500, minimumFreeBytes: 0, criticalFreeBytes: 0),
             sources: fixture.store, store: fixture.cache.store
         )
-        #expect(try healthy.evictIfNeeded().evicted == 0)
+        let result = try healthy.evictIfNeeded()
+        #expect(result.evicted == 0)
+        #expect(!result.ceilingHalved)
         #expect(try healthy.status().bytesOnDisk == 1000)
     }
 }

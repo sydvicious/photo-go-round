@@ -192,10 +192,15 @@ extension SourceProvider {
 public struct MaterializedFile: Sendable, Equatable {
     public let url: URL
     public let byteSize: Int64
+    /// What the photograph is called, when the provider knows and its
+    /// identifier does not say. A Photos asset's original filename; nil for a
+    /// folder or a file, whose path already is its name.
+    public let originalFilename: String?
 
-    public init(url: URL, byteSize: Int64) {
+    public init(url: URL, byteSize: Int64, originalFilename: String? = nil) {
         self.url = url
         self.byteSize = byteSize
+        self.originalFilename = originalFilename
     }
 }
 

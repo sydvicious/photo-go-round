@@ -362,6 +362,47 @@ struct EndpointCacheTests {
         #expect(headers(original)["X-PGR-Deal"] != nil)
         // The original was not decoded, so there is no size to report.
         #expect(headers(original)["X-PGR-Pixels"] == nil)
+
+        // What a person calls them. A folder photograph has no recorded
+        // filename, so its name is its path inside the folder, less the
+        // extension — the original's, not what went out.
+        let source = try #require(try library.sources.source(id: library.sourceIdentifier))
+        for response in [rendered, original] {
+            #expect(headers(response)["X-PGR-Name"]?.removingPercentEncoding == "photo-0")
+            #expect(headers(response)["X-PGR-Source-Name"]?.removingPercentEncoding == source.locator)
+        }
+    }
+
+    @Test("The name in the header loses its extension and keeps its folders")
+    func headerNameStripsTheExtension() {
+        func card(_ externalID: String, named: String? = nil) -> DeckCard {
+            DeckCard(
+                id: 1, uuid: "u", sourceID: 1, sourceUUID: "s", externalID: externalID,
+                storage: .materialized, dealSeq: nil, originalFilename: named)
+        }
+
+        #expect(PictureEndpoint.headerName(for: card("2019/summer/sunset-05.png")) == "2019/summer/sunset-05")
+        #expect(PictureEndpoint.headerName(for: card("C3D4/L0/001", named: "IMG_0042.HEIC")) == "IMG_0042")
+        // A Photos photograph with no recorded name: its identifier has no
+        // extension to lose.
+        #expect(PictureEndpoint.headerName(for: card("C3D4/L0/001")) == "C3D4/L0/001")
+        #expect(PictureEndpoint.headerName(for: card("backup.2019.jpeg")) == "backup.2019")
+        #expect(PictureEndpoint.headerName(for: card("no extension")) == "no extension")
+    }
+
+    @Test("A name goes into a header as printable ASCII, and comes back out as it was")
+    func headerValuesRoundTrip() {
+        let names = [
+            "Rice Homecoming.jpeg", "100% real.HEIC", "Photos › Trips › Holiday",
+            " leading and trailing ", "line\nbreak.png", "日本.jpg", "2019/Spring/IMG_1.jpg",
+        ]
+        for name in names {
+            let value = PictureEndpoint.headerValue(name)
+            #expect(
+                value.unicodeScalars.allSatisfy { $0.value > 0x20 && $0.value < 0x7F },
+                "\(name) went out as \(value)")
+            #expect(value.removingPercentEncoding == name)
+        }
     }
 
     @Test("A 200's bytes survive the file being deleted after the answer is decided")

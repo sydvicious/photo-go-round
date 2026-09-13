@@ -72,9 +72,14 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - Say what happened when registration is refused. It is the one failure that leaves the window with nothing to show and no way for the user to fix it, which is why it is the one that names somewhere to write to: "Problem launching the agent. Contact support@sydpolk.com."
   - `Scripts/make-agent-bundle.sh` and `pgr_ctl register` stay the rig's way in; decide whether the script is subsumed by a copy phase.
 - *Also set wallpapers* — a checkbox that turns the wallpaper on. **Built 2026-09-10**, under the two panels in the Settings window. Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wallpapers'."
-  - While it is ticked, the app runs the wallpaper: a new picture on each display every `intervalSeconds`, a preference in the wallpaper's own domain that is sixty seconds for now. Unticking stops it and leaves the desktop as it is.
+  - While it is ticked, the app runs the wallpaper: a new picture on each display every `intervalSeconds`, a preference in the wallpaper's own domain that defaults to thirty minutes — sixty seconds from 2026-09-10, back to thirty minutes on 2026-09-13, when the development domain was set to thirty minutes as well. Unticking stops it and leaves the desktop as it is.
   - **Off until ticked.** Claude's pick when building; what it defaults to is still open in `Wallpaper Plan.md`, which owns the design.
   - `AppDelegate` hosts it; the loop itself is `Wallpaper`, in `PhotoGoRoundDisplay`, so a binary of its own can host it later.
+- *The agent's dashboard, from the About box* — **built 2026-09-12.** Syd, 2026-09-12: "the reason I want it in the about box is that gives me the port number. it should open the dashboard in the system browser, not a webview in the app."
+  - The link's text is the dashboard's URL, port and all. Clicking it opens the default browser; `Link` hands the URL to the system, and there is no web view in the app.
+  - Re-read every two seconds while the box is open, because the agent takes a new port every launch.
+  - With no port published it says "Photo-Go-Round Is Not Running", the picture window's words for the same condition. A preference domain that cannot be read says so, with the reason.
+  - The dashboard itself is the agent's: `photogoroundd(1)`, *SERVICE → Dashboard*.
 - *A menu bar app* — the picture window becomes something the app can show rather than the app itself. **Not built.**
   - **Probably the shipping form, 2026-09-10:** "The full desktop app is useful, but we are probably not going to ship it." See TODO.md, *A menu-bar app for shipping*.
   - A status item, and an item that brings the window up.

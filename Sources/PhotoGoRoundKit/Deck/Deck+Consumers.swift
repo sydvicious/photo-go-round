@@ -433,7 +433,8 @@ extension Deck {
         """
 
     static let candidateSQL = """
-        SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
+        SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage,
+               p.original_filename
           \(Deck.population)
          WHERE \(candidatePredicate)
          ORDER BY p.shuffle_key

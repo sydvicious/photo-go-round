@@ -121,6 +121,40 @@ struct FillerBoxTests {
         #expect(again.produced == 1)
     }
 
+    final class Dealt: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [DealLookup] = []
+
+        func record(_ lookup: DealLookup) {
+            lock.lock()
+            entries.append(lookup)
+            lock.unlock()
+        }
+
+        var all: [DealLookup] {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries
+        }
+    }
+
+    /// Dealing runs on the box's own connection and its own `PhotoCache`, so the
+    /// fetch side of the dashboard's hit rate only reaches the tally if the box
+    /// hands the hook to the dealer it builds — which is the wiring tested here.
+    @Test("Dealing through the box reports the fetch side to its hook")
+    func dealLookupsReachTheHook() async throws {
+        let fixture = try Fixture(photos: 3, servable: false)
+        let box = fixture.box()
+        let dealt = Dealt()
+        box.countingDealLookups { dealt.record($0) }
+
+        _ = await box.topUpIfShort(preferences: Self.preferences())
+
+        #expect(try fixture.queueSize() == 3)
+        // Materialized, and nothing in the box's store: every one is a miss.
+        #expect(dealt.all == [.miss, .miss, .miss])
+    }
+
     @Test("A queue already at its target is left alone")
     func aFullQueueIsNotChurned() async throws {
         // The other half of the same rule: topping up must be a top-*up*. A

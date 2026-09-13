@@ -1,6 +1,6 @@
 # Summary
 
-The desktop picture: one photograph per display, changed every `intervalSeconds` — sixty seconds for now, thirty minutes as first planned — sized to fit, with the rest filled in the colour set in System Settings. It is a client of the agent like every other surface, hosted by the Mac app first and moved to a binary of its own later. Subordinate to `PLAN.md`, which places this in Phase 7.
+The desktop picture: one photograph per display, changed every `intervalSeconds` — thirty minutes by default, as first planned, and sixty seconds from 2026-09-10 to 2026-09-13 — sized to fit, with the rest filled in the colour set in System Settings. It is a client of the agent like every other surface, hosted by the Mac app first and moved to a binary of its own later. Subordinate to `PLAN.md`, which places this in Phase 7.
 
 # Rationale
 
@@ -11,13 +11,13 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 - **Phase 1 — The wallpaper in the app.** A loop that asks the agent for a picture for each display, writes it to that display's file, and makes that file the desktop. The app starts it at launch. **Built 2026-09-10; the exit gate has not been run.** See *What was built*. **First run 2026-09-11: it works** — the checkbox turns it on, the desktop shows photographs from the sources, and the agent's log shows them served to `consumer=wallpaper`. The exit gate is under way: the day on Syd's MacBook Pro, then the weekend on Plex.
   - First, find out whether leaving `.fillColor` out keeps the fill colour set in System Settings, or whether it has to be read with `desktopImageOptions(for:)` and passed back. **Answered 2026-09-10 with `Scripts/wallpaper-probe.swift`: it keeps it.** See *The fit*.
   - Also first, find out whether setting the same URL again with new contents redraws the desktop. The answer decides between one file per display and two alternating files. **Answered the same day: it does not**, so each display alternates between two files. See *The file on disk*.
-  - Aspect fit in the System Settings fill colour, every thirty minutes, and the desktop left alone when there is nothing to give it. *Sixty seconds since 2026-09-10, as the preference `intervalSeconds`; every "thirty minutes" below is that interval.*
+  - Aspect fit in the System Settings fill colour, every thirty minutes, and the desktop left alone when there is nothing to give it. *The preference `intervalSeconds` since 2026-09-10: sixty seconds until 2026-09-13, thirty minutes since; every "thirty minutes" below is that interval.*
   - Store the time each display's picture changed, in the wallpaper's own preference domain, and change a display only once that time is thirty minutes old — at launch as much as at any other moment.
   - Put each display's file back at launch and when displays or Spaces change.
   - An *Also set wallpapers* checkbox in the app; the loop runs only while it is ticked.
   - Before any of it is built, look at what System Settings › Wallpaper needs from us — TODO.md. *Partly answered by the probe runs; Syd said to start building on 2026-09-10 with the rest still open.*
   - The agent's served line names the display as well as the consumer, so each display's changes can be counted from the agent's side.
-  - **Exit gate:** the app is left open for an evening, every display changes every thirty minutes, and the agent's log shows `consumer=wallpaper` twice an hour per display. *At the current sixty seconds that is every minute, and sixty lines an hour per display.*
+  - **Exit gate:** the app is left open for an evening, every display changes every thirty minutes, and the agent's log shows `consumer=wallpaper` twice an hour per display. *The day and weekend runs began at sixty seconds — a line a minute per display. Since 2026-09-13 the interval is thirty minutes again, so the count is back to twice an hour per display.*
 - **Phase 2 — Its own binary.** The same loop in a process of its own, installed per user as a plist in `~/Library/LaunchAgents`, with the binary staying inside the app bundle. Designed when Phase 1 has run; see *Its own binary*.
 
 # Design Decisions
@@ -26,6 +26,7 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 
 - **"Make it change every 30 minutes."**
 - **"could we make the internal for the wallpaper 60 seconds for now? Eventually we will have a set of choices"**, then **"this should be part of the wallpaper preferences."** Superseding the thirty minutes above: `intervalSeconds` in the wallpaper's own domain, sixty seconds when nothing has set it.
+- **"set both the default and the current time between serving wallpaper to 30 minutes."** 2026-09-13, superseding the sixty seconds: `intervalSeconds` is thirty minutes when nothing has set it, and the development domain holds 1800.
 - **"we should store (per display) a preference storing the time the picture was changed for that display. And the image should not be changed before the time interval (initially 30 minutes) if it has previously been saved, even if the binary was just started up."** The interval is measured per display from that stored time, across launches, not from when the process started.
 - **"give the wallpaper its own domain. Actually two, one for prod and one for qa"** — corrected at once: **"I meant 'prod' and 'dev'."** One domain per existing deployment, and the agent's domain is not touched; Syd: "the agent won't care about this preference."
 - **The names: "com.sydpolk.photogoround.wallpaper.{dev|prod}"** — `com.sydpolk.photogoround.wallpaper.dev` and `com.sydpolk.photogoround.wallpaper.prod`.
@@ -56,7 +57,7 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 - **One rule for when to change: which displays are due?** Asked at launch, on wake, and when the loop's sleep ends, after which it sleeps until the next display is due. This replaces a separate rule for launch, one for wake and one for the timer. *Replaces two proposals Syd's stored-time decision overturned: changing the picture at launch, and a wake check against a "last complete round" held only in memory.*
 - **Each display's file URL is stored beside its change time**, so a launch that is not due still knows which file each display is showing.
 - **A change time in the future, or one whose file is gone, counts as due.**
-- **It retries after a minute when a display got nothing**, rather than waiting the full half hour. *With the interval at sixty seconds the two are the same, for now.*
+- **It retries after a minute when a display got nothing**, rather than waiting the full half hour. *The two were the same while the interval was sixty seconds, from 2026-09-10 to 2026-09-13.*
 - **`intervalSeconds` is read on every use and clamped to between ten seconds and seven days**, and the loop never sleeps longer than thirty seconds, so a changed value applies within that without a restart. *Chosen while building, 2026-09-10.*
 - **It puts each display's file back when screens or Spaces change, and otherwise does not fight macOS reverting it.** Launch is the third occasion, by Syd's decision above. *Wallpaper is asserted continuously* is later work.
 - **At launch, before putting each file back, it compares the stored file with what `desktopImageURL(for:)` reports and logs any difference.** That is a record of how often the desktop changes while the app is closed, whether macOS reverted it or somebody chose another picture — the evidence *Wallpaper is asserted continuously* says is missing. *A log line only: the read-back was measured lagging on 2026-09-10.*
@@ -101,6 +102,7 @@ Recorded in order, because one step of it was a wrong turn of a kind this projec
 20. Phase 1 began with `Scripts/wallpaper-probe.swift`, run by Syd. Leaving `.fillColor` out keeps the System Settings colour; setting the same URL again does not redraw; the reported URL lagged once; restoring a folder URL left the Golden Gate default. Syd: "yes, record them and start building."
 21. Phase 1 was built and its tests pass; the exit gate is Syd's to run. Syd then changed the interval: "could we make the internal for the wallpaper 60 seconds for now? Eventually we will have a set of choices", and "this should be part of the wallpaper preferences." It became `intervalSeconds`, in the wallpaper's own domain.
 22. First run, 2026-09-11. Syd: "The checkbox works. I see wallpaper from the sources. I see from the logs that wallpaper served from the queue." He left it running for the day, and set it up on Plex to run over the weekend.
+23. Syd, 2026-09-13: "set both the default and the current time between serving wallpaper to 30 minutes." `Wallpaper.defaultInterval` went back to thirty minutes, and `intervalSeconds` in `com.sydpolk.photogoround.wallpaper.dev` was set to 1800 with `defaults write`, which a running app picks up within its thirty-second recheck. The production domain did not exist and was not created.
 
 ## Where the loop runs
 
@@ -117,7 +119,7 @@ Recorded in order, because one step of it was a wrong turn of a kind this projec
 Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wallpapers'."
 
 - **Ticked, the wallpaper runs; unticked, it does not.** Unticking stops the loop and leaves the desktop showing whatever it has — the same rule as an empty library, since taking our picture down would mean choosing a replacement for the user. Ticking starts it, and the due rule decides what happens: a display whose stored time is under the interval old gets its stored file back and nothing new.
-- **It is the plan's one preference.** Everything else waits for "options … later".
+- **It was the plan's first preference**, and `intervalSeconds` joined it the same day. Everything else waits for "options … later".
 - **Where it is stored — Claude's proposal, built that way:** the key `enabled` in the wallpaper's own domain, `com.sydpolk.photogoround.wallpaper.{dev|prod}`, beside the change times. The agent does not read it, and the Phase 2 binary would read the same key, so moving the wallpaper out of the app does not move the setting.
 - **Where it sits — Claude's proposal, built that way:** the Settings window, under its two panels, which is the app's one existing place for options, until the menu-bar app exists. It is listed in `app/mac/FEATURES.md` as an app feature.
 - **What it defaults to is open.** "Also" reads as opt-in, which is off; on means nobody has to find it. Listed under *Not yet decided*. **Built off**, Claude's pick while building: a development build then does not change anybody's desktop just by launching.
@@ -212,11 +214,11 @@ The first is tried first, because if it works there is nothing to carry. The mea
 
 The agent never enlarges — `PhotoRenderer` returns a small original at its own pixels — so the system does the enlarging, exactly as the screensaver's `AspectFit` does. `PLAN.md`'s *Beyond 0.1* holds the upscale cap and the other fits, and Syd's "options later" covers them.
 
-**Asking at the display's native pixels.** `screen.convertRectToBacking(screen.frame)` gives the size in pixels, which is what the box on the wire is measured in. A 5K display asks at 5120×2880, so a HEIC of a few megabytes arrives and is written once per half hour, which is negligible. *At sixty seconds it is a few megabytes a minute per display — still small, and worth watching if the interval stays there.*
+**Asking at the display's native pixels.** `screen.convertRectToBacking(screen.frame)` gives the size in pixels, which is what the box on the wire is measured in. A 5K display asks at 5120×2880, so a HEIC of a few megabytes arrives and is written once per half hour, which is negligible. *While the interval was sixty seconds it was a few megabytes a minute per display; since 2026-09-13 it is once per half hour again.*
 
 ## Timing
 
-- **Every thirty minutes per display, measured from that display's stored change time.** See *The time each display last changed*. The interval is a `Duration` constant beside `Shuffle.defaultDwell` today, not a preference. **Changed 2026-09-10: sixty seconds, and a preference.** Syd: "could we make the internal for the wallpaper 60 seconds for now?", then "this should be part of the wallpaper preferences." It is `intervalSeconds` in the wallpaper's domain — sixty when unset, read on every use rather than once at start, parsed with a default and clamped to between ten seconds and seven days, as every preference is. The loop sleeps no longer than thirty seconds, so a `defaults write` applies within that and never needs a restart, which is `PLAN.md`'s rule for every preference.
+- **Every thirty minutes per display, measured from that display's stored change time.** See *The time each display last changed*. The interval was first a `Duration` constant beside `Shuffle.defaultDwell`. **Changed 2026-09-10: sixty seconds, and a preference.** Syd: "could we make the internal for the wallpaper 60 seconds for now?", then "this should be part of the wallpaper preferences." **Changed again 2026-09-13: thirty minutes when unset.** Syd: "set both the default and the current time between serving wallpaper to 30 minutes." It is `intervalSeconds` in the wallpaper's domain — thirty minutes when unset, read on every use rather than once at start, parsed with a default and clamped to between ten seconds and seven days, as every preference is. The loop sleeps no longer than thirty seconds, so a `defaults write` applies within that and never needs a restart, which is `PLAN.md`'s rule for every preference.
 - **Not at launch, unless a display is due.** "At start, straight away" was Claude's proposal, on the grounds that a wallpaper which waited half an hour would look broken. Syd overturned it the same day: "the image should not be changed before the time interval (initially 30 minutes) if it has previously been saved, even if the binary was just started up." The grounds survive in a narrower form: a display with no stored time — the very first run, or a monitor never seen before — is due, so the first launch still changes every display at once.
 - **One question, asked every time: which displays are due?** At launch, on wake, when the loop's sleep ends, and when a display appears. Each due display gets a new picture, and the loop then sleeps until the earliest stored time plus the interval. This replaces the earlier design's in-memory "last complete round" and its separate wake check, which were two answers to the same question.
 - **Across sleep, by the wall clock.** On `NSWorkspace.didWakeNotification` the question is asked again, so a Mac that slept through a change makes it when it wakes. This does not rely on a sleeping `Task.sleep` noticing the time that passed, which has not been measured.
@@ -276,7 +278,7 @@ At launch, on `activeSpaceDidChangeNotification`, and on `NSApplication.didChang
 - **A `204`, or no agent at all: the desktop keeps what it has**, whether that is our last picture or something the user chose. The retry follows a minute later.
 - **Failures are described in `Shuffle`'s own words** — `no photos`, `no agent: …`, `not answering: …` — by reusing `Shuffle.trouble(from:)` instead of writing the mapping a second time. That means taking `private` off it.
 - **Logged when they change, not every time.** A retry every minute with the agent down would otherwise be a line a minute all night. A new trouble is `.notice`, a repeat is `.debug`, and recovery is one `.notice`. This is the same rule `Shuffle.note` follows.
-- **Every change is one `.notice` line**: the display, card, deal, the pixels served and asked for, and the file name. That is two lines an hour per display — sixty at the current interval — and it is the line the exit gate is counted from — the lesson of the screensaver's overnight run, whose `.info` line had evaporated by morning.
+- **Every change is one `.notice` line**: the display, card, deal, the pixels served and asked for, and the file name. That is two lines an hour per display — sixty an hour while the interval was sixty seconds — and it is the line the exit gate is counted from — the lesson of the screensaver's overnight run, whose `.info` line had evaporated by morning.
 - **A display with no UUID is skipped and says so**, because it has no file name. `DisplayShuffles` adopts the sole identified display in that case; the wallpaper has no reason to, since it asks per screen rather than per view.
 - **After each set, the URL the system reports is compared with the one just set**, and a mismatch is logged. It is cheap, and it is the first place to look when a desktop does not change. **It can lag, measured 2026-09-10:** the first set over Syd's folder rotation put the new picture on screen while the same process read back the folder, and a later set read back correctly. So a mismatch is logged as what the system reported, and never acted on.
 
@@ -301,11 +303,11 @@ The change is small and sits entirely in the agent: a `display` field on `Served
 
 It is the one change this plan makes to the agent, and it is logging, not a new job.
 
-**Built 2026-09-10.** `display=` follows `consumer=` in the unified-log line, `display <uuid>` follows the consumer on the console, and a request that names no display logs `display=none`. Two tests in `RequestLogTests`, and the man page sentence now reads "with the consumer, the display it named, the size asked for…".
+**Built 2026-09-10.** `display=` follows `consumer=` in the unified-log line, `display <uuid>` follows the consumer on the console, and a request that names no display logs `display=none`. Two tests in `RequestLogTests`, and the man page sentence now reads "with the consumer, the display it named, the size asked for…". **Grown since, 2026-09-12**: the served line also names the photograph and its source — `name=` and `sourceName=` in the unified log, public — and the man page sentence reads "with the photograph's name, the consumer, the display it named, the source's row id and name, …". See `PLAN.md`, *The agent's dashboard*.
 
 ## What it costs the shared queue
 
-Two cards an hour per display, against the screensaver's 341 an hour. **At sixty seconds it is sixty an hour per display** — about a sixth of the screensaver's rate, for as long as the interval stays there. The wallpaper therefore sees what `PLAN.md` already describes: "a near-random sample rather than a slow walk", because a screensaver session in between can roll through the library. That is accepted there, and worth confirming it still reads as right once it is on the desktop.
+Two cards an hour per display, against the screensaver's 341 an hour. **At sixty seconds it was sixty an hour per display** — about a sixth of the screensaver's rate — from 2026-09-10 to 2026-09-13; at thirty minutes it is two an hour again. The wallpaper therefore sees what `PLAN.md` already describes: "a near-random sample rather than a slow walk", because a screensaver session in between can roll through the library. That is accepted there, and worth confirming it still reads as right once it is on the desktop.
 
 ## Testing
 
@@ -330,7 +332,7 @@ The loop is written so a test drives it without touching anybody's desktop: the 
 - the extension follows the content type
 - in `Tests/photogorounddTests/RequestLogTests.swift`: a served request records its consumer and its display, and a request that names no display records none
 - each deployment resolves its own directory and domain, and neither names the agent's container
-- `intervalSeconds` is sixty when unset, a changed value applies without a restart, nonsense is ignored or clamped, and the loop looks again at least every thirty seconds — and every other test sets its interval through the preference, the way `defaults write` would
+- `intervalSeconds` is thirty minutes when unset — sixty seconds until 2026-09-13 — a changed value applies without a restart, nonsense is ignored or clamped, and the loop looks again at least every thirty seconds — and every other test sets its interval through the preference, the way `defaults write` would
 
 What no test can reach is whether the desktop actually changes, whether the same URL redraws, and how Spaces behave. Those are answered by Syd running it and by the log lines above — the same standard the screensaver was held to.
 
@@ -340,7 +342,7 @@ What no test can reach is whether the desktop actually changes, whether the same
 
 **Phase 1, built 2026-09-10 after the probe.** The exit gate has not been run; that is Syd's.
 
-**First run, 2026-09-11, on Syd's MacBook Pro.** "The checkbox works. I see wallpaper from the sources. I see from the logs that wallpaper served from the queue." So the whole path held on its first run: the checkbox starts the loop, the loop asks the agent as `wallpaper`, the agent serves it from the shared queue, and the desktop shows the picture. **The exit gate is running**: left on for the day on the laptop, then for the weekend on Plex. It is counted from the agent's `consumer=wallpaper` lines, per display by `display=` — sixty an hour per display at the current interval.
+**First run, 2026-09-11, on Syd's MacBook Pro.** "The checkbox works. I see wallpaper from the sources. I see from the logs that wallpaper served from the queue." So the whole path held on its first run: the checkbox starts the loop, the loop asks the agent as `wallpaper`, the agent serves it from the shared queue, and the desktop shows the picture. **The exit gate is running**: left on for the day on the laptop, then for the weekend on Plex. It is counted from the agent's `consumer=wallpaper` lines, per display by `display=` — sixty an hour per display while the interval was sixty seconds, and two an hour since it went back to thirty minutes on 2026-09-13.
 
 - `Sources/PhotoGoRoundDisplay/Wallpaper.swift` — `WallpaperDisplay`; `WallpaperHome`, the domain and directory per deployment; `Wallpaper`, the loop, driven by closures and `@Observable` so the checkbox can bind to it; and an AppKit extension holding `Wallpaper.desktop()`, `fitOptions()`, the `NSWorkspace` calls and `watchTheSystem()`.
 - `Tests/PhotoGoRoundDisplayTests/WallpaperTests.swift` — 22 tests.

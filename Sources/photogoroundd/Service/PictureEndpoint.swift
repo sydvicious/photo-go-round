@@ -63,6 +63,11 @@ struct PictureEndpoint {
     /// entries and read them, rather than watching a terminal.
     var log: @Sendable (Served) -> Void = { $0.report() }
 
+    /// Where a picture handed over, and what serving found in the cache, are
+    /// counted for the dashboard. Nil counts nothing, which is every test that
+    /// is not about counting.
+    var tally: LaunchTally?
+
     /// One request, as it happened. A value rather than a formatted line, so the
     /// facts can be asserted without parsing the sentence they end up in.
     struct Served: Sendable, Equatable {
@@ -93,6 +98,11 @@ struct PictureEndpoint {
         /// A client naming a source still uses the `uuid` — that identity is
         /// stable and this one is not.
         var sourceID: Int64?
+        /// What that source is called, beside its row id: `source 6
+        /// (Photos › Trips › Holiday)`. The id alone is what `pgr_ctl` answers
+        /// to; the name is what a person reading an installed agent's log
+        /// recognises without a second terminal.
+        var sourceName: String? = nil
         var bytes: Int64
         var milliseconds: Double
         /// What the cache holds, at the moment this request was answered.
@@ -114,7 +124,9 @@ struct PictureEndpoint {
         var summary: String {
             var parts = [consumer]
             if let display { parts.append("display \(display)") }
-            if let sourceID { parts.append("source \(sourceID)") }
+            if let sourceID {
+                parts.append(sourceName.map { "source \(sourceID) (\($0))" } ?? "source \(sourceID)")
+            }
             if let width, let height { parts.append("\(width)x\(height)") }
             if let deal { parts.append("deal #\(deal)") }
             if bytes > 0 { parts.append(RunCommand.bytes(bytes)) }
@@ -130,7 +142,9 @@ struct PictureEndpoint {
         func report() {
             switch status {
             case 200: Console.change("▸", detail, .yellow, suffix: summary)
-            case 500...599: Console.alert("\(status) \(detail) · \(summary)")
+            // The error logged where the failure happened records it; this
+            // line carries a latency, and would never collapse into one row.
+            case 500...599: Console.alert("\(status) \(detail) · \(summary)", recording: .unrecorded)
             default: Console.event("\(status) \(detail) · \(summary)")
             }
 
@@ -141,6 +155,7 @@ struct PictureEndpoint {
                 card=\(card ?? 0, privacy: .public) deal=\(deal ?? 0, privacy: .public) \
                 bytes=\(bytes, privacy: .public) \
                 source=\(sourceID ?? 0, privacy: .public) \
+                name=\(detail, privacy: .public) sourceName=\(sourceName ?? "none", privacy: .public) \
                 cacheBytes=\(cacheBytes ?? -1, privacy: .public) \
                 queued=\(queued ?? -1, privacy: .public) ms=\(milliseconds, privacy: .public)
                 """
@@ -172,6 +187,7 @@ struct PictureEndpoint {
         cache.serveWait = preferences.serveWait
         cache.ensureFetching = ensureFetching
         cache.bench = bench
+        if let tally { cache.lookedUp = { tally.record($0) } }
         return (cache, deck)
     }
 
@@ -198,22 +214,29 @@ struct PictureEndpoint {
         _ request: HTTPListener.Request,
         status: Int,
         detail: String,
+        source: Source? = nil,
         card: DeckCard? = nil,
         bytes: Int64 = 0,
         cacheBytes: Int64? = nil,
         queued: Int? = nil
     ) {
+        let consumer = request.query("consumer") ?? "anonymous"
+        // Here rather than beside each `return` of a 200, so the count and the
+        // console line cannot disagree: every request is reported exactly once,
+        // through this.
+        if status == 200 { tally?.recordServed(consumer: consumer, card: card, source: source) }
         log(
             Served(
                 status: status,
                 detail: detail,
-                consumer: request.query("consumer") ?? "anonymous",
+                consumer: consumer,
                 display: request.query("display"),
                 width: request.query("w"),
                 height: request.query("h"),
                 card: card?.id,
                 deal: card?.dealSeq,
                 sourceID: card?.sourceID,
+                sourceName: source?.spokenName,
                 bytes: bytes,
                 milliseconds: (ContinuousClock.now - request.receivedAt).totalSeconds * 1000,
                 cacheBytes: cacheBytes,
@@ -228,7 +251,7 @@ struct PictureEndpoint {
             context = try self.context()
         } catch {
             report(request, status: 503, detail: "library unavailable")
-            Log.deck.error("could not open the library: \(String(describing: error), privacy: .public)")
+            Log.deck.error(kind: "serve.library-unavailable", "could not open the library: \(error)")
             return .text("library unavailable\n", status: 503, reason: "Service Unavailable")
         }
 
@@ -280,12 +303,12 @@ struct PictureEndpoint {
                     // belongs beside it and nowhere else.
                     queueRanShort()
                     report(
-                        request, status: 200, detail: served.card.externalID,
+                        request, status: 200, detail: served.card.spokenName, source: served.source,
                         card: served.card, bytes: stream.byteCount)
                     return HTTPListener.Response(
                         status: 200, reason: "OK",
                         headers: Self.headers(
-                            for: served.card, contentType: Self.contentType(of: served.url)),
+                            for: served, contentType: Self.contentType(of: served.url)),
                         body: .file(stream))
                 }
 
@@ -302,7 +325,7 @@ struct PictureEndpoint {
                         contentsOf: served.url, fitting: box.width, by: box.height, as: format)
 
                     var headers = Self.headers(
-                        for: served.card, contentType: rendered.format.mimeType)
+                        for: served, contentType: rendered.format.mimeType)
                     headers["X-PGR-Pixels"] = "\(rendered.width)x\(rendered.height)"
                     try? context.deck.markDelivered(photoID: served.card.id)
                     // **A deal follows a picture that reached somebody**, not a
@@ -315,7 +338,7 @@ struct PictureEndpoint {
                     // belongs beside it and nowhere else.
                     queueRanShort()
                     report(
-                        request, status: 200, detail: served.card.externalID,
+                        request, status: 200, detail: served.card.spokenName, source: served.source,
                         card: served.card, bytes: Int64(rendered.bytes.count),
                         cacheBytes: store.totals.byteCount,
                         queued: try? context.cache.queue.size())
@@ -327,20 +350,22 @@ struct PictureEndpoint {
                     // Visible on the console as well as in the log, because a
                     // photograph leaving the library for good is a state change
                     // somebody watching should see happen.
-                    if failures >= Deck.renderFailureLimit {
+                    let retired = failures >= Deck.renderFailureLimit
+                    if retired {
                         Console.alert(
-                            "\(served.card.externalID) will not render; retired after \(failures) attempts")
+                            "\(served.card.spokenName) will not render; retired after \(failures) attempts",
+                            recording: .kind(
+                                AgentErrors.kind("serve.photo-retired", source: served.card.sourceID)))
                     } else {
                         Console.event(
-                            "\(served.card.externalID) failed to render (\(failures)); skipping it")
+                            "\(served.card.spokenName) failed to render (\(failures)); skipping it")
                     }
+                    // Recorded unless it retired the photograph, which the
+                    // alert above has already recorded.
                     Log.deck.error(
-                        """
-                        photo \(served.card.id, privacy: .public) failed to render \
-                        (\(failures, privacy: .public) times): \
-                        \(String(describing: error), privacy: .public)
-                        """
-                    )
+                        kind: retired
+                            ? nil : AgentErrors.kind("serve.render-failed", source: served.card.sourceID),
+                        "photo \(served.card.id) failed to render (\(failures) times): \(error)")
                     continue
                 }
             }
@@ -356,7 +381,7 @@ struct PictureEndpoint {
             return .noContent()
         } catch {
             report(request, status: 500, detail: "could not serve a picture")
-            Log.deck.error("serving failed: \(String(describing: error), privacy: .public)")
+            Log.deck.error(kind: "serve.failed", "serving failed: \(error)")
             return .text("could not serve a picture\n", status: 500, reason: "Internal Server Error")
         }
     }
@@ -371,7 +396,7 @@ struct PictureEndpoint {
     /// comes first.
     private func vanished(_ served: PhotoCache.ServedPhoto, context: (cache: PhotoCache, deck: Deck)) {
         Console.event(
-            "\(served.card.externalID) vanished between the index and the open; skipping it")
+            "\(served.card.spokenName) vanished between the index and the open; skipping it")
         Log.deck.notice(
             "photo \(served.card.id, privacy: .public) vanished before its bytes could be opened")
     }
@@ -389,15 +414,45 @@ struct PictureEndpoint {
         return (width, height)
     }
 
-    static func headers(for card: DeckCard, contentType: String) -> [String: String] {
-        [
+    static func headers(for served: PhotoCache.ServedPhoto, contentType: String) -> [String: String] {
+        let card = served.card
+        return [
             "Content-Type": contentType,
             "X-PGR-Card": String(card.id),
             "X-PGR-Deal": String(card.dealSeq ?? 0),
             "X-PGR-Source": String(card.sourceID),
             "X-PGR-Storage": card.storage.rawValue,
+            // What a person calls the photograph and its source, for a client
+            // that wants to say so, or to name a file it saves.
+            "X-PGR-Name": headerValue(headerName(for: card)),
+            "X-PGR-Source-Name": headerValue(served.source.spokenName),
         ]
     }
+
+    /// The original filename when one was recorded and the identifier
+    /// otherwise — a folder photograph's path inside its folder — **with the
+    /// extension removed.** What goes out is in the format `Accept` chose, not
+    /// the original's, so `.png` on a HEIC answer would be a lie. The folders
+    /// stay: two directories in one source can hold the same filename.
+    ///
+    /// Only the header strips it. The logs and the dashboard name the original
+    /// file, where its extension is true.
+    static func headerName(for card: DeckCard) -> String {
+        ((card.originalFilename ?? card.externalID) as NSString).deletingPathExtension
+    }
+
+    /// **Percent-encoded, because a header is ASCII and a filename is not.**
+    /// `日本.jpg`, `Photos › Trips`, a name with a newline in it: each would
+    /// be mangled or would break the response written raw onto the socket. A
+    /// space is encoded too, since a header parser trims the ends of a value and
+    /// a filename may begin or end with one. `removingPercentEncoding` reads it
+    /// back.
+    static func headerValue(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: headerSafe) ?? ""
+    }
+
+    private static let headerSafe = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~()[]/,'&+=!@$;")
 
     /// From the extension, because that is what the cache path carries and what
     /// the source file is named. Conformance rather than a switch, so formats

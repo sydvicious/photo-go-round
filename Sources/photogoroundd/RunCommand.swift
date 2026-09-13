@@ -33,6 +33,14 @@ struct RunCommand {
     func run() async throws {
         try environment.prepare()
 
+        // **Errors are recorded from here on, and in this process only.** Every
+        // red line and every error logged with a kind goes into the record the
+        // dashboard reads. `pgr_ctl`, the app, and the screensaver log the same
+        // kit errors and never start recording, so theirs are logged and kept
+        // nowhere else.
+        AgentErrors.shared.startRecording()
+        Console.recordAlerts { text, kind in AgentErrors.shared.record(kind: kind, text) }
+
         let database = try Database(path: environment.databaseURL.path(percentEncoded: false))
         try Migrator.migrate(database)
 
@@ -96,6 +104,11 @@ struct RunCommand {
         // returns — see `FetchDeadline`, which deliberately has no cap of its
         // own.
         let bench = SourceBench()
+
+        // What the dashboard counts — pictures served, cache lookups on both
+        // sides, evictions — from here to exit. Made before the fetcher, which
+        // reports what became of each fetch.
+        let tally = LaunchTally()
         // Rebuilt per use rather than shared: a `Database` belongs to one
         // isolation domain, and these run on whichever lane reaches them.
         let cacheForFetch: @Sendable () -> PhotoCache? = {
@@ -120,7 +133,7 @@ struct RunCommand {
             fetch: { card, limit in
                 guard let cache = cacheForFetch() else { return .failed }
                 // Said before the wait, not after it. See `QueueEvent.caching`.
-                Self.speak(.caching(photo: card.externalID, source: card.sourceID, within: limit))
+                Self.speak(.caching(photo: card.spokenName, source: card.sourceID, within: limit))
                 // **The lane comes back whatever the provider does.** The fetch
                 // is let go of rather than waited for: a read blocked waiting
                 // for an iCloud file to materialise answers neither cancellation
@@ -152,6 +165,7 @@ struct RunCommand {
                     // this photograph finds them here.
                     cache.fetchTimedOut(card, after: limit)
                     cache.dropUnfetched(card, because: "its fetch did not answer in \(limit)")
+                    tally.record(fetch: .timedOut)
                     return .timedOut
                 }
                 guard landed.lower() else {
@@ -160,9 +174,11 @@ struct RunCommand {
                     // fetch that produced no bytes is what the bench counts.
                     cache.fetchFailed(card)
                     cache.dropUnfetched(card, because: "its fetch failed")
+                    tally.record(fetch: .failed)
                     return .failed
                 }
                 environment.announce(.cacheChanged)
+                tally.record(fetch: .fetched)
                 return .fetched
             },
             log: { Console.event($0) }
@@ -180,6 +196,9 @@ struct RunCommand {
         }
 
         filler.reporting(to: Self.speak)
+        // The fetch side of the dashboard's cache lookups, counted as cards are
+        // dealt. Before any fill: the filler is built once and keeps its hook.
+        filler.countingDealLookups { tally.record($0) }
 
         let endpoint = PictureEndpoint(
             databasePath: databasePath,
@@ -202,7 +221,8 @@ struct RunCommand {
             // kick is absorbed if a round is already on it.
             ensureFetching: { Task { await fetcher.kick() } },
             bench: bench,
-            speak: Self.speak
+            speak: Self.speak,
+            tally: tally
         )
         // Sources are managed over the same listener, because a client cannot
         // meaningfully write preferences and should not open the database. The
@@ -224,7 +244,10 @@ struct RunCommand {
             pictures: endpoint,
             sources: SourceEndpoint(
                 databasePath: databasePath, preferences: preferences, bytes: store),
-            photos: PhotosEndpoint(catalog: catalog, library: photos)
+            photos: PhotosEndpoint(catalog: catalog, library: photos),
+            dashboard: DashboardEndpoint(
+                databasePath: databasePath, cacheRoot: environment.cacheRoot,
+                preferences: preferences, store: store, tally: tally)
         )
         // Where the service is, written where every local client can find it:
         // a preference domain is a name rather than a path, which is the only
@@ -240,6 +263,11 @@ struct RunCommand {
             port: servicePort,
             advertising: PictureEndpoint.path,
             onReady: { port in
+                // Pasteable, on both branches: a scratch agent has a dashboard
+                // too, and it is the one nobody can find by the published port.
+                Console.event("dashboard at http://localhost:\(port)\(DashboardEndpoint.pagePath)")
+                Log.deck.notice(
+                    "dashboard at http://localhost:\(port, privacy: .public)\(DashboardEndpoint.pagePath, privacy: .public)")
                 guard publishes else {
                     // Nothing can discover it, so say it plainly enough to copy.
                     Console.event("not published — reach this agent at http://localhost:\(port)")
@@ -316,7 +344,8 @@ struct RunCommand {
         {
             Console.alert(
                 "refusing --add-folder: storage is relocated but preferences are not, so this "
-                    + "would write \(foldersToAdd.count) folder(s) into the real source list")
+                    + "would write \(foldersToAdd.count) folder(s) into the real source list",
+                recording: .kind("launch.add-folder-refused"))
             Console.note(
                 "set PGR_PREFS_SUITE to isolate preferences too, or drop --container/--database")
             throw OptionsError.addFolderWouldEditRealPreferences
@@ -498,17 +527,12 @@ struct RunCommand {
                     ),
                     deck: deck,
                     preferences: preferences,
-                    environment: environment
+                    environment: environment,
+                    tally: tally
                 )
                 heartbeat.finished(.maintenance, at: Date())
             }
 
-            // Built from the preferences in force rather than reused from
-            // launch. The one at line 37 exists to create the directory, and it
-            // froze the cap it was born with — so raising `cachePhotoCap` from
-            // a terminal left the status line reporting the old number
-            // indefinitely, which is the one place a person goes to check that
-            // the change took.
             let status = try describe(
                 cache: PhotoCache(
                     database: database,
@@ -717,15 +741,20 @@ struct RunCommand {
         cache: PhotoCache,
         deck: Deck,
         preferences: Preferences,
-        environment: MacHostEnvironment
+        environment: MacHostEnvironment,
+        tally: LaunchTally
     ) async throws {
         // No residency check and no orphan sweep: the index is built from the
         // filesystem at launch, so it cannot disagree with it, and a file whose
         // UUID nothing claims is deleted there rather than swept later.
         let eviction = try cache.evictIfNeeded()
+        // For the dashboard, which counts the passes that took something.
+        tally.record(eviction)
         if eviction.evicted > 0 {
             Console.event(
                 "evicted \(eviction.evicted) cache entries, freed \(Self.bytes(eviction.bytesFreed))"
+                    + (eviction.ceilingHalved
+                        ? " — free space is below the critical floor, so the ceiling was halved" : "")
             )
             environment.announce(.cacheChanged)
         }
@@ -753,12 +782,12 @@ struct RunCommand {
         // library that spans removable storage — it changes nothing, it
         // resolves itself when the drive returns, and colouring it red draws
         // the eye to the one line on the console that needs no attention.
-        case .dropped: Console.alert(event.line)
+        case .dropped: Console.alert(event.line, recording: Self.recording(for: event))
         case .serving, .cached, .cacheFailed: Console.event(event.line)
         // Red, and it earns it: this is the failure that hides.
-        case .cacheTimedOut: Console.alert(event.line)
+        case .cacheTimedOut: Console.alert(event.line, recording: Self.recording(for: event))
         // Red as well: a benched source is why nothing from it is appearing.
-        case .sourcePaused: Console.alert(event.line)
+        case .sourcePaused: Console.alert(event.line, recording: Self.recording(for: event))
         // **Timestamped, because all of these happen inside the loop.** This
         // was `Console.note` — untimestamped, and documented as being for the
         // banner and for anything printed before the loop starts — so lines
@@ -769,6 +798,22 @@ struct RunCommand {
         default: Console.event(event.line)
         }
         event.report()
+    }
+
+    /// What the error record files a red queue line under: the kind of event
+    /// and its source, which stay put while the photograph and the queue depth
+    /// on the line change.
+    static func recording(for event: QueueEvent) -> Console.Recording {
+        switch event {
+        case .dropped(_, let source, _, _):
+            .kind(AgentErrors.kind("library.photo-dropped", source: source))
+        case .cacheTimedOut(_, let source, _):
+            .kind(AgentErrors.kind("cache.timed-out", source: source))
+        case .sourcePaused(let source, _):
+            .kind(AgentErrors.kind("source.paused", source: source))
+        default:
+            .byText
+        }
     }
 
     static func bytes(_ count: Int64) -> String {
@@ -806,7 +851,11 @@ private func describeSources(_ sources: [Source], pool: PhotoPool) {
         if source.enabled && source.available {
             Console.note(line)
         } else {
-            Console.alert(line.trimmingCharacters(in: .whitespaces))
+            // A disabled source is red here so it is seen, and is not an error.
+            Console.alert(
+                line.trimmingCharacters(in: .whitespaces),
+                recording: source.available
+                    ? .unrecorded : .kind(AgentErrors.kind("source.unavailable", source: source.id)))
         }
     }
     print()
@@ -876,12 +925,13 @@ final class FillerBox: @unchecked Sendable {
             // Nothing can be dealt without a connection, and a filler that
             // silently never produces is the failure this whole change exists
             // to stop being invisible.
-            Log.deck.error("could not open the dealing connection at \(path, privacy: .public)")
+            Log.deck.error(kind: "deal.no-connection", "could not open the dealing connection at \(path)")
             return QueueFiller(isShort: { false }, produce: { false })
         }
         lock.lock()
         let bytes = store
         let report = self.log
+        let lookup = self.dealLookup
         lock.unlock()
         let built = QueueFiller(
             isShort: { gauge.isShort(nominalSize: sizes.queueSize) },
@@ -901,6 +951,7 @@ final class FillerBox: @unchecked Sendable {
                         database: database, root: root, settings: sizes.cacheSettings,
                         sources: store, queueSize: sizes.queueSize, store: bytes)
                     dealer.log = report
+                    dealer.dealLookedUp = lookup
                     return try dealer.deal(settings: sizes.deckSettings)
                 }
             })
@@ -918,6 +969,18 @@ final class FillerBox: @unchecked Sendable {
     func reporting(to log: @escaping @Sendable (QueueEvent) -> Void) {
         lock.lock()
         self.log = log
+        lock.unlock()
+    }
+
+    /// Where dealing says whether each materialized card's original was
+    /// already held — the fetch side of the dashboard's cache lookups. Set it
+    /// before the first fill: the filler is built once and keeps the hook it
+    /// was built with.
+    private var dealLookup: @Sendable (DealLookup) -> Void = { _ in }
+
+    func countingDealLookups(_ lookup: @escaping @Sendable (DealLookup) -> Void) {
+        lock.lock()
+        dealLookup = lookup
         lock.unlock()
     }
 
@@ -1068,7 +1131,9 @@ final class Reporter: @unchecked Sendable {
         let returned = !result.sourceUnavailable && !wasAvailable
 
         if lost {
-            Console.alert("source \(result.sourceID) unavailable: \(result.reason ?? "unknown")")
+            Console.alert(
+                "source \(result.sourceID) unavailable: \(result.reason ?? "unknown")",
+                recording: .kind(AgentErrors.kind("source.unavailable", source: result.sourceID)))
         } else if returned {
             Console.recovered("source \(result.sourceID) is available again")
         }
@@ -1101,7 +1166,8 @@ final class Reporter: @unchecked Sendable {
         // log is to find out why nothing is appearing.
         guard Self.scannedEmpty(result) else { return }
         Console.alert(
-            "source \(result.sourceID) is empty — it scanned cleanly and holds no photographs")
+            "source \(result.sourceID) is empty — it scanned cleanly and holds no photographs",
+            recording: .kind(AgentErrors.kind("source.empty", source: result.sourceID)))
     }
 
     /// A scan that reached its source and came back with nothing.

@@ -91,12 +91,13 @@ struct WallpaperRecord: Equatable {
 @Observable
 public final class Wallpaper {
 
-    /// What `intervalSeconds` means when nothing has set it. **Sixty seconds for
-    /// now.** Syd, 2026-09-10: "could we make the internal for the wallpaper 60
-    /// seconds for now? Eventually we will have a set of choices" — and "this
-    /// should be part of the wallpaper preferences." It was thirty minutes,
-    /// which is what `Wallpaper Plan.md` was written around.
-    public static let defaultInterval = Duration.seconds(60)
+    /// What `intervalSeconds` means when nothing has set it. **Thirty minutes.**
+    /// Syd, 2026-09-13: "set both the default and the current time between
+    /// serving wallpaper to 30 minutes." It was sixty seconds from 2026-09-10 —
+    /// "could we make the internal for the wallpaper 60 seconds for now?
+    /// Eventually we will have a set of choices" — and thirty minutes before
+    /// that, which is what `Wallpaper Plan.md` was written around.
+    public static let defaultInterval = Duration.seconds(30 * 60)
     /// The bounds `intervalSeconds` is clamped to. `defaults write` accepts
     /// anything, and a wallpaper asking every tenth of a second, or never, is
     /// not a setting anybody meant.

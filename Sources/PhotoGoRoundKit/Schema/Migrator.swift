@@ -22,6 +22,7 @@ public enum Migrator {
         Migration(version: 9, name: "one photograph, one row", sql: SchemaV9.sql),
         Migration(version: 10, name: "placement is random again, by rank", sql: SchemaV10.sql),
         Migration(version: 11, name: "the album's name, beside its identifier", sql: SchemaV11.sql),
+        Migration(version: 12, name: "the photograph's name, beside its identifier", sql: SchemaV12.sql),
     ]
 
     /// The version a fully migrated database reports.
@@ -66,8 +67,8 @@ public enum Migrator {
             } catch {
                 Log.signposter.endInterval("migration", state)
                 Log.sql.error(
-                    "migration \(migration.version, privacy: .public) failed: \(String(describing: error), privacy: .public)"
-                )
+                    kind: "database.migration-failed",
+                    "migration \(migration.version) failed: \(error)")
                 throw MigrationError.migrationFailed(
                     version: migration.version,
                     name: migration.name,

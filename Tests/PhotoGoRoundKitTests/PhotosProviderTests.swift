@@ -391,14 +391,24 @@ struct PhotosProviderTests {
         ])
         #expect(fake.written.map(\.resource.kind) == [.fullSizePhoto])
         #expect(file.byteSize == 1024)
+        // The edited render is what was written; the name is the original's,
+        // because `FullSizeRender.jpeg` is what every edited photograph is called.
+        #expect(file.originalFilename == "014_14.JPG")
     }
 
     @Test("An unedited photograph gives up its original")
     func uneditedTakesPhoto() async throws {
-        let (fake, _) = try await materialize([
+        let (fake, file) = try await materialize([
             LibraryResource(kind: .photo, originalFilename: "IMG_0023.JPG")
         ])
         #expect(fake.written.map(\.resource.kind) == [.photo])
+        #expect(file.originalFilename == "IMG_0023.JPG")
+    }
+
+    @Test("A photograph Photos gives no name has none, rather than an empty one")
+    func unnamedHasNoFilename() async throws {
+        let (_, file) = try await materialize([LibraryResource(kind: .photo)])
+        #expect(file.originalFilename == nil)
     }
 
     @Test("An edited Live Photo does not hand back a movie")

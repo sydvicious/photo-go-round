@@ -28,6 +28,24 @@ import Testing
 @Suite("Serving waits for the head card")
 struct ServeWaitTests {
 
+    /// Every cache lookup serving reported, in order. See `CacheLookup`.
+    final class Looked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [CacheLookup] = []
+
+        func record(_ lookup: CacheLookup) {
+            lock.lock()
+            entries.append(lookup)
+            lock.unlock()
+        }
+
+        var all: [CacheLookup] {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries
+        }
+    }
+
     private struct Fixture {
         let directory: URL
         let folder: TemporaryFolder
@@ -37,8 +55,9 @@ struct ServeWaitTests {
         var cache: PhotoCache
         let source: Source
         let heard = ServeWalkTests.Heard()
+        let looked = Looked()
 
-        init(photos: [String], wait: Duration) async throws {
+        init(photos: [String], wait: Duration, materialized: Bool = true) async throws {
             directory = URL.temporaryDirectory.appending(path: "pgr-wait-\(UUID().uuidString)")
             folder = TemporaryFolder(name: "pgr-wait-src")
             for name in photos { folder.write(name, bytes: 2048) }
@@ -53,8 +72,12 @@ struct ServeWaitTests {
 
             source = try await store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
-            try library.database.run("UPDATE photo SET storage = 'materialized';")
+            if materialized {
+                try library.database.run("UPDATE photo SET storage = 'materialized';")
+            }
             cache.log = heard.log
+            let looked = looked
+            cache.lookedUp = { looked.record($0) }
             cache.serveWait = wait
         }
 
@@ -125,6 +148,7 @@ struct ServeWaitTests {
         #expect(fixture.dropped().isEmpty)
         #expect(clock.now - started < .seconds(15), "the request waited out its whole bound")
         #expect(fixture.queued == 0)
+        #expect(fixture.looked.all == [.miss(.landed)])
     }
 
     @Test("When the wait runs out the head is dropped and the first warm card is served")
@@ -152,6 +176,7 @@ struct ServeWaitTests {
         #expect(fixture.queued == 0)
         #expect(fixture.pooled == 2, "a dropped card must keep its row")
         #expect(try fixture.cache.queue.contains(photoID: head.id) == false)
+        #expect(fixture.looked.all == [.miss(.timedOut), .hit])
     }
 
     @Test("With no warm card after the wait, every cold card is dropped and nothing is served")
@@ -172,6 +197,7 @@ struct ServeWaitTests {
         #expect(fixture.queued == 0)
         #expect(fixture.pooled == 2, "a dropped card must keep its row")
         #expect(fixture.heard.lines.contains("SERVE: nothing to show — out of cards, walked 2"))
+        #expect(fixture.looked.all == [.miss(.timedOut), .miss(.droppedWithoutWaiting)])
     }
 
     @Test("Cold cards ahead of a warm one are dropped, and the warm one is served")
@@ -206,6 +232,10 @@ struct ServeWaitTests {
         #expect(
             clock.now - started < .seconds(2),
             "a request spent more than its one wait walking cold cards")
+        #expect(
+            fixture.looked.all
+                == [.miss(.timedOut)]
+                + Array(repeating: .miss(.droppedWithoutWaiting), count: 5) + [.hit])
     }
 
     @Test("A card dropped for want of bytes keeps its claim, because its fetch may still be running")
@@ -248,6 +278,7 @@ struct ServeWaitTests {
         #expect(fixture.waited() == 0)
         #expect(fixture.dropped() == ["its source is not answering"])
         #expect(fixture.queued == 0)
+        #expect(fixture.looked.all == [.miss(.droppedWithoutWaiting)])
     }
 
     @Test("A request meeting a cold card asks for the fetcher")
@@ -281,6 +312,9 @@ struct ServeWaitTests {
         #expect(fixture.pooled == 1, "the deleted photograph should have left the library")
         #expect(fixture.waited() == 1)
         #expect(fixture.dropped().isEmpty, "the fetcher removed it; serving should not have dropped anything")
+        // Only the first is certain: whether `b.png` had landed by the time the
+        // request reached it is the background fetch's timing, not this test's.
+        #expect(fixture.looked.all.first == .miss(.leftDuringWait))
     }
 
     @Test("A wait of zero never waits, and drops every cold card it meets")
@@ -300,6 +334,7 @@ struct ServeWaitTests {
         #expect(fixture.dropped().count == 1)
         #expect(fixture.queued == 0)
         #expect(fixture.pooled == 1)
+        #expect(fixture.looked.all == [.miss(.droppedWithoutWaiting)])
     }
 
     @Test("A warm head is served at once, with no wait said")
@@ -316,5 +351,69 @@ struct ServeWaitTests {
         #expect(served.card.externalID == "a.png")
         #expect(fixture.waited() == 0)
         #expect(clock.now - started < .seconds(1))
+        #expect(fixture.looked.all == [.hit])
+    }
+
+    /// Every fetch-side lookup dealing reported, in order. See `DealLookup`.
+    final class Dealt: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [DealLookup] = []
+
+        func record(_ lookup: DealLookup) {
+            lock.lock()
+            entries.append(lookup)
+            lock.unlock()
+        }
+
+        var all: [DealLookup] {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries
+        }
+    }
+
+    /// The fetch side of the hit rate is counted at the deal, because the
+    /// fetcher only ever asks for cards whose originals are not held.
+    @Test("Dealing a materialized card says whether its original is already held")
+    func dealingReportsWhetherTheOriginalIsHeld() async throws {
+        var fixture = try await Fixture(photos: ["a.png", "b.png"], wait: .zero)
+        defer { fixture.cleanUp() }
+        let dealt = Dealt()
+        fixture.cache.dealLookedUp = { dealt.record($0) }
+
+        #expect(try fixture.dealAll() == 2)
+        #expect(dealt.all == [.miss, .miss])
+
+        // Fetched, then dealt again: both originals are here now.
+        try await fixture.cache.fetchAllQueued()
+        try fixture.library.database.run("DELETE FROM queue;")
+        #expect(try fixture.dealAll() == 2)
+        #expect(dealt.all == [.miss, .miss, .hit, .hit])
+    }
+
+    @Test("Dealing a referenced photograph is not a fetch-side lookup")
+    func dealingReferencedIsNotALookup() async throws {
+        var fixture = try await Fixture(photos: ["a.png"], wait: .zero, materialized: false)
+        defer { fixture.cleanUp() }
+        let dealt = Dealt()
+        fixture.cache.dealLookedUp = { dealt.record($0) }
+
+        #expect(try fixture.dealAll() == 1)
+        #expect(dealt.all.isEmpty)
+    }
+
+    /// A referenced photograph is its own file, so serving one never consulted
+    /// the cache — and a hit rate that counted it would be flattered by every
+    /// folder on the boot volume.
+    @Test("Serving a referenced photograph is not a cache lookup")
+    func referencedIsNotALookup() async throws {
+        let fixture = try await Fixture(photos: ["a.png"], wait: .seconds(10), materialized: false)
+        defer { fixture.cleanUp() }
+        try fixture.dealAll()
+
+        let served = try #require(try await fixture.cache.serve())
+
+        #expect(served.card.storage == .referenced)
+        #expect(fixture.looked.all.isEmpty)
     }
 }

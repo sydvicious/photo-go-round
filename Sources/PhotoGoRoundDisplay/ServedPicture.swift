@@ -37,6 +37,12 @@ public struct ServedPicture: Sendable, Equatable {
     public let source: Int64?
     /// `referenced` or `materialized`, as the cache sees it.
     public let storage: String?
+    /// What a person calls the photograph: its original filename when the
+    /// agent recorded one, its identifier otherwise, **without an extension** —
+    /// the bytes are in `contentType`'s format, not the original's.
+    public let name: String?
+    /// What a person calls its source: a path, or `Photos › Trips › Holiday`.
+    public let sourceName: String?
     public init(
         data: Data,
         contentType: String,
@@ -44,7 +50,9 @@ public struct ServedPicture: Sendable, Equatable {
         card: Int64? = nil,
         deal: Int64? = nil,
         source: Int64? = nil,
-        storage: String? = nil
+        storage: String? = nil,
+        name: String? = nil,
+        sourceName: String? = nil
     ) {
         self.data = data
         self.contentType = contentType
@@ -53,6 +61,8 @@ public struct ServedPicture: Sendable, Equatable {
         self.deal = deal
         self.source = source
         self.storage = storage
+        self.name = name
+        self.sourceName = sourceName
     }
 }
 
@@ -86,7 +96,12 @@ extension ServedPicture {
             card: fields["x-pgr-card"].flatMap(Int64.init),
             deal: fields["x-pgr-deal"].flatMap(Int64.init),
             source: fields["x-pgr-source"].flatMap(Int64.init),
-            storage: fields["x-pgr-storage"]
+            storage: fields["x-pgr-storage"],
+            // Percent-encoded on the wire, because a header is ASCII and a
+            // filename is not. One that will not decode is absent rather than
+            // shown with its escapes in it.
+            name: fields["x-pgr-name"].flatMap { $0.removingPercentEncoding },
+            sourceName: fields["x-pgr-source-name"].flatMap { $0.removingPercentEncoding }
         )
     }
 }

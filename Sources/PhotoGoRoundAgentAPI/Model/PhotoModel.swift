@@ -55,6 +55,10 @@ public struct DeckCard: Sendable, Equatable, Identifiable {
     /// The ordinal assigned when this picture was shown. Nil for one that is
     /// queued or merely selected, and so has not been shown yet.
     public let dealSeq: Int64?
+    /// The name Photos imported it with, recorded when its original was
+    /// fetched. Nil for a folder or a file, and for a Photos photograph not
+    /// fetched since the name began to be kept.
+    public let originalFilename: String?
 
     public init(
         id: Int64,
@@ -63,7 +67,8 @@ public struct DeckCard: Sendable, Equatable, Identifiable {
         sourceUUID: String,
         externalID: String,
         storage: PhotoStorage,
-        dealSeq: Int64?
+        dealSeq: Int64?,
+        originalFilename: String? = nil
     ) {
         self.id = id
         self.uuid = uuid
@@ -72,6 +77,18 @@ public struct DeckCard: Sendable, Equatable, Identifiable {
         self.externalID = externalID
         self.storage = storage
         self.dealSeq = dealSeq
+        self.originalFilename = originalFilename
+    }
+
+    /// The photograph as a line somebody reads names it.
+    ///
+    /// **The identifier is kept, and the name added.** `IMG_0042.HEIC
+    /// (C3D4…/L0/001)`: the name is what a person recognises, the identifier is
+    /// what `pgr_ctl` and the database answer to. A card with no name — every
+    /// folder photograph, whose identifier is already its path — is its
+    /// identifier alone, exactly as before.
+    public var spokenName: String {
+        originalFilename.map { "\($0) (\(externalID))" } ?? externalID
     }
 }
 

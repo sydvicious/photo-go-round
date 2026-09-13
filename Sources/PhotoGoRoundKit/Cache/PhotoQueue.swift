@@ -89,7 +89,8 @@ public struct PhotoQueue {
     public func peek(_ count: Int = 1) throws -> [DeckCard] {
         try database.all(
             """
-            SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
+            SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage,
+                   p.original_filename
               FROM queue q
               JOIN photo p ON p.id = q.photo_id
               JOIN source s ON s.id = p.source_id
@@ -116,7 +117,7 @@ public struct PhotoQueue {
         try database.first(
             """
             SELECT q.rank, p.id, p.uuid, p.source_id, s.uuid AS source_uuid,
-                   p.external_id, p.storage
+                   p.external_id, p.storage, p.original_filename
               FROM queue q
               JOIN photo p ON p.id = q.photo_id
               JOIN source s ON s.id = p.source_id

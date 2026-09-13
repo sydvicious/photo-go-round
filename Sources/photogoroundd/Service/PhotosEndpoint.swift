@@ -203,7 +203,8 @@ struct PhotosEndpoint: Sendable {
         let library = error as? PhotoLibraryError
         // The log gets the call and the bound; the client gets the sentence.
         Log.photos.error(
-            "photos endpoint: \(library?.description ?? String(describing: error), privacy: .public)")
+            kind: "photos.endpoint-unavailable",
+            "photos endpoint: \(library?.description ?? String(describing: error))")
         let reason = library?.sentence ?? "Photos is not responding."
         guard let bytes = try? SourceEndpoint.encoder().encode(Failure(error: reason)) else {
             return .text(reason + "\n", status: 503, reason: "Service Unavailable")
@@ -237,7 +238,7 @@ struct PhotosEndpoint: Sendable {
         _ value: T, status: Int = 200, reason: String = "OK"
     ) -> HTTPListener.Response {
         guard let bytes = try? SourceEndpoint.encoder().encode(value) else {
-            Log.photos.error("a photos response would not encode")
+            Log.photos.error(kind: "photos.encode-failed", "a photos response would not encode")
             return .text(
                 "the library could not answer\n", status: 500, reason: "Internal Server Error")
         }
@@ -257,7 +258,12 @@ struct PhotosEndpoint: Sendable {
     ) -> HTTPListener.Response {
         let milliseconds = Date().timeIntervalSince(started) * 1000
         let line = "\(response.status) \(request.method) \(request.path) · \(detail)"
-        if response.status >= 500 { Console.alert(line) } else { Console.event(line) }
+        // A 5xx's error is recorded where it was logged, not here as well.
+        if response.status >= 500 {
+            Console.alert(line, recording: .unrecorded)
+        } else {
+            Console.event(line)
+        }
         Log.photos.notice(
             """
             \(request.method, privacy: .public) \(request.path, privacy: .public) \

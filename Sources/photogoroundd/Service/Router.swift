@@ -14,8 +14,15 @@ struct Router {
     let pictures: PictureEndpoint
     let sources: SourceEndpoint
     let photos: PhotosEndpoint
+    let dashboard: DashboardEndpoint
 
     func route(_ request: HTTPListener.Request) async -> HTTPListener.Response {
+        // **Before the pictures, so the page's once-a-second poll is never a
+        // line in the request log.** Unclaimed, it would be answered by the
+        // picture endpoint's 404 and reported sixty times a minute.
+        if DashboardEndpoint.claims(request.path) {
+            return await dashboard.route(request)
+        }
         if SourceEndpoint.claims(request.path) {
             return await sources.route(request)
         }

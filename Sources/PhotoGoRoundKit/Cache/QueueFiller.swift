@@ -96,8 +96,7 @@ public final class QueueFiller: @unchecked Sendable {
                 // point — a round that gives up has to leave a reason behind,
                 // because a queue that stops filling looks identical from the
                 // outside to a library that has run out.
-                Log.deck.error(
-                    "could not deal: \(String(describing: error), privacy: .public)")
+                Log.deck.error(kind: "deal.failed", "could not deal: \(error)")
                 return Round(
                     produced: produced, exhausted: false, skipped: false,
                     failure: String(describing: error))

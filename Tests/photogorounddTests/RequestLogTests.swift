@@ -201,6 +201,18 @@ extension RequestLogTests {
         #expect(!entry.summary.contains("miss"))
     }
 
+    /// The row id is what `pgr_ctl` answers to; the name is what somebody
+    /// reading an installed agent's log recognises.
+    @Test("A served picture names its source beside the row id")
+    func summaryNamesTheSource() {
+        let entry = PictureEndpoint.Served(
+            status: 200, detail: "IMG_0042.HEIC (C3D4/L0/001)", consumer: "app",
+            sourceID: 6, sourceName: "Photos › Trips › Holiday",
+            bytes: 0, milliseconds: 1)
+
+        #expect(entry.summary == "app · source 6 (Photos › Trips › Holiday) · 1.0ms")
+    }
+
     @Test("A request that asked for no size reports no cache size")
     func noSizeMeansNoCacheField() {
         // The original went out as it is, so nothing consulted the cache's

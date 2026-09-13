@@ -76,7 +76,8 @@ public actor PhotosCollectionCatalog {
                 folders = try await library.folderPaths()
             } catch {
                 Log.photos.error(
-                    "folder walk failed, listing without folders: \(String(describing: error), privacy: .public)")
+                    kind: "photos.folder-walk-failed",
+                    "folder walk failed, listing without folders: \(error)")
             }
         }
         apply(fresh)
@@ -112,7 +113,7 @@ public actor PhotosCollectionCatalog {
                 done += 1
             } catch {
                 Log.photos.error(
-                    "counting stopped after \(done, privacy: .public): \(String(describing: error), privacy: .public)")
+                    kind: "photos.counting-stopped", "counting stopped after \(done): \(error)")
                 break
             }
         }

@@ -263,7 +263,18 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
             throw PhotoLibraryError.noUsableResource(externalID)
         }
         let bytes = try await library.write(chosen, ofAsset: externalID, to: destination)
-        return MaterializedFile(url: destination, byteSize: bytes)
+        return MaterializedFile(
+            url: destination, byteSize: bytes, originalFilename: Self.originalFilename(in: resources))
+    }
+
+    /// **The original's name, not the fetched resource's.** What is written is
+    /// `.fullSizePhoto` when there is one, and on every edited photograph that is
+    /// called `FullSizeRender.heic` — true, and no use to anybody reading a log.
+    /// `.photo` carries the name the photograph was imported with.
+    static func originalFilename(in resources: [LibraryResource]) -> String? {
+        let named = resources.first { $0.kind == .photo } ?? preferredResource(in: resources)
+        guard let name = named?.originalFilename, !name.isEmpty else { return nil }
+        return name
     }
 
     /// `.fullSizePhoto` when present, `.photo` otherwise, **matched on exact

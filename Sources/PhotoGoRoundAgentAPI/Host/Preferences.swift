@@ -97,14 +97,16 @@ public struct Preferences: @unchecked Sendable {
         guard defaults.object(forKey: key.rawValue) != nil else { return fallback }
         let raw = T(defaults.double(forKey: key.rawValue))
         guard raw.isFinite else {
-            Log.prefs.error("\(key.rawValue, privacy: .public) is not a number; using the default")
+            Log.prefs.error(
+                kind: "preferences.not-a-number.\(key.rawValue)",
+                "\(key.rawValue) is not a number; using the default")
             return fallback
         }
         guard range.contains(raw) else {
             let clamped = min(max(raw, range.lowerBound), range.upperBound)
             Log.prefs.error(
-                "\(key.rawValue, privacy: .public) out of range; clamped to \(Double(clamped), privacy: .public)"
-            )
+                kind: "preferences.out-of-range.\(key.rawValue)",
+                "\(key.rawValue) out of range; clamped to \(Double(clamped))")
             return clamped
         }
         return raw
@@ -116,8 +118,8 @@ public struct Preferences: @unchecked Sendable {
         guard range.contains(raw) else {
             let clamped = min(max(raw, range.lowerBound), range.upperBound)
             Log.prefs.error(
-                "\(key.rawValue, privacy: .public) out of range; clamped to \(clamped, privacy: .public)"
-            )
+                kind: "preferences.out-of-range.\(key.rawValue)",
+                "\(key.rawValue) out of range; clamped to \(clamped)")
             return clamped
         }
         return raw
@@ -129,8 +131,8 @@ public struct Preferences: @unchecked Sendable {
         guard range.contains(raw) else {
             let clamped = min(max(raw, range.lowerBound), range.upperBound)
             Log.prefs.error(
-                "\(key.rawValue, privacy: .public) out of range; clamped to \(clamped, privacy: .public)"
-            )
+                kind: "preferences.out-of-range.\(key.rawValue)",
+                "\(key.rawValue) out of range; clamped to \(clamped)")
             return clamped
         }
         return raw
@@ -299,7 +301,9 @@ public struct Preferences: @unchecked Sendable {
             if let spec = SourceSpec(propertyList: entry) {
                 specs.append(spec)
             } else {
-                Log.prefs.error("keeping an unreadable entry in the source list, untouched")
+                Log.prefs.error(
+                    kind: "preferences.unreadable-source-entry",
+                    "keeping an unreadable entry in the source list, untouched")
                 unreadable.append(entry)
             }
         }
@@ -340,7 +344,9 @@ public struct Preferences: @unchecked Sendable {
             write(edited, keeping: unreadableNow)
             return true
         }
-        Log.prefs.error("gave up rewriting the source list; something else keeps changing it")
+        Log.prefs.error(
+            kind: "preferences.source-list-rewrite-gave-up",
+            "gave up rewriting the source list; something else keeps changing it")
         return false
     }
 

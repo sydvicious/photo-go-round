@@ -443,12 +443,13 @@ struct WallpaperTests {
     // MARK: - The interval is a preference
 
     /// Syd, 2026-09-10: "60 seconds for now … this should be part of the
-    /// wallpaper preferences."
-    @Test("The interval is sixty seconds when nothing has set it")
+    /// wallpaper preferences." And 2026-09-13: "set both the default and the
+    /// current time between serving wallpaper to 30 minutes."
+    @Test("The interval is thirty minutes when nothing has set it")
     func intervalDefault() {
         let rig = Rig(.empty, displays: [])
         UserDefaults(suiteName: rig.suite)!.removeObject(forKey: "intervalSeconds")
-        #expect(rig.make().interval == .seconds(60))
+        #expect(rig.make().interval == .seconds(30 * 60))
     }
 
     @Test("A set interval is used, and a changed one applies without a restart")
@@ -470,7 +471,7 @@ struct WallpaperTests {
         let wallpaper = rig.make()
 
         defaults.set("soon", forKey: "intervalSeconds")
-        #expect(wallpaper.interval == .seconds(60))
+        #expect(wallpaper.interval == .seconds(30 * 60))
         defaults.set(0, forKey: "intervalSeconds")
         #expect(wallpaper.interval == .seconds(10))
         defaults.set(-5, forKey: "intervalSeconds")

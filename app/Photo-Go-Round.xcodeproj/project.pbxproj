@@ -58,7 +58,7 @@
 			path = saver/Sources;
 			sourceTree = "<group>";
 		};
-		AA00000000000000000000B5 /* Sources */ = {
+		AA00000000000000000000B5 /* Spike */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			name = Spike;
 			path = saver/Spike/Sources;
@@ -72,24 +72,11 @@
 		};
 		AA00000000000000000000D5 /* pgr_ctl */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				AA00000000000000000000DF /* Exceptions for "pgr_ctl" folder in "pgr_ctl" target */,
-			);
 			name = pgr_ctl;
 			path = ../Sources/pgr_ctl;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
-
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		AA00000000000000000000DF /* Exceptions for "pgr_ctl" folder in "pgr_ctl" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Info.plist,
-			);
-			target = AA00000000000000000000D0 /* pgr_ctl */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		000000000000000130000000 /* Frameworks */ = {

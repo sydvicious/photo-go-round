@@ -75,8 +75,39 @@ public enum Console {
         print("\(timestamp)  \(paint(mark, colour)) \(body)\(tail)")
     }
 
-    public static func alert(_ text: String) {
+    /// Whether a red line is kept in the agent's record of its errors, and
+    /// under what.
+    public enum Recording: Sendable, Equatable {
+        /// Under its exact text. What an alert nobody has classified gets, so a
+        /// new red line is never silently left out.
+        case byText
+        /// Under a kind that stays the same while the line's details — a
+        /// photograph's name, a queue depth, a latency — change, so the same
+        /// trouble collapses into one row with a count.
+        case kind(String)
+        /// Not at all, because something at the same site already records this
+        /// event and a second record would count it twice.
+        case unrecorded
+    }
+
+    /// Where recorded alerts go. Nil records nothing, which is every process
+    /// but the agent: `pgr_ctl` prints red lines too, and keeps no record.
+    private static let alertRecorder = Mutex<(@Sendable (String, String?) -> Void)?>(nil)
+
+    /// Sends every recorded alert's text and kind to `recorder` — the kind nil
+    /// for one recorded by its text — or stops, given nil.
+    public static func recordAlerts(to recorder: (@Sendable (_ text: String, _ kind: String?) -> Void)?) {
+        alertRecorder.withLock { $0 = recorder }
+    }
+
+    public static func alert(_ text: String, recording: Recording = .byText) {
         print("\(timestamp)  \(paint("!", .red)) \(paint(text, .red))")
+        guard let recorder = alertRecorder.withLock({ $0 }) else { return }
+        switch recording {
+        case .byText: recorder(text, nil)
+        case .kind(let kind): recorder(text, kind)
+        case .unrecorded: break
+        }
     }
 
     public static func recovered(_ text: String) {

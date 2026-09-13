@@ -71,7 +71,8 @@ extension DeckCard {
             sourceUUID: try row.string("source_uuid"),
             externalID: try row.string("external_id"),
             storage: PhotoStorage(rawValue: try row.string("storage")) ?? .materialized,
-            dealSeq: dealSeq
+            dealSeq: dealSeq,
+            originalFilename: try row.optionalString("original_filename")
         )
     }
 }

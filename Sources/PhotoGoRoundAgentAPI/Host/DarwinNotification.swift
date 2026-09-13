@@ -65,8 +65,7 @@ public enum DarwinNotification {
             let status = notify_post(name)
             if status != NOTIFY_STATUS_OK {
                 Log.prefs.error(
-                    "could not post \(name, privacy: .public): status \(status, privacy: .public)"
-                )
+                    kind: "notification.post-failed", "could not post \(name): status \(status)")
             }
         }
 
@@ -81,8 +80,7 @@ public enum DarwinNotification {
             let status = notify_register_dispatch(name, &token, queue) { _ in handler() }
             guard status == NOTIFY_STATUS_OK else {
                 Log.prefs.error(
-                    "could not observe \(name, privacy: .public): status \(status, privacy: .public)"
-                )
+                    kind: "notification.observe-failed", "could not observe \(name): status \(status)")
                 return nil
             }
             return Observation(token: token)

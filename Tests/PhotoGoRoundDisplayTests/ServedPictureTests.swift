@@ -16,6 +16,8 @@ struct PictureTests {
         "X-PGR-Source": "2",
         "X-PGR-Storage": "referenced",
         "X-PGR-Pixels": "3840x2160",
+        "X-PGR-Name": "IMG_0042",
+        "X-PGR-Source-Name": "Photos%20%E2%80%BA%20Trips%20%E2%80%BA%20Holiday",
     ]
 
     @Test("Every header the endpoint sets is read back")
@@ -27,6 +29,16 @@ struct PictureTests {
         #expect(picture.source == 2)
         #expect(picture.storage == "referenced")
         #expect(picture.pixels == PixelSize(width: 3840, height: 2160))
+        #expect(picture.name == "IMG_0042")
+        #expect(picture.sourceName == "Photos › Trips › Holiday")
+    }
+
+    @Test("A name that will not decode is absent, not shown with its escapes")
+    func undecodableName() {
+        let picture = ServedPicture.from(
+            data: Data(), headers: ["X-PGR-Name": "broken%ZZ.jpg", "X-PGR-Source-Name": "%E2%80"])
+        #expect(picture.name == nil)
+        #expect(picture.sourceName == nil)
     }
 
     /// `URLHTTPResponse` normalises header names and a raw socket does not, so

@@ -161,7 +161,8 @@ final class HTTPListener: @unchecked Sendable {
                 Log.deck.notice("http listener ready on port \(self.boundPort, privacy: .public)")
                 self.onReady(self.boundPort)
             case .failed(let error):
-                Console.alert("http listener failed: \(error)")
+                // The alert records it; the log record below says the same words.
+                Console.alert("http listener failed: \(error)", recording: .kind("listener.failed"))
                 Log.deck.error("http listener failed: \(String(describing: error), privacy: .public)")
             default:
                 break

@@ -92,7 +92,8 @@ struct SourceEndpoint {
             let line = "\(status) \(method) \(path) · \(detail)"
             switch status {
             case 200...299: Console.event(line)
-            case 500...599: Console.alert(line)
+            // The error logged where the failure happened records it.
+            case 500...599: Console.alert(line, recording: .unrecorded)
             default: Console.event(line)
             }
             Log.sources.notice(
@@ -236,7 +237,7 @@ struct SourceEndpoint {
                 ?? SourceStore(database: database, bytes: bytes)
         } catch {
             Log.sources.error(
-                "could not open the library: \(String(describing: error), privacy: .public)")
+                kind: "sources.library-unavailable", "could not open the library: \(error)")
             return answer(
                 request, .text("library unavailable\n", status: 503, reason: "Service Unavailable"),
                 detail: "library unavailable")
@@ -599,7 +600,7 @@ struct SourceEndpoint {
         _ value: T, status: Int = 200, reason: String = "OK"
     ) -> HTTPListener.Response {
         guard let bytes = try? Self.encoder().encode(value) else {
-            Log.sources.error("a source response would not encode")
+            Log.sources.error(kind: "sources.encode-failed", "a source response would not encode")
             return .text(
                 "the library could not answer\n", status: 500, reason: "Internal Server Error")
         }
@@ -619,7 +620,7 @@ struct SourceEndpoint {
     /// The library answered with an exception. Nothing a client can do about it,
     /// so it says so plainly and the details go to the log.
     private func failed(_ error: any Error) -> HTTPListener.Response {
-        Log.sources.error("source request failed: \(String(describing: error), privacy: .public)")
+        Log.sources.error(kind: "sources.request-failed", "source request failed: \(error)")
         return json(
             Failure(error: "the library could not answer"), status: 500,
             reason: "Internal Server Error")

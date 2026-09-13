@@ -379,8 +379,8 @@ public struct SourceStore {
             } catch {
                 let reason = String(describing: error)
                 Log.sources.error(
-                    "could not remove source \(source.id, privacy: .public) (\(source.locator, privacy: .public)): \(reason, privacy: .public) — leaving it for the next reconcile"
-                )
+                    kind: AgentErrors.kind("source.removal-failed", source: source.id),
+                    "could not remove source \(source.id) (\(source.locator)): \(reason) — leaving it for the next reconcile")
             }
         }
 
@@ -486,8 +486,8 @@ public struct SourceStore {
         } catch {
             let reason = "refresh failed: \(error)"
             Log.sources.error(
-                "source \(source.id, privacy: .public) \(reason, privacy: .public)"
-            )
+                kind: AgentErrors.kind("source.refresh-failed", source: source.id),
+                "source \(source.id) \(reason)")
             try? markUnavailable(sourceID: source.id, reason: reason, at: now)
             return ScanResult(
                 sourceID: source.id, added: 0, removed: 0, unchanged: 0,

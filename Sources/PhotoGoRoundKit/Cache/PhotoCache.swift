@@ -31,6 +31,14 @@ public struct PhotoCache {
     /// up needs the decisions on the console as they happen.
     public var log: @Sendable (QueueEvent) -> Void = { $0.report() }
 
+    /// Told what serving found each time it looks for a materialized card's
+    /// bytes. Nothing by default; the agent counts them for its dashboard.
+    public var lookedUp: @Sendable (CacheLookup) -> Void = { _ in }
+
+    /// Told, for each materialized card dealt, whether its original was already
+    /// held. Nothing by default; the agent counts them for its dashboard.
+    public var dealLookedUp: @Sendable (DealLookup) -> Void = { _ in }
+
     /// Which library's bells this cache rings. Nil rings nothing, so a cache
     /// built in a test cannot tell every agent on the Mac that its deck moved.
     public var doorbells: DarwinNotification.Doorbells?
@@ -295,6 +303,11 @@ public struct PhotoCache {
         guard try queue.append(photoID: candidate.id, sourceID: candidate.sourceID, at: now) else {
             return false
         }
+        // The fetch side of the hit rate, counted only for a card that was
+        // actually dealt. A referenced photograph never touches the cache.
+        if candidate.storage == .materialized {
+            dealLookedUp(store.contains(photo: candidate.uuid) ? .hit : .miss)
+        }
         log(.dealt(photo: candidate.externalID, source: candidate.sourceID, queued: (try? queue.size()) ?? 0))
         return true
     }
@@ -329,7 +342,7 @@ public struct PhotoCache {
         // request comes off the queue, rather than in whatever put it on.
         guard card.storage == .materialized else { return false }
         guard !store.contains(photo: card.uuid) else {
-            log(.cacheUnnecessary(photo: card.externalID, source: card.sourceID))
+            log(.cacheUnnecessary(photo: card.spokenName, source: card.sourceID))
             return false
         }
 
@@ -355,7 +368,7 @@ public struct PhotoCache {
                 externalID: card.externalID, from: source, to: temporary)
         } catch {
             try? FileManager.default.removeItem(at: temporary)
-            log(.cacheFailed(photo: card.externalID, source: card.sourceID, because: "\(error)"))
+            log(.cacheFailed(photo: card.spokenName, source: card.sourceID, because: "\(error)"))
             try await handleFailedDownload(card, source: source, provider: provider)
             return false
         }
@@ -367,9 +380,22 @@ public struct PhotoCache {
             // `cached_at` is the projection of what the store holds; the
             // eviction order reads it, the status lines count it, and the
             // queue's fetcher uses it to find cards that still need bytes.
+            //
+            // **The name goes in the same statement**, when the provider knew
+            // one: this is the moment it holds the asset's resources, and
+            // anywhere else the name is a round trip to Photos. A fetch that
+            // does not say keeps whatever was recorded rather than clearing it.
             try database.run(
-                "UPDATE photo SET byte_size = :size, cached_at = :now WHERE id = :id;",
-                ["size": .int(file.byteSize), "now": SQLValue(now), "id": .int(card.id)]
+                """
+                UPDATE photo
+                   SET byte_size = :size, cached_at = :now,
+                       original_filename = COALESCE(:name, original_filename)
+                 WHERE id = :id;
+                """,
+                [
+                    "size": .int(file.byteSize), "now": SQLValue(now),
+                    "name": SQLValue(file.originalFilename), "id": .int(card.id),
+                ]
             )
         } catch {
             try? FileManager.default.removeItem(at: temporary)
@@ -382,10 +408,10 @@ public struct PhotoCache {
             // entry leaves both saying *not held*, which is true, and the
             // photograph is simply drawn again.
             store.remove(photoUUID: card.uuid)
-            log(.cacheFailed(photo: card.externalID, source: card.sourceID, because: "\(error)"))
+            log(.cacheFailed(photo: card.spokenName, source: card.sourceID, because: "\(error)"))
             Log.cache.error(
-                "photo \(card.id, privacy: .public) was fetched and could not be kept: \(String(describing: error), privacy: .public)"
-            )
+                kind: AgentErrors.kind("cache.could-not-keep", source: card.sourceID),
+                "photo \(card.id) was fetched and could not be kept: \(error)")
             return false
         }
 
@@ -399,9 +425,15 @@ public struct PhotoCache {
         // the queue and had a one-in-the-library chance of coming back, cannot
         // recur either way — that was the *deck* forgetting it, and the row is
         // untouched here.
+        // Named with what this fetch just learned, which the card read before
+        // it cannot know.
+        let named = DeckCard(
+            id: card.id, uuid: card.uuid, sourceID: card.sourceID, sourceUUID: card.sourceUUID,
+            externalID: card.externalID, storage: card.storage, dealSeq: card.dealSeq,
+            originalFilename: file.originalFilename ?? card.originalFilename)
         log(
             .cached(
-                photo: card.externalID, source: card.sourceID,
+                photo: named.spokenName, source: card.sourceID,
                 bytes: store.url(forPhoto: card.uuid).flatMap {
                     (try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
                 } ?? 0))
@@ -520,7 +552,7 @@ public struct PhotoCache {
         guard (try? queue.remove(photoID: card.id)) == true else { return }
         log(
             .cacheDropped(
-                photo: card.externalID, source: card.sourceID, because: reason, queued: depth()))
+                photo: card.spokenName, source: card.sourceID, because: reason, queued: depth()))
     }
 
     /// What one step of fetching from the queue did, for a caller content to
@@ -549,7 +581,7 @@ public struct PhotoCache {
         case .drained: return .drained
         case .benched(let rank): return .benched(rank: rank)
         case .card(let card, let rank, let limit):
-            log(.caching(photo: card.externalID, source: card.sourceID, within: limit))
+            log(.caching(photo: card.spokenName, source: card.sourceID, within: limit))
             let landed = await fetch(card, now: now)
             finishFetch(card, landed: landed)
             if !landed { dropUnfetched(card, because: "its fetch failed") }
@@ -562,7 +594,7 @@ public struct PhotoCache {
     public func fetchTimedOut(_ card: DeckCard, after limit: Duration) -> Duration? {
         let benched = bench?.failed(card.sourceID)
         log(
-            .cacheTimedOut(photo: card.externalID, source: card.sourceID, after: limit))
+            .cacheTimedOut(photo: card.spokenName, source: card.sourceID, after: limit))
         if let benched {
             log(.sourcePaused(source: card.sourceID, until: benched))
         }
@@ -628,6 +660,9 @@ public struct PhotoCache {
     /// One picture, ready to hand over.
     public struct ServedPhoto: Sendable {
         public let card: DeckCard
+        /// The source it came from, as serving found it — so the host can say
+        /// what the source is called without a second read.
+        public let source: Source
         /// The bytes to send: the photograph's original, in place for a
         /// referenced file and in the cache for a materialized one. **Always
         /// the original** — the store stopped holding renderings on 2026-09-06,
@@ -715,9 +750,13 @@ public struct PhotoCache {
             else {
                 skipped += 1
                 _ = try await queue.remove(photoID: card.id)
-                log(.skipped(photo: card.externalID, source: card.sourceID, because: "no provider for its source", queued: depth()))
+                log(.skipped(photo: card.spokenName, source: card.sourceID, because: "no provider for its source", queued: depth()))
                 continue
             }
+
+            // Counted here, after the provider guard, so a card skipped for
+            // want of a source is not a lookup at all.
+            if foundBytes != nil, card.storage == .materialized { lookedUp(.hit) }
 
             var bytes = foundBytes
             if bytes == nil {
@@ -739,6 +778,7 @@ public struct PhotoCache {
                 // learning what the bench already knows.
                 if bench?.isBenched(card.sourceID) == true {
                     skipped += 1
+                    lookedUp(.miss(.droppedWithoutWaiting))
                     dropCold(card, because: "its source is not answering")
                     continue
                 }
@@ -758,23 +798,27 @@ public struct PhotoCache {
                 // and its bytes are simply here the next time it is dealt.
                 guard patience > .zero else {
                     skipped += 1
+                    lookedUp(.miss(.droppedWithoutWaiting))
                     dropCold(card, because: "its bytes are not here and the wait is spent")
                     continue
                 }
 
-                log(.waiting(photo: card.externalID, source: card.sourceID, upTo: patience, queued: depth()))
+                log(.waiting(photo: card.spokenName, source: card.sourceID, upTo: patience, queued: depth()))
                 // Join the fetch already running for it, or have one started.
                 ensureFetching()
                 switch try await waitForBytes(of: card, upTo: patience) {
                 case .landed(let url):
+                    lookedUp(.miss(.landed))
                     bytes = url
                 case .gone:
                     // The fetcher dropped it, or its source confirmed it gone
                     // and the row went. Either way the head has moved.
                     skipped += 1
+                    lookedUp(.miss(.leftDuringWait))
                     continue
                 case .timedOut:
                     skipped += 1
+                    lookedUp(.miss(.timedOut))
                     patience = .zero
                     dropCold(card, because: "its bytes did not arrive in \(serveWait)")
                     continue
@@ -789,7 +833,7 @@ public struct PhotoCache {
             switch await provider.existence(of: card.externalID, in: source) {
             case .absent:
                 skipped += 1
-                log(.dropped(photo: card.externalID, source: card.sourceID, because: "gone from a source that is right there", queued: depth()))
+                log(.dropped(photo: card.spokenName, source: card.sourceID, because: "gone from a source that is right there", queued: depth()))
                 try self.remove(card.id)
                 continue
 
@@ -799,7 +843,7 @@ public struct PhotoCache {
                 // photographs are never coming back.
                 if case .gone(let why) = await provider.availability(of: source) {
                     skipped += 1
-                    log(.dropped(photo: card.externalID, source: card.sourceID, because: "its source is \(why)", queued: depth()))
+                    log(.dropped(photo: card.spokenName, source: card.sourceID, because: "its source is \(why)", queued: depth()))
                     try self.remove(card.id)
                     continue
                 }
@@ -816,7 +860,7 @@ public struct PhotoCache {
 
             log(
                 .serving(
-                    photo: card.externalID, source: card.sourceID,
+                    photo: card.spokenName, source: card.sourceID,
                     unconfirmed: unconfirmed, queued: depth()))
             let seq = try await deck.markShown(photoID: card.id, now: now)
             if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
@@ -827,8 +871,10 @@ public struct PhotoCache {
                 card: DeckCard(
                     id: card.id, uuid: card.uuid, sourceID: card.sourceID,
                     sourceUUID: card.sourceUUID, externalID: card.externalID,
-                    storage: card.storage, dealSeq: seq
+                    storage: card.storage, dealSeq: seq,
+                    originalFilename: card.originalFilename
                 ),
+                source: source,
                 url: url
             )
         }
@@ -873,7 +919,7 @@ public struct PhotoCache {
         guard (try? queue.remove(photoID: card.id)) == true else { return }
         log(
             .cacheDropped(
-                photo: card.externalID, source: card.sourceID, because: reason, queued: depth()))
+                photo: card.spokenName, source: card.sourceID, because: reason, queued: depth()))
     }
 
     private enum Waited {
@@ -911,7 +957,7 @@ public struct PhotoCache {
         }
         log(
             .skipped(
-                photo: card.externalID, source: card.sourceID,
+                photo: card.spokenName, source: card.sourceID,
                 because: "its bytes are gone", queued: depth()))
     }
 
@@ -946,6 +992,10 @@ public struct PhotoCache {
     public struct EvictionResult: Sendable, Equatable {
         public let evicted: Int
         public let bytesFreed: Int64
+        /// Whether free space was below `criticalFreeBytes`, so the pass aimed
+        /// at half the ceiling. Set whether or not anything was evicted: it
+        /// says what the pass was trying for, not what it took.
+        public var ceilingHalved: Bool = false
     }
 
     /// Photographs oldest-first by when anybody last had a reason to keep them.
@@ -1027,7 +1077,8 @@ public struct PhotoCache {
         // The disk-space guard evicts ahead of the ceiling, folded in as a lower
         // effective ceiling rather than as a second pass.
         let free = freeBytesOnVolume()
-        if free < settings.criticalFreeBytes {
+        let halved = free < settings.criticalFreeBytes
+        if halved {
             Log.cache.notice(
                 "evicting ahead of the ceiling: only \(free, privacy: .public) bytes free"
             )
@@ -1040,7 +1091,8 @@ public struct PhotoCache {
         // An evicted original is no longer servable, so it leaves the deck's
         // pool in the same breath as it leaves the disk.
         try releaseResidency(ofPhotos: result.releasedOriginals)
-        return EvictionResult(evicted: result.evicted, bytesFreed: result.bytesFreed)
+        return EvictionResult(
+            evicted: result.evicted, bytesFreed: result.bytesFreed, ceilingHalved: halved)
     }
 
     // MARK: - Clearing on purpose

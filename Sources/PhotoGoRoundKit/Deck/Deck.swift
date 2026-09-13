@@ -90,7 +90,8 @@ public struct Deck {
     public func card(photoID: Int64) throws -> DeckCard? {
         try database.first(
             """
-            SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage
+            SELECT p.id, p.uuid, p.source_id, s.uuid AS source_uuid, p.external_id, p.storage,
+                   p.original_filename
               FROM photo p JOIN source s ON s.id = p.source_id
              WHERE p.id = :id;
             """,
