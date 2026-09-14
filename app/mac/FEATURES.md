@@ -88,6 +88,7 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - The picture window's picker is separate work, done after this. Its design is under *The window's picker*.
 - *A menu bar app* — the picture window becomes something the app can show rather than the app itself. **Not built.**
   - **Probably the shipping form, 2026-09-10:** "The full desktop app is useful, but we are probably not going to ship it." See TODO.md, *A menu-bar app for shipping*.
+  - **Firmer, 2026-09-14:** "this app is a development playground for the settings, and to test. the real shipping app will need to be a menubar app that brings up the settings, and won't have its own window." So the picture window, and everything planned for it — *The window's picker*, *Navigation in the picture window* — is for development, not for shipping.
   - A status item, and an item that brings the window up.
   - **Deliberately unfinished.** What else belongs in that menu, whether the Dock icon goes with it, and what closing the last window means are all open.
 - *Later, in the same places* — the Display tab for timer duration and fit; going backwards through history. *For the screensaver and the wallpaper, timer duration is now* Time between pictures*. The picture window's is designed there too, under* The window's picker*.*
@@ -312,6 +313,8 @@ Coalescing needs no separate mechanism. The gate cannot open while a fetch is ou
 
 `advanceIntervalSeconds` would default to 0.5 and be parsed with a default and a clamp like every other key.
 
+**Changed 2026-09-14: it is a window setting and is not stored.** Syd: "yes, it's a window setting and not stored." That overrides the paragraph below about a preference domain of the app's own. **It stays a named setting**, not a bare constant, as Claude had proposed: "you can keep advanceintervalseconds."
+
 **It lives in a preference domain of the app's own, not the agent's.** The agent never reads it, and the agent's domain is a black box that clients neither read nor write — Syd, 2026-09-09, TODO.md's *Settings endpoints, and preferences as a black box*. An earlier version of this section put it in the agent's domain, so that `pgr_ctl set` could tune it and it would turn up in a `pgr_ctl get` listing as the one key the agent ignores; that is what changed. `UserDefaults.standard` is not the answer either, because the app's bundle identifier, `com.sydpolk.photogoround`, *is* the production agent's domain. So it follows the wallpaper's pattern — one domain per deployment, belonging to the app. The name is not decided.
 
 ## Building forwards so that backwards fits
@@ -386,21 +389,22 @@ If both were sandboxed, the source list would carry bookmark data rather than pa
 ### The window's picker, done after this phase
 
 - **Three ways to reach it:**
-  - a settings gear in the upper trailing corner, "transparent until the mouse moves over it (but visible)";
-  - a context menu anywhere in the window except the gear, with "PhotosGoRound Settings" (opens Settings, or brings it to the front) and "Window Settings";
-  - the View menu, holding only "Window Settings".
-- **Window Settings slides a sheet down from the top of the window** with the "Shuffle All" pop-up in it. It has no Done button, and it has a grab handle. A click anywhere else in the app dismisses it. The pop-up is live immediately.
+  - a settings gear in the upper trailing corner, "transparent until the mouse moves over it (but visible)". Syd, 2026-09-14, on what that means:
+    - "the gear is dimmed and transparent, but visibile (against the black background anyway; the picture may cause it to be not very visible, and that's ok)."
+    - "When the user hovers over it, the gear itself becomes opague, but the negative space is still transparent."
+    - "It about the same size as 48-point text is high, and should scale with text size accesibility settings."
+    - "and should be in the upper trailing corner with some margin." The margin is Claude's to pick when building, and Syd will judge it by eye.
+    - Clicking it "opens the sheet directly."
+    - **To check when building:** which macOS text-size setting a SwiftUI view can follow, and whether `@ScaledMetric` follows it on the Mac.
+  - a context menu anywhere in the window except the gear, with "Photo-Go-Round Settings" (opens Settings, or brings it to the front) and "Window Settings". Settled 2026-09-14: the app's name as it is spelled everywhere else, where he had written "PhotosGoRound", and no ellipsis on either — "get rid of the elipsis in both menu items", after first agreeing to one;
+  - the View menu, with "Window Settings" and Enter Full Screen. Syd, 2026-09-14: "keep Enter Full Screen. we are just removing tab support in the window, and replacing it with this window settings item." So the tab bar items go, because the window no longer supports tabs.
+- **Window Settings slides a sheet down from the top of the window** with the "Shuffle All" pop-up in it. The pop-up is live immediately.
+  - **A standard Mac sheet.** Syd, 2026-09-14: "let's do a standard mac sheet; with a Done button if we have to."
+  - **This replaces the sheet he first described**, which had no Done button, a grab handle that closed it when dragged up ("nothing else"), and a click anywhere else in the app to dismiss it. A standard sheet has neither a grab handle nor dismissal on an outside click. He chose the standard sheet over drawing one.
+  - **A Done button if closing needs one**, decided while building.
+- **A change counts from when the picture on screen appeared.** Syd, 2026-09-14: "change right away, counted from when the picture appeared." If a picture has been up forty seconds and the choice drops to thirty, it changes at once. A longer choice keeps it up until the new interval has passed since it appeared. The loop's wait therefore has to be interruptible, not a single sleep for the old interval.
 - **The window's interval starts at the screensaver's** and is never stored.
-- **To ask when this work starts:**
-  - whether "transparent (but visible)" means dimmed;
-  - whether the gear opens the sheet directly;
-  - how the app's name is spelled in the menu item;
-  - whether replacing the View menu may drop Enter Full Screen;
-  - what the grab handle does;
-  - whether a change cuts short the picture already up;
-  - whether `advanceIntervalSeconds` (*Advancing costs a card*) is also a window preference that is not stored.
-
-  One constraint goes with them: a standard Mac sheet has no grab handle and does not close on an outside click.
+- **Every question about it was answered on 2026-09-14.**
 
 ### Options in System Settings, later
 
@@ -417,7 +421,8 @@ If both were sandboxed, the source list would carry bookmark data rather than pa
 - A new window takes the screensaver's interval, and a window already open keeps its own copy when the screensaver's interval changes.
 - For the window work:
   - a change writes nothing;
-  - a running `Shuffle` accepts a new dwell.
+  - a running `Shuffle` given a shorter dwell than the picture has been up changes it at once;
+  - a running `Shuffle` given a longer dwell waits until that dwell has passed since the picture appeared.
 
   The gear, the menus, and the sheet are checked by looking at them.
 

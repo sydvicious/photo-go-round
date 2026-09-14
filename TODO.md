@@ -59,6 +59,21 @@ Syd, 2026-09-10: *"make a menubar app for final shipping of this. The full deskt
 - How it starts at login — a login item, or a per-user LaunchAgent like the agent — is open.
 - `app/mac/FEATURES.md` already sketches *A menu bar app* — a status item, and an item that brings the window up — and is where this starts.
 
+## A wallpaper bundle, so the wallpaper runs without the app
+
+Syd, 2026-09-14: *"we need a TODO in the app to setup a wallpaper bundle like the screensaver bundle so the wallpaper will work without the app running and so that the user can run it without running the app."*
+
+- **Already planned as `Wallpaper Plan.md` Phase 2, *Its own binary*, and not designed.** What is settled there: a per-user plist in `~/Library/LaunchAgents`, with the binary staying inside the app bundle, the same shape as the agent.
+- **"Like the screensaver bundle"** suggests the same pieces: an Xcode target, and a `Scripts/make-wallpaper-bundle.sh --install` beside `make-saver-bundle.sh` and `make-agent-bundle.sh`.
+- **The loop does not move.** `Wallpaper` is in `PhotoGoRoundDisplay` precisely so a second host is new code around it rather than a move; `AppDelegate` is the whole of the app's host today.
+- **Its settings already live where a separate process can read them.** The *Also set wallpapers* checkbox and the *Shuffle All* choice are in `com.sydpolk.photogoround.wallpaper.{dev|prod}`, not in the app's domain. The checkbox is to stay "until we have a standalone wallpaper binary" (`app/mac/FEATURES.md`, *Time between pictures*), so what the Wallpaper panel offers once this exists is open.
+- **Two hosts must never run the loop at once.** If the app and the bundle both run it, each display is asked for twice, and two cards are spent where one is shown. Handing the loop over has to be designed, not left to chance.
+- **Open, from `Wallpaper Plan.md`:**
+  - whether it is a bare executable or an `LSUIElement` bundle;
+  - whether it has a menu-bar item, which is where a pause control would go;
+  - how it is installed, updated, started, and stopped once quitting the app no longer stops the wallpaper;
+  - whether the menu-bar app (*A menu-bar app for shipping* above) hosts it instead.
+
 ## Metrics in the database
 
 Serve counts and timings belong in the deck, not only in the unified log. **Needs its own plan when it is picked up.**
