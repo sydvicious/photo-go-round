@@ -115,8 +115,8 @@ struct SourcesSettingsView: View {
 
     private var screensaverPanel: some View {
         Panel("Screensaver") {
-            shuffleAll(
-                Binding(
+            ShuffleAllRow(
+                selection: Binding(
                     get: { screensaverInterval },
                     set: { choice in
                         Log.sources.notice(
@@ -142,8 +142,8 @@ struct SourcesSettingsView: View {
                     .fill(Color(nsColor: .separatorColor))
                     .frame(height: 1)
                     .padding(.horizontal, 10)
-                shuffleAll(
-                    Binding(
+                ShuffleAllRow(
+                    selection: Binding(
                         get: { wallpaperInterval },
                         set: { choice in
                             Log.sources.notice(
@@ -156,30 +156,6 @@ struct SourcesSettingsView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    /// One *Shuffle All* row, drawn like System Settings' screen saver pane:
-    /// the title on the left, the choice and its chevrons on the right. Syd,
-    /// 2026-09-14: "The title should be "Shuffle All"", and "don't put in that
-    /// second line."
-    ///
-    /// **Applies as soon as it is chosen**, with no spinner — nothing here goes
-    /// to the agent.
-    private func shuffleAll(_ selection: Binding<ShuffleInterval>) -> some View {
-        HStack {
-            Text("Shuffle All")
-            Spacer(minLength: 12)
-            Picker("Shuffle All", selection: selection) {
-                ForEach(ShuffleInterval.allCases) { interval in
-                    Text(interval.title).tag(interval)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .fixedSize()
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
     }
 
     /// Syd, 2026-09-10: "a checkbox which says 'Also set wallpapers'."

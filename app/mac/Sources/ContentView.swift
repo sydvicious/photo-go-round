@@ -2,8 +2,9 @@ import PhotoGoRoundAgentAPI
 import PhotoGoRoundDisplay
 import SwiftUI
 
-/// The window's whole contents: the photograph, and the words that appear when
-/// there has never been one.
+/// The window's whole contents: the photograph, the words that appear when
+/// there has never been one, and the ways to reach Window Settings — the gear,
+/// the right-click menu, and the View menu through `WindowCommands`.
 struct ContentView: View {
     /// **The consumer name is the app's, and it is a parameter now.** The loop
     /// moved into `PhotoGoRoundDisplay` in Phase 2 of `Screensaver Plan.md` so
@@ -15,8 +16,20 @@ struct ContentView: View {
     /// screensaver internal when it is created, and it will stay there with its
     /// own copy of the setting even if the screensaver interval is changed." A
     /// window's preferences are never stored.
-    @State private var shuffle = Shuffle(
-        consumer: "app", dwell: ScreensaverPreferences(deployment: .development).interval.duration)
+    @State private var shuffle: Shuffle
+    /// This window's *Shuffle All*, changed from Window Settings and never
+    /// stored.
+    @State private var interval: ShuffleInterval
+    /// Whether the Window Settings sheet is up.
+    @State private var showingSettings = false
+
+    @Environment(\.openWindow) private var openWindow
+
+    init() {
+        let interval = ScreensaverPreferences(deployment: .development).interval
+        _interval = State(initialValue: interval)
+        _shuffle = State(initialValue: Shuffle(consumer: "app", dwell: interval.duration))
+    }
 
     /// The name, and what is wrong with it when something is.
     ///
@@ -61,7 +74,36 @@ struct ContentView: View {
                 // be looked at with a debugger attached.
                 EmptyStateDisplay(words: trouble.words, detail: trouble.detail)
             }
+
+            // **A layer of nothing, above the picture and the words, for the
+            // right-click menu to land on.** Both of those are AppKit views, and
+            // a right-click on one is not certain to reach a SwiftUI context
+            // menu.
+            Color.clear
+                .contentShape(.rect)
         }
+        .overlay(alignment: .topTrailing) {
+            SettingsGear { showingSettings = true }
+        }
+        // After the gear, so the gear has the menu too. Syd, 2026-09-14:
+        // "Right click anywhere in the window will invoke context menu, even
+        // the gear."
+        // With ellipses, which the View menu's item does not have: Syd,
+        // 2026-09-14, "Put the elipsis back for both items in the context menu."
+        .contextMenu {
+            Button("\(Bundle.main.displayName) Settings…") {
+                openWindow(id: SourcesSettingsView.windowID)
+            }
+            Button("Window Settings…") { showingSettings = true }
+        }
+        .sheet(isPresented: $showingSettings) {
+            WindowSettingsSheet(interval: $interval)
+        }
+        .onChange(of: interval) {
+            shuffle.setDwell(interval.duration)
+        }
+        // How the View menu's Window Settings finds this window's sheet.
+        .focusedSceneValue(\.windowSettings, $showingSettings)
         .background(.black)
         // **The window's own title, never over the picture.** Words on the
         // photograph would have to stay legible against whatever happens to be

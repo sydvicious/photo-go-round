@@ -40,11 +40,14 @@ struct PhotoGoRoundApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            // Window Settings, in the View menu, for the key window.
+            WindowCommands()
         }
-        // An ordinary title bar, and the photograph strictly below it. The
-        // controls are not allowed to sit on top of the picture — a window is
-        // not the screensaver, and chrome overlapping the image is the one
-        // thing this window must not do.
+        // An ordinary title bar, and the photograph strictly below it. **One
+        // control sits on the picture, since 2026-09-14:** the Window Settings
+        // gear, dimmed in the upper trailing corner, which Syd designed
+        // knowing it would sometimes all but vanish against a bright photograph.
+        // Nothing else goes there.
         //
         // Nothing bespoke about the presentation otherwise: the green button
         // and `toggleFullScreen:` are the whole of it, and full screen takes

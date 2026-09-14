@@ -80,12 +80,12 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - Re-read every two seconds while the box is open, because the agent takes a new port every launch.
   - With no port published it says "Photo-Go-Round Is Not Running", the picture window's words for the same condition. A preference domain that cannot be read says so, with the reason.
   - The dashboard itself is the agent's: `photogoroundd(1)`, *SERVICE → Dashboard*.
-- *Time between pictures* — how long each picture stays up, chosen in Settings: one pop-up for the screensaver, one for the wallpaper. **Built 2026-09-14**, apart from the picture window's picker. The tests pass. Syd, the same day, once it was running: "app is running and is looking great." And after using it: "I have changed the screensaver settings a couple of times, and created a new app window. things look great." **The log confirms the window's copy:** `panel: screensaver shuffle set to oneMinute` at 09:11:20, then a new window's `app: starting, each picture up for 60 seconds` at 09:11:29. **The screensaver was not exercised:** its last session ended at 08:48, before the build, and no `saver: shuffle interval` line exists yet. See *Time between pictures* below.
+- *Time between pictures* — how long each picture stays up, chosen in Settings: one pop-up for the screensaver, one for the wallpaper. **Done 2026-09-14.** Syd: "Please mark this feature as complete." The picture window's picker was built later the same day, as separate work. The tests pass. Syd, the same day, once it was running: "app is running and is looking great." And after using it: "I have changed the screensaver settings a couple of times, and created a new app window. things look great." **The log confirms the window's copy:** `panel: screensaver shuffle set to oneMinute` at 09:11:20, then a new window's `app: starting, each picture up for 60 seconds` at 09:11:29. **The screensaver was exercised once it was installed with `--install`:** see *Behaviour* in *Time between pictures* below.
   - Settings has three panels: Sources, with subpanels for Apple Photos, Google Photos (eventually), and files; Screensaver; and Wallpaper.
   - Screensaver and Wallpaper each hold a "Shuffle All" pop-up. Wallpaper also holds the *Also set wallpapers* checkbox, above the pop-up, until the wallpaper is a binary of its own.
   - The screensaver defaults to every ten seconds and the wallpaper to every hour.
   - A new picture window takes the screensaver's interval when it is created and keeps its own copy, even if the screensaver's interval changes later.
-  - The picture window's picker is separate work, done after this. Its design is under *The window's picker*.
+  - The picture window's picker was built after the rest, as separate work. See *The window's picker*.
 - *A menu bar app* — the picture window becomes something the app can show rather than the app itself. **Not built.**
   - **Probably the shipping form, 2026-09-10:** "The full desktop app is useful, but we are probably not going to ship it." See TODO.md, *A menu-bar app for shipping*.
   - **Firmer, 2026-09-14:** "this app is a development playground for the settings, and to test. the real shipping app will need to be a menubar app that brings up the settings, and won't have its own window." So the picture window, and everything planned for it — *The window's picker*, *Navigation in the picture window* — is for development, not for shipping.
@@ -343,7 +343,7 @@ If both were sandboxed, the source list would carry bookmark data rather than pa
 
 ## Time between pictures
 
-**Built 2026-09-14**, except *The window's picker* and *Options in System Settings, later*. Decided with Syd the same day.
+**Done 2026-09-14**, including *The window's picker*. *Options in System Settings, later* is not built. Decided with Syd the same day.
 
 ### The Settings window
 
@@ -386,18 +386,27 @@ If both were sandboxed, the source list would carry bookmark data rather than pa
 
     **Whether a flush would remove the delay is unmeasured.** A probe the same day wrote to path-named domains in a scratch directory. The file carried the new value immediately, with no flush, with `synchronize()`, and with `CFPreferencesAppSynchronize` alike, so the probe could not reproduce the lag. Only a dotted domain under `~/Library/Preferences`, the real case, has shown it.
 
-### The window's picker, done after this phase
+### The window's picker
+
+**Done 2026-09-14, after the rest of the phase.** Syd, having used it: "this works well. pretty much." After the corrections recorded below: "looks good." **Choices Claude made while building**, none of which he changed:
+
+- **The gear:** white at 35% opacity at rest, with a 12-point margin from the corner that scales with it. The margin was 16 while the gear was 48 points.
+- **The right-click menu:** on a transparent SwiftUI layer over the picture, not on the picture itself. The picture and the empty state are AppKit views, and a right-click on one is not certain to reach a SwiftUI menu.
+- **The sheet:** it has a Done button, because a standard sheet has no other way to close.
+- **Tabs:** removed with `NSWindow.allowsAutomaticWindowTabbing = false`, set before the first window.
 
 - **Three ways to reach it:**
   - a settings gear in the upper trailing corner, "transparent until the mouse moves over it (but visible)". Syd, 2026-09-14, on what that means:
     - "the gear is dimmed and transparent, but visibile (against the black background anyway; the picture may cause it to be not very visible, and that's ok)."
     - "When the user hovers over it, the gear itself becomes opague, but the negative space is still transparent."
-    - "It about the same size as 48-point text is high, and should scale with text size accesibility settings."
+    - "It about the same size as 48-point text is high, and should scale with text size accesibility settings." **Changed once it was built:** "The gear is too big; make it based on 24-point text."
     - "and should be in the upper trailing corner with some margin." The margin is Claude's to pick when building, and Syd will judge it by eye.
     - Clicking it "opens the sheet directly."
-    - **To check when building:** which macOS text-size setting a SwiftUI view can follow, and whether `@ScaledMetric` follows it on the Mac.
-  - a context menu anywhere in the window except the gear, with "Photo-Go-Round Settings" (opens Settings, or brings it to the front) and "Window Settings". Settled 2026-09-14: the app's name as it is spelled everywhere else, where he had written "PhotosGoRound", and no ellipsis on either — "get rid of the elipsis in both menu items", after first agreeing to one;
-  - the View menu, with "Window Settings" and Enter Full Screen. Syd, 2026-09-14: "keep Enter Full Screen. we are just removing tab support in the window, and replacing it with this window settings item." So the tab bar items go, because the window no longer supports tabs.
+    - **Still unchecked when the feature was marked done:** which macOS text-size setting a SwiftUI view can follow. The gear uses `@ScaledMetric(relativeTo: .title)`, and whether the Mac's setting reaches it has not been tried.
+  - a context menu anywhere in the window, the gear included — **changed 2026-09-14**, Syd: "Right click anywhere in the window will invoke context menu, even the gear," correcting the gear's first exclusion — with "Photo-Go-Round Settings…" (opens Settings, or brings it to the front) and "Window Settings…". Settled 2026-09-14: the app's name as it is spelled everywhere else, where he had written "PhotosGoRound". The ellipses went in, came out ("get rid of the elipsis in both menu items"), and went back once he had used it: "Put the elipsis back for both items in the context menu." The View menu's item has none;
+  - the View menu, with "Window Settings" and Enter Full Screen. Syd, 2026-09-14: "keep Enter Full Screen. we are just removing tab support in the window, and replacing it with this window settings item." So the tab bar items go, because the window no longer supports tabs. **Wrong in the first build, and fixed the same day.** Syd: "The view menu doesn't work quite right; there is no divider and Enter Full Screen item." The cause is unmeasured: turning tabbing off, or SwiftUI rebuilding the View menu around its item, are both candidates. The app logs the View menu's items at launch and whenever the menu bar opens, prefixed `menu:`.
+    - **The next run had it**, and the log showed when it arrives. At launch, 09:51:58, the View menu held only `Window Settings`. When the menu bar was opened, 09:52:05, it held `Window Settings [menuAction:], Enter Full Screen [toggleFullScreen:]`. So AppKit adds the item after launch, and tabbing being off does not stop it. Why the earlier run showed none is unexplained.
+    - **A separator between the two**, after Syd saw it: "that's better, but it needs a separator." A `Divider()` after Window Settings.
 - **Window Settings slides a sheet down from the top of the window** with the "Shuffle All" pop-up in it. The pop-up is live immediately.
   - **A standard Mac sheet.** Syd, 2026-09-14: "let's do a standard mac sheet; with a Done button if we have to."
   - **This replaces the sheet he first described**, which had no Done button, a grab handle that closed it when dragged up ("nothing else"), and a click anywhere else in the app to dismiss it. A standard sheet has neither a grab handle nor dismissal on an outside click. He chose the standard sheet over drawing one.
@@ -438,12 +447,12 @@ None of these has been edited.
 - **`Screensaver Plan.md`:** *Whether the dwell becomes a preference*.
 - **`PLAN.md`:**
   - *Everything user-settable is a user default*, held back to Beyond 0.1;
-  - for the window work, *Showing unavailability*, which the gear sits against.
+  - *Showing unavailability*, which the gear sits against.
 - **This document:**
   - *Sources in Settings* and *Two panels, because there is one Photos library*, which are now subpanels of one Sources panel;
   - *Sources by kind, in sections*, on where Google Photos goes;
-  - for the window work, *Chevrons on the photograph*, whose exception was argued for a control that vanishes.
-- **In code:** `PhotoGoRoundApp`'s "chrome overlapping the image is the one thing this window must not do", for the window work. `Shuffle.defaultDwell` and `SourcesSettingsView`'s "Not in a panel of its own" went in the build.
+  - *Chevrons on the photograph*, whose exception was argued for a control that vanishes.
+- **In code:** `PhotoGoRoundApp`'s "chrome overlapping the image is the one thing this window must not do" was rewritten when the gear was built. `Shuffle.defaultDwell` and `SourcesSettingsView`'s "Not in a panel of its own" went in the first build.
 
 ## Captured, not designed
 

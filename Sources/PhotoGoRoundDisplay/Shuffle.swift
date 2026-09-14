@@ -161,8 +161,9 @@ public final class Shuffle {
     /// made. The screensaver hands in a read of its *Shuffle All* preference:
     /// its host outlives a session and a `Shuffle` is stopped rather than
     /// discarded, so a value captured once would keep an old choice until
-    /// `legacyScreenSaver` exits. A window hands in a copy — see `ContentView`.
-    private let dwell: @MainActor () -> Duration
+    /// `legacyScreenSaver` exits. A window hands in its own value, and changes
+    /// it with `setDwell`.
+    @ObservationIgnored private var dwell: @MainActor () -> Duration
     private let whenEmpty: Duration
     private let whenAbsent: Duration
     /// The size the view is about to draw at, in pixels. Nothing is asked for
@@ -174,6 +175,11 @@ public final class Shuffle {
     /// the agent says, including a failure — a streak is *consecutive* empties
     /// or it is not a streak.
     private var emptyAnswers = 0
+    /// When the picture on screen appeared, which is what its dwell counts from.
+    @ObservationIgnored private var appearedAt: ContinuousClock.Instant?
+    /// The sleep the loop is in while a picture dwells, held so `setDwell` can
+    /// wake the loop without ending it.
+    @ObservationIgnored private var pause: Task<Void, Never>?
 
     public init(
         source: PictureSource,
@@ -225,6 +231,41 @@ public final class Shuffle {
     /// How long the next picture will stay up, as things stand.
     var currentDwell: Duration { dwell() }
 
+    /// A new dwell for a loop that may already be running: the window's
+    /// Window Settings sheet.
+    ///
+    /// **The picture on screen is held to it at once.** Syd, 2026-09-14:
+    /// "change right away, counted from when the picture appeared." A dwell
+    /// shorter than the picture has already been up changes it now; a longer
+    /// one keeps it until the new dwell has passed since it appeared.
+    public func setDwell(_ duration: Duration) {
+        dwell = { duration }
+        Log.deck.notice(
+            "\(self.consumer, privacy: .public): each picture now up for \(duration.spokenSeconds, privacy: .public)")
+        pause?.cancel()
+    }
+
+    /// Waits until the picture on screen has been up for the dwell, **counted
+    /// from when it appeared**, and works it out again whenever `setDwell`
+    /// wakes it. The sleep is a task of its own for exactly that: cancelling it
+    /// ends the wait and leaves the loop running.
+    private func dwellOnPicture() async {
+        while !Task.isCancelled, let appearedAt {
+            let remaining = appearedAt + dwell() - ContinuousClock.now
+            guard remaining > .zero else { return }
+            let pause = Task { _ = try? await Task.sleep(for: remaining) }
+            self.pause = pause
+            // `stop` cancels the loop, and the handler passes that on to the
+            // sleep — or a stopped loop would sit out the rest of an hour's
+            // dwell, and a restart would run beside it.
+            await withTaskCancellationHandler {
+                await pause.value
+            } onCancel: {
+                pause.cancel()
+            }
+        }
+    }
+
     /// The view saying how big it is, in pixels, and which display it is on.
     ///
     /// Asking at the size actually being drawn is the whole point of the
@@ -268,15 +309,25 @@ public final class Shuffle {
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let wait = await self.advance()
-                try? await Task.sleep(for: wait)
+                switch await self.advance() {
+                case .fixed(let wait): try? await Task.sleep(for: wait)
+                case .dwell: await self.dwellOnPicture()
+                }
             }
         }
     }
 
-    /// One picture, and how long to wait before the next.
-    private func advance() async -> Duration {
-        guard let box else { return whenEmpty }
+    /// What the loop waits for after one ask.
+    private enum Wait {
+        /// A picture went up: until it has been up for the dwell.
+        case dwell
+        /// Nothing went up: a fixed pause before asking again.
+        case fixed(Duration)
+    }
+
+    /// One picture, and what to wait for before the next.
+    private func advance() async -> Wait {
+        guard let box else { return .fixed(whenEmpty) }
         do {
             guard let picture = try await source.next(
                 consumer: consumer, displayID: displayID, fitting: box)
@@ -287,7 +338,7 @@ public final class Shuffle {
                 // answering again; it is the agent saying it has nothing, and
                 // whatever was already up stays up and keeps its words.
                 if emptyAnswers >= Self.emptyAnswersBeforeSaying { note(.noPhotos) }
-                return whenEmpty
+                return .fixed(whenEmpty)
             }
             emptyAnswers = 0
             guard let image = await Self.decode(picture.data) else {
@@ -295,19 +346,20 @@ public final class Shuffle {
                 // retires it after three tries; this is the same failure on
                 // our side of the wire, and the answer is the same — ask for
                 // another rather than show nothing.
-                return Self.whenUndecodable
+                return .fixed(Self.whenUndecodable)
             }
             shown = Frame(image: image, picture: picture)
+            appearedAt = .now
             note(nil)
-            return dwell()
+            return .dwell
         } catch let failure as PictureClient.Failure {
             emptyAnswers = 0
             note(Self.trouble(from: failure))
-            return whenAbsent
+            return .fixed(whenAbsent)
         } catch {
             emptyAnswers = 0
             note(.noAgent(error.localizedDescription))
-            return whenAbsent
+            return .fixed(whenAbsent)
         }
     }
 

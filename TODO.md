@@ -84,6 +84,16 @@ Serve counts and timings belong in the deck, not only in the unified log. **Need
 - Worth recording: serves per consumer per interval, latency, cache hit or miss, non-200s, and what the queue depth was at the time.
 - **The cost is a migration and a write on the serve path**, which is the hot path — 3,034 serves in nine hours from one surface, and every surface shares it.
 
+## The dashboard over HTTPS
+
+Syd, 2026-09-14: *"add a TODO item to have the dashboard accessible via https"*. Nothing is designed. `PLAN.md`, *The agent's dashboard*, is what exists.
+
+- **The listener is loopback only, and that is marked settled.** `HTTPListener.start` sets `requiredInterfaceType = .loopback`, because "nothing off this machine has any reason to reach this listener." Loopback traffic never leaves the machine, so HTTPS there protects nothing on the wire. **So first decide what this is for.** If it is to reach the dashboard from another machine, that reverses the loopback decision, and the reversal gets recorded in `PLAN.md`.
+- **One listener serves everything.** The dashboard's routes sit beside `/v1/next`, the source routes, and `/v2/photos`. Either TLS covers every client, and `PictureClient`, `pgr_ctl`'s `InspectCommands`, and the screensaver's port discovery all change, or the dashboard gets a second listener of its own.
+- **The certificate is the hard part.** `NWProtocolTLS.Options` needs a `sec_identity`. A self-signed one gets a browser warning unless it is trusted in the keychain, and the agent takes a new port on every launch. Where the identity comes from, where it is stored per deployment, and who trusts it are all open.
+- **Anything off the machine needs authentication too.** The same listener accepts `POST`, `PATCH`, and `DELETE` on sources. Encryption alone would let anyone on the network change them.
+- The About box builds its link as `http://localhost:<port>/dashboard` (`DashboardLink`, pinned by `DashboardLinkTests`), and the agent prints the same address at launch. Both follow whatever is decided.
+
 ## Settings endpoints, and preferences as a black box
 
 The agent should answer for its own configuration over HTTP, and its preference domain should stop being something clients read or write. Syd, 2026-09-09: *"We need to add settings endpoints anyway; the agent's preferences should be a black box."* **Needs its own plan.**

@@ -335,4 +335,55 @@ struct ShuffleTests {
 
         #expect(shuffle.trouble == nil)
     }
+
+    // MARK: - Changing the dwell
+
+    private static func shuffle(_ source: some PictureSource, dwell: Duration) -> Shuffle {
+        Shuffle(
+            source: source, consumer: "test", dwell: dwell,
+            whenEmpty: .milliseconds(20), whenAbsent: .milliseconds(20))
+    }
+
+    /// Syd, 2026-09-14: "change right away, counted from when the picture
+    /// appeared."
+    @Test("A dwell shorter than the picture has been up changes it at once")
+    func shorterDwellChangesAtOnce() async throws {
+        let source = Stub(.picture(try Self.onePixelPNG()))
+        let shuffle = Self.shuffle(source, dwell: .seconds(600))
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.shown != nil }, "a first picture")
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(source.callCount == 1)
+
+        shuffle.setDwell(.milliseconds(20))
+        try await Self.until({ source.callCount > 1 }, "the next picture", within: .seconds(2))
+    }
+
+    @Test("A new dwell counts from when the picture appeared, not from the change")
+    func dwellCountsFromAppearance() async throws {
+        let source = Stub(.picture(try Self.onePixelPNG()))
+        let shuffle = Self.shuffle(source, dwell: .seconds(600))
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.shown != nil }, "a first picture")
+        try await Task.sleep(for: .milliseconds(700))
+
+        // A second from the appearance is about 300 ms away. Counted from the
+        // change it would be a full second.
+        let changed = ContinuousClock.now
+        shuffle.setDwell(.seconds(1))
+        try await Self.until({ source.callCount > 1 }, "the next picture", within: .seconds(3))
+        #expect(ContinuousClock.now - changed < .milliseconds(850), "the dwell was counted from the change")
+    }
+
+    @Test("A longer dwell keeps the picture until it has passed since the picture appeared")
+    func longerDwellKeepsThePicture() async throws {
+        let source = Stub(.picture(try Self.onePixelPNG()))
+        let shuffle = Self.shuffle(source, dwell: .seconds(1))
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.shown != nil }, "a first picture")
+        shuffle.setDwell(.seconds(600))
+
+        try await Task.sleep(for: .milliseconds(1500))
+        #expect(source.callCount == 1, "the old dwell ended the picture")
+    }
 }
