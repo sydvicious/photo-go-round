@@ -197,7 +197,7 @@ Each phase carries its own spike rather than front-loading them all, so the firs
   - **Web services for managing sources — built**: `GET`, `POST`, `PATCH`, and `DELETE /v1/sources` on the agent, so a client can list, add, reconfigure, and remove without opening the database. See *The database is private to the service*.
   - **UI for managing them in the app — built**: a Settings panel showing what is configured with its counts and state, pickers to add, and buttons to remove and to reconfigure. See `app/mac/FEATURES.md`.
   - Diagnostic panels accrete later, as the phases that need them arrive — not in Phase 3. **The one diagnostic surface that did arrive in Phase 3 is the agent's dashboard**, a page the agent serves rather than a panel in the app.
-  - **The agent's dashboard — built 2026-09-12, not yet run against a live agent.** A page the agent serves at `/dashboard`, redrawn every second: the last picture served with its name and source, photos in the database and the cache, cache bytes against the ceiling, the queue against `queueSize`, pictures served since launch, cache lookups on the serve side and the fetch side, cache evictions, and agent errors grouped by kind. Linked from the app's About box. See *The agent's dashboard*.
+  - **The agent's dashboard — built 2026-09-12, not yet run against a live agent.** A page the agent serves at `/dashboard`, redrawn every second: the last picture served with its name and source, photos in the database with those added and removed by source since launch, photos in the cache, cache bytes against the ceiling, the queue against `queueSize`, pictures served since launch, cache lookups on the serve side and the fetch side, cache evictions, and agent errors grouped by kind — each gone a minute after it stops, unless it is a standing condition. Linked from the app's About box. See *The agent's dashboard*.
   - **The app's own features have their own plan**: `app/mac/FEATURES.md`, starting with a Settings panel that adds and removes sources. That reverses *The Mac app as instrument panel*'s "it manages no sources", and the reversal is argued there rather than here.
 - **Phase 4 — deferred past 1.0.** iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
 - **Phase 5 — deferred past 1.0.** iOS widget: WidgetKit extension sharing an App Group container, serving from the queue in the timeline provider.
@@ -2011,7 +2011,7 @@ GET /v1/dashboard                          what the page shows, as JSON
 GET /v1/dashboard/thumbnail?photo=<id>     a small JPEG of one photograph
 ```
 
-What was asked for: a thumbnail of the last image served; how many pictures are in the database; how many are in the cache; disk space in the cache against the cache size; pictures served since launch, from wallpaper, screensaver, and app; any error messages consistently reported. Then, as it was being built: updated in real time; cache hits and misses since launch; the numbers following changed preferences; a caption naming the source and file; that name in the logs and available to the app; and a link in the About box. On 2026-09-13: cache evictions, and cache hits and misses on the fetch side as well as the serve side. The man page's *SERVICE → Dashboard* is the reference for the JSON.
+What was asked for: a thumbnail of the last image served; how many pictures are in the database; how many are in the cache; disk space in the cache against the cache size; pictures served since launch, from wallpaper, screensaver, and app; any error messages consistently reported. Then, as it was being built: updated in real time; cache hits and misses since launch; the numbers following changed preferences; a caption naming the source and file; that name in the logs and available to the app; and a link in the About box. On 2026-09-13: cache evictions, and cache hits and misses on the fetch side as well as the serve side; then photographs added and removed since launch, by source, in the database panel; the error messages behind failed fetches; and errors taken off the panel a minute after they stop, with standing conditions kept until they clear. The man page's *SERVICE → Dashboard* is the reference for the JSON.
 
 ### Why the agent serves it
 
@@ -2029,7 +2029,7 @@ What was asked for: a thumbnail of the last image served; how many pictures are 
 
 ### Since launch, in memory
 
-**Served counts, cache lookups on both sides, evictions, the last picture, and the error record are all in memory and gone at exit.** "Since launch" is the question; a count that survived a restart would answer a different one, and `photo.times_delivered` is already the durable per-photograph record.
+**Served counts, photographs added and removed, cache lookups on both sides, evictions, the last picture, and the error record are all in memory and gone at exit.** "Since launch" is the question; a count that survived a restart would answer a different one, and `photo.times_delivered` is already the durable per-photograph record.
 
 **Served is counted per `consumer` as named, and only on a `200`.** `cli` and `anonymous` are counted beside wallpaper, screensaver, and app, because a total that left them out would disagree with the console. The count is taken in `PictureEndpoint.report`, which every request already passes through exactly once, so it cannot drift from the request log.
 
@@ -2060,6 +2060,17 @@ The kit reports serve lookups through `PhotoCache.lookedUp`, a closure that does
 - **The agent's own passes only.** `pgr_ctl cache evict` and `cache clear` run in another process and are not seen; bytes that left because their photograph or source left the library are not evictions.
 - **A pass that evicted nothing is not counted**, and does not move the last-eviction time.
 
+### Added and removed, by source
+
+**Asked for on 2026-09-13**: in the photos-in-the-database panel, the total number of photographs added or removed since launch, broken down by source. The panel keeps its total and gains a row per source that has changed, `+added −removed`, with a total row; the JSON field is `libraryChanges`.
+
+- **Counted where the rows are written, not where a change is noticed.** A photograph enters `photo` one way, a refresh's upsert, and leaves it four: a refresh that no longer finds it, a fetch whose source confirms it gone, a serve whose source confirms it gone, and its source being removed. The first three all go through `PhotoPool`, and the fourth is a cascade from `SourceStore.remove(id:)`, so that is where `LibraryChanges` is told — a fifth way of noticing a change is counted without anybody remembering to.
+- **Told after the transaction commits**, so a batch that rolled back is not counted. A source's photographs are counted and deleted in one transaction, so a refresh landing a batch between the two cannot be deleted uncounted.
+- **Counted as events rather than derived** from `added_at` and a per-source count taken at launch. The derivation drifts from nothing, but a photograph added and removed in the same run would have been in neither number.
+- **A photograph already in the library through another source is not added**, because its row is not written.
+- **A removed source keeps its name**, taken from its row as it goes, and is marked removed. The rest are named as they are called now.
+- **`LibraryChanges` is in the kit, and shared**, like `AgentErrors`, because a `PhotoPool` is made per connection all over the agent; only `RunCommand.run` starts it recording. `pgr_ctl` writes the same tables from another process and is not seen.
+
 ### Preferences are followed, and the one that does not exist
 
 **A changed `cacheByteCeiling` or `queueSize` is in the next reading.** `Preferences` keeps no copy, and the dashboard builds its `PhotoCache` from the current values on every poll. How soon after a write is `cfprefsd`'s business: at once after the doorbell, within the agent loop's thirty-second re-read after a bare `defaults write`. **The cache itself shrinks to a lowered ceiling only at the next maintenance pass**, so the page can read over a hundred per cent until then, which is true rather than a fault.
@@ -2088,9 +2099,28 @@ The kit reports serve lookups through `PhotoCache.lookedUp`, a closure that does
 - **A kind about one source ends in its row id**, because a source that keeps failing is what somebody opening this page is looking for.
 - **An event reported both ways is recorded once.** A failed request's red line is left unrecorded, since the error logged where the failure happened records it; a photograph retired by a render failure is recorded as `serve.photo-retired` and not also as `serve.render-failed`; the listener's failure is recorded by its alert, whose words its log record repeats.
 - **A disabled source is red at launch and is not an error**, so it is not recorded; an unavailable one is.
-- **At most a hundred kinds**, the one seen longest ago giving way — bounded memory against a flood of unclassified lines.
+- **At most a hundred kinds**, the error seen longest ago giving way — bounded memory against a flood of unclassified lines. Since 2026-09-13 a standing condition gives way only when no other row is left.
 - **Recording happens in the agent only.** `RunCommand.run` starts it and attaches `Console.recordAlerts`. `pgr_ctl`, the app, and the screensaver log the same kit errors and keep them nowhere; the wallpaper's three errors, which run in the app, are not recorded at all.
 - **The error text did not change.** Every error-level record these sites replaced already marked each of its values `.public`, so `Logger.error(kind:_:into:)` logs the same words it was logging; the difference is that they are a `String` the record can keep.
+
+**Errors leave when they stop, since 2026-09-13.** Syd: "if an error clears after a minute, remove it from that panel". Until then every row stayed for the whole run, and the panel said *since launch*; it is now *Agent errors*.
+
+- **An error leaves a minute after it last happened.** Happening again restarts the minute; happening after it has left is a new row, counted from one.
+- **A standing condition stays until it clears.** Asked when the one-minute rule was put to him against the conditions it would have got wrong — Syd: "keep standing conditions until they clear". Three are standing:
+  - `source.unavailable`, **recorded at every refresh that finds the source unavailable and cleared by the first that does not.** It was recorded on the transition alone, and still only the transition is red on the console; heard only at the transition, a source already unavailable when the agent launched would never have appeared, and one that went away would have left after a minute.
+  - `source.empty`, cleared by the first scan that finds photographs or cannot reach the source. It is reported every scan, so under the minute rule it would have shown for one minute in five.
+  - `source.paused`, standing until its pause ends, the time the bench gave it. The pause has an end, so nothing has to clear it.
+- **A removed source's standing conditions are cleared with it**, in `SourceStore.remove(id:)`, since nothing will ever report it available or not empty again.
+- **So are a disabled source's, decided 2026-09-13.** Disabled sources are not refreshed, so a condition recorded before the source was disabled would have stood until it was re-enabled or removed; it was built that way first and put to Syd, who said to clear them when a source is disabled. Re-enabled, its next refresh finds them again if they still hold.
+  - **Cleared in two places, because one would miss `pgr_ctl`.** `SourceStore.setEnabled` clears them when the agent disables a source — from the app, or reconciling after a `defaults write`. `pgr_ctl` disables by reconciling in its own process, against its own error record, so when the agent next reconciles the row is already disabled and `setEnabled` never runs there. Every refresh pass therefore also clears the conditions of the disabled sources it skips, through `Reporter.skipped`.
+- **A standing row says how long**, "standing since", and its end time when it has one; an event says how often and how lately. `firstSeen` is when this run first found the condition, not when it began.
+
+**Failed fetches were not recorded at all, and are now `cache.fetch-failed`.** Syd, the same day, having seen 125 in the fetch panel: he wanted the error messages for them in the errors panel.
+
+- **Why they were missing**: a failed fetch's console line is deliberately not red — a volume that is not mounted is the ordinary shape of a library on removable storage — and only red lines were recorded. Timeouts were, and so was a fetch that landed and could not be kept.
+- **Every way a fetch comes to nothing now has words.** Several answered a bare `false` — the source disabled or gone, no provider, the volume at its floor, the photograph gone from the library — and were counted as failed with nothing said anywhere. `PhotoCache.fetch` answers `FetchAnswer`, `.landed` or `.failed(because:)`, and says the reason on the console; a provider's error gains that the source confirmed the photograph gone, when it did.
+- **Recorded by the fetch lane in `RunCommand`, not where the fetch failed.** Only the lane knows whether anybody was still waiting: a fetch given up on is already `cache.timed-out`, and recording its later failure too would have made one fetch two rows. So each `cache.fetch-failed` is one of the fetches counted in `fetchLookups.failed`, and nothing else is.
+- **`cache.could-not-keep` went into it.** That failure was recorded where it happened and would now have been recorded twice; it is logged there and recorded by the lane like the rest.
 
 ### What this revised, elsewhere in this document
 
@@ -2134,7 +2164,7 @@ Details that decide whether the logs are useful a week later:
 
 - **Level determines persistence, so choose deliberately.** `.debug` is memory-only and gone by the time you look; `.info` persists only when the subsystem is being actively collected. State transitions worth reconstructing after the fact — source became unavailable, cache cleared, library switch detected, preference changed, wallpaper reasserted — must be `.notice` or higher, or they will not be there.
 - **Privacy annotations are on by default, and that is correct here.** Interpolated values are redacted as `<private>` unless marked `.public`. File paths, photo filenames, and album names are the user's business and stay private. Structural values — source ids, counts, durations, error codes, deal ordinals — are marked public, because a log full of `<private>` is not a log. **Amended 2026-09-12:** the agent's record of a served picture carries the photograph's name and its source's name publicly, at Syd's direction, because an installed agent's unified log is the only log it has. The queue's `SERVE:`, `CACHE:`, and `DEAL:` lines were already logged public whole, names included, so this bullet had not been true of them.
-- **Errors are also recorded in memory, by kind, for the dashboard.** In the agent only; see *The error record*.
+- **Errors are also recorded in memory, by kind, for the dashboard**, kept a minute after they stop or, for a standing condition, until it clears. In the agent only; see *The error record*.
 - **Structured means fields, not prose.** Consistent event names with consistent keys, so `log show --predicate` can filter on them. "Materialized 10 photos in 4.2s for source 3" is a sentence; the same thing with stable keys is queryable.
 - **`OSSignposter` for intervals**, not log lines: decode-to-display time, fetch duration, refresh duration, serve latency. These are the numbers the Phase 2 measurements need, and signposts make them readable in Instruments without building a benchmark harness. **Only two are built**: `migration` and `refresh`. Decode, fetch, and serve are not signposted; the request log carries serve latency instead.
 - **`pgr_ctl log`** wraps `log show --predicate 'subsystem == "com.sydpolk.photogoround"'` with sensible defaults and a `--follow` mode, because nobody should have to remember predicate syntax to see what the server is doing.

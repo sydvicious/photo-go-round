@@ -85,17 +85,24 @@ public struct SourceStore {
     /// silent.
     public let bytes: PhotoStore?
 
+    /// The agent's error record, whose standing conditions about a source are
+    /// cleared when the source is removed. The shared one everywhere; a test
+    /// hands in its own.
+    public var errors: AgentErrors = .shared
+
     private let providers: [SourceKind: any SourceProvider]
 
+    /// `changes` is where the pool counts what it adds and removes.
     public init(
         database: Database,
         fileAccess: any FileAccess = UnsandboxedFileAccess(),
         providers: [any SourceProvider],
-        bytes: PhotoStore? = nil
+        bytes: PhotoStore? = nil,
+        changes: LibraryChanges = .shared
     ) {
         self.database = database
         self.fileAccess = fileAccess
-        self.pool = PhotoPool(database: database)
+        self.pool = PhotoPool(database: database, changes: changes)
         self.bytes = bytes
         self.providers = Dictionary(uniqueKeysWithValues: providers.map { ($0.kind, $0) })
     }
@@ -113,7 +120,8 @@ public struct SourceStore {
     public init(
         database: Database,
         fileAccess: any FileAccess = UnsandboxedFileAccess(),
-        bytes: PhotoStore? = nil
+        bytes: PhotoStore? = nil,
+        changes: LibraryChanges = .shared
     ) {
         self.init(
             database: database,
@@ -124,7 +132,8 @@ public struct SourceStore {
                 PhotosCollectionSourceProvider(
                     library: BoundedPhotoLibrary(SystemPhotoLibrary())),
             ],
-            bytes: bytes
+            bytes: bytes,
+            changes: changes
         )
     }
 
@@ -231,6 +240,10 @@ public struct SourceStore {
         Log.sources.notice(
             "source \(sourceID, privacy: .public) \(enabled ? "enabled" : "disabled", privacy: .public)"
         )
+        // A disabled source is not refreshed or fetched from, so nothing would
+        // ever report its conditions over. Syd, 2026-09-13: clear them when a
+        // source is disabled. Re-enabled, its next refresh finds them again.
+        if !enabled { errors.clearStanding(source: sourceID) }
     }
 
     /// Removes a source and everything that came from it: the row, its
@@ -245,10 +258,21 @@ public struct SourceStore {
     /// *source* is touched: removal is not deletion.
     @discardableResult
     public func remove(id: Int64) throws -> Int64 {
-        let uuid = try database.scalarString(
-            "SELECT uuid FROM source WHERE id = :id;", ["id": .int(id)])
-        try database.run("DELETE FROM source WHERE id = :id;", ["id": .int(id)])
-        let freed = uuid.map { bytes?.removeSource($0) ?? 0 } ?? 0
+        // Read before the row goes, and in the same transaction as the delete:
+        // the cascade takes the photographs with it, so afterwards there is
+        // nothing left to count or to name, and a refresh landing a batch in
+        // between would be deleted without being counted.
+        let (gone, photos) = try database.transaction(.immediate) {
+            let gone = try source(id: id)
+            let photos = try pool.size(forSource: id)
+            try database.run("DELETE FROM source WHERE id = :id;", ["id": .int(id)])
+            return (gone, photos)
+        }
+        let freed = gone.map { bytes?.removeSource($0.uuid) ?? 0 } ?? 0
+        if let gone {
+            pool.changes.sourceRemoved(gone, photos: photos)
+            errors.clearStanding(source: id)
+        }
         Log.sources.notice(
             "removed source \(id, privacy: .public), freeing \(freed, privacy: .public) bytes")
         return freed

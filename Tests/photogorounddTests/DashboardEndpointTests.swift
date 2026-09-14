@@ -33,6 +33,8 @@ struct DashboardEndpointTests {
         let served = Collector()
         /// Its own, so what another test records never shows up here.
         let errors = AgentErrors(recording: true)
+        /// Its own, and the one the sources count into, for the same reason.
+        let changes = LibraryChanges(recording: true)
 
         init(photographs: Int = 0) throws {
             directory = URL.temporaryDirectory.appending(path: "pgr-dash-\(UUID().uuidString)")
@@ -45,7 +47,7 @@ struct DashboardEndpointTests {
             let path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
             let database = try Database(path: path)
             try Migrator.migrate(database)
-            sources = SourceStore(database: database)
+            sources = SourceStore(database: database, changes: changes)
 
             let cacheRoot = directory.appending(path: "cache")
             let store = PhotoStore(root: cacheRoot)
@@ -62,7 +64,7 @@ struct DashboardEndpointTests {
             self.pictures = pictures
             dashboard = DashboardEndpoint(
                 databasePath: path, cacheRoot: cacheRoot, preferences: preferences,
-                store: store, tally: tally, errors: errors)
+                store: store, tally: tally, errors: errors, changes: changes)
         }
 
         deinit { try? FileManager.default.removeItem(at: directory) }
@@ -227,6 +229,7 @@ struct DashboardEndpointTests {
         let snapshot = try await library.snapshot()
 
         #expect(snapshot.photos == 0)
+        #expect(snapshot.libraryChanges.isEmpty)
         #expect(snapshot.cached == 0)
         #expect(snapshot.cacheBytes == 0)
         #expect(snapshot.served.isEmpty)
@@ -248,6 +251,37 @@ struct DashboardEndpointTests {
         #expect(snapshot.photos == 3)
         #expect(snapshot.cached == status.residentCount)
         #expect(snapshot.cacheBytes == status.bytesOnDisk)
+    }
+
+    @Test("Photographs added and removed are reported by source, and a removed source keeps its name")
+    func libraryChangesAreReported() async throws {
+        let library = try Library(photographs: 3)
+        try await library.fill()
+        let source = try #require(try library.sources.all().first)
+
+        #expect(
+            try await library.snapshot().libraryChanges
+                == [.init(source: source.spokenName, sourceRemoved: false, added: 3, removed: 0)])
+
+        try library.sources.remove(id: source.id)
+
+        #expect(
+            try await library.snapshot().libraryChanges
+                == [.init(source: source.spokenName, sourceRemoved: true, added: 3, removed: 3)])
+    }
+
+    @Test("The page draws the changes by source, and a standing condition as standing")
+    func pageHasChangesAndStanding() async throws {
+        let library = try Library()
+        let response = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
+        guard case .data(let bytes) = response.body else {
+            Issue.record("the page answered without a body")
+            return
+        }
+        let page = String(decoding: bytes, as: UTF8.self)
+        #expect(page.contains("s.libraryChanges"))
+        #expect(page.contains("e.standing"))
+        #expect(page.contains("e.until"))
     }
 
     @Test("Pictures handed over are counted by the consumer that asked for them")
@@ -354,8 +388,10 @@ struct DashboardEndpointTests {
 
     // MARK: - Errors
 
-    @Test("The errors recorded since launch are in the reading, one per kind, most recent first")
-    func errorsAreReported() async throws {
+    /// Read at a fixed moment, because a row's life is measured from when it
+    /// was reported.
+    @Test("The errors recorded are in the reading, one per kind, most recent first")
+    func errorsAreReported() throws {
         let library = try Library()
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         library.errors.record(
@@ -366,11 +402,26 @@ struct DashboardEndpointTests {
             kind: "cache.timed-out.source-6", "CACHE: b.jpg did not answer in 60s",
             at: start.addingTimeInterval(10))
 
-        let errors = try await library.snapshot().errors
+        let errors = try library.dashboard.snapshot(now: start.addingTimeInterval(10)).errors
         #expect(errors.compactMap(\.kind) == ["cache.timed-out.source-6", "source.empty.source-2"])
         #expect(errors.map(\.count) == [2, 1])
         #expect(errors.first?.message == "CACHE: b.jpg did not answer in 60s")
         #expect(errors.first?.firstSeen == start)
+    }
+
+    @Test("An error not seen for a minute is gone from the reading, and a standing condition is not")
+    func errorsClear() throws {
+        let library = try Library()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        library.errors.record(
+            kind: "cache.timed-out.source-6", "CACHE: a.jpg did not answer in 60s", at: start)
+        library.errors.record(
+            kind: "source.unavailable.source-2", "source 2 unavailable: not mounted",
+            lasting: .standing, at: start)
+
+        let errors = try library.dashboard.snapshot(now: start.addingTimeInterval(61)).errors
+        #expect(errors.compactMap(\.kind) == ["source.unavailable.source-2"])
+        #expect(errors.first?.standing == true)
     }
 
     // MARK: - The last picture

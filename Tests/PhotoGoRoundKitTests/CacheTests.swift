@@ -213,10 +213,24 @@ struct CacheTests {
             Issue.record("a claimed card was handed to a second lane"); return
         }
 
-        let landed = await fixture.cache.fetch(card)
-        #expect(landed)
-        fixture.cache.finishFetch(card, landed: landed)
+        let answer = await fixture.cache.fetch(card)
+        #expect(answer == .landed)
+        fixture.cache.finishFetch(card, landed: answer.didLand)
         #expect(try fixture.deck.claim(photoID: card.id) == true)
+    }
+
+    @Test("A fetch refused by a volume at its floor gives that as its reason")
+    func fetchAtTheFloorSaysWhy() async throws {
+        let fixture = try await Fixture(
+            photos: ["a.png"],
+            settings: CacheSettings(minimumFreeBytes: .max, criticalFreeBytes: .max))
+        while try fixture.cache.deal() {}
+        let card = try #require(try fixture.cache.queue.peek().first)
+
+        let answer = await fixture.cache.fetch(card)
+
+        guard case .failed(let because) = answer else { Issue.record("\(answer)"); return }
+        #expect(because.contains("bytes free on the cache's volume, below the floor of"))
     }
 
     @Test("Each deal yields a different picture, and running out is an ordinary answer")

@@ -68,6 +68,10 @@ enum DashboardPage {
           .errors li:first-child { border-top: 0; padding-top: 0; }
           .errors .message { overflow-wrap: anywhere; }
           .errors .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 2px; overflow-wrap: anywhere; }
+          .note { font-size: 12px; margin-bottom: 8px; }
+          .changes { margin-top: 8px; }
+          .changes td:first-child { overflow-wrap: anywhere; padding-right: 8px; }
+          .changes td.n { text-align: right; white-space: nowrap; padding-left: 8px; }
         </style>
         </head>
         <body>
@@ -93,13 +97,16 @@ enum DashboardPage {
             </div>
           </section>
           <section class="wide">
-            <h2>Agent errors since launch</h2>
-            <div id="errorsEmpty" class="sub">none since launch</div>
+            <h2>Agent errors</h2>
+            <div class="sub note">A standing condition stays until it clears; anything else leaves a minute after it last happened.</div>
+            <div id="errorsEmpty" class="sub">nothing standing, and nothing in the last minute</div>
             <ol id="errors" class="errors" hidden></ol>
           </section>
           <section>
             <h2>Photos in the database</h2>
             <div class="figure" id="photos">—</div>
+            <div class="sub" id="changesEmpty">none added or removed since launch</div>
+            <table id="changes" class="changes" hidden></table>
           </section>
           <section>
             <h2>Photos in the cache</h2>
@@ -202,7 +209,8 @@ enum DashboardPage {
         }
 
         // One row per kind of trouble, most recently seen first: the latest
-        // words, then the kind, how often, and when.
+        // words, then the kind and when. A standing condition is still true,
+        // so what it says is how long; an event says how often and how lately.
         function drawErrors(list) {
           $("errorsEmpty").hidden = list.length > 0;
           $("errors").hidden = list.length === 0;
@@ -214,21 +222,54 @@ enum DashboardPage {
             const last = new Date(e.lastSeen), first = new Date(e.firstSeen);
             const meta = document.createElement("div");
             meta.className = "meta";
-            meta.textContent = [
+            meta.textContent = (e.standing ? [
+              e.kind,
+              "standing since " + clock(first) + " (" + duration(Date.now() - first.getTime()) + ")",
+              e.until == null ? null : "until " + clock(new Date(e.until)),
+            ] : [
               e.kind,
               e.count === 1 ? "once" : count(e.count) + " times",
               "last " + clock(last) + " (" + duration(Date.now() - last.getTime()) + " ago)",
               e.count === 1 ? null : "first " + clock(first),
-            ].filter(Boolean).join(" · ");
+            ]).filter(Boolean).join(" · ");
             item.append(message, meta);
             return item;
           }));
+        }
+
+        function changeRow(label, added, removed, cls) {
+          const tr = document.createElement("tr");
+          if (cls) tr.className = cls;
+          const name = document.createElement("td");
+          const plus = document.createElement("td"), minus = document.createElement("td");
+          name.textContent = label;
+          plus.textContent = "+" + count(added);
+          minus.textContent = "−" + count(removed);
+          plus.className = minus.className = "n";
+          tr.append(name, plus, minus);
+          return tr;
+        }
+
+        // One row per source that added or removed anything since launch,
+        // then the totals. A source removed since keeps its name.
+        function drawChanges(list) {
+          $("changesEmpty").hidden = list.length > 0;
+          $("changes").hidden = list.length === 0;
+          let added = 0, removed = 0;
+          const rows = list.map((c) => {
+            added += c.added;
+            removed += c.removed;
+            return changeRow(c.source + (c.sourceRemoved ? " (removed)" : ""), c.added, c.removed);
+          });
+          if (list.length > 0) rows.push(changeRow("total", added, removed, "total"));
+          $("changes").replaceChildren(...rows);
         }
 
         function draw(s) {
           drawErrors(s.errors);
           drawLast(s.last);
           $("photos").textContent = count(s.photos);
+          drawChanges(s.libraryChanges);
           $("cached").textContent = count(s.cached);
           $("queue").textContent = count(s.queued) + " / " + count(s.queueSize) + " queued";
           $("cacheBytes").textContent = bytes(s.cacheBytes);

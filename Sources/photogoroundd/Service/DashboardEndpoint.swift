@@ -34,6 +34,9 @@ struct DashboardEndpoint {
     /// The agent's record of its errors. The shared one in the agent; a test
     /// hands in its own.
     var errors: AgentErrors = .shared
+    /// The agent's count of photographs added and removed. The shared one in
+    /// the agent; a test hands in its own.
+    var changes: LibraryChanges = .shared
 
     static let pagePath = "/dashboard"
     static let path = "/v1/dashboard"
@@ -52,6 +55,9 @@ struct DashboardEndpoint {
     struct Snapshot: Codable, Equatable {
         /// Every photograph row, in every source, whatever its state.
         var photos: Int
+        /// Photographs added to and removed from the database since launch,
+        /// one row per source that has done either, ordered by name.
+        var libraryChanges: [LibraryChange]
         /// Originals held in the cache.
         var cached: Int
         var cacheBytes: Int64
@@ -76,8 +82,8 @@ struct DashboardEndpoint {
         var evictions: LaunchTally.Evictions
         /// The picture most recently handed over. Absent until one has been.
         var last: Last?
-        /// The errors reported since launch, one per kind, most recently seen
-        /// first. See `AgentErrors`.
+        /// The errors standing now and those reported in the last minute, one
+        /// per kind, most recently seen first. See `AgentErrors`.
         var errors: [AgentErrors.Entry]
         /// When the agent launched, which is when `served` began counting.
         var since: Date
@@ -97,6 +103,15 @@ struct DashboardEndpoint {
             /// Its identifier, which is the name for a folder photograph and a
             /// `PHAsset` identifier for a Photos one.
             var externalID: String
+        }
+
+        struct LibraryChange: Codable, Equatable {
+            /// What the source is called now, or was called when it was removed.
+            var source: String
+            /// Whether the source itself is gone.
+            var sourceRemoved: Bool
+            var added: Int
+            var removed: Int
         }
     }
 
@@ -158,9 +173,20 @@ struct DashboardEndpoint {
         let deck = Deck(database: database)
         let status = try makeCache(database: database, deck: deck).status()
         let photos = try deck.stats(settings: preferences.deckSettings).totalPhotos
+        // Named as the source is called now; a source no longer in the table
+        // by what it was called when it went, or by its row id when it went
+        // somewhere this process did not see.
+        let current = Dictionary(
+            uniqueKeysWithValues: try SourceStore(database: database).all().map { ($0.id, $0) })
+        let libraryChanges = changes.bySource.map { id, count in
+            Snapshot.LibraryChange(
+                source: current[id]?.spokenName ?? changes.nameOfRemovedSource(id) ?? "source \(id)",
+                sourceRemoved: current[id] == nil, added: count.added, removed: count.removed)
+        }.sorted { $0.source.localizedStandardCompare($1.source) == .orderedAscending }
 
         return Snapshot(
             photos: photos,
+            libraryChanges: libraryChanges,
             cached: status.residentCount,
             cacheBytes: status.bytesOnDisk,
             cacheCeilingBytes: status.byteCeiling,
@@ -178,7 +204,7 @@ struct DashboardEndpoint {
                     photo: $0.photo, consumer: $0.consumer, at: $0.at,
                     source: $0.sourceName, name: $0.name, externalID: $0.externalID)
             },
-            errors: errors.entries,
+            errors: errors.entries(at: now),
             since: tally.since,
             at: now
         )

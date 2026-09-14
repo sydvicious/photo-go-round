@@ -40,6 +40,9 @@ struct RunCommand {
         // nowhere else.
         AgentErrors.shared.startRecording()
         Console.recordAlerts { text, kind in AgentErrors.shared.record(kind: kind, text) }
+        // The photographs added and removed by source, for the dashboard's
+        // photos panel, counted from here on and in this process only.
+        LibraryChanges.shared.startRecording()
 
         let database = try Database(path: environment.databaseURL.path(percentEncoded: false))
         try Migrator.migrate(database)
@@ -140,16 +143,23 @@ struct RunCommand {
                 // nor this deadline, and a structured child would be awaited at
                 // scope exit — which is the wait this exists to escape.
                 let landed = Flag()
+                let failure = Note()
                 let answered = await FetchDeadline.run(
                     within: limit,
                     work: {
-                        guard let worker = cacheForFetch() else { return }
-                        let ok = await worker.fetch(card)
-                        if ok { landed.raise() }
+                        guard let worker = cacheForFetch() else {
+                            failure.write("the library could not be opened to fetch it")
+                            return
+                        }
+                        let answer = await worker.fetch(card)
+                        switch answer {
+                        case .landed: landed.raise()
+                        case .failed(let because): failure.write(because)
+                        }
                         // Whatever happened, the claim must not outlive the
                         // work: a photograph left claimed is sidelined for the
                         // whole timeout for no reason.
-                        worker.finishFetch(card, landed: ok)
+                        worker.finishFetch(card, landed: answer.didLand)
                     },
                     whenAbandoned: {
                         Log.cache.notice(
@@ -175,6 +185,7 @@ struct RunCommand {
                     cache.fetchFailed(card)
                     cache.dropUnfetched(card, because: "its fetch failed")
                     tally.record(fetch: .failed)
+                    Self.recordFetchFailure(card, because: failure.read() ?? "it gave no reason")
                     return .failed
                 }
                 environment.announce(.cacheChanged)
@@ -580,12 +591,13 @@ struct RunCommand {
     ) async {
         guard let database = try? Database(path: databasePath) else { return }
         let sources = SourceStore(database: database, bytes: bytes)
+        let reported = Reporter()
+        if let all = try? sources.all() { reported.skipped(all.filter { !$0.enabled }) }
         guard let enabled = try? sources.enabled() else { return }
         let due = localFirst ? Self.localFirst(enabled) : enabled
         guard !due.isEmpty else { return }
 
         let cap = min(Self.maximumConcurrentRefreshes, due.count)
-        let reported = Reporter()
 
         await withTaskGroup(of: Void.self) { group in
             var next = due.startIndex
@@ -782,12 +794,20 @@ struct RunCommand {
         // library that spans removable storage — it changes nothing, it
         // resolves itself when the drive returns, and colouring it red draws
         // the eye to the one line on the console that needs no attention.
-        case .dropped: Console.alert(event.line, recording: Self.recording(for: event))
+        case .dropped:
+            Console.alert(event.line, recording: .unrecorded)
+            Self.record(event)
+        // A failed fetch is recorded by its lane, which alone knows whether
+        // anyone was still waiting for it. See `recordFetchFailure`.
         case .serving, .cached, .cacheFailed: Console.event(event.line)
         // Red, and it earns it: this is the failure that hides.
-        case .cacheTimedOut: Console.alert(event.line, recording: Self.recording(for: event))
+        case .cacheTimedOut:
+            Console.alert(event.line, recording: .unrecorded)
+            Self.record(event)
         // Red as well: a benched source is why nothing from it is appearing.
-        case .sourcePaused: Console.alert(event.line, recording: Self.recording(for: event))
+        case .sourcePaused:
+            Console.alert(event.line, recording: .unrecorded)
+            Self.record(event)
         // **Timestamped, because all of these happen inside the loop.** This
         // was `Console.note` — untimestamped, and documented as being for the
         // banner and for anything printed before the loop starts — so lines
@@ -811,9 +831,54 @@ struct RunCommand {
             .kind(AgentErrors.kind("cache.timed-out", source: source))
         case .sourcePaused(let source, _):
             .kind(AgentErrors.kind("source.paused", source: source))
+        case .cacheFailed(_, let source, _):
+            .kind(AgentErrors.kind("cache.fetch-failed", source: source))
         default:
             .byText
         }
+    }
+
+    /// How long a queue line keeps its row in the error record.
+    ///
+    /// **A paused source stands until its pause ends.** It is a condition
+    /// rather than an event: nothing is fetched from the source for the whole
+    /// of it, and a row gone a minute after the line would say the trouble was
+    /// over while it still held. Everything else is an event.
+    static func lifetime(for event: QueueEvent, at now: Date) -> AgentErrors.Lifetime {
+        if case .sourcePaused(_, let until) = event {
+            return .standingUntil(now.addingTimeInterval(until.totalSeconds))
+        }
+        return .transient
+    }
+
+    /// A queue line into the error record, under the kind `recording(for:)`
+    /// names and for as long as `lifetime(for:at:)` says.
+    static func record(
+        _ event: QueueEvent, into errors: AgentErrors = .shared, at now: Date = Date()
+    ) {
+        let kind: String? =
+            switch recording(for: event) {
+            case .kind(let kind): kind
+            default: nil
+            }
+        errors.record(kind: kind, event.line, lasting: lifetime(for: event, at: now), at: now)
+    }
+
+    /// A fetch that produced no bytes, in the error record under its source and
+    /// in the words the fetch gave.
+    ///
+    /// **Recorded by the lane rather than where the fetch failed**, because only
+    /// the lane knows whether anyone was still waiting for the answer. A fetch
+    /// given up on is recorded as `cache.timed-out` when its lane lets go; were
+    /// its later failure recorded too, one fetch would be two rows. So every
+    /// fetch the dashboard counts as `failed` is recorded here, and nothing else.
+    static func recordFetchFailure(
+        _ card: DeckCard, because reason: String, into errors: AgentErrors = .shared,
+        at now: Date = Date()
+    ) {
+        record(
+            .cacheFailed(photo: card.spokenName, source: card.sourceID, because: reason),
+            into: errors, at: now)
     }
 
     static func bytes(_ count: Int64) -> String {
@@ -1088,6 +1153,14 @@ final class FillerBox: @unchecked Sendable {
 /// Narrates the concurrent refresh tasks.
 final class Reporter: @unchecked Sendable {
 
+    /// The agent's error record. The shared one in the agent; a test hands in
+    /// its own.
+    let errors: AgentErrors
+
+    init(errors: AgentErrors = .shared) {
+        self.errors = errors
+    }
+
     /// Said before the walk rather than after it.
     ///
     /// **A refresh used to be silent unless something changed**, which was right
@@ -1096,6 +1169,17 @@ final class Reporter: @unchecked Sendable {
     /// the whole time, and "nothing has happened for four minutes" is
     /// indistinguishable from "the agent has stopped". So it says what it is
     /// about to do, and how long it took.
+    /// The disabled sources a pass does not refresh, whose standing conditions
+    /// are cleared, since no refresh will report them over.
+    ///
+    /// **`SourceStore.setEnabled` clears them too, and that is not enough on its
+    /// own.** `pgr_ctl` disables a source by reconciling in its own process,
+    /// against its own error record; by the time the agent reconciles, the row
+    /// is already disabled and the agent never calls `setEnabled` at all.
+    func skipped(_ disabled: [Source]) {
+        for source in disabled { errors.clearStanding(source: source.id) }
+    }
+
     func began(_ source: Source) {
         Console.note("refreshing #\(source.id)  \(source.locator)")
     }
@@ -1126,16 +1210,26 @@ final class Reporter: @unchecked Sendable {
     /// — so printing it each time turns one fact into an alert every few
     /// seconds. `wasAvailable` is the row as it stood before this refresh,
     /// which is all the edge detection needs.
+    ///
+    /// **The error record hears the state, not the transition.** An unavailable
+    /// source and an empty one are standing conditions, kept on the dashboard
+    /// until they clear (Syd, 2026-09-13) — so each is recorded on every refresh
+    /// that finds it and cleared by the first that does not. Recorded on the
+    /// transition only, a source already unavailable when the agent launched
+    /// would never have appeared.
     func finish(_ result: ScanResult, wasAvailable: Bool, took: Duration = .zero) {
         let lost = result.sourceUnavailable && wasAvailable
         let returned = !result.sourceUnavailable && !wasAvailable
+        let unavailable = AgentErrors.kind("source.unavailable", source: result.sourceID)
+        let empty = AgentErrors.kind("source.empty", source: result.sourceID)
 
-        if lost {
-            Console.alert(
-                "source \(result.sourceID) unavailable: \(result.reason ?? "unknown")",
-                recording: .kind(AgentErrors.kind("source.unavailable", source: result.sourceID)))
-        } else if returned {
-            Console.recovered("source \(result.sourceID) is available again")
+        if result.sourceUnavailable {
+            let line = "source \(result.sourceID) unavailable: \(result.reason ?? "unknown")"
+            if lost { Console.alert(line, recording: .unrecorded) }
+            errors.record(kind: unavailable, line, lasting: .standing)
+        } else {
+            if returned { Console.recovered("source \(result.sourceID) is available again") }
+            errors.clear(kind: unavailable)
         }
 
         // Always, including when nothing changed — that *is* the news when a
@@ -1164,10 +1258,15 @@ final class Reporter: @unchecked Sendable {
         // Said on every scan rather than on the transition, because the
         // condition is a standing one and the reason somebody is reading the
         // log is to find out why nothing is appearing.
-        guard Self.scannedEmpty(result) else { return }
-        Console.alert(
-            "source \(result.sourceID) is empty — it scanned cleanly and holds no photographs",
-            recording: .kind(AgentErrors.kind("source.empty", source: result.sourceID)))
+        guard Self.scannedEmpty(result) else {
+            // It found photographs, or could not look: either way it is not
+            // known to be empty any more.
+            errors.clear(kind: empty)
+            return
+        }
+        let line = "source \(result.sourceID) is empty — it scanned cleanly and holds no photographs"
+        Console.alert(line, recording: .unrecorded)
+        errors.record(kind: empty, line, lasting: .standing)
     }
 
     /// A scan that reached its source and came back with nothing.
@@ -1260,6 +1359,24 @@ final class Flag: @unchecked Sendable {
         let was = raised
         raised = false
         return was
+    }
+}
+
+/// The last words written, for a lane to read once its work has answered.
+final class Note: @unchecked Sendable {
+    private var text: String?
+    private let lock = NSLock()
+
+    func write(_ words: String) {
+        lock.lock()
+        text = words
+        lock.unlock()
+    }
+
+    func read() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return text
     }
 }
 

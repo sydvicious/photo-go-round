@@ -317,6 +317,51 @@ struct ServeWalkTests {
         #expect(fixture.pooled == 1, "an unreadable-but-present file was deleted")
     }
 
+    // MARK: - What a fetch says about why
+
+    @Test("A failed fetch says why, and says so when its source confirms the photograph gone")
+    func aFailedFetchSaysWhy() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        let card = try #require(try fixture.firstPhoto())
+
+        fixture.folder.remove("a.png")
+        let answer = await fixture.cache.fetch(card)
+
+        guard case .failed(let because) = answer else { Issue.record("\(answer)"); return }
+        #expect(because.hasSuffix("; its source confirms it gone, so it has left the library"))
+        #expect(fixture.heard.lines.filter { $0.hasSuffix("failed — \(because)") }.count == 1)
+        #expect(fixture.pooled == 0)
+    }
+
+    @Test("A fetch that cannot be kept gives that as its reason")
+    func aFailedAdoptSaysWhy() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        let card = try #require(try fixture.firstPhoto())
+        let root = fixture.cache.root
+        try FileManager.default.createDirectory(
+            at: root.appending(path: ".staging"), withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555], ofItemAtPath: root.path(percentEncoded: false))
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: root.path(percentEncoded: false))
+        }
+
+        let answer = await fixture.cache.fetch(card)
+
+        guard case .failed(let because) = answer else { Issue.record("\(answer)"); return }
+        #expect(because.hasPrefix("it was fetched and could not be kept: "))
+    }
+
+    @Test("A fetch of a photograph whose bytes are already here has landed")
+    func aFetchOfSomethingHeldLands() async throws {
+        let fixture = try await Fixture(photos: ["a.png"])
+        let card = try #require(try fixture.firstPhoto())
+        #expect(try await fixture.cache.cache(photoID: card.id))
+
+        #expect(await fixture.cache.fetch(card) == .landed)
+    }
+
     // MARK: - Fetching, and what a failure means about the photograph
 
     @Test("A fetch that fails does not put the card back")

@@ -323,9 +323,41 @@ public struct PhotoCache {
     ///
     /// Answers false when there was nothing to do or nothing could be done: it
     /// is already held, its source is unreachable, its provider is missing, or
-    /// the download failed.
+    /// the download failed. A failure is said on the console, with why.
     @discardableResult
     public func cache(photoID: Int64, now: Date = Date()) async throws -> Bool {
+        switch try await attemptCache(photoID: photoID, now: now) {
+        case .landed:
+            return true
+        case .unnecessary:
+            return false
+        case .failed(let reason, let card):
+            if let card {
+                log(.cacheFailed(photo: card.spokenName, source: card.sourceID, because: reason))
+            }
+            return false
+        }
+    }
+
+    /// What trying to cache one photograph came to.
+    enum CacheAttempt: Sendable {
+        case landed
+        /// Nothing to fetch, and why: its bytes are already here, or it is read
+        /// in place.
+        case unnecessary(String)
+        /// Nothing fetched, and why — with the card, when it could be read.
+        case failed(String, DeckCard?)
+    }
+
+    /// The work of `cache(photoID:)`, answering why when nothing landed.
+    ///
+    /// **A failure is not said here**, because each of its two callers says it
+    /// once: `cache(photoID:)` on the console, and `fetch` on the console and
+    /// back to the agent's fetcher, which puts the words in the error record.
+    /// Every way this comes to nothing has words, including the ones that used
+    /// to answer a bare false — a disabled source, a missing provider, the disk
+    /// at its floor — so no failed fetch reaches the record without a reason.
+    func attemptCache(photoID: Int64, now: Date) async throws -> CacheAttempt {
         // Free space is checked before fetching, so running out of disk degrades
         // into "the cache stops growing" rather than a full volume.
         let free = freeBytesOnVolume()
@@ -333,23 +365,32 @@ public struct PhotoCache {
             Log.cache.notice(
                 "not caching: \(free, privacy: .public) bytes free, floor is \(self.settings.minimumFreeBytes, privacy: .public)"
             )
-            return false
+            return .failed(
+                "\(free) bytes free on the cache's volume, below the floor of \(self.settings.minimumFreeBytes)",
+                nil)
         }
 
-        guard let card = try deck.card(photoID: photoID) else { return false }
+        guard let card = try deck.card(photoID: photoID) else {
+            return .failed("it is no longer in the library", nil)
+        }
         // Already there. This is how asking for the same picture more than once
         // costs a skip rather than a second fetch — the check is here, when the
         // request comes off the queue, rather than in whatever put it on.
-        guard card.storage == .materialized else { return false }
+        guard card.storage == .materialized else {
+            return .unnecessary("it is read in place and never fetched")
+        }
         guard !store.contains(photo: card.uuid) else {
             log(.cacheUnnecessary(photo: card.spokenName, source: card.sourceID))
-            return false
+            return .unnecessary("its bytes are already here")
         }
 
-        guard let source = try sources.source(id: card.sourceID),
-            source.enabled,
-            let provider = sources.provider(for: source.kind)
-        else { return false }
+        guard let source = try sources.source(id: card.sourceID) else {
+            return .failed("its source is gone", card)
+        }
+        guard source.enabled else { return .failed("its source is disabled", card) }
+        guard let provider = sources.provider(for: source.kind) else {
+            return .failed("this build has no provider for \(source.kind.rawValue) sources", card)
+        }
 
         let extension_ = (card.externalID as NSString).pathExtension
         let staging = root.appending(path: Self.stagingDirectory)
@@ -368,9 +409,10 @@ public struct PhotoCache {
                 externalID: card.externalID, from: source, to: temporary)
         } catch {
             try? FileManager.default.removeItem(at: temporary)
-            log(.cacheFailed(photo: card.spokenName, source: card.sourceID, because: "\(error)"))
-            try await handleFailedDownload(card, source: source, provider: provider)
-            return false
+            let gone = try await handleFailedDownload(card, source: source, provider: provider)
+            return .failed(
+                gone ? "\(error); its source confirms it gone, so it has left the library" : "\(error)",
+                card)
         }
         do {
             try store.adopt(
@@ -408,11 +450,12 @@ public struct PhotoCache {
             // entry leaves both saying *not held*, which is true, and the
             // photograph is simply drawn again.
             store.remove(photoUUID: card.uuid)
-            log(.cacheFailed(photo: card.spokenName, source: card.sourceID, because: "\(error)"))
+            // Only logged here. The agent's fetcher records it with every other
+            // reason a fetch comes to nothing, as `cache.fetch-failed`; this was
+            // `cache.could-not-keep` until 2026-09-13, which recorded it twice.
             Log.cache.error(
-                kind: AgentErrors.kind("cache.could-not-keep", source: card.sourceID),
-                "photo \(card.id) was fetched and could not be kept: \(error)")
-            return false
+                kind: nil, "photo \(card.id) was fetched and could not be kept: \(error)")
+            return .failed("it was fetched and could not be kept: \(error)", card)
         }
 
         // **Nothing about the queue changes here**, including when the card
@@ -437,7 +480,7 @@ public struct PhotoCache {
                 bytes: store.url(forPhoto: card.uuid).flatMap {
                     (try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
                 } ?? 0))
-        return true
+        return .landed
     }
 
     // MARK: - The queue fetching its own cards
@@ -511,12 +554,34 @@ public struct PhotoCache {
         }
     }
 
-    /// Fetches a queued card's bytes. Answers whether they are here now —
-    /// including the case where another path landed them first, which is not
-    /// a failure and must not drop the card.
-    public func fetch(_ card: DeckCard, now: Date = Date()) async -> Bool {
-        let landed = (try? await cache(photoID: card.id, now: now)) ?? false
-        return landed || store.contains(photo: card.uuid)
+    /// What a queued card's fetch came to.
+    public enum FetchAnswer: Sendable, Equatable {
+        /// Its bytes are here — including when another path landed them first,
+        /// which is not a failure and must not drop the card.
+        case landed
+        /// They are not, and why, in words for the console and the agent's
+        /// error record.
+        case failed(because: String)
+
+        public var didLand: Bool { self == .landed }
+    }
+
+    /// Fetches a queued card's bytes, and says why on the console when they are
+    /// not here afterwards.
+    public func fetch(_ card: DeckCard, now: Date = Date()) async -> FetchAnswer {
+        let reason: String
+        do {
+            switch try await attemptCache(photoID: card.id, now: now) {
+            case .landed: return .landed
+            case .unnecessary(let why): reason = why
+            case .failed(let why, _): reason = why
+            }
+        } catch {
+            reason = "\(error)"
+        }
+        if store.contains(photo: card.uuid) { return .landed }
+        log(.cacheFailed(photo: card.spokenName, source: card.sourceID, because: reason))
+        return .failed(because: reason)
     }
 
     /// Ends a fetch: releases the claim, and tells the bench what happened.
@@ -582,7 +647,7 @@ public struct PhotoCache {
         case .benched(let rank): return .benched(rank: rank)
         case .card(let card, let rank, let limit):
             log(.caching(photo: card.spokenName, source: card.sourceID, within: limit))
-            let landed = await fetch(card, now: now)
+            let landed = await fetch(card, now: now).didLand
             finishFetch(card, landed: landed)
             if !landed { dropUnfetched(card, because: "its fetch failed") }
             return landed ? .fetched(rank: rank) : .failed(rank: rank)
@@ -635,23 +700,28 @@ public struct PhotoCache {
     /// retry churn of a permanently unreadable file is accepted over deleting
     /// a photograph that is demonstrably still there (settled 2026-08-24).
     /// `unknown` says nothing, so nothing moves.
+    ///
+    /// Answers whether the photograph was removed.
     private func handleFailedDownload(
         _ card: DeckCard, source: Source, provider: any SourceProvider
-    ) async throws {
+    ) async throws -> Bool {
         switch await provider.existence(of: card.externalID, in: source) {
         case .absent:
             Log.cache.notice(
                 "photo \(card.id, privacy: .public) failed to fetch and its source confirms it absent; removing it from the pool"
             )
             try self.remove(card.id)
+            return true
         case .present:
             Log.cache.info(
                 "photo \(card.id, privacy: .public) is present and could not be fetched; keeping it"
             )
+            return false
         case .unknown:
             Log.cache.info(
                 "photo \(card.id, privacy: .public) could not be confirmed either way; keeping it"
             )
+            return false
         }
     }
 

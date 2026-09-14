@@ -358,15 +358,19 @@ The agent prints the dashboard's address when its listener is ready. **The page
 redraws itself every second**, and says `not answering` when the agent stops
 replying.
 
-It shows the last picture served, with a caption, and how many photographs the database holds, how many originals the cache
+It shows the last picture served, with a caption, and how many photographs the database holds, how many each source added and
+removed since the agent launched, how many originals the cache
 holds, how many cards are queued against `queueSize`, the bytes the cache
 occupies against its ceiling, the free space on the cache's volume against the
 floor below which fetching stops, how many pictures each consumer has been
-handed since the agent launched, what serving and dealing found in the cache and what
-eviction took from it since then, and the errors the agent has reported since
-then.
+handed since launch, what serving and dealing found in the cache and what
+eviction took from it since then, and the errors standing now or reported in
+the last minute.
 
-    {"photos": 5093, "cached": 212, "queued": 18, "queueSize": 20,
+    {"photos": 5093,
+     "libraryChanges": [{"source": "/Volumes/Photos/2019", "sourceRemoved": false,
+                         "added": 212, "removed": 3}],
+     "cached": 212, "queued": 18, "queueSize": 20,
      "cacheBytes": 624000000, "cacheCeilingBytes": 1000000000,
      "freeBytes": 212000000000, "freeFloorBytes": 5000000000,
      "served": {"app": 14, "wallpaper": 2},
@@ -378,9 +382,13 @@ then.
               "externalID": "Rice Homecoming.jpeg"},
      "evictions": {"photos": 36, "bytesFreed": 106000000, "passes": 4,
                    "lastAt": "2026-09-12T17:10:02Z", "lastCeilingHalved": false},
-     "errors": [{"kind": "cache.timed-out.source-6", "count": 4,
-                 "message": "CACHE: IMG_0042.HEIC (C3D4…/L0/001) (source 6) did not answer in 60 seconds",
-                 "firstSeen": "2026-09-12T15:40:02Z", "lastSeen": "2026-09-12T17:12:55Z"}],
+     "errors": [{"kind": "cache.fetch-failed.source-6", "count": 4, "standing": false,
+                 "message": "CACHE: IMG_0042.HEIC (C3D4…/L0/001) (source 6) failed — The network connection was lost.",
+                 "firstSeen": "2026-09-12T17:14:02Z", "lastSeen": "2026-09-12T17:14:35Z"},
+                {"kind": "source.paused.source-6", "count": 1, "standing": true,
+                 "message": "CACHE: source 6 paused for 120.0 seconds — it has stopped answering",
+                 "firstSeen": "2026-09-12T17:14:35Z", "lastSeen": "2026-09-12T17:14:35Z",
+                 "until": "2026-09-12T17:16:35Z"}],
      "since": "2026-09-12T14:02:11Z", "at": "2026-09-12T17:14:40Z"}
 
 **`last` is the picture most recently handed over** with a `200`, and is absent
@@ -399,8 +407,35 @@ words, since the photograph or the queue depth on a line changes while the
 trouble does not. A kind about one source ends in that source's row id. A red
 line with no kind is grouped by its exact words, and `kind` is then absent. An
 event reported both on the console and in the log is recorded once. At most 100
-kinds are kept; past that, the one seen longest ago gives way. The record starts
-empty at launch and is not kept.
+kinds are kept; past that, the error seen longest ago gives way, and a standing
+condition only when no other is left. The record starts empty at launch and is
+not kept.
+
+**An error leaves `errors` a minute after it last happened; a standing condition
+stays until it clears.** `standing` marks one of these: a source unavailable,
+recorded at every refresh that finds it so and gone at the first that does not;
+a source empty, gone at the first scan that finds photographs or cannot reach
+it; and a source paused after failed fetches, gone when the pause ends, which
+is `until`. A source's standing conditions go when it is removed or disabled. On a standing
+condition, `firstSeen` is when this run first found it rather than when it
+began, and `count` is how many times it has been found. An error that happens
+again after leaving is a new row, counted from one.
+
+**A fetch that produces no bytes is `cache.fetch-failed`**, under its source,
+with the reason the fetch gave: the source's own error, the source disabled or
+gone, the cache's volume at `cacheMinimumFreeBytes`, the original fetched and
+not kept. Each is one of the fetches counted in `fetchLookups.failed`. A fetch
+given up on is `cache.timed-out` instead, and is not recorded again if it fails
+afterwards.
+
+**`libraryChanges` is one row per source that has added or removed a photograph
+since launch**, ordered by name. `added` counts photographs a refresh put in the
+database; one already there through another source is not added. `removed`
+counts photographs that left it: a refresh that no longer found them, a fetch or
+a serve whose source confirmed them gone, and the source itself being removed.
+`source` is what the source is called now, or was called when it was removed,
+and `sourceRemoved` says it was. Changes `pgr_ctl` makes from its own process
+are not counted, and a source it removed is named `source` and its row id.
 
 The thumbnail fits 480 pixels either way and is never enlarged. **Asking for one
 takes no card and counts as nothing served.** It is drawn from the original, in
@@ -411,8 +446,8 @@ decode is `422`.
 
 `freeBytes` is absent when the volume will not say. `served` counts only `200`s,
 keyed by the `consumer` each request named, including `cli` and `anonymous`.
-`served`, `serveLookups`, `fetchLookups`, and `evictions` start empty at launch
-and are not kept.
+`libraryChanges`, `served`, `serveLookups`, `fetchLookups`, and `evictions`
+start empty at launch and are not kept.
 
 **Preferences are read on every request**, so a changed `cacheByteCeiling` or
 `queueSize` is in the next reading once the agent has re-read its preferences —

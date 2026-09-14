@@ -15,9 +15,13 @@ import PhotoGoRoundAgentAPI
 /// a place in a rotation it was absent from.
 public struct PhotoPool {
     public let database: Database
+    /// Where what is added and removed is counted, once each batch commits.
+    /// The shared record everywhere; a test hands in its own.
+    public let changes: LibraryChanges
 
-    public init(database: Database) {
+    public init(database: Database, changes: LibraryChanges = .shared) {
         self.database = database
+        self.changes = changes
     }
 
     /// One page of a source's entries, ordered by row id, starting after `after`.
@@ -92,6 +96,7 @@ public struct PhotoPool {
             let counts = try await database.transaction(.immediate) {
                 try applyUpsert(batch, to: source, at: now, onAdded: onAdded)
             }
+            changes.added(counts.added, toSource: source.id)
             added += counts.added
             updated += counts.updated
         }
@@ -110,6 +115,9 @@ public struct PhotoPool {
         for batch in photoIDs.chunked(into: Self.batchSize) {
             let batchResult = try await database.transaction(.immediate) {
                 try applyRemoval(batch)
+            }
+            for (source, count) in batchResult.bySource {
+                changes.removed(count, fromSource: source)
             }
             removed += batchResult.removed
             orphaned.append(contentsOf: batchResult.orphaned)
@@ -173,6 +181,7 @@ public struct PhotoPool {
             let counts = try database.transaction(.immediate) {
                 try applyUpsert(batch, to: source, at: now, onAdded: onAdded)
             }
+            changes.added(counts.added, toSource: source.id)
             added += counts.added
             updated += counts.updated
         }
@@ -271,6 +280,9 @@ public struct PhotoPool {
 
         for batch in photoIDs.chunked(into: Self.batchSize) {
             let result = try database.transaction(.immediate) { try applyRemoval(batch) }
+            for (source, count) in result.bySource {
+                changes.removed(count, fromSource: source)
+            }
             removed += result.removed
             orphaned.append(contentsOf: result.orphaned)
         }
@@ -281,32 +293,30 @@ public struct PhotoPool {
     }
 
     /// One batch, assumed to be inside a transaction already.
-    private func applyRemoval(_ batch: ArraySlice<Int64>) throws -> (removed: Int, orphaned: [String]) {
+    private func applyRemoval(
+        _ batch: ArraySlice<Int64>
+    ) throws -> (removed: Int, orphaned: [String], bySource: [Int64: Int]) {
         var removed = 0
         var orphaned: [String] = []
-        do {
-                for id in batch {
-                    // Read the path before the row goes, or there is no way to
-                    // find the bytes afterwards.
-                    //
-                    // The closure is parenthesized rather than trailing: inside
-                    // an `if` condition a trailing closure reads as the body of
-                    // the statement, and the compiler says so.
-                    //
-                    // Doubly optional because the query may match no row and the
-                    // column itself is nullable — a referenced photo has no
-                    // cache path. Both mean "nothing to delete", so they flatten.
-                    if let uuid = try database.first(
-                        "SELECT uuid FROM photo WHERE id = :id;", ["id": .int(id)],
-                        { try $0.string("uuid") }
-                    ) {
-                        orphaned.append(uuid)
-                    }
-                    try database.run("DELETE FROM photo WHERE id = :id;", ["id": .int(id)])
-                    removed += database.changes
-                }
+        var bySource: [Int64: Int] = [:]
+        for id in batch {
+            // Read the identity and the source before the row goes: the one
+            // is how the bytes are found afterwards, the other is what the
+            // removal is counted against. No row means nothing to delete.
+            //
+            // The closure is parenthesized rather than trailing, so the call
+            // reads the same wherever it is moved to.
+            let row = try database.first(
+                "SELECT uuid, source_id FROM photo WHERE id = :id;", ["id": .int(id)],
+                { (uuid: try $0.string("uuid"), source: try $0.int64("source_id")) }
+            )
+            if let row { orphaned.append(row.uuid) }
+            try database.run("DELETE FROM photo WHERE id = :id;", ["id": .int(id)])
+            let deleted = database.changes
+            removed += deleted
+            if let row, deleted > 0 { bySource[row.source, default: 0] += deleted }
         }
-        return (removed, orphaned)
+        return (removed, orphaned, bySource)
     }
 
     @discardableResult
