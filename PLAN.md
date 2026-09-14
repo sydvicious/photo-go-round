@@ -197,7 +197,7 @@ Each phase carries its own spike rather than front-loading them all, so the firs
   - **Web services for managing sources — built**: `GET`, `POST`, `PATCH`, and `DELETE /v1/sources` on the agent, so a client can list, add, reconfigure, and remove without opening the database. See *The database is private to the service*.
   - **UI for managing them in the app — built**: a Settings panel showing what is configured with its counts and state, pickers to add, and buttons to remove and to reconfigure. See `app/mac/FEATURES.md`.
   - Diagnostic panels accrete later, as the phases that need them arrive — not in Phase 3. **The one diagnostic surface that did arrive in Phase 3 is the agent's dashboard**, a page the agent serves rather than a panel in the app.
-  - **The agent's dashboard — built 2026-09-12, not yet run against a live agent.** A page the agent serves at `/dashboard`, redrawn every second: the last picture served with its name and source, photos in the database with those added and removed by source since launch, photos in the cache, cache bytes against the ceiling, the queue against `queueSize`, pictures served since launch, cache lookups on the serve side and the fetch side, cache evictions, and agent errors grouped by kind — each gone a minute after it stops, unless it is a standing condition. Linked from the app's About box. See *The agent's dashboard*.
+  - **The agent's dashboard — built 2026-09-12 and 2026-09-13; stood up on the laptop and on Plex on 2026-09-14, and working.** A page the agent serves at `/dashboard`, redrawn every second: the last picture served with its name and source, photos in the database with those added and removed by source since launch, photos in the cache, cache bytes against the ceiling, the queue against `queueSize`, pictures served since launch, cache lookups on the serve side and the fetch side, cache evictions, and agent errors grouped by kind — each gone a minute after it stops, unless it is a standing condition. Linked from the app's About box. See *The agent's dashboard*.
   - **The app's own features have their own plan**: `app/mac/FEATURES.md`, starting with a Settings panel that adds and removes sources. That reverses *The Mac app as instrument panel*'s "it manages no sources", and the reversal is argued there rather than here.
 - **Phase 4 — deferred past 1.0.** iOS and iPadOS app, carrying both roles in one process, since iOS has no place to put a separate server.
 - **Phase 5 — deferred past 1.0.** iOS widget: WidgetKit extension sharing an App Group container, serving from the queue in the timeline provider.
@@ -2003,7 +2003,7 @@ The consequence worth keeping: **the two views can disagree, and that is useful.
 
 ## The agent's dashboard
 
-Built 2026-09-12, in slices, each run through the test suites before the next began. **Not yet stood up against a live agent**, and by this document's own rule a thing is not done until it has been used — so everything below is what was built and why, not what running it found.
+Built 2026-09-12 and 2026-09-13, in slices, each run through the test suites before the next began. **Stood up against live agents on 2026-09-14**, on the laptop and on Plex, and Syd reported everything fine on both. Everything below is what was built and why; running it found nothing to change.
 
 ```
 GET /dashboard                             a page for a browser

@@ -86,12 +86,45 @@ enum DisplayShuffles {
         if key == unknownDisplay {
             log.notice("saver: starting a loop for a view whose display is unidentified")
         }
+        let screensaver = ScreensaverPreferences(deployment: .development)
         let shuffle = Shuffle(
             source: PictureClient(preferences: environment.preferences),
-            consumer: ConsumerKind.screensaver.rawValue)
+            consumer: ConsumerKind.screensaver.rawValue,
+            dwellFrom: { Self.interval(from: screensaver).duration })
         entries[key] = Entry(shuffle: shuffle, views: 1)
         log.notice("saver: new loop for display \(key, privacy: .public)")
         return shuffle
+    }
+
+    /// The last reading reported, so a change is one line and an unchanged
+    /// read is none — the interval is read before every picture.
+    private static var reportedInterval: IntervalReading?
+
+    /// The *Shuffle All* choice, read fresh before every picture so a change in
+    /// the app reaches a host that is already running. See `Shuffle.dwell`.
+    ///
+    /// `via file` means the sandbox refused the domain and the saver read its
+    /// `.plist`, as it does for the port.
+    private static func interval(from preferences: ScreensaverPreferences) -> ShuffleInterval {
+        let reading = preferences.read()
+        let fallback = ScreensaverPreferences.defaultInterval
+        if reading != reportedInterval {
+            reportedInterval = reading
+            switch reading {
+            case .set(let choice, let origin):
+                log.notice(
+                    "saver: shuffle interval \(choice.rawValue, privacy: .public) via \(origin.rawValue, privacy: .public)")
+            case .unset:
+                log.notice("saver: no shuffle interval chosen; using \(fallback.rawValue, privacy: .public)")
+            case .unknown(let raw, let origin):
+                log.error(
+                    "saver: shuffle interval \(raw, privacy: .public) via \(origin.rawValue, privacy: .public) is not one of the choices; using \(fallback.rawValue, privacy: .public)")
+            case .unreadable(let reason):
+                log.error(
+                    "saver: the shuffle interval could not be read — \(reason, privacy: .public); using \(fallback.rawValue, privacy: .public)")
+            }
+        }
+        return reading.choice(default: fallback)
     }
 
     /// One view has finished with this display. The loop stops when the last of

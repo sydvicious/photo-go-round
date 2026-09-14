@@ -1,3 +1,4 @@
+import PhotoGoRoundAgentAPI
 import PhotoGoRoundDisplay
 import SwiftUI
 
@@ -8,7 +9,14 @@ struct ContentView: View {
     /// moved into `PhotoGoRoundDisplay` in Phase 2 of `Screensaver Plan.md` so
     /// the screensaver could run the same one; the deck keys a consumer's
     /// history on this string, so the two must not share it.
-    @State private var shuffle = Shuffle(consumer: "app")
+    ///
+    /// **Its interval is a copy of the screensaver's, taken when the window is
+    /// made.** Syd, 2026-09-14: "the app window will read the current
+    /// screensaver internal when it is created, and it will stay there with its
+    /// own copy of the setting even if the screensaver interval is changed." A
+    /// window's preferences are never stored.
+    @State private var shuffle = Shuffle(
+        consumer: "app", dwell: ScreensaverPreferences(deployment: .development).interval.duration)
 
     /// The name, and what is wrong with it when something is.
     ///

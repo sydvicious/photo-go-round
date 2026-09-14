@@ -39,11 +39,7 @@ public struct WallpaperHome: Sendable, Equatable {
     }
 
     public init(deployment: Deployment, home: URL = URL.homeDirectory) {
-        let suffix = switch deployment {
-        case .production: "prod"
-        case .development: "dev"
-        }
-        let domain = "\(Deployment.identifier).wallpaper.\(suffix)"
+        let domain = "\(Deployment.identifier).wallpaper.\(deployment.domainSuffix)"
         self.init(
             domain: domain,
             directory: home.appending(path: "Library/Application Support/\(domain)"))
@@ -56,8 +52,8 @@ struct WallpaperRecord: Equatable {
     let file: URL
 }
 
-/// The desktop picture: one photograph per display, changed every minute for
-/// now — see `defaultInterval`.
+/// The desktop picture: one photograph per display, changed at the *Shuffle
+/// All* interval — an hour unless somebody chose otherwise. See `choice`.
 ///
 /// **A client like every other surface.** It asks the agent for a picture over
 /// HTTP as consumer `wallpaper`, at each display's size in pixels, and the agent
@@ -91,19 +87,12 @@ struct WallpaperRecord: Equatable {
 @Observable
 public final class Wallpaper {
 
-    /// What `intervalSeconds` means when nothing has set it. **Thirty minutes.**
-    /// Syd, 2026-09-13: "set both the default and the current time between
-    /// serving wallpaper to 30 minutes." It was sixty seconds from 2026-09-10 —
-    /// "could we make the internal for the wallpaper 60 seconds for now?
-    /// Eventually we will have a set of choices" — and thirty minutes before
+    /// The interval when nothing has chosen one. **One hour.** Syd, 2026-09-14:
+    /// "wallpaper will default to "1 hour"." It was thirty minutes from
+    /// 2026-09-13, sixty seconds from 2026-09-10, and thirty minutes before
     /// that, which is what `Wallpaper Plan.md` was written around.
-    public static let defaultInterval = Duration.seconds(30 * 60)
-    /// The bounds `intervalSeconds` is clamped to. `defaults write` accepts
-    /// anything, and a wallpaper asking every tenth of a second, or never, is
-    /// not a setting anybody meant.
-    static let shortestInterval = Duration.seconds(10)
-    static let longestInterval = Duration.seconds(7 * 24 * 60 * 60)
-    /// The loop never sleeps longer than this, so a changed `intervalSeconds`
+    public static let defaultInterval = ShuffleInterval.oneHour
+    /// The loop never sleeps longer than this, so a changed interval
     /// is noticed within it rather than at the next change — no preference
     /// ever needs a restart. A round with nothing due costs one file check per
     /// display.
@@ -160,7 +149,7 @@ public final class Wallpaper {
     /// The last trouble logged, so a quiet agent is one line when it goes quiet
     /// and one when it comes back, not one per retry.
     @ObservationIgnored private var trouble: String?
-    /// The last complaint about `intervalSeconds`, so a bad value is one line
+    /// The last complaint about the interval, so a bad value is one line
     /// and not one per read.
     @ObservationIgnored private var intervalProblem: String?
     /// Held for the life of the wallpaper; see `watchTheSystem()`.
@@ -168,8 +157,9 @@ public final class Wallpaper {
 
     private enum Key {
         static let enabled = "enabled"
-        /// How long a display keeps its picture, in seconds. See `interval`.
-        static let interval = "intervalSeconds"
+        /// How long a display keeps its picture, as a `ShuffleInterval` tag.
+        /// See `choice`.
+        static let interval = ShuffleInterval.key
         /// `[display UUID: ["changedAt": Date, "file": path]]`, readable with
         /// `defaults read` on the wallpaper's domain.
         static let displays = "displays"
@@ -427,25 +417,32 @@ public final class Wallpaper {
 
     // MARK: - The preferences
 
-    /// `intervalSeconds` in the wallpaper's domain, **read every time it is
-    /// needed** — nothing reads a preference into a stored property, so a
-    /// `defaults write` applies within `recheck` and never needs a restart.
-    /// Parsed with a default and a clamp, as every preference is: a value that
-    /// is not a number is ignored, and one out of range is brought inside it.
-    var interval: Duration {
-        guard let raw = defaults.object(forKey: Key.interval) else { return Self.defaultInterval }
-        guard let seconds = (raw as? NSNumber)?.doubleValue, seconds.isFinite else {
+    /// The *Shuffle All* choice in the wallpaper's domain, **read every time it
+    /// is needed** — nothing reads a preference into a stored property, so a
+    /// change from anywhere applies within `recheck` and never needs a restart.
+    /// A missing tag is the default, and so is anything that is not a tag, which
+    /// says so once.
+    public var choice: ShuffleInterval {
+        let reading = IntervalReading.parse(defaults.object(forKey: Key.interval), from: .suite)
+        if case .unknown(let raw, _) = reading {
             complainAboutInterval(
-                "\(Key.interval) is not a number; using \(Self.defaultInterval.spokenSeconds)")
-            return Self.defaultInterval
+                "\(Key.interval) of \(raw) is not one of the choices; using \(Self.defaultInterval.rawValue)")
         }
-        let clamped = min(
-            max(seconds, Self.shortestInterval.totalSeconds), Self.longestInterval.totalSeconds)
-        if clamped != seconds {
-            complainAboutInterval(
-                "\(Key.interval) of \(seconds) is out of range; using \(Duration.seconds(clamped).spokenSeconds)")
-        }
-        return .seconds(clamped)
+        return reading.choice(default: Self.defaultInterval)
+    }
+
+    /// The choice in the seconds the loop works in.
+    var interval: Duration { choice.duration }
+
+    /// The *Shuffle All* pop-up. Written as the tag, and a round is asked for at
+    /// once: the due rule still decides, so a display the new interval makes due
+    /// changes now and every other display keeps its picture.
+    public func setChoice(_ choice: ShuffleInterval) {
+        guard choice != self.choice else { return }
+        defaults.set(choice.rawValue, forKey: Key.interval)
+        intervalProblem = nil
+        Log.wallpaper.notice("wallpaper: shuffle interval set to \(choice.rawValue, privacy: .public)")
+        if loop != nil { kick() }
     }
 
     /// Once per bad value, not once per read — the interval is read on every

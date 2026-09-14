@@ -34,12 +34,23 @@ struct SourcesSettingsView: View {
     /// removes the block and hands back the one job the modality was doing, so
     /// this does it: one picker at a time, and the menu says so while it is up.
     @State private var picking = false
+    /// The two *Shuffle All* pop-ups, as last read. Read again whenever the
+    /// window appears, since `defaults write` and another window can change
+    /// either, and neither domain rings anything this view could hear.
+    @State private var screensaverInterval = ScreensaverPreferences.defaultInterval
+    @State private var wallpaperInterval = Wallpaper.defaultInterval
+
+    /// The screensaver's domain, which this window writes and the saver reads.
+    private static let screensaver = ScreensaverPreferences(deployment: .development)
 
     var body: some View {
+        // Syd, 2026-09-14: "There should be THREE panels. One for the sources;
+        // one for screensaver-specific settings; one for wallpaper-specific
+        // settings."
         VStack(spacing: 12) {
-            photosPanel
-            filesPanel
-            wallpaperCheckbox
+            sourcesPanel
+            screensaverPanel
+            wallpaperPanel
         }
         .padding(12)
         // The width floor is what this was pinned at. The height floor grew
@@ -47,20 +58,28 @@ struct SourcesSettingsView: View {
         // would have let the window shrink until the list it encloses was a
         // couple of rows tall.
         //
-        // **480 since the collections became a list of their own.** Four
+        // **480 once the collections became a list of their own.** Four
         // collection rows and five folder rows are 306 points between them
         // before either heading, the buttons beside the collections, or the
         // controls under the folders — and at 440 the two lists were squeezing
         // each other rather than scrolling, which is the whole thing bounding
         // them was for.
+        //
+        // **640 since the screensaver and wallpaper panels, 2026-09-14.** The
+        // two of them and the Sources panel's own heading and inset are about
+        // 160 points the lists must not be squeezed to pay for.
         .frame(
             minWidth: 520, idealWidth: 520, maxWidth: .infinity,
-            minHeight: 480, idealHeight: 480, maxHeight: .infinity)
+            minHeight: 640, idealHeight: 640, maxHeight: .infinity)
         // Both, and deliberately: the first is the panel being opened, the
         // second is this app starting up with it already open. Neither can be
         // assumed from the other.
         .task { await model.load() }
-        .onAppear { model.beginPolling() }
+        .onAppear {
+            model.beginPolling()
+            screensaverInterval = Self.screensaver.interval
+            wallpaperInterval = wallpaper.choice
+        }
         .onDisappear { model.endPolling() }
         // A change made in this app's own picker, rather than one the timer
         // will find eventually. See `SourceChanges`.
@@ -80,15 +99,93 @@ struct SourcesSettingsView: View {
         }
     }
 
-    // MARK: - The wallpaper
+    // MARK: - The screensaver and the wallpaper
+
+    /// Syd, 2026-09-14: "One sources panel, with subpanels for apple photos,
+    /// google photos (eventually), and one for files."
+    private var sourcesPanel: some View {
+        Panel("Sources") {
+            VStack(spacing: 10) {
+                photosPanel
+                filesPanel
+            }
+            .padding(10)
+        }
+    }
+
+    private var screensaverPanel: some View {
+        Panel("Screensaver") {
+            shuffleAll(
+                Binding(
+                    get: { screensaverInterval },
+                    set: { choice in
+                        Log.sources.notice(
+                            "panel: screensaver shuffle set to \(choice.rawValue, privacy: .public)")
+                        screensaverInterval = choice
+                        Self.screensaver.set(choice)
+                    }))
+        }
+        // Its own height and no more; the lists above take whatever is left.
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The checkbox, and the pop-up underneath it. Syd: "Wallpaper needs its
+    /// own panel with the enable checkbox, and the slider underneath it."
+    private var wallpaperPanel: some View {
+        Panel("Wallpaper") {
+            VStack(spacing: 0) {
+                wallpaperCheckbox
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                // A drawn rule, for the reason the folder list gives.
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(height: 1)
+                    .padding(.horizontal, 10)
+                shuffleAll(
+                    Binding(
+                        get: { wallpaperInterval },
+                        set: { choice in
+                            Log.sources.notice(
+                                "panel: wallpaper shuffle set to \(choice.rawValue, privacy: .public)")
+                            wallpaperInterval = choice
+                            wallpaper.setChoice(choice)
+                        }))
+                // A dependent control, greyed while what it depends on is off.
+                .disabled(!wallpaper.isEnabled)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// One *Shuffle All* row, drawn like System Settings' screen saver pane:
+    /// the title on the left, the choice and its chevrons on the right. Syd,
+    /// 2026-09-14: "The title should be "Shuffle All"", and "don't put in that
+    /// second line."
+    ///
+    /// **Applies as soon as it is chosen**, with no spinner — nothing here goes
+    /// to the agent.
+    private func shuffleAll(_ selection: Binding<ShuffleInterval>) -> some View {
+        HStack {
+            Text("Shuffle All")
+            Spacer(minLength: 12)
+            Picker("Shuffle All", selection: selection) {
+                ForEach(ShuffleInterval.allCases) { interval in
+                    Text(interval.title).tag(interval)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
 
     /// Syd, 2026-09-10: "a checkbox which says 'Also set wallpapers'."
     ///
-    /// **Off until ticked**, and unticking leaves the desktop as it is. Not in
-    /// a panel of its own: it is one switch, and a box around one checkbox is
-    /// more frame than content. Where it finally lives is the menu-bar app's
-    /// question — see `Wallpaper Plan.md`, *The* Also set wallpapers
-    /// *checkbox*.
+    /// **Off until ticked**, and unticking leaves the desktop as it is. It
+    /// stays "until we have a standalone wallpaper binary" — Syd, 2026-09-14.
     private var wallpaperCheckbox: some View {
         Toggle(
             "Also set wallpapers",
@@ -106,7 +203,7 @@ struct SourcesSettingsView: View {
     /// collections are in play, and a way to change it. The collections *are*
     /// sources underneath, and the lower panel deliberately does not show them.
     private var photosPanel: some View {
-        Panel("Apple Photos") {
+        Panel("Apple Photos", level: .subpanel) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     chosenCollections
@@ -343,7 +440,7 @@ struct SourcesSettingsView: View {
 
     /// What we already had, with a box drawn round it and a name put on it.
     private var filesPanel: some View {
-        Panel("Folders and Files") {
+        Panel("Folders and Files", level: .subpanel) {
             VStack(spacing: 0) {
                 list
                 // **A drawn rule rather than `Divider()`.** A `Divider` is a
@@ -709,11 +806,20 @@ struct ConfigureSourceView: View {
 /// was overridden before this existed: the default is caption-sized, which reads
 /// as a footnote attached to a box rather than as the name of a section.
 private struct Panel<Content: View>: View {
+    /// A panel is a section of the window; a subpanel is a section of a panel,
+    /// and its heading is a step smaller so the two do not read as siblings.
+    enum Level {
+        case panel
+        case subpanel
+    }
+
     private let title: String
+    private let level: Level
     private let content: Content
 
-    init(_ title: String, @ViewBuilder content: () -> Content) {
+    init(_ title: String, level: Level = .panel, @ViewBuilder content: () -> Content) {
         self.title = title
+        self.level = level
         self.content = content()
     }
 
@@ -724,7 +830,7 @@ private struct Panel<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.headline)
+                .font(level == .panel ? .headline : .subheadline.weight(.semibold))
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(Color(nsColor: .controlBackgroundColor))

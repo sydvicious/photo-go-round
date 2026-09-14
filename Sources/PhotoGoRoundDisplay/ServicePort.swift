@@ -67,6 +67,12 @@ public enum ServicePort {
     /// suites use one so that nothing lands in the directory `cfprefsd` owns.
     static func plistURL(for preferences: Preferences) -> URL? {
         guard let domain = preferences.domain else { return nil }
+        return plistURL(forDomain: domain)
+    }
+
+    /// The same, for a domain that is not the agent's — the screensaver reads
+    /// its own through here.
+    static func plistURL(forDomain domain: String) -> URL {
         if domain.hasPrefix("/") {
             return URL(filePath: domain).appendingPathExtension("plist")
         }
@@ -75,24 +81,42 @@ public enum ServicePort {
             .appending(path: "\(domain).plist")
     }
 
-    static func readFile(at url: URL) -> Reading {
-        // A domain nothing ever wrote has no file, and that is *not* a refusal —
-        // it is the ordinary state of a machine where the agent has never run.
+    /// What a preference file holds, for a reader the suite refused.
+    enum Contents {
+        /// No file. **Not a refusal**: a domain nothing ever wrote has none.
+        case missing
+        case contents([String: Any])
+        case unreadable(String)
+    }
+
+    static func contents(at url: URL) -> Contents {
         guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else {
-            return .none
+            return .missing
         }
         let data: Data
         do {
             data = try Data(contentsOf: url)
         } catch {
-            return .unreadable(reason: error.localizedDescription)
+            return .unreadable(error.localizedDescription)
         }
         guard
             let any = try? PropertyListSerialization.propertyList(
                 from: data, options: [], format: nil),
             let dictionary = any as? [String: Any]
         else {
-            return .unreadable(reason: "the preference file would not parse")
+            return .unreadable("the preference file would not parse")
+        }
+        return .contents(dictionary)
+    }
+
+    static func readFile(at url: URL) -> Reading {
+        // A domain nothing ever wrote has no file, and that is *not* a refusal —
+        // it is the ordinary state of a machine where the agent has never run.
+        let dictionary: [String: Any]
+        switch contents(at: url) {
+        case .missing: return .none
+        case .unreadable(let reason): return .unreadable(reason: reason)
+        case .contents(let found): dictionary = found
         }
         guard let raw = dictionary[Preferences.Key.servicePort.rawValue] as? Int,
             raw > 0, raw <= Int(UInt16.max)

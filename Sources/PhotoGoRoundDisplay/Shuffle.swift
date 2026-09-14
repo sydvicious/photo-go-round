@@ -122,10 +122,6 @@ public final class Shuffle {
         }
     }
 
-    /// How long a picture stays up. Not yet a preference: *Everything
-    /// user-settable is a user default* is held back to Beyond 0.1, and a
-    /// number nobody has looked at yet is not worth a key.
-    public static let defaultDwell = Duration.seconds(10)
     /// A cold start answers `204` until the first downloads land, so this is
     /// how quickly a fresh library starts showing something.
     public static let defaultWhenEmpty = Duration.seconds(3)
@@ -160,7 +156,13 @@ public final class Shuffle {
     /// The three waits, injected for the same reason `SourcesModel` takes its
     /// poll interval: a test that waits ten real seconds to watch one picture
     /// give way to the next is a test nobody will run.
-    private let dwell: Duration
+    ///
+    /// **The dwell is asked for before every wait**, not fixed when the loop is
+    /// made. The screensaver hands in a read of its *Shuffle All* preference:
+    /// its host outlives a session and a `Shuffle` is stopped rather than
+    /// discarded, so a value captured once would keep an old choice until
+    /// `legacyScreenSaver` exits. A window hands in a copy — see `ContentView`.
+    private let dwell: @MainActor () -> Duration
     private let whenEmpty: Duration
     private let whenAbsent: Duration
     /// The size the view is about to draw at, in pixels. Nothing is asked for
@@ -176,7 +178,7 @@ public final class Shuffle {
     public init(
         source: PictureSource,
         consumer: String,
-        dwell: Duration = Shuffle.defaultDwell,
+        dwellFrom dwell: @escaping @MainActor () -> Duration,
         whenEmpty: Duration = Shuffle.defaultWhenEmpty,
         whenAbsent: Duration = Shuffle.defaultWhenAbsent
     ) {
@@ -185,6 +187,19 @@ public final class Shuffle {
         self.dwell = dwell
         self.whenEmpty = whenEmpty
         self.whenAbsent = whenAbsent
+    }
+
+    /// A dwell that never changes: a window's copy, or a test's.
+    public convenience init(
+        source: PictureSource,
+        consumer: String,
+        dwell: Duration = ScreensaverPreferences.defaultInterval.duration,
+        whenEmpty: Duration = Shuffle.defaultWhenEmpty,
+        whenAbsent: Duration = Shuffle.defaultWhenAbsent
+    ) {
+        self.init(
+            source: source, consumer: consumer, dwellFrom: { dwell },
+            whenEmpty: whenEmpty, whenAbsent: whenAbsent)
     }
 
     /// The ordinary case: the agent this checkout's development runs talk to.
@@ -197,12 +212,18 @@ public final class Shuffle {
     /// was hardcoded while the window was the only surface; a shipped saver
     /// talks to production, and the default is what keeps every development run
     /// off a real library — see `Deployment`.
-    public convenience init(consumer: String, deployment: Deployment = .development) {
+    public convenience init(
+        consumer: String, deployment: Deployment = .development,
+        dwell: Duration = ScreensaverPreferences.defaultInterval.duration
+    ) {
         let environment = MacHostEnvironment(deployment: deployment)
         self.init(
             source: PictureClient(preferences: environment.preferences),
-            consumer: consumer)
+            consumer: consumer, dwell: dwell)
     }
+
+    /// How long the next picture will stay up, as things stand.
+    var currentDwell: Duration { dwell() }
 
     /// The view saying how big it is, in pixels, and which display it is on.
     ///
@@ -242,6 +263,8 @@ public final class Shuffle {
     }
 
     private func begin() {
+        Log.deck.notice(
+            "\(self.consumer, privacy: .public): starting, each picture up for \(self.currentDwell.spokenSeconds, privacy: .public)")
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -276,7 +299,7 @@ public final class Shuffle {
             }
             shown = Frame(image: image, picture: picture)
             note(nil)
-            return dwell
+            return dwell()
         } catch let failure as PictureClient.Failure {
             emptyAnswers = 0
             note(Self.trouble(from: failure))

@@ -71,8 +71,8 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - Leave a development agent alone if one is already serving on the same preference domain; two agents on one library is the failure this must not cause.
   - Say what happened when registration is refused. It is the one failure that leaves the window with nothing to show and no way for the user to fix it, which is why it is the one that names somewhere to write to: "Problem launching the agent. Contact support@sydpolk.com."
   - `Scripts/make-agent-bundle.sh` and `pgr_ctl register` stay the rig's way in; decide whether the script is subsumed by a copy phase.
-- *Also set wallpapers* — a checkbox that turns the wallpaper on. **Built 2026-09-10**, under the two panels in the Settings window. Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wallpapers'."
-  - While it is ticked, the app runs the wallpaper: a new picture on each display every `intervalSeconds`, a preference in the wallpaper's own domain that defaults to thirty minutes — sixty seconds from 2026-09-10, back to thirty minutes on 2026-09-13, when the development domain was set to thirty minutes as well. Unticking stops it and leaves the desktop as it is.
+- *Also set wallpapers* — a checkbox that turns the wallpaper on. **Built 2026-09-10**, under the two panels in the Settings window, and in the Wallpaper panel since 2026-09-14. Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wallpapers'."
+  - While it is ticked, the app runs the wallpaper: a new picture on each display at the *Shuffle All* interval, a tag under `interval` in the wallpaper's own domain that defaults to one hour since 2026-09-14. It was `intervalSeconds`, in seconds: thirty minutes by default, and sixty seconds from 2026-09-10 to 2026-09-13. See *Time between pictures*. Unticking stops it and leaves the desktop as it is.
   - **Off until ticked.** Claude's pick when building; what it defaults to is still open in `Wallpaper Plan.md`, which owns the design.
   - `AppDelegate` hosts it; the loop itself is `Wallpaper`, in `PhotoGoRoundDisplay`, so a binary of its own can host it later.
 - *The agent's dashboard, from the About box* — **built 2026-09-12.** Syd, 2026-09-12: "the reason I want it in the about box is that gives me the port number. it should open the dashboard in the system browser, not a webview in the app."
@@ -80,11 +80,17 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - Re-read every two seconds while the box is open, because the agent takes a new port every launch.
   - With no port published it says "Photo-Go-Round Is Not Running", the picture window's words for the same condition. A preference domain that cannot be read says so, with the reason.
   - The dashboard itself is the agent's: `photogoroundd(1)`, *SERVICE → Dashboard*.
+- *Time between pictures* — how long each picture stays up, chosen in Settings: one pop-up for the screensaver, one for the wallpaper. **Built 2026-09-14**, apart from the picture window's picker. The tests pass. Syd, the same day, once it was running: "app is running and is looking great." And after using it: "I have changed the screensaver settings a couple of times, and created a new app window. things look great." **The log confirms the window's copy:** `panel: screensaver shuffle set to oneMinute` at 09:11:20, then a new window's `app: starting, each picture up for 60 seconds` at 09:11:29. **The screensaver was not exercised:** its last session ended at 08:48, before the build, and no `saver: shuffle interval` line exists yet. See *Time between pictures* below.
+  - Settings has three panels: Sources, with subpanels for Apple Photos, Google Photos (eventually), and files; Screensaver; and Wallpaper.
+  - Screensaver and Wallpaper each hold a "Shuffle All" pop-up. Wallpaper also holds the *Also set wallpapers* checkbox, above the pop-up, until the wallpaper is a binary of its own.
+  - The screensaver defaults to every ten seconds and the wallpaper to every hour.
+  - A new picture window takes the screensaver's interval when it is created and keeps its own copy, even if the screensaver's interval changes later.
+  - The picture window's picker is separate work, done after this. Its design is under *The window's picker*.
 - *A menu bar app* — the picture window becomes something the app can show rather than the app itself. **Not built.**
   - **Probably the shipping form, 2026-09-10:** "The full desktop app is useful, but we are probably not going to ship it." See TODO.md, *A menu-bar app for shipping*.
   - A status item, and an item that brings the window up.
   - **Deliberately unfinished.** What else belongs in that menu, whether the Dock icon goes with it, and what closing the last window means are all open.
-- *Later, in the same places* — the Display tab for timer duration and fit; going backwards through history.
+- *Later, in the same places* — the Display tab for timer duration and fit; going backwards through history. *For the screensaver and the wallpaper, timer duration is now* Time between pictures*. The picture window's is designed there too, under* The window's picker*.*
 
 # Design Decisions
 
@@ -331,6 +337,108 @@ Keys are space, →, ↓, and page down, on the focused window. Each window owns
 Sandboxed, `NSOpenPanel` becomes a powerbox transaction: access arrives as a security-scoped bookmark rather than a path. Writing the path into preferences would hand the agent a string it has no right to use — except the agent is a separate, unsandboxed process, so it would work anyway. The fragility is that the app's ability to add a source would stop being a property of the app and become a property of the agent staying unsandboxed.
 
 If both were sandboxed, the source list would carry bookmark data rather than paths — the change `SourceSpec` and `FileAccess` were built to absorb, one nullable column with the provider code identical either way. Worth knowing this feature is the first thing that would break, and that the insurance already exists.
+
+## Time between pictures
+
+**Built 2026-09-14**, except *The window's picker* and *Options in System Settings, later*. Decided with Syd the same day.
+
+### The Settings window
+
+- **Three panels:** "One for the sources; one for screensaver-specific settings; one for wallpaper-specific settings."
+- **Sources:** "One sources panel, with subpanels for apple photos, google photos (eventually), and one for files."
+- **Screensaver:** the "Shuffle All" row.
+- **Wallpaper:** the *Also set wallpapers* checkbox, with the "Shuffle All" row underneath it. The checkbox stays "until we have a standalone wallpaper binary". The row is disabled while the checkbox is unticked.
+
+### The control
+
+- **A pop-up menu, like System Settings' screen saver pane.** The row matches that pane: "Shuffle All" on the left, and the current choice with an up-and-down chevron button on the right. There is no second line under the title.
+- **The choices:** "Every 10 Seconds", "Every 30 Seconds", "Every Minute", "Every 5 Minutes", "Every 10 Minutes", "Every 30 Minutes", "Every Hour", "Every 2 Hours", "Every 8 Hours", "Every 12 Hours", and "Every Day". No "Continuously".
+- **Defaults:** "Every 10 Seconds" for the screensaver, and "Every Hour" for the wallpaper. The wallpaper's replaces the thirty minutes set on 2026-09-13.
+- **A choice applies as soon as it is made.** There is no spinner, because nothing goes to the agent.
+
+### Preferences
+
+- **The wallpaper, the screensaver, the app window, and the agent each have their own preferences.** The one thing every client reads from the agent's domain is `servicePort`, and `ServicePort.read` already handles it.
+- **The screensaver's domain** is `com.sydpolk.photogoround.screensaver.dev`, or `.screensaver.prod` in production, beside the wallpaper's `.wallpaper.dev` and `.wallpaper.prod`.
+- **The value is stored as an enum tag in English camelCase**, under the key `interval`: `tenSeconds`, `thirtySeconds`, `oneMinute`, `fiveMinutes`, `tenMinutes`, `thirtyMinutes`, `oneHour`, `twoHours`, `eightHours`, `twelveHours`, `oneDay`. A tag becomes seconds when it is read and turns back into a tag when it is written, so the wallpaper loop and `Shuffle` keep working in seconds. A missing or unknown tag gives the default, and an unknown one is logged.
+- **`intervalSeconds` is no longer read.** Syd deleted it from the development wallpaper domain, the only place it was set, on 2026-09-14.
+- **The app window's preferences are not stored.** In this phase, before the window has a picker, "the app window will read the current screensaver internal when it is created, and it will stay there with its own copy of the setting even if the screensaver interval is changed."
+
+### Behaviour
+
+- **Wallpaper:** a changed interval acts only through the due rule. A display changes once its stored time plus the new interval has passed. Choosing in the pop-up asks which displays are due straight away; a `defaults write` is noticed within the loop's thirty-second recheck. Shortening can change a picture at once, and lengthening keeps the current one up longer.
+- **Screensaver:** inside `legacyScreenSaver`'s sandbox, `UserDefaults(suiteName:)` comes back empty, so the saver reads the plist as a file, the way `ServicePort` does.
+  - **The saver reads its interval before every picture.** `Shuffle` asks a closure instead of holding a fixed value. This was built that way, not measured.
+  - **A change is never made while the saver is on screen.** Syd, 2026-09-14: "impossible to change the settings from the app while screensaver is running." What the per-picture read covers is a change made between sessions: `legacyScreenSaver` outlives a session and keeps each display's `Shuffle`, so the next session starts with the new value instead of the one the loop was made with.
+  - **The file route works, measured 2026-09-14.** The first run of the new saver logged `saver: shuffle interval tenSeconds via file` at 09:18:04, then `screensaver: starting, each picture up for 10 seconds`. The app had written the tag at 09:12:11, and the plist's modification time was 09:12.
+  - **A change made just before a session arrives one picture late, measured 2026-09-14.** Syd: "I just set screensaver to 30 seconds, and when I reinvoked it, it did not pick it up."
+    - 09:18:38.442: `panel: screensaver shuffle set to thirtySeconds`.
+    - 09:18:41.597: the session starts with `each picture up for 10 seconds`, and no `shuffle interval` line, so the file still said `tenSeconds`.
+    - 09:18:48: the plist's modification time, ten seconds after the write. `cfprefsd` held it that long.
+    - 09:18:52.407: `saver: shuffle interval thirtySeconds via file`. Every picture after that, and the next session at 09:19:24, used thirty seconds.
+
+    The per-picture read did its job. What failed is that the file lags the app's write by about ten seconds.
+
+    **Left as it is.** Syd: "seems to be a slight propogation delay. it's not a huge deal."
+
+    **Whether a flush would remove the delay is unmeasured.** A probe the same day wrote to path-named domains in a scratch directory. The file carried the new value immediately, with no flush, with `synchronize()`, and with `CFPreferencesAppSynchronize` alike, so the probe could not reproduce the lag. Only a dotted domain under `~/Library/Preferences`, the real case, has shown it.
+
+### The window's picker, done after this phase
+
+- **Three ways to reach it:**
+  - a settings gear in the upper trailing corner, "transparent until the mouse moves over it (but visible)";
+  - a context menu anywhere in the window except the gear, with "PhotosGoRound Settings" (opens Settings, or brings it to the front) and "Window Settings";
+  - the View menu, holding only "Window Settings".
+- **Window Settings slides a sheet down from the top of the window** with the "Shuffle All" pop-up in it. It has no Done button, and it has a grab handle. A click anywhere else in the app dismisses it. The pop-up is live immediately.
+- **The window's interval starts at the screensaver's** and is never stored.
+- **To ask when this work starts:**
+  - whether "transparent (but visible)" means dimmed;
+  - whether the gear opens the sheet directly;
+  - how the app's name is spelled in the menu item;
+  - whether replacing the View menu may drop Enter Full Screen;
+  - what the grab handle does;
+  - whether a change cuts short the picture already up;
+  - whether `advanceIntervalSeconds` (*Advancing costs a card*) is also a window preference that is not stored.
+
+  One constraint goes with them: a standard Mac sheet has no grab handle and does not close on an outside click.
+
+### Options in System Settings, later
+
+"I want this now-popup menu to be available in the Options button we will eventually add to the system settings for both." Not in this phase. When it is built, two things apply:
+
+- **The screensaver:** its Options sheet runs in the sandbox, which cannot write the screensaver's domain.
+- **The wallpaper:** whether System Settings offers it an Options button at all is unchecked.
+
+### Tests
+
+- Each tag converts to its seconds and back. A missing or unknown tag gives the default.
+- The wallpaper defaults to an hour. The existing thirty-minute test is changed first, and fails.
+- The saver reads its interval from the plist file. Cover a missing domain, an unreadable one, and nonsense, mirroring `ServicePort`'s tests.
+- A new window takes the screensaver's interval, and a window already open keeps its own copy when the screensaver's interval changes.
+- For the window work:
+  - a change writes nothing;
+  - a running `Shuffle` accepts a new dwell.
+
+  The gear, the menus, and the sheet are checked by looking at them.
+
+### Documents this will contradict
+
+None of these has been edited.
+
+- **`Wallpaper Plan.md`:**
+  - the thirty-minute default;
+  - `intervalSeconds` in seconds;
+  - the checkbox under two panels;
+  - *The set of interval choices*, which this answers.
+- **`Screensaver Plan.md`:** *Whether the dwell becomes a preference*.
+- **`PLAN.md`:**
+  - *Everything user-settable is a user default*, held back to Beyond 0.1;
+  - for the window work, *Showing unavailability*, which the gear sits against.
+- **This document:**
+  - *Sources in Settings* and *Two panels, because there is one Photos library*, which are now subpanels of one Sources panel;
+  - *Sources by kind, in sections*, on where Google Photos goes;
+  - for the window work, *Chevrons on the photograph*, whose exception was argued for a control that vanishes.
+- **In code:** `PhotoGoRoundApp`'s "chrome overlapping the image is the one thing this window must not do", for the window work. `Shuffle.defaultDwell` and `SourcesSettingsView`'s "Not in a panel of its own" went in the build.
 
 ## Captured, not designed
 

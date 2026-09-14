@@ -86,20 +86,20 @@ struct WallpaperTests {
         let screens: Screens
         let directory = URL.temporaryDirectory.appending(path: "pgr-wallpaper-\(UUID().uuidString)")
         let suite = scratchSuiteName("wallpaper")
-        let interval: Duration
+        let interval: ShuffleInterval
         let retry: Duration
 
         init(
             _ answer: Stub.Answer, displays: [WallpaperDisplay],
-            interval: Duration = .seconds(30 * 60), retry: Duration = .seconds(60)
+            interval: ShuffleInterval = .thirtyMinutes, retry: Duration = .seconds(60)
         ) {
             source = Stub(answer)
             screens = Screens(displays)
             self.interval = interval
             self.retry = retry
-            // Through the preference, as `defaults write` would, so every test
-            // here also exercises the path the real interval takes.
-            UserDefaults(suiteName: suite)!.set(interval.totalSeconds, forKey: "intervalSeconds")
+            // Through the preference, as the pop-up would, so every test here
+            // also exercises the path the real interval takes.
+            UserDefaults(suiteName: suite)!.set(interval.rawValue, forKey: "interval")
         }
 
         deinit {
@@ -275,7 +275,7 @@ struct WallpaperTests {
 
         rig.source.answers(.picture(Self.heic, "image/heic"))
         let wait = await wallpaper.round()
-        #expect(abs(wait.totalSeconds - rig.interval.totalSeconds) < 1)
+        #expect(abs(wait.totalSeconds - rig.interval.duration.totalSeconds) < 1)
     }
 
     @Test("The change time is stored only after the desktop was set")
@@ -442,14 +442,13 @@ struct WallpaperTests {
 
     // MARK: - The interval is a preference
 
-    /// Syd, 2026-09-10: "60 seconds for now … this should be part of the
-    /// wallpaper preferences." And 2026-09-13: "set both the default and the
-    /// current time between serving wallpaper to 30 minutes."
-    @Test("The interval is thirty minutes when nothing has set it")
+    /// Syd, 2026-09-14: "wallpaper will default to "1 hour"."
+    @Test("The interval is one hour when nothing has set it")
     func intervalDefault() {
         let rig = Rig(.empty, displays: [])
-        UserDefaults(suiteName: rig.suite)!.removeObject(forKey: "intervalSeconds")
-        #expect(rig.make().interval == .seconds(30 * 60))
+        UserDefaults(suiteName: rig.suite)!.removeObject(forKey: "interval")
+        #expect(rig.make().choice == .oneHour)
+        #expect(rig.make().interval == .seconds(60 * 60))
     }
 
     @Test("A set interval is used, and a changed one applies without a restart")
@@ -460,24 +459,37 @@ struct WallpaperTests {
         rig.clock.advance(minutes: 2)
         #expect(!wallpaper.isDue("A"), "thirty minutes were not honoured")
 
-        UserDefaults(suiteName: rig.suite)!.set(60, forKey: "intervalSeconds")
+        UserDefaults(suiteName: rig.suite)!.set("oneMinute", forKey: "interval")
         #expect(wallpaper.isDue("A"), "a shorter interval waited for a restart")
     }
 
-    @Test("Nonsense from defaults write is ignored or clamped, never accepted")
+    /// Syd, 2026-09-14: "the preference should store enum tags for the values."
+    @Test("The pop-up writes the tag, and the loop reads it back in seconds")
+    func choiceIsWrittenAsTheTag() {
+        let rig = Rig(.empty, displays: [])
+        let wallpaper = rig.make()
+        wallpaper.setChoice(.twoHours)
+
+        #expect(UserDefaults(suiteName: rig.suite)!.string(forKey: "interval") == "twoHours")
+        #expect(rig.make().interval == .seconds(2 * 60 * 60))
+    }
+
+    @Test("Anything that is not a tag is the default, never a guess")
     func intervalIsValidated() {
         let rig = Rig(.empty, displays: [])
         let defaults = UserDefaults(suiteName: rig.suite)!
         let wallpaper = rig.make()
 
-        defaults.set("soon", forKey: "intervalSeconds")
-        #expect(wallpaper.interval == .seconds(30 * 60))
-        defaults.set(0, forKey: "intervalSeconds")
-        #expect(wallpaper.interval == .seconds(10))
-        defaults.set(-5, forKey: "intervalSeconds")
-        #expect(wallpaper.interval == .seconds(10))
-        defaults.set(1e12, forKey: "intervalSeconds")
-        #expect(wallpaper.interval == .seconds(7 * 24 * 60 * 60))
+        defaults.set("soon", forKey: "interval")
+        #expect(wallpaper.choice == .oneHour)
+        defaults.set(60, forKey: "interval")
+        #expect(wallpaper.choice == .oneHour)
+        defaults.set("OneMinute", forKey: "interval")
+        #expect(wallpaper.choice == .oneHour)
+        // The key this replaced is not read at all.
+        defaults.removeObject(forKey: "interval")
+        defaults.set(60, forKey: "intervalSeconds")
+        #expect(wallpaper.choice == .oneHour)
     }
 
     @Test("The loop looks again at least every thirty seconds, so a changed interval is noticed")
