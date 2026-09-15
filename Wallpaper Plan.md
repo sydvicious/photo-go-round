@@ -1,6 +1,6 @@
 # Summary
 
-The desktop picture: one photograph per display, changed every `intervalSeconds` — thirty minutes by default, as first planned, and sixty seconds from 2026-09-10 to 2026-09-13 — sized to fit, with the rest filled in the colour set in System Settings. It is a client of the agent like every other surface, hosted by the Mac app first and moved to a bundle of its own later — shown in System Settings › Wallpaper itself, if a probe finds that can work. Subordinate to `PLAN.md`, which places this in Phase 7.
+The desktop picture: one photograph per display, changed every `intervalSeconds` — thirty minutes by default, as first planned, and sixty seconds from 2026-09-10 to 2026-09-13 — sized to fit, with the rest filled in the colour set in System Settings. It is a client of the agent like every other surface, hosted by the Mac app first and moved to a bundle of its own later — shown in System Settings › Wallpaper itself, which a probe showed can work on macOS 27. Subordinate to `PLAN.md`, which places this in Phase 7.
 
 # Rationale
 
@@ -19,8 +19,8 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
   - The agent's served line names the display as well as the consumer, so each display's changes can be counted from the agent's side.
   - **Exit gate:** the app is left open for an evening, every display changes every thirty minutes, and the agent's log shows `consumer=wallpaper` twice an hour per display. *The day and weekend runs began at sixty seconds — a line a minute per display. Since 2026-09-13 the interval is thirty minutes again, so the count is back to twice an hour per display.*
 - **Phase 2 — Its own bundle, in the Wallpaper pane if that can work.** A bundle built and installed very like the screensaver's, so the wallpaper runs without the app and is chosen in System Settings › Wallpaper. *Until 2026-09-14 this phase read "the same loop in a process of its own, installed per user as a plist in `~/Library/LaunchAgents`, with the binary staying inside the app bundle", designed after Phase 1; see* Its own binary.
-  - First, the extension probe: does macOS register an extension of ours on `com.apple.wallpaper`, does the Wallpaper pane list it, and does it run — all with SIP on. **Proposed 2026-09-14; not built.** See *The extension probe*.
-  - If all three pass, a second probe for what the private wallpaper frameworks expect an extension to do.
+  - First, the extension probe: does macOS register an extension of ours on `com.apple.wallpaper`, does the Wallpaper pane list it, and does it run — all with SIP on. **Built and run 2026-09-14: registered, launched and connected to by `WallpaperAgent` with no private entitlement; the pane lists nothing, because the probe answers nothing.** *Until then this read "Proposed 2026-09-14; not built."* See *The extension probe*.
+  - Next, the second probe: a Photo-Go-Round section in the pane that can be chosen and draws a still. **Built and run 2026-09-14: all three gates passed — the section shows, choosing it reaches the extension, and the desktop shows the picture.** *Until then: "Drafted 2026-09-14; not built."* *This bullet first read "If all three pass, a second probe for what the private wallpaper frameworks expect an extension to do."* See *The second probe*.
   - If any fails, it cannot work, and what is left for the pane is a folder registered in Apple's private store. *Until 2026-09-14 a bundle that is only a LaunchAgent was the other choice; Syd: "I don't see the LaunchAgent method as viable in the system wallpaper case."* See *Getting into System Settings › Wallpaper*.
   - `Scripts/make-wallpaper-bundle.sh`, very similar to `Scripts/make-saver-bundle.sh`. See *The bundle, like the saver's*. *Claude's reading, 2026-09-14: it builds and installs whatever ships — the pane's extension if that route works — and has no launchd step unless it does not.*
   - Whatever launchd needs goes in each user's `~/Library/LaunchAgents` — **only if the system wallpaper route cannot be figured out.** Syd: "don't want launch agent at all if system wallpaper route can be figured out."
@@ -69,6 +69,11 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 - **"I am ok with not supporting app and system wallpapers and the two systems fighting each other"** *Claude's reading: turning on the pane's wallpaper and the app's for the same display is not a supported configuration. If somebody does, the two fighting over the desktop is accepted, and nothing is built to prevent it.*
 - **"I don't see the LaunchAgent method as viable in the system wallpaper case."** *Claude's reading: route C — a LaunchAgent calling `setDesktopImageURL` — never appears in the Wallpaper pane, so it is not a way to get the system wallpaper; if the probe fails, route A is the one route into the pane left. Whether a LaunchAgent bundle is still wanted for the app-style wallpaper is not said.*
 - **"don't want launch agent at all if system wallpaper route can be figured out"** — asked whether a LaunchAgent bundle is still wanted for the app-style wallpaper. *Claude's reading: no LaunchAgent bundle is built while the system wallpaper route is being worked out, and none at all if it works; the question comes back only if it cannot be figured out.*
+- **"yes"** — to writing the step 1 findings into this plan and changing *The extension probe* to follow Phosphene's shape: no private entitlement, a sandboxed extension inside a host app.
+- **"yes, build the probe"**
+- **"yes"** — to recording the probe's results here and drafting the second probe.
+- **"yes, build the second probe"**
+- **"yes"** — to recording the second probe's results here.
 
 *Decided before this plan*
 
@@ -86,8 +91,9 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 - **It puts each display's file back when screens or Spaces change, and otherwise does not fight macOS reverting it.** Launch is the third occasion, by Syd's decision above. *Wallpaper is asserted continuously* is later work.
 - **At launch, before putting each file back, it compares the stored file with what `desktopImageURL(for:)` reports and logs any difference.** That is a record of how often the desktop changes while the app is closed, whether macOS reverted it or somebody chose another picture — the evidence *Wallpaper is asserted continuously* says is missing. *A log line only: the read-back was measured lagging on 2026-09-10.*
 - **It asks at each display's native pixel size, as consumer `wallpaper`, with the display UUID.** That gives one consumer row per display, which is the identity the deck already uses.
-- **Phase 2's probe is a throwaway host app carrying one extension on `com.apple.wallpaper`**, built by a script with `swiftc` and `codesign` rather than an Xcode target, signed two ways, and registered by Syd. *2026-09-14; not approved to build.* See *The extension probe*.
+- **Phase 2's probe is a throwaway host app carrying one extension on `com.apple.wallpaper`**, built by a script with `swiftc` and `codesign` rather than an Xcode target, signed two ways, and registered by Syd. *2026-09-14; not approved to build. Revised the same day to follow Phosphene: no private entitlement, a sandboxed extension inside the host app.* See *The extension probe*.
 - **The bundle is an Xcode target, `Photo-Go-Round Wallpaper`, with a host like `AppDelegate` around the same `Wallpaper` loop.** *2026-09-14, proposed before the pane was asked for; much of it changes if an extension is what ships.* See *The bundle, like the saver's*.
+- **Phase 2's second probe answers the pane and draws one bundled still, without the agent**, grown from the first probe's extension. *2026-09-14; built and run that night at Syd's "yes, build the second probe", and all three gates passed.* See *The second probe*.
 # Background
 
 `PLAN.md` Phase 7 is one line — "per-screen `NSWorkspace.setDesktopImageURL`, scheduled by the server." `PLAN.md`'s *Wallpaper mechanics and their limits* and *Wallpaper is asserted continuously, never set once* were written before *The service is the interface*. TODO.md's *Design the wallpaper* settled where the files go and left open who runs the loop, which is now answered.
@@ -98,7 +104,7 @@ Everything a client needs already exists. `PictureClient` asks the agent at a si
 
 The app is unsandboxed (`ENABLE_APP_SANDBOX = NO` in both configurations), so it can write under `~/Library/Application Support` and call `NSWorkspace` without an entitlement.
 
-**System Settings › Wallpaper has no public slot.** The wallpapers it lists are ExtensionKit extensions on `com.apple.wallpaper`, and that extension point requires the private entitlement `com.apple.private.wallpaper.extension` — measured 2026-09-14 from the system's own bundles. The screensaver has Screen Saver › Other; the wallpaper has nothing like it. See *Getting into System Settings › Wallpaper*.
+**System Settings › Wallpaper has no public slot.** The wallpapers it lists are ExtensionKit extensions on `com.apple.wallpaper`, and that extension point requires the private entitlement `com.apple.private.wallpaper.extension` — measured 2026-09-14 from the system's own bundles. The screensaver has Screen Saver › Other; the wallpaper has nothing like it. See *Getting into System Settings › Wallpaper*. *Later the same day: a third-party project, Phosphene, is in the pane with an extension whose source declares no such entitlement. See* Phosphene: a third-party extension in the pane. *Measured that evening: an extension of ours with no private entitlement was registered, launched and connected to by `WallpaperAgent`. See* The extension probe. *Later that night, the second probe's section was chosen in the pane and drew on the desktop. See* The second probe.
 
 **Code was written before this plan and stopped.** On 2026-09-10, a draft of Phase 1 was written and then halted at Syd's direction, because the design had not been read as a plan. **Superseded the same day:** after the probe, Phase 1 was built to this plan and the draft was rewritten rather than kept. See *What was built*.
 
@@ -144,6 +150,19 @@ Recorded in order, because one step of it was a wrong turn of a kind this projec
 34. Syd: "I don't see the LaunchAgent method as viable in the system wallpaper case."
 35. Asked whether a LaunchAgent bundle was still wanted for the app-style wallpaper, Syd: "don't want launch agent at all if system wallpaper route can be figured out."
 36. Asked again whether to write step 33's explanation and the development point into the plan, Syd: "yes, add both to the plan." They are *How the system does wallpaper* and *The development extension point*.
+37. Syd chose the shared cache search first: "1". Nothing defines `com.apple.wallpaper.development` there or anywhere else looked. Syd, during the search: "also make sure and scan the web." The web turned up Phosphene, a third-party extension in the Wallpaper pane on `com.apple.wallpaper`, whose source declares no private entitlement.
+38. Asked whether to write that into the plan and change the probe to follow Phosphene's shape, Syd: "yes".
+39. Syd: "yes, build the probe". Claude built it with `Scripts/make-wallpaper-extension-probe.sh`, following *The extension probe*, with two additions named to Syd: the `dlopen` check and logged connections.
+40. Syd listed his one signing identity, `Apple Development: Sydney Polk (W8E4GRMLBV)`, asked for "the revised build script", asked for it to be written back to the scripts directory and for the command line. It was already there, and he was given the commands.
+41. Syd ran gate 1 on the development-signed build: twelve extensions, ours among them. Claude found that the script's summary printed no signer for an identity build — `codesign -dv` shows `Authority` only at `-dvv` — and fixed it.
+42. Syd asked where the probe would appear in the pane and in what category. Claude read Phosphene's `SettingsProvider.swift`: an extension names its own section, and the probe names none.
+43. Syd's log showed the extension starting and never connected to, and "nothing showed up in the wallpaper pane". Claude read `WallpaperAgent`'s side of the log and the crash report: `WallpaperAgent` had launched the extension, and it had crashed. Disassembly traced the crash to the entry point, and the script was changed to link `_NSExtensionMain`.
+44. Syd rebuilt, registered the probe again and opened the pane. `WallpaperAgent` connected five times, the probe logged each connection, and the pane stayed empty.
+45. Asked whether to record the results and draft the second probe here, Syd: "yes".
+46. Syd: "yes, build the second probe". Claude read Phosphene's view-model mirrors, interface setup, `acquire` and still path in full, built the probe, cleared all but one deliberate warning, and decoded its archive as Apple's class in a harness before handing it over.
+47. Syd: "no photos go round section". The log showed the first probe's extension process, still running, answering instead of the new build, and `ps` confirmed it. Claude added `killall WallpaperProbeExtension` to the script's removal steps; Syd ran it and opened the pane again.
+48. Syd: "I see the section, the probe wallpaper, and the picture on the desktop." The log confirmed all three gates, and showed the snapshot failures and one `isChoiceDownloaded` race.
+49. Asked whether to record the results here, Syd: "yes".
 
 ## Where the loop runs
 
@@ -179,7 +198,7 @@ Answered from general knowledge, not from anything measured on this machine or o
 
 ## Its own binary
 
-*2026-09-14: Phase 2 is being designed now, and aims at the Wallpaper pane; the seven sections after this one hold it. This section is as it was written.*
+*2026-09-14: Phase 2 is being designed now, and aims at the Wallpaper pane; the nine sections after this one hold it. This section is as it was written.*
 
 Held for Phase 2 and not designed here. What has been said about it:
 
@@ -221,7 +240,7 @@ Syd, 2026-09-14: "I don't understand. How are wallpapers done by the system?" An
 **Where each route plugs in:**
 
 - **Phase 1, the app:** sets the choice from outside, through the public call.
-- **The extension probe:** would be one of the kinds of wallpaper `WallpaperAgent` loads, picked in the pane like Apple's — which is why it needs the private entitlement.
+- **The extension probe:** would be one of the kinds of wallpaper `WallpaperAgent` loads, picked in the pane like Apple's. *This line first said that is why it needs the private entitlement; Phosphene's source, found later the same day, suggests it does not. See* Phosphene: a third-party extension in the pane.
 - **Route A:** uses the image extension's existing folder of pictures, set up by writing its private store.
 - **Route C:** the public call again, from a LaunchAgent instead of the app — the same program run in a second place. Ruled out for the system wallpaper.
 
@@ -229,7 +248,7 @@ Syd, 2026-09-14: "I don't understand. How are wallpapers done by the system?" An
 
 Syd, 2026-09-14: "appearing the wallpaper pane itself", and "I really want this in the wallpaper pane but only if it can work."
 
-**Why "like the screensaver" does not carry over.** The saver is a `.saver` bundle in `~/Library/Screen Savers`, and System Settings lists it under Screen Saver › Other. That slot is public. Nothing found shows anyone outside Apple getting a wallpaper into the Wallpaper pane the same way.
+**Why "like the screensaver" does not carry over.** The saver is a `.saver` bundle in `~/Library/Screen Savers`, and System Settings lists it under Screen Saver › Other. That slot is public. Nothing found shows anyone outside Apple getting a wallpaper into the Wallpaper pane the same way. *Corrected later on 2026-09-14: Phosphene does. See* Phosphene: a third-party extension in the pane.
 
 **Measured 2026-09-14, from the system's own bundles on macOS 27:**
 
@@ -239,7 +258,7 @@ Syd, 2026-09-14: "appearing the wallpaper pane itself", and "I really want this 
 - `WallpaperSonomaExtension` is signed with exactly two entitlements: `com.apple.private.wallpaper.extension` and `com.apple.security.app-sandbox`.
 - `WallpaperSonomaExtension` links the private `WallpaperExtensionKit`, `WallpaperFoundation` and `WallpaperTypes`, and the public `ExtensionFoundation` and `AVFoundation`. `WallpaperImageExtension` links the same three private frameworks and `ExtensionFoundation`. Whatever the pane asks of an extension is defined in those private frameworks, and nothing documents it.
 
-**Not measured:** that a build of ours carrying a `com.apple.private.*` entitlement is refused. With System Integrity Protection on, macOS is generally understood to refuse to run a non-Apple binary signed with a private entitlement, but that is general knowledge, not a result from this machine. The probe measures it.
+**Not measured:** that a build of ours carrying a `com.apple.private.*` entitlement is refused. With System Integrity Protection on, macOS is generally understood to refuse to run a non-Apple binary signed with a private entitlement, but that is general knowledge, not a result from this machine. The probe measures it. *Later the same day: Phosphene's author reports running Developer ID signed and notarized without that entitlement, and its source declares none. The probe still measures it on this Mac.* *Measured that evening: not refused. See* The extension probe.
 
 **The routes into the pane, as offered to Syd:**
 
@@ -273,9 +292,52 @@ Found 2026-09-14 while answering *How the system does wallpaper*, and added here
 - Look for the point's definition in the shared cache before building the probe, since what it requires decides what the probe signs with.
 - Give the probe a second extension on `com.apple.wallpaper.development`, run with the same three gates and the same two signatures as the one on `com.apple.wallpaper`, so the two points are measured side by side.
 
+**Searched 2026-09-14, at Syd's go-ahead — "1" — and not found.**
+
+- `strings` over all 82 files of the dyld shared cache in `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/`: `com.apple.wallpaper` appears in 4 files, which shows the search reaches the text; `wallpaper.development` in none.
+- Two earlier passes with `grep -a` over the same files found nothing even for strings that are there, so their empty result is not counted.
+- `pluginkit -m -v -p com.apple.wallpaper.development` lists nothing.
+- LaunchServices' registry, `lsregister -dump` filtered to the name, mentions it only inside `WallpaperAgent`'s entitlements, and holds no extension point by that name.
+- `WallpaperAgent`'s `Info.plist` declares no extension points.
+
+**Probably moot.** Phosphene is in the pane on `com.apple.wallpaper` without the private entitlement, which removes the reason this point mattered. Both proposals above are set aside unless the probe is refused on `com.apple.wallpaper`.
+
+## Phosphene: a third-party extension in the pane
+
+Found 2026-09-14, after Syd's "also make sure and scan the web", and written here at his "yes". **Read from its source on GitHub; not downloaded, and not run on this Mac.**
+
+**What it is.** An MIT-licensed menu-bar app and wallpaper extension, by the GitHub user kageroumado, that adds videos to System Settings › Wallpaper as a collection of its own, chosen for the desktop and the lock screen the way Apple's are.
+
+- Distributed as a signed, notarized DMG and a Homebrew cask. Its README says it was validated on macOS 26 and on the macOS 27 beta, and asks for nothing like turning SIP off.
+- Video only; it offers no stills.
+
+**What the source shows:**
+
+- **The extension's `Info.plist`** holds only `EXAppExtensionAttributes` › `EXExtensionPointIdentifier` = `com.apple.wallpaper`.
+- **The extension target**, `glass.kagerou.phosphene.extension`, is product type `com.apple.product-type.extensionkit-extension`, copied into the app's extensions folder, with `ENABLE_APP_SANDBOX = YES`, `ENABLE_HARDENED_RUNTIME = YES`, deployment target 26.0, and no entitlements file. The project's one entitlements file is the app's, and holds only `com.apple.security.files.bookmarks.app-scope`. The app is unsandboxed and `LSUIElement`.
+- **No `com.apple.private.wallpaper.extension` anywhere**, although `com.apple.wallpaper.appexpt` on this Mac names it in `EXRequiredEntitlements`. Whether that key goes unenforced for this point, or is enforced in a way Phosphene passes, is unknown. The probe's gates are how this Mac answers.
+- **Registered by launching the app**, per its README.
+- **At start the extension `dlopen`s `WallpaperExtensionKit`** from `/System/Library/PrivateFrameworks/` and checks that the private XPC classes it relies on are present, logging one clear line when they are not.
+- **Its `AppExtensionConfiguration` accepts a connection only from a caller it validates**, and exports a protocol whose methods include `acquire`, `update`, `invalidate`, `snapshot`, `provideSettingsViewModels`, adding and removing choice requests, downloads, migration, skipping shuffled content, and debug requests. Apple's request types are read by reflection, since no SDK header declares them.
+- **It draws into a remote `CAContext`** that `WallpaperAgent` hands it, through `AVSampleBufferDisplayLayer`.
+- **Storage:** the extension is sandboxed and the app is not, so the app writes the video library into the extension's sandbox container and announces changes with a Darwin notification.
+
+**Its author's caveats, paraphrased.** Any major macOS release could break it; Apple renaming fields in its request types would break it; and switching wallpapers quickly can wedge `WallpaperAgent`, which killing the process clears. The author's guide to reversing Apple frameworks adds that private-framework code cannot pass App Store review. The same guide says a sandbox will not let a process `dlopen` arbitrary private frameworks, while Phosphene's sandboxed extension does exactly that for one; the two are not reconciled here, and it was not looked into. *Measured 2026-09-14 by the probe: the sandboxed `dlopen` of `WallpaperExtensionKit` succeeds on this Mac.*
+
+**What it means for this plan — Claude's reading, not measured:**
+
+- **The pane is very likely reachable without Apple's entitlement, macOS 27 included.** The probe now confirms a known path on this Mac rather than testing a long shot.
+- **The probe drops the private entitlement.** See *The extension probe*, revised.
+- **The second probe has a map.** What `WallpaperAgent` asks of an extension is largely visible in Phosphene's source. It is MIT, but this project writes its own code rather than taking dependencies, so it is read for reference, not linked or copied.
+- **A still is one frame** drawn into the same remote context Phosphene draws video into. Not checked.
+- **The pane's wallpaper would be sandboxed.** Asking the agent needs permission to open network connections, and finding the port from inside the sandbox — the problem the saver solved by reading the preferences plist as a file.
+- **Phosphene's storage model is one way for the app to hand the extension its settings.**
+- **Syd's App Store point stands:** private-framework code cannot pass review.
+- **`com.apple.wallpaper.development` probably no longer matters.**
+
 ## The extension probe
 
-Claude's proposal, 2026-09-14. **Not built:** Syd asked for it to be captured here, and has not said to build it.
+Claude's proposal, 2026-09-14. **Not built:** Syd asked for it to be captured here, and has not said to build it. **Revised the same day to follow Phosphene**, a third-party extension already in the pane — Syd: "yes". **Built and run that evening** — Syd: "yes, build the probe". See *What the probe found*, below.
 
 **Three questions, in order, each yes or no:**
 
@@ -283,23 +345,115 @@ Claude's proposal, 2026-09-14. **Not built:** Syd asked for it to be captured he
 2. **Does System Settings › Wallpaper show it?** Syd opens the pane and says.
 3. **Does it run?** The extension logs one `probe:` line when it starts. A refusal leaves a line of its own in the unified log, found by the extension's name; the probe's instructions give the `/usr/bin/log show` predicate for both.
 
-A no at any gate ends it: the answer is "it cannot work", and route A is what is left for the pane. *It read "back to A or C" until C was ruled out for the system wallpaper, 2026-09-14.*
+A no at any gate ends it: the answer is "it cannot work", and route A is what is left for the pane. *It read "back to A or C" until C was ruled out for the system wallpaper, 2026-09-14.* *Weaker than it reads for gate 2, found when it was built: the pane lists a provider only from its answer to `WallpaperAgent`'s request for settings view models, which this probe cannot give, so an empty pane with gates 1 and 3 passing is not a no.*
 
 **What is built:**
 
 - A host app, `Photo-Go-Round Wallpaper Probe.app`, `LSUIElement`, which does nothing itself. An ExtensionKit extension ships inside an app, so something has to carry it.
-- One extension in the host's `Contents/Extensions/`, with `EXExtensionPointIdentifier` = `com.apple.wallpaper`; the entitlements `com.apple.private.wallpaper.extension` and `com.apple.security.app-sandbox`, as Apple's carries; and a minimal `@main` on ExtensionFoundation's `AppExtension` that logs the `probe:` line and nothing more.
+- One extension in the host's `Contents/Extensions/`, with `EXExtensionPointIdentifier` = `com.apple.wallpaper`, sandboxed, and **no private entitlement** — Phosphene's shape; and a minimal `@main` on ExtensionFoundation's `AppExtension` that logs the `probe:` line and nothing more. *Revised 2026-09-14; it first carried `com.apple.private.wallpaper.extension` and `com.apple.security.app-sandbox`, copying Apple's.*
+- The host registers the extension by being launched once, as Phosphene's app does.
 - Deployment target macOS 27.0.
 - **Two signatures, as two runs:** ad-hoc, and Syd's development identity. One may be refused where the other is not, and that is measured rather than guessed.
 - **A script with `swiftc` and `codesign`, following `make-agent-bundle.sh`, so the Xcode project is not touched.** Its source sits beside `Scripts/wallpaper-probe.swift`, as the second wallpaper probe.
 - **The output defaults to a directory under DerivedData**, never the checkout.
 - **The script only builds.** Copying the app to `~/Applications` and registering it are Syd's, handed to him as commands, as every install is.
 
-**What it does not answer.** Three yeses say macOS lets an extension of ours in; they say nothing about drawing. What the pane asks an extension for lives in `WallpaperExtensionKit`, `WallpaperFoundation` and `WallpaperTypes`, all private. So a pass leads to a second probe to find that out, and whatever it finds can change with any macOS update — the private store behind route A already moved once, in macOS 26.
+**What it does not answer.** Three yeses say macOS lets an extension of ours in; they say nothing about drawing. What the pane asks an extension for lives in `WallpaperExtensionKit`, `WallpaperFoundation` and `WallpaperTypes`, all private. So a pass leads to a second probe to find that out, and whatever it finds can change with any macOS update — the private store behind route A already moved once, in macOS 26. *2026-09-14: Phosphene's source is the best map of that protocol found so far, read for reference rather than linked or copied.*
 
 **Left to Claude when it is built:** where exactly its source directory sits, and the host's and extension's bundle identifiers.
 
-**Possibly a second extension, on `com.apple.wallpaper.development`** — proposed, not decided. See *The development extension point*.
+**Possibly a second extension, on `com.apple.wallpaper.development`** — proposed, then set aside once the shared cache search found nothing and Phosphene was found. See *The development extension point*.
+
+**What was built, 2026-09-14.** Syd: "yes, build the probe".
+
+- `Scripts/make-wallpaper-extension-probe.sh` compiles `Scripts/wallpaper-extension-probe/Host.swift` and `Extension.swift` with `swiftc` for macOS 27.0, assembles `Photo-Go-Round Wallpaper Probe.app` with `WallpaperProbeExtension.appex` in `Contents/Extensions/`, signs the extension with `com.apple.security.app-sandbox` alone and the host with no entitlements, both with hardened runtime, and verifies the result. `--sign` defaults to ad-hoc and `--output` to `~/Library/Developer/Xcode/DerivedData/photo-go-round/wallpaper-extension-probe`. It prints the install, gate and removal commands, and runs none of them.
+- Bundle identifiers, Claude's picks: `com.sydpolk.photogoround.wallpaper-probe` and `com.sydpolk.photogoround.wallpaper-probe.extension`.
+- Logging: subsystem `com.sydpolk.photogoround`, category `wallpaper-probe`, every line `.notice` and prefixed `probe:`.
+- **Two additions beyond the design above, both Claude's, named to Syd when built:** the extension tries `dlopen` of `WallpaperExtensionKit` and logs the result, which tests the sandbox question in *Phosphene*; and it accepts connections, exporting nothing, and logs each one and its end.
+
+**What the probe found, 2026-09-14,** on the development-signed build — `Apple Development: Sydney Polk (W8E4GRMLBV)`, team `R5PQPZARC5`. **The ad-hoc run has not been made.** Measured from the unified log and the crash report.
+
+- **Gate 1, yes.** `pluginkit -m -v -p com.apple.wallpaper` listed twelve extensions, the twelfth `com.sydpolk.photogoround.wallpaper-probe.extension`, from `~/Applications`.
+- **First run, 20:49: `WallpaperAgent` launched the extension, and the extension crashed.** `WallpaperAgent` began `provideSettingsViewModels` for it and launched it through runningboard, with sandbox profile `application`; nothing refused it. The extension logged that it had started in its own sandbox container and that `dlopen` of `WallpaperExtensionKit` had succeeded, then died with `EXC_BREAKPOINT` (SIGTRAP) inside `AppExtension.main()`, before any connection reached it. `WallpaperAgent` logged the query failing with `NSCocoaErrorDomain` 4099.
+- **The cause was the build, not the system.** The crash report's stack ends in ExtensionFoundation's setup of `_EXRunningExtension._shared`. Disassembled, the trap is a nil check on a word inside `ExtensionMain.launchArguments`, whose field offset is `0x10`, the next field's `0x30`. Xcode's `app-extension` product type, which `extensionkit-extension` is based on, sets `LD_ENTRY_POINT = _NSExtensionMain` and `APPLICATION_EXTENSION_API_ONLY = YES`. `_NSExtensionMain`, in Foundation, hands over to ExtensionFoundation's `_EXExtensionMain`, which reads the launch arguments. The probe had been linked with an ordinary `main`. Phosphene's project overrides none of those settings, and Apple's `WallpaperSonomaExtension` and `WallpaperImageExtension` both import `_NSExtensionMain`.
+- **The fix:** the script links the extension with `-e _NSExtensionMain` and builds it with `-application-extension`. The rebuilt binary's `LC_MAIN` points at the `NSExtensionMain` stub.
+- **Second run, 21:06, after the probe was removed and registered again: gate 3, yes.** `WallpaperAgent` (pid 686) asked for settings view models, launched the extension and connected. The probe logged "connection from pid 686", and "invalidated" within a millisecond. `WallpaperAgent` logged `provideSettingsViewModels` failing with 4099, and "Could not update view model for choice provider com.sydpolk.photogoround.wallpaper-probe.extension". The same exchange came at 21:06:09, :10, :28 and :40, each reusing the running process, which runningboard suspended in between. No crash, and no line about entitlements or signing.
+- **Gate 2: nothing in the pane — the caveat case.** `WallpaperAgent` asks, and the probe has nothing exported to answer with. That the empty export is why each connection is invalidated is Claude's reading, not measured.
+- **The sandboxed `dlopen` of `WallpaperExtensionKit` works** on this Mac, which settles the contradiction recorded in *Phosphene*.
+
+**So an extension of ours, with no private entitlement, is launched and asked by `WallpaperAgent` on macOS 27.** Whether it can be chosen and can draw is *The second probe*.
+
+## The second probe
+
+Claude's draft, 2026-09-14, at Syd's "yes" to recording the first probe's results and drafting this. **Not built, and not approved to build.** **Built and run that night** — Syd: "yes, build the second probe". See *What the second probe found*, below.
+
+**What it answers:** whether a Photo-Go-Round section can be chosen in System Settings › Wallpaper and draw a still on the desktop. It asks the agent for nothing. A picture carried in the extension keeps the network, the agent's port, and the sandbox's view of preferences out of it.
+
+**Three questions, in order:**
+
+1. **Does the pane show a Photo-Go-Round section with one item?** The extension answers the request for settings view models with one group and one item; Syd opens the pane and says.
+2. **Does choosing the item reach the extension?** Syd picks it; the extension logs the `acquire` it receives — the size asked for and the choice — and what it sent back.
+3. **Does the desktop show the picture?** Syd looks and says. The log line for the reply is not evidence that the glass changed.
+
+Each no is read against the log, which shows whether the request arrived and what was sent back.
+
+**What `WallpaperAgent` asks, from Phosphene's source — read for reference, not copied:**
+
+- **The calls.** Phosphene declares the protocol `WallpaperAgent` calls as `WallpaperExtensionXPCProtocol`: `provideSettingsViewModelsWithContentTypes:reply:` for the pane; `acquireWithId:request:reply:`, `updateWithId:request:reply:`, `invalidateWithId:reply:` and `snapshotWithId:reply:` for a surface; and calls for choices, downloads, migration, shuffling, debugging and notifications. The extension can call back through `WallpaperExtensionProxyXPCProtocol`, which includes `updateSettingsViewModels:reply:`.
+- **The view models** are the private class `WallpaperSettingsViewModelsXPC`. Phosphene writes Codable mirrors of `WallpaperTypes`' values — view models holding groups; a group with an id, a name, a sort order, a sort id and items; an item with a choice id, a name, a thumbnail given as an image URL, a choice descriptor and a content badge — archives them with `NSKeyedArchiver` under a class name of its own, and unarchives them with `setClass` mapping that name to the real class. The same models serve the desktop picker and the screen saver picker.
+- **The surface.** For `acquire`, Phosphene creates a remote `CAContext` through private QuartzCore API, gives it a root layer of the size the request names, and replies with an instance of the private `WallpaperRemoteContextXPC`, made with `class_createInstance`, whose `box` ivar it writes the context id into after checking the class's layout.
+- **A still.** Phosphene draws video through `AVSampleBufferDisplayLayer`, and has a diagnostic path that hosts a still only, from a `CGImage` wrapped as a single sample buffer.
+
+**What is built, as drafted:**
+
+- The first probe's host, script and bundle identifiers, so the steps to register it are unchanged; the extension grows rather than a second one appearing.
+- A bridging header declaring the two protocols and the private `CAContext` interface, compiled in with `-import-objc-header`.
+- One group, "Photo-Go-Round", holding one item, "Probe Picture", whose thumbnail and picture are one JPEG in the extension's `Resources` — readable from inside the sandbox without asking for anything.
+- The settings request answered as above. `acquire` answered with a remote context whose root layer shows the picture, aspect fit: Phosphene's still path first, and a plain layer's `contents` as the simpler alternative, the two measured in turn if the first does not draw.
+- Every other call answered with an empty reply, and every call logged with a description of its arguments, so what `WallpaperAgent` sends is on record.
+- The caller's pid logged on each connection. Phosphene checks the caller's audit token through private SPI; the probe leaves that out.
+
+**Costs, named now:**
+
+- **More private API, and a more brittle kind.** The first probe used the extension point and nothing else. This one depends on the private `CAContext` interface, on writing a context id into a private class's ivar, and on class and field names Apple can change in any release; Phosphene's README says renamed fields would break it.
+- **The pane caches answers.** Phosphene's comments say that on macOS 26.6 `WallpaperAgent` keeps the view models on disk and asks again only after a reinstall or an OS update, so each rebuild is removed and registered again before it is judged. Not measured here.
+- **A rendering fault can wedge `WallpaperAgent`** for every wallpaper, not only ours; Phosphene's remedy is killing it. That is Syd's to do, as everything running on his Mac is.
+
+**What it does not answer:** pictures from the agent; the sandboxed extension's network permission and port discovery; a surface per display and per Space; the lock screen; snapshots for the pane's thumbnails; the *Shuffle All* interval; and the empty state.
+
+**Left to Claude when it is built:** the picture, the group's and item's names, and the exact wording of the log lines.
+
+**What was built, 2026-09-14.** Syd: "yes, build the second probe".
+
+- The first probe's host, script and bundle identifiers, with the extension grown to four files in `Scripts/wallpaper-extension-probe/`:
+  - `Extension.swift` starts, loads `WallpaperExtensionKit`, checks that the fifteen private classes are present, writes the thumbnail, and exports the handler on each connection;
+  - `PaneHandler.swift` declares the protocol, allows the private classes on each object argument, logs every call, answers the settings request and `acquire`, and answers everything else empty;
+  - `PaneModels.swift` is the section;
+  - `ProbePicture.swift` is the picture, its thumbnail, and the still as a sample buffer.
+- The script compiles the four files, raises the version to 0.2 (build 2), and prints this probe's gates.
+- **Checked before Syd ran it:** a command-line harness in Claude's scratchpad loaded `WallpaperExtensionKit` and decoded the probe's archive as `WallpaperSettingsViewModelsXPC`. Walking the result with `Mirror` found every value in Apple's fields, for the desktop and the screen saver alike.
+- **One warning, kept on purpose:** `AVSampleBufferDisplayLayer`'s `sampleBufferRenderer.enqueue` is deprecated on macOS 27, in favour of a render synchronizer's receiver taking a `CMReadySampleBuffer`. It is the call Phosphene is validated with on 27, and the probe asked whether a still draws, not how the newer API behaves.
+
+**Where it differs from the draft above — Claude's choices while building, named to Syd:**
+
+- No bridging header. The protocol is declared in Swift with Apple's selectors, and `CAContext` is reached by name rather than declared.
+- The picture is drawn in code — a blue-to-yellow gradient labelled "Photo-Go-Round wallpaper probe" — not carried as a JPEG. Its thumbnail is written into the extension's container, where Phosphene keeps its own, because the pane reads the thumbnail from a URL.
+- Only the sample-buffer layer is used. Phosphene's author recorded that a plain layer's `contents` composites black in `WallpaperAgent`, so the draft's alternative was dropped.
+- The section is offered to the screen saver picker as well as the desktop, as Phosphene does.
+- The group's sort order, −100, and sort id, `com.apple.wallpaper.aerials`, are Phosphene's; what they mean has not been looked into.
+- The surface is built, and the reply sent, on the main thread: the macOS 27 SDK makes `AVSampleBufferDisplayLayer`'s properties main-actor state, and XPC calls arrive elsewhere.
+
+**What the second probe found, 2026-09-14,** on the development-signed build. Measured from the unified log; gates 1 and 3 also seen by Syd: "I see the section, the probe wallpaper, and the picture on the desktop."
+
+- **The first attempt, at 21:59, never ran the new code.** Every line came from pid 38311 — the first probe's extension process, started at 21:06 and suspended since — because `WallpaperAgent` reuses a running extension process even after a new build is registered; `ps` confirmed its start time. The old code answered, and `WallpaperAgent` logged the same 4099 failures as before. The script's removal steps now begin with `killall WallpaperProbeExtension`; Syd ran it and opened the pane again.
+- **Startup, 22:04:47, pid 45803:** sandboxed; `WallpaperExtensionKit` loaded; all fifteen private classes present; thumbnail written.
+- **Gate 1, yes.** `WallpaperAgent` asked for settings view models, passing a `WallpaperContentTypeSetXPC`. The probe answered with 5,005 bytes decoded as `WallpaperSettingsViewModelsXPC`, and the section appeared.
+- **Gate 2, yes.** Choosing the item at 22:04:55 brought two `acquire` calls, both 1800×1169 at 2x on display 1: one with `isPreview` false — the desktop — answered with remote context 2954774346, and one with `isPreview` true — the pane's preview — answered with context 3318084944.
+- **Gate 3, yes.** The picture is on the desktop.
+- **Behind the working result:** five `snapshot` calls between 22:04:55 and 22:05:00, each answered with nothing and each followed by `WallpaperAgent` logging "Failed to create snapshot to export"; what the snapshot is for — the lock screen, or an exported copy — is not known. And one `isChoiceDownloaded` failing with 4099 at 22:04:55.355, in the nine milliseconds between one connection closing and the next opening; Claude's reading is a race on the closing connection rather than a bad answer. No other errors.
+- **The request-field log line is swamped** by the bytes of the choice's configuration data, so the fields that matter were cut off the end of it. The size, scale, display and preview flag were still found. Worth trimming in the next probe.
+
+**So a Photo-Go-Round section can be chosen in System Settings › Wallpaper and can draw a still on the desktop on macOS 27**, from a sandboxed extension with no private entitlement. Not yet asked: the ad-hoc signed run, pictures from the agent, snapshots and the lock screen, Spaces and several displays, and sleep and wake.
 
 ## The bundle, like the saver's
 
@@ -563,6 +717,19 @@ What no test can reach is whether the desktop actually changes, whether the same
 
 **The Xcode project file changed during the first app build, and nothing here edited it.** `app/Photo-Go-Round.xcodeproj/project.pbxproj` was modified at 21:15:45, while `xcodebuild` was building the app and the saver: the `pgr_ctl` target's exception keeping `Sources/pgr_ctl/Info.plist` out of the target was removed, and a group's comment renamed. That exception matters, since `pgr_ctl` embeds that plist through the linker. Not reverted; Syd's to decide.
 
+**Phase 2's first extension probe, built 2026-09-14.** Not part of anything that ships; *The extension probe* holds what it found.
+
+- `Scripts/make-wallpaper-extension-probe.sh` — builds and signs the probe, and installs nothing.
+- `Scripts/wallpaper-extension-probe/Host.swift` — the host app.
+- `Scripts/wallpaper-extension-probe/Extension.swift` — the extension.
+
+**Phase 2's second extension probe, built 2026-09-14,** in the same place; *The second probe* holds what it found.
+
+- `Scripts/wallpaper-extension-probe/PaneHandler.swift` — the protocol and the answers.
+- `Scripts/wallpaper-extension-probe/PaneModels.swift` — the section.
+- `Scripts/wallpaper-extension-probe/ProbePicture.swift` — the picture.
+- `Scripts/wallpaper-extension-probe/Extension.swift` and `Scripts/make-wallpaper-extension-probe.sh` — grown from the first probe.
+
 ## What this leaves stale elsewhere
 
 Named here first, then brought into line on 2026-09-10 at Syd's request — "please update all other planning documents to reflect decisions made in Wallpaper Plan.md" — as dated corrections marked beside the original text, not rewrites of it. `PLAN.md`, `Screensaver Plan.md`, `TODO.md` and `app/mac/FEATURES.md` were changed. **Code is not a planning document:** `Sources/pgr_ctl/ServiceCommand.swift` still describes `SMAppService`, and is left for when the installation route is built.
@@ -586,8 +753,12 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
 - **A pause control beyond the checkbox**, and where it would live — the app, the shipping menu-bar app (TODO.md, *A menu-bar app for shipping*), or the Phase 2 binary.
 - **Whether reapplying on a Space change is wanted at all**, given it overrides a picture the user chose on that Space.
 - **Everything about Phase 2**: bundle or bare executable, menu-bar presence, and how the app installs and removes the plist. *2026-09-14, now also:*
-  - whether to build the extension probe, and then whether an extension of ours can be in the Wallpaper pane at all;
-  - what `com.apple.wallpaper.development` requires, and whether the probe tries it too;
+  - *Answered 2026-09-14: a Photo-Go-Round section can be chosen in the pane and draw; see* What the second probe found. *Open from it:* what `snapshot` must return, and whether the lock screen shows the picture; pictures from the agent; Spaces, several displays, and sleep and wake; the macOS 27 replacement for the deprecated `enqueue`; and whether the section also appears in the Screen Saver picker;
+  - the first probe's ad-hoc run, which has not been made;
+  - what `com.apple.wallpaper.development` is for — searched and not found, and probably moot since Phosphene;
+  - how a sandboxed extension reaches the agent: permission to connect, and finding the port from inside the sandbox;
+  - how the app hands the extension its settings — Phosphene's app writes into the extension's container;
+  - whether a still can be shown as one frame through an extension that draws its own;
   - whether to take route A, if it cannot — C is ruled out for the system wallpaper;
   - a LaunchAgent bundle for the app-style wallpaper — not wanted if the system wallpaper route can be figured out, and open again only if it cannot;
   - the App Store — whether to try for it, which is Syd's, and which decides how long both wallpapers stay;
@@ -612,7 +783,15 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
 - Apple: `NSWorkspace.setDesktopImageURL(_:for:options:)`, `desktopImageURL(for:)`, `NSWorkspace.DesktopImageOptionKey`; `launchd.plist(5)` (`LimitLoadToSessionType`); `SMAppService`.
 - `/System/Library/ExtensionKit/ExtensionPoints/com.apple.wallpaper.appexpt` and `/System/Library/ExtensionKit/Extensions/Wallpaper*.appex` — the extension point and Apple's extensions, read 2026-09-14; `pluginkit -m -v -p com.apple.wallpaper`, `codesign -d --entitlements`, `otool -L`.
 - `/System/Library/CoreServices/WallpaperAgent.app` — the host, read 2026-09-14: its entitlements, its links, its `Info.plist` and its strings. `/System/Library/ExtensionKit/Extensions/Wallpaper.appex` and `WallpaperSettingsIntents.appex` — the Settings side.
+- `/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e*` — searched for `com.apple.wallpaper.development`, 2026-09-14; `lsregister -dump`.
+- Phosphene — https://github.com/kageroumado/phosphene, read 2026-09-14: `PhospheneExtension/Info.plist`, `Phosphene/Phosphene.entitlements`, `Phosphene.xcodeproj/project.pbxproj`, `PhospheneExtension/PhospheneExtension.swift`, `PhospheneExtension/WallpaperExtensionConfig.swift`, `README.md`. Project page: https://kagerou.glass/phosphene/
+- *Show HN: I reverse engineered Apple's video wallpapers* — https://news.ycombinator.com/item?id=48215979
+- kageroumado, *How to Reverse Engineer Apple Frameworks* — https://kagerou.glass/blog/how-to-reverse-engineer-apple-frameworks/
 - Howard Oakley, *An overview of app extensions and plugins in macOS Sequoia*, The Eclectic Light Company, 2025-04-23 — https://eclecticlight.co/2025/04/23/an-overview-of-app-extensions-and-plugins-in-macos-sequoia/
 - Bart Reardon, *Adding Wallpaper folders to macOS System Settings* (WallpaperFolderManager), 2025-12-04 — https://bartreardon.github.io/2025/12/04/adding-wallpaper-folders-to-macos-system-settings.html
 - `Scripts/make-saver-bundle.sh` — what Phase 2's script follows. `Scripts/make-agent-bundle.sh` — `--install-to`, and printing the `launchctl` commands rather than running them.
 - `Package.swift` — the `.macOS("26.0")` line.
+- `Scripts/make-wallpaper-extension-probe.sh` and `Scripts/wallpaper-extension-probe/` — the first extension probe. `~/Library/Logs/DiagnosticReports/WallpaperProbeExtension-2026-09-14-204957.ips` — its first run's crash report.
+- `Scripts/wallpaper-extension-probe/PaneHandler.swift`, `PaneModels.swift`, `ProbePicture.swift` — the second extension probe.
+- Phosphene, read for *The second probe*: `PhospheneExtension/WallpaperExtension-Bridging-Header.h`, `WallpaperXPCHandler.swift`, `CodableShims.swift`, `SettingsProvider.swift`, `RuntimeHelpers.swift`, `StillFrame.swift`, `SnapshotCreation.swift`.
+- Xcode's `DarwinProductTypes.xcspec`, in Swift Build's `SWBApplePlatform` plugin — the `app-extension` and `extensionkit-extension` product types.
