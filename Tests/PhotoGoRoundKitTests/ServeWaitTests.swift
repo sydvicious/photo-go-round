@@ -70,7 +70,7 @@ struct ServeWaitTests {
                 sources: store, store: bytes)
             try cache.prepare()
 
-            source = try await store.add(kind: .folder, locator: folder.path)
+            source = try store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
             if materialized {
                 try library.database.run("UPDATE photo SET storage = 'materialized';")

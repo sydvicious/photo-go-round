@@ -175,7 +175,6 @@ struct MigratorTests {
             VALUES ('screensaver', NULL, 0, 0);
             """
         )
-        let consumerID = database.lastInsertRowID
         try database.run(
             "INSERT INTO queue (photo_id, source_id, queued_at) VALUES (:p, :s, 0);",
             ["p": .int(photoID), "s": .int(source)]

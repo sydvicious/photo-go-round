@@ -535,7 +535,7 @@ struct DeckTests {
     @Test("A photo is retired after three failed renders, not the first")
     func blacklistTakesThreeAttempts() throws {
         let (library, ids) = try TestLibrary.withPhotos(2)
-        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        _ = try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;"))
         let deck = library.deck
         let doomed = ids[0]
 
@@ -552,7 +552,7 @@ struct DeckTests {
     @Test("A retired photo is never offered again")
     func blacklistedIsNotDealt() throws {
         let (library, ids) = try TestLibrary.withPhotos(2)
-        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        _ = try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;"))
         let deck = library.deck
 
         for _ in 0..<Deck.renderFailureLimit {
@@ -586,7 +586,7 @@ struct DeckTests {
     @Test("Clearing the failures puts them back in contention")
     func clearingRestoresThem() throws {
         let (library, ids) = try TestLibrary.withPhotos(1)
-        let source = Int64(try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;")))
+        _ = try #require(try library.database.scalarInt("SELECT id FROM source LIMIT 1;"))
         let deck = library.deck
         for _ in 0..<Deck.renderFailureLimit { try deck.recordRenderFailure(photoID: ids[0]) }
         #expect(try deck.nextCandidate() == nil)

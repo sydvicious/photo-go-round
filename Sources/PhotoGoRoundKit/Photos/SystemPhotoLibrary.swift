@@ -316,11 +316,14 @@ public struct SystemPhotoLibrary: PhotoLibrary {
         }
     }
 
+    /// `filename` replaces `originalFilename` on macOS 27, and may be nil where
+    /// the old property never was. Nil becomes the empty string, which the
+    /// provider already reads as "no name".
     static func describe(_ resource: PHAssetResource) -> LibraryResource {
         LibraryResource(
             kind: kind(of: resource.type),
             uniformTypeIdentifier: resource.uniformTypeIdentifier,
-            originalFilename: resource.originalFilename)
+            originalFilename: resource.filename ?? "")
     }
 
     /// **Only the kinds the rule names, plus the two it must refuse.**
@@ -417,7 +420,7 @@ public struct SystemPhotoLibrary: PhotoLibrary {
                     guard
                         let match = PHAssetResource.assetResources(for: asset).first(where: {
                             Self.kind(of: $0.type) == resource.kind
-                                && $0.originalFilename == resource.originalFilename
+                                && ($0.filename ?? "") == resource.originalFilename
                         })
                     else {
                         deadline.cancel()

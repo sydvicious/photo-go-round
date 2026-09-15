@@ -37,7 +37,7 @@ struct ResidencyTests {
             )
             try cache.prepare()
 
-            source = try await sources.add(kind: .folder, locator: folder.path, recursive: true)
+            source = try sources.add(kind: .folder, locator: folder.path, recursive: true)
             await sources.refresh(source)
             try library.database.run("UPDATE photo SET storage = 'materialized';")
         }

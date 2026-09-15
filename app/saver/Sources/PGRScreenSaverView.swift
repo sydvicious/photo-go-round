@@ -22,7 +22,9 @@ import ScreenSaver
 @objc(PGRScreenSaverView)
 public final class PGRScreenSaverView: ScreenSaverView {
 
-    private static let log = Logger(subsystem: "com.sydpolk.photogoround", category: "saver")
+    /// `nonisolated` so `deinit`, which is not on the main actor, can say the
+    /// view went away. `Logger` is `Sendable`, so nothing is lost by it.
+    private nonisolated static let log = Logger(subsystem: "com.sydpolk.photogoround", category: "saver")
 
     /// The photograph. A subview rather than this view's own layer, because it
     /// is the same one the window uses and it owns its own geometry.

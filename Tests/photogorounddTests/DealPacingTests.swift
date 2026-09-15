@@ -93,7 +93,7 @@ struct DealPacingTests {
         func fill() async throws {
             try cache.prepare()
             let folder = directory.appending(path: "photos").path(percentEncoded: false)
-            let source = try await sources.add(kind: .folder, locator: folder)
+            let source = try sources.add(kind: .folder, locator: folder)
             _ = await sources.refresh(source)
             _ = try await cache.fillCompletely()
         }

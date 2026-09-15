@@ -106,7 +106,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key>
     <true/>
     <key>LSMinimumSystemVersion</key>
-    <string>26.0</string>
+    <string>27.0</string>
     <!-- Only the server ever touches files or the Photos library, so every
          privacy grant lives on this one bundle and the user consents once. -->
     <key>NSPhotoLibraryUsageDescription</key>

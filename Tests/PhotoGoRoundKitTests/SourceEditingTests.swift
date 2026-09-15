@@ -202,7 +202,7 @@ struct SourceEditingTests {
         // Straight into the table, which is what a hand-written row or a
         // half-finished experiment leaves behind. Reconciling is what deletes
         // it, so removing has to work without a preferences entry to drop.
-        let orphan = try await store.add(kind: .folder, locator: folder.path)
+        let orphan = try store.add(kind: .folder, locator: folder.path)
         #expect(scratch.preferences.sources.isEmpty)
 
         try store.remove(orphan, from: scratch.preferences)

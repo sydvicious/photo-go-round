@@ -5,7 +5,10 @@
 // private entitlement. The first probe answered nothing, and showed that
 // `WallpaperAgent` launches it and connects. This one answers: one Photo-Go-Round
 // section in System Settings › Wallpaper holding one item, and a generated
-// picture on the desktop when that item is chosen. It asks the agent for nothing.
+// picture on the desktop when that item is chosen. Since the third probe, it also
+// answers `snapshot` with that picture, for the export `WallpaperAgent` makes of
+// the chosen wallpaper. Since the fourth probe, the desktop asks the agent for a
+// photograph as `system-wallpaper` and shows it in place of the generated picture.
 //
 // Everything `WallpaperAgent` sends is logged, category `wallpaper-probe`, lines
 // prefixed `probe:`, so each gate is read against what actually arrived.

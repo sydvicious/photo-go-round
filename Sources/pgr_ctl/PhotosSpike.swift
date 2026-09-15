@@ -390,7 +390,7 @@ enum PhotosSpike {
         for resource in PHAssetResource.assetResources(for: asset) {
             Console.note(
                 "        \(name(resource.type).paddedRight(26))"
-                    + "\(resource.uniformTypeIdentifier)   \(resource.originalFilename)")
+                    + "\(resource.uniformTypeIdentifier)   \(resource.filename ?? "(no filename)")")
         }
         print()
     }

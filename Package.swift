@@ -5,11 +5,10 @@ import PackageDescription
 let package = Package(
     name: "PhotoGoRound",
     platforms: [
-        // macOS is held at 26.0 so the server runs on a second Mac that is
-        // kept off betas; the target is 27.0. Raise this line rather than
-        // writing an availability guard when a 27-only API is the right
-        // answer — there is deliberately nothing else to unwind.
-        .macOS("26.0"),
+        // macOS 27 and later only. Syd, 2026-09-14: "upgrade everything to our
+        // minimum support to macOS 27". Raise this line rather than writing an
+        // availability guard when a newer API is the right answer.
+        .macOS("27.0"),
         .iOS("27.0"),
     ],
     products: [

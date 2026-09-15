@@ -240,7 +240,7 @@ struct PhotosSourceEditingTests {
         }
 
         let folder = TemporaryFolder()
-        let added = try await store.add(kind: .folder, locator: folder.path)
+        let added = try store.add(kind: .folder, locator: folder.path)
         await #expect(throws: SourceStore.EditFailure.notMissing) {
             try await store.reconnect(added, in: scratch.preferences)
         }

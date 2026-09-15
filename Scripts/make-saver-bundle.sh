@@ -71,22 +71,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$SPIKE" -eq 1 ]]; then
-    TARGET="Photo-Go-Round Saver Spike"
+    SCHEME="Photo-Go-Round Saver Spike"
     NAME="Photo-Go-Round Spike"
 else
-    TARGET="Photo-Go-Round Saver"
+    SCHEME="Photo-Go-Round Saver"
     NAME="Photo-Go-Round"
 fi
 
+# By scheme, not -target: a -target build gives the local package targets a
+# "Conditional compilation flags do not have values in Swift" warning that a
+# scheme build, which is how Xcode itself builds, does not. Measured 2026-09-15.
+# xcodebuild makes a scheme for every target on its own.
 xcodebuild build \
     -project "$PROJECT" \
-    -target "$TARGET" \
+    -scheme "$SCHEME" \
+    -destination "platform=macOS" \
     -configuration "$CONFIGURATION" \
-    SYMROOT="$BUILD_DIR/Products" \
-    OBJROOT="$BUILD_DIR/Intermediates.noindex" \
+    -derivedDataPath "$BUILD_DIR" \
     >/dev/null
 
-BUNDLE="$BUILD_DIR/Products/$CONFIGURATION/$NAME.saver"
+BUNDLE="$BUILD_DIR/Build/Products/$CONFIGURATION/$NAME.saver"
 [[ -d "$BUNDLE" ]] || { echo "expected a bundle at $BUNDLE and there is none" >&2; exit 1; }
 echo "built $BUNDLE"
 

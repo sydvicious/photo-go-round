@@ -76,7 +76,7 @@ struct DashboardEndpointTests {
         func fill(materialized: Bool = false) async throws {
             try cache.prepare()
             let folder = directory.appending(path: "photos").path(percentEncoded: false)
-            let source = try await sources.add(kind: .folder, locator: folder)
+            let source = try sources.add(kind: .folder, locator: folder)
             _ = await sources.refresh(source)
             if materialized {
                 try sources.database.run("UPDATE photo SET storage = 'materialized';")

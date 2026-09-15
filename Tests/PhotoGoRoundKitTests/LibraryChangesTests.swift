@@ -28,7 +28,7 @@ struct LibraryChangesTests {
         }
 
         func addFolder() async throws -> Source {
-            let source = try await store.add(kind: .folder, locator: folder.path)
+            let source = try store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
             return source
         }

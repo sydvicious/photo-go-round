@@ -42,7 +42,7 @@ struct OriginalFilenameTests {
             try cache.prepare()
             self.cache = cache
 
-            let source = try await sources.add(kind: .photosCollection, locator: album)
+            let source = try sources.add(kind: .photosCollection, locator: album)
             _ = await sources.refresh(source)
             #expect(try cache.deal())
         }

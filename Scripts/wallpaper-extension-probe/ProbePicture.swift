@@ -10,6 +10,7 @@ import CoreText
 import CoreVideo
 import Foundation
 import ImageIO
+import IOSurface
 
 enum ProbePicture {
     static let image: CGImage? = draw(width: 1920, height: 1080)
@@ -75,6 +76,38 @@ enum ProbePicture {
         }
         CGImageDestinationAddImage(destination, small, nil)
         return CGImageDestinationFinalize(destination) ? url : nil
+    }
+
+    /// The picture drawn into a BGRA IOSurface of `pixels`, aspect fit on black —
+    /// the form Phosphene answers `snapshot` with.
+    static func surface(of image: CGImage, pixels: CGSize) -> IOSurface? {
+        let width = max(Int(pixels.width), 1)
+        let height = max(Int(pixels.height), 1)
+        let properties: [IOSurfacePropertyKey: any Sendable] = [
+            .width: width,
+            .height: height,
+            .bytesPerElement: 4,
+            .pixelFormat: 0x4247_5241,  // 'BGRA'
+        ]
+        guard let surface = IOSurface(properties: properties) else { return nil }
+        surface.lock(options: [], seed: nil)
+        defer { surface.unlock(options: [], seed: nil) }
+        guard
+            let context = CGContext(
+                data: surface.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: surface.bytesPerRow, space: sRGB,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let fit = min(CGFloat(width) / CGFloat(image.width), CGFloat(height) / CGFloat(image.height))
+        let drawn = CGSize(width: CGFloat(image.width) * fit, height: CGFloat(image.height) * fit)
+        context.draw(
+            image,
+            in: CGRect(
+                x: (CGFloat(width) - drawn.width) / 2, y: (CGFloat(height) - drawn.height) / 2,
+                width: drawn.width, height: drawn.height))
+        return surface
     }
 
     /// The picture as one IOSurface-backed sample buffer, marked to display at

@@ -53,7 +53,7 @@ struct SourceStateTests {
             cache = built
             try cache.prepare()
 
-            source = try await store.add(kind: .folder, locator: folder.path)
+            source = try store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
             // Materialized means we copied the bytes, which is the only way
             // "the source is unreachable but we can still serve" is possible.
@@ -134,7 +134,7 @@ struct SourceStateTests {
         let file = folder.write("pinned.png")
         let library = try TestLibrary()
         let store = SourceStore(database: library.database)
-        let source = try await store.add(
+        let source = try store.add(
             kind: .file, locator: file.path(percentEncoded: false))
 
         #expect(await FileSourceProvider().availability(of: source) == .available)

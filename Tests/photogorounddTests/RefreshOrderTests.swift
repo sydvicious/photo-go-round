@@ -32,11 +32,11 @@ struct RefreshOrderTests {
         // Network folders added first, exactly as this library had them, and the
         // local one added last so it has the highest id.
         for name in ["Negatives", "Prints", "Slides"] {
-            try await store.add(kind: .folder, locator: "/Volumes/home/Archive/Pictures/\(name)/")
+            try store.add(kind: .folder, locator: "/Volumes/home/Archive/Pictures/\(name)/")
         }
         let local = directory.appending(path: "Desktop Pictures")
         try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
-        let localSource = try await store.add(
+        let localSource = try store.add(
             kind: .folder, locator: local.path(percentEncoded: false) + "/")
 
         let ordered = RunCommand.localFirst(try store.all())
@@ -54,7 +54,7 @@ struct RefreshOrderTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         for name in ["A", "B", "C"] {
-            try await store.add(kind: .folder, locator: "/Volumes/home/\(name)/")
+            try store.add(kind: .folder, locator: "/Volumes/home/\(name)/")
         }
         let ordered = RunCommand.localFirst(try store.all())
         #expect(ordered.map(\.locator) == ["/Volumes/home/A/", "/Volumes/home/B/", "/Volumes/home/C/"])
@@ -66,11 +66,11 @@ struct RefreshOrderTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         for name in ["A", "B"] {
-            try await store.add(kind: .folder, locator: "/Volumes/home/\(name)/")
+            try store.add(kind: .folder, locator: "/Volumes/home/\(name)/")
         }
         let local = directory.appending(path: "here")
         try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
-        try await store.add(kind: .folder, locator: local.path(percentEncoded: false) + "/")
+        try store.add(kind: .folder, locator: local.path(percentEncoded: false) + "/")
 
         let all = try store.all()
         let ordered = RunCommand.localFirst(all)
@@ -86,7 +86,7 @@ struct RefreshOrderTests {
         let (directory, store) = try library()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        try await store.add(kind: .folder, locator: "/Volumes/not-mounted-\(UUID().uuidString)/")
+        try store.add(kind: .folder, locator: "/Volumes/not-mounted-\(UUID().uuidString)/")
         let source = try #require(try store.all().first)
         #expect(!RunCommand.isOnBootVolume(source))
     }
@@ -98,7 +98,7 @@ struct RefreshOrderTests {
 
         let local = directory.appending(path: "pictures")
         try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
-        try await store.add(kind: .folder, locator: local.path(percentEncoded: false) + "/")
+        try store.add(kind: .folder, locator: local.path(percentEncoded: false) + "/")
         let source = try #require(try store.all().first)
         #expect(RunCommand.isOnBootVolume(source))
     }
@@ -189,7 +189,7 @@ struct RefreshPassTests {
         // `isDue` reads the last *finish*, so it keeps saying yes for as long as
         // a pass runs. The latch is the only thing standing between that and a
         // new pass every tick — which is why it is a latch and not a flag.
-        var heartbeat = Heartbeat()
+        let heartbeat = Heartbeat()
         let now = Date(timeIntervalSince1970: 1_000)
         let pass = Latch()
 
