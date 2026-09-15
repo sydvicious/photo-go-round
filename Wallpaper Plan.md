@@ -1,6 +1,6 @@
 # Summary
 
-The desktop picture: one photograph per display, changed every `intervalSeconds` — thirty minutes by default, as first planned, and sixty seconds from 2026-09-10 to 2026-09-13 — sized to fit, with the rest filled in the colour set in System Settings. It is a client of the agent like every other surface, hosted by the Mac app first and moved to a binary of its own later. Subordinate to `PLAN.md`, which places this in Phase 7.
+The desktop picture: one photograph per display, changed every `intervalSeconds` — thirty minutes by default, as first planned, and sixty seconds from 2026-09-10 to 2026-09-13 — sized to fit, with the rest filled in the colour set in System Settings. It is a client of the agent like every other surface, hosted by the Mac app first and moved to a bundle of its own later — shown in System Settings › Wallpaper itself, if a probe finds that can work. Subordinate to `PLAN.md`, which places this in Phase 7.
 
 # Rationale
 
@@ -18,7 +18,16 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
   - Before any of it is built, look at what System Settings › Wallpaper needs from us — TODO.md. *Partly answered by the probe runs; Syd said to start building on 2026-09-10 with the rest still open.*
   - The agent's served line names the display as well as the consumer, so each display's changes can be counted from the agent's side.
   - **Exit gate:** the app is left open for an evening, every display changes every thirty minutes, and the agent's log shows `consumer=wallpaper` twice an hour per display. *The day and weekend runs began at sixty seconds — a line a minute per display. Since 2026-09-13 the interval is thirty minutes again, so the count is back to twice an hour per display.*
-- **Phase 2 — Its own binary.** The same loop in a process of its own, installed per user as a plist in `~/Library/LaunchAgents`, with the binary staying inside the app bundle. Designed when Phase 1 has run; see *Its own binary*.
+- **Phase 2 — Its own bundle, in the Wallpaper pane if that can work.** A bundle built and installed very like the screensaver's, so the wallpaper runs without the app and is chosen in System Settings › Wallpaper. *Until 2026-09-14 this phase read "the same loop in a process of its own, installed per user as a plist in `~/Library/LaunchAgents`, with the binary staying inside the app bundle", designed after Phase 1; see* Its own binary.
+  - First, the extension probe: does macOS register an extension of ours on `com.apple.wallpaper`, does the Wallpaper pane list it, and does it run — all with SIP on. **Proposed 2026-09-14; not built.** See *The extension probe*.
+  - If all three pass, a second probe for what the private wallpaper frameworks expect an extension to do.
+  - If any fails, it cannot work, and what is left for the pane is a folder registered in Apple's private store. *Until 2026-09-14 a bundle that is only a LaunchAgent was the other choice; Syd: "I don't see the LaunchAgent method as viable in the system wallpaper case."* See *Getting into System Settings › Wallpaper*.
+  - `Scripts/make-wallpaper-bundle.sh`, very similar to `Scripts/make-saver-bundle.sh`. See *The bundle, like the saver's*. *Claude's reading, 2026-09-14: it builds and installs whatever ships — the pane's extension if that route works — and has no launchd step unless it does not.*
+  - Whatever launchd needs goes in each user's `~/Library/LaunchAgents` — **only if the system wallpaper route cannot be figured out.** Syd: "don't want launch agent at all if system wallpaper route can be figured out."
+  - macOS 27 and later only.
+  - The pane's wallpaper asks the agent as `system-wallpaper`; the app's keeps asking as `wallpaper`. See *Two wallpapers, told apart in the log*.
+  - The app's wallpaper stays alongside the pane's until Syd decides on the App Store.
+  - **Exit gate:** not yet decided.
 
 # Design Decisions
 
@@ -46,6 +55,21 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 - **"the app should not need to see the agent's container."** And of the app not seeing the agent's `--container`: **"it's not a gap; it's a design decision."** The wallpaper's files live somewhere of its own.
 - **"let's put it in Application Support for now; we will probably have to move it if we want to sandbox."** `~/Library/Application Support/com.sydpolk.photogoround.wallpaper.{dev|prod}/`, named like the wallpaper's preference domains and resolved from the deployment by the wallpaper itself; `MacHostEnvironment` gains nothing.
 
+*Syd's, 2026-09-14, for Phase 2, in his words*
+
+- **"Wallpapers needs its own binary/bundle so that it can be set from System Settings and run without the app."**
+- **"I am expecting something very similar to Scripts/make-saver-bundle.sh"**
+- **"appearing the wallpaper pane itself"** — his answer to whether "set from System Settings" meant System Settings › Wallpaper or the background item's switch under Login Items.
+- **"b. I really want this in the wallpaper pane but only if it can work"** — the extension probe first, before either fallback. See *Getting into System Settings › Wallpaper*.
+- **"whatever launchctl needs should be put into ~/Library/LaunchAgents so multiple users don't clobber each other"**
+- **"this will very soon be MacOS 27+ only"**
+- **"reverse-engineering the wallpaper extension API will mean we can't sandbox this"**, then, when Claude pointed out that Apple's own wallpaper extension is sandboxed: **"you are right about the App Store; that is what I meant."** The private route costs the App Store. See *Getting into System Settings › Wallpaper*, *Sandboxing, and the App Store*.
+- **"the logging for fetches from the system wallpaper panel should say "system-wallpaper" to distinguish it from the app-based "wallpaper" now."** See *Two wallpapers, told apart in the log*.
+- **"We will continue to support both until I decide on trying to sandbox or not."** Both the pane's wallpaper and the app's. *Claude's reading, given the correction above: the decision meant is the App Store.*
+- **"I am ok with not supporting app and system wallpapers and the two systems fighting each other"** *Claude's reading: turning on the pane's wallpaper and the app's for the same display is not a supported configuration. If somebody does, the two fighting over the desktop is accepted, and nothing is built to prevent it.*
+- **"I don't see the LaunchAgent method as viable in the system wallpaper case."** *Claude's reading: route C — a LaunchAgent calling `setDesktopImageURL` — never appears in the Wallpaper pane, so it is not a way to get the system wallpaper; if the probe fails, route A is the one route into the pane left. Whether a LaunchAgent bundle is still wanted for the app-style wallpaper is not said.*
+- **"don't want launch agent at all if system wallpaper route can be figured out"** — asked whether a LaunchAgent bundle is still wanted for the app-style wallpaper. *Claude's reading: no LaunchAgent bundle is built while the system wallpaper route is being worked out, and none at all if it works; the question comes back only if it cannot be figured out.*
+
 *Decided before this plan*
 
 - **One file per display, named by the display's UUID**, scoped to the deployment, outside the cache, and never swept. TODO.md, *Design the wallpaper*, 2026-09-09. *That entry put the files in `<container>/wallpapers/`; Syd reversed the location on 2026-09-10 — see the bullet above. The rest of it stands.*
@@ -62,6 +86,8 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 - **It puts each display's file back when screens or Spaces change, and otherwise does not fight macOS reverting it.** Launch is the third occasion, by Syd's decision above. *Wallpaper is asserted continuously* is later work.
 - **At launch, before putting each file back, it compares the stored file with what `desktopImageURL(for:)` reports and logs any difference.** That is a record of how often the desktop changes while the app is closed, whether macOS reverted it or somebody chose another picture — the evidence *Wallpaper is asserted continuously* says is missing. *A log line only: the read-back was measured lagging on 2026-09-10.*
 - **It asks at each display's native pixel size, as consumer `wallpaper`, with the display UUID.** That gives one consumer row per display, which is the identity the deck already uses.
+- **Phase 2's probe is a throwaway host app carrying one extension on `com.apple.wallpaper`**, built by a script with `swiftc` and `codesign` rather than an Xcode target, signed two ways, and registered by Syd. *2026-09-14; not approved to build.* See *The extension probe*.
+- **The bundle is an Xcode target, `Photo-Go-Round Wallpaper`, with a host like `AppDelegate` around the same `Wallpaper` loop.** *2026-09-14, proposed before the pane was asked for; much of it changes if an extension is what ships.* See *The bundle, like the saver's*.
 # Background
 
 `PLAN.md` Phase 7 is one line — "per-screen `NSWorkspace.setDesktopImageURL`, scheduled by the server." `PLAN.md`'s *Wallpaper mechanics and their limits* and *Wallpaper is asserted continuously, never set once* were written before *The service is the interface*. TODO.md's *Design the wallpaper* settled where the files go and left open who runs the loop, which is now answered.
@@ -71,6 +97,8 @@ Everything a client needs already exists. `PictureClient` asks the agent at a si
 **No surface opens the agent's container.** The app and the saver use `MacHostEnvironment` for its preference domain alone, which is how they find the port; only the agent and `pgr_ctl`, the rig, touch the database and the cache. The wallpaper keeps it that way.
 
 The app is unsandboxed (`ENABLE_APP_SANDBOX = NO` in both configurations), so it can write under `~/Library/Application Support` and call `NSWorkspace` without an entitlement.
+
+**System Settings › Wallpaper has no public slot.** The wallpapers it lists are ExtensionKit extensions on `com.apple.wallpaper`, and that extension point requires the private entitlement `com.apple.private.wallpaper.extension` — measured 2026-09-14 from the system's own bundles. The screensaver has Screen Saver › Other; the wallpaper has nothing like it. See *Getting into System Settings › Wallpaper*.
 
 **Code was written before this plan and stopped.** On 2026-09-10, a draft of Phase 1 was written and then halted at Syd's direction, because the design had not been read as a plan. **Superseded the same day:** after the probe, Phase 1 was built to this plan and the draft was rewritten rather than kept. See *What was built*.
 
@@ -103,6 +131,19 @@ Recorded in order, because one step of it was a wrong turn of a kind this projec
 21. Phase 1 was built and its tests pass; the exit gate is Syd's to run. Syd then changed the interval: "could we make the internal for the wallpaper 60 seconds for now? Eventually we will have a set of choices", and "this should be part of the wallpaper preferences." It became `intervalSeconds`, in the wallpaper's own domain.
 22. First run, 2026-09-11. Syd: "The checkbox works. I see wallpaper from the sources. I see from the logs that wallpaper served from the queue." He left it running for the day, and set it up on Plex to run over the weekend.
 23. Syd, 2026-09-13: "set both the default and the current time between serving wallpaper to 30 minutes." `Wallpaper.defaultInterval` went back to thirty minutes, and `intervalSeconds` in `com.sydpolk.photogoround.wallpaper.dev` was set to 1800 with `defaults write`, which a running app picks up within its thirty-second recheck. The production domain did not exist and was not created.
+24. Syd, 2026-09-14: "Wallpapers needs its own binary/bundle so that it can be set from System Settings and run without the app." Claude proposed a bundle following the saver's — an Xcode target, a host around `Wallpaper`, a script with `--install` — and listed where it did not fit, first among them that no public route into the Wallpaper pane was known. Syd, while that was being written: "I am expecting something very similar to Scripts/make-saver-bundle.sh".
+25. Asked whether System Settings meant the Wallpaper pane or the background item's switch under Login Items, Syd: "appearing the wallpaper pane itself".
+26. Claude read Apple's wallpaper extensions and the extension point's definition, found the private entitlement it requires, and offered three routes: a folder registered in Apple's private store, a probe measuring whether an extension of ours is refused, or leaving the pane out. Syd, meanwhile: "whatever launchctl needs should be put into ~/Library/LaunchAgents so multiple users don't clobber each other".
+27. Syd: "b. I really want this in the wallpaper pane but only if it can work", then "this will very soon be MacOS 27+ only". Claude proposed the probe as three gates and asked whether to build it.
+28. Syd: "please capture all of this in the "Wallpaper Plan.md" file" — so it is recorded here, and the probe is not built. With it: "In almost ALL cases, I want the plan before any implementation."
+29. Syd, while it was being recorded: "reverse-engineering the wallpaper extension API will mean we can't sandbox this." Recorded as his, with Claude's differing reading beside it rather than in it.
+30. Syd: "the logging for fetches from the system wallpaper panel should say "system-wallpaper" to distinguish it from the app-based "wallpaper" now. We will continue to support both until I decide on trying to sandbox or not." Claude read `PictureEndpoint` and `ConsumerKind` and found the agent takes any consumer name, so nothing in the agent changes.
+31. Syd, on the sandboxing difference: "you are right about the App Store; that is what I meant."
+32. Claude listed what supporting both left open, first among them both being on for one display. Syd: "I am ok with not supporting app and system wallpapers and the two systems fighting each other."
+33. Syd: "I don't understand. How are wallpapers done by the system?" Claude read `WallpaperAgent`'s entitlements and links, the Settings pane's extension, and what was running, and explained: one per-user `WallpaperAgent` hosts an extension per kind of wallpaper, the pane is a Settings extension that records the choice, and `setDesktopImageURL` is the public way to set that same choice. The same reading found `WallpaperAgent` also entitled to host `com.apple.wallpaper.development`, with no definition found for it. Not yet written into this plan beyond this line; Claude asked whether to add it.
+34. Syd: "I don't see the LaunchAgent method as viable in the system wallpaper case."
+35. Asked whether a LaunchAgent bundle was still wanted for the app-style wallpaper, Syd: "don't want launch agent at all if system wallpaper route can be figured out."
+36. Asked again whether to write step 33's explanation and the development point into the plan, Syd: "yes, add both to the plan." They are *How the system does wallpaper* and *The development extension point*.
 
 ## Where the loop runs
 
@@ -134,9 +175,11 @@ Answered from general knowledge, not from anything measured on this machine or o
 - **A per-user LaunchAgent works just as well.** A plist in `~/Library/LaunchAgents` is loaded into the user's `gui/<uid>` domain at login, which is the Aqua session unless `LimitLoadToSessionType` says otherwise — so that key must be left out. launchd starts the process and can restart it with `KeepAlive`.
 - **There are no per-user daemons.** launchd reads `~/Library/LaunchAgents` for each user. Daemons come only from `/Library/LaunchDaemons` and `/System/Library/LaunchDaemons`.
 - **Since macOS 13 the user is told.** Anything in `~/Library/LaunchAgents` appears under System Settings › General › Login Items › *Allow in the Background*, and the system posts a notification when one is added. It still runs; the user can see it and switch it off.
-- **Apple's own rotation is no help.** "Change picture every 30 minutes" in System Settings is done by the system's `WallpaperAgent`, and the animated wallpapers use a private extension point. There is no hook into either.
+- **Apple's own rotation is no help.** "Change picture every 30 minutes" in System Settings is done by the system's `WallpaperAgent`, and the animated wallpapers use a private extension point. There is no hook into either. *Measured 2026-09-14: that extension point is `com.apple.wallpaper`, it carries the stills the pane lists as well as the animated wallpapers, and it requires a private entitlement. See* Getting into System Settings › Wallpaper.
 
 ## Its own binary
+
+*2026-09-14: Phase 2 is being designed now, and aims at the Wallpaper pane; the seven sections after this one hold it. This section is as it was written.*
 
 Held for Phase 2 and not designed here. What has been said about it:
 
@@ -147,6 +190,168 @@ Held for Phase 2 and not designed here. What has been said about it:
 Open when Phase 2 is designed: whether it is a bare executable or an `LSUIElement` bundle, whether it carries a menu-bar item (the pause control needs a home), and how the app installs, updates and removes the plist. The app's quit no longer ends the wallpaper at that point, so stopping it becomes a real question.
 
 **The shipping app is probably a menu-bar app, not the full desktop app.** Syd, 2026-09-10: "The full desktop app is useful, but we are probably not going to ship it." That makes a menu-bar app a possible host for the wallpaper, alongside a separate binary, and the natural place for the pause control. Recorded in TODO.md, *A menu-bar app for shipping*. Which of the two runs the wallpaper is Phase 2's decision.
+
+## How the system does wallpaper
+
+Syd, 2026-09-14: "I don't understand. How are wallpapers done by the system?" Answered from Apple's own bundles on this Mac, read that day, and marked where it rests on general knowledge instead. **In short: one per-user process owns each display's wallpaper, and everything else — System Settings and this app alike — tells that process what to show.**
+
+**`WallpaperAgent`**, `/System/Library/CoreServices/WallpaperAgent.app`, one per logged-in user.
+
+- **Measured:** it was running. It is sandboxed (`com.apple.security.app-sandbox`).
+- **Measured:** it is the host for wallpaper extensions. Its entitlements include `com.apple.private.wallpaper.extension-host` — the host entitlement the extension point requires — and `com.apple.extensionkit.host.extension-point-identifiers` naming `com.apple.wallpaper` and `com.apple.wallpaper.development`. See *The development extension point* for the second.
+- **Measured, not interpreted:** it also carries `com.apple.private.coreservices.definesExtensionPoint`, `com.apple.private.wallpaper.export`, and `com.apple.developer.extension-host.screensaver`.
+- **Measured:** it links the private `Wallpaper`, `WallpaperExtensionKit`, `WallpaperFoundation`, `WallpaperServices`, `WallpaperAnalytics` and `WallpaperTypes`, and the public `ExtensionFoundation`.
+- **General knowledge:** it is what draws the desktop.
+
+**One extension per kind of wallpaper**, in `/System/Library/ExtensionKit/Extensions/`, each on `com.apple.wallpaper` and each entitled `com.apple.private.wallpaper.extension`. Several were running as processes of their own when looked at, so `WallpaperAgent` runs them out of process.
+
+- `WallpaperImageExtension` (`com.apple.wallpaper.extension.image`) — stills and photographs; its entitlements name the group `com.apple.wallpaper.extension.photos`.
+- `WallpaperDynamicExtension` — pictures that change through the day.
+- `WallpaperAerialsExtension` — the moving ones.
+- `WallpaperGradientExtension` — plain colours.
+- `WallpaperSonomaExtension`, `…Sequoia…`, `…Ventura…`, `…Monterey…`, `…Macintosh…`, and `NeptuneOneWallpaper` — Apple's named sets.
+- `WallpaperLegacyExtension` — by its name, older-style choices; not looked into.
+
+**The System Settings pane is itself an extension.** `Wallpaper.appex`, `com.apple.Wallpaper-Settings.extension`, on `com.apple.Settings.extension.ui` — a Settings UI extension, not a wallpaper extension — entitled `com.apple.private.wallpaper`. `WallpaperSettingsIntents.appex`, `com.apple.settings-intents.WallpaperIntents`, carries the same entitlement. **General knowledge and the WallpaperFolderManager article, not measured:** the pane shows what the wallpaper extensions offer and records the choice in a private store that `WallpaperAgent` reads.
+
+**`NSWorkspace.setDesktopImageURL`** is the public way to set that same choice, and it is what Phase 1 calls. **Not measured:** what it becomes inside `WallpaperAgent`; most likely a still-image choice handled by `WallpaperImageExtension`. Two of the probe's 2026-09-10 results fit that reading: a fill colour chosen in the pane recoloured the bands around a picture this app set, and setting a folder's URL back left the Golden Gate default.
+
+**What follows, and why two wallpapers "fight".** There is one choice per display, per Space. Setting a file through `setDesktopImageURL` replaces what the pane chose — the 2026-09-10 probe's first set replaced Syd's folder rotation on screen — and the pane edits the same choice back. Nothing draws in layers; whichever wrote last is what shows. That is the fight Syd accepted in *Two wallpapers, told apart in the log*.
+
+**Where each route plugs in:**
+
+- **Phase 1, the app:** sets the choice from outside, through the public call.
+- **The extension probe:** would be one of the kinds of wallpaper `WallpaperAgent` loads, picked in the pane like Apple's — which is why it needs the private entitlement.
+- **Route A:** uses the image extension's existing folder of pictures, set up by writing its private store.
+- **Route C:** the public call again, from a LaunchAgent instead of the app — the same program run in a second place. Ruled out for the system wallpaper.
+
+## Getting into System Settings › Wallpaper
+
+Syd, 2026-09-14: "appearing the wallpaper pane itself", and "I really want this in the wallpaper pane but only if it can work."
+
+**Why "like the screensaver" does not carry over.** The saver is a `.saver` bundle in `~/Library/Screen Savers`, and System Settings lists it under Screen Saver › Other. That slot is public. Nothing found shows anyone outside Apple getting a wallpaper into the Wallpaper pane the same way.
+
+**Measured 2026-09-14, from the system's own bundles on macOS 27:**
+
+- `pluginkit -m -v -p com.apple.wallpaper` lists eleven extensions, all Apple's, all in `/System/Library/ExtensionKit/Extensions/`: `WallpaperImageExtension`, `WallpaperDynamicExtension`, `WallpaperAerialsExtension`, `WallpaperGradientExtension`, `WallpaperSonomaExtension`, `WallpaperSequoiaExtension`, `WallpaperVenturaExtension`, `WallpaperMontereyExtension`, `WallpaperMacintoshExtension`, `WallpaperLegacyExtension`, and `NeptuneOneWallpaper`. That count is the baseline the probe is compared against. `Wallpaper.appex` and `WallpaperSettingsIntents.appex` sit in the same directory and are not in the list.
+- The two Info.plists read, `WallpaperSonomaExtension` and `NeptuneOneWallpaper`, both carry `EXAppExtensionAttributes` › `EXExtensionPointIdentifier` = `com.apple.wallpaper`; Sonoma's package type is `XPC!`.
+- The extension point's definition, `/System/Library/ExtensionKit/ExtensionPoints/com.apple.wallpaper.appexpt`, is only this: `EXRequiredEntitlements` = `com.apple.private.wallpaper.extension`, and `EXRequiredHostEntitlements` = `com.apple.private.wallpaper.extension-host`.
+- `WallpaperSonomaExtension` is signed with exactly two entitlements: `com.apple.private.wallpaper.extension` and `com.apple.security.app-sandbox`.
+- `WallpaperSonomaExtension` links the private `WallpaperExtensionKit`, `WallpaperFoundation` and `WallpaperTypes`, and the public `ExtensionFoundation` and `AVFoundation`. `WallpaperImageExtension` links the same three private frameworks and `ExtensionFoundation`. Whatever the pane asks of an extension is defined in those private frameworks, and nothing documents it.
+
+**Not measured:** that a build of ours carrying a `com.apple.private.*` entitlement is refused. With System Integrity Protection on, macOS is generally understood to refuse to run a non-Apple binary signed with a private entitlement, but that is general knowledge, not a result from this machine. The probe measures it.
+
+**The routes into the pane, as offered to Syd:**
+
+- **A. A folder registered in Apple's private store.** WallpaperFolderManager adds a folder to the pane on macOS 26 by writing plists, encoded as data inside other plists, under `~/Library/Containers/com.apple.wallpaper.extension.image/`, then restarting `cfprefsd` and `WallpaperAgent`; on 13 to 15 the same thing lived in `com.apple.systempreferences.plist`. Our bundle would keep a small folder fed from the agent, and the pane would show that folder. The costs: the format is undocumented and has moved once already; Apple's `WallpaperAgent` does the rotating, which replaces the per-display change times and the *Shuffle All* interval; and the agent's `consumer=wallpaper` lines would no longer match what is on the glass one for one. A small folder stays clear of the original complaint, Apple's picker choking on a large one.
+- **B. A probe first** — Syd's choice. See *The extension probe*.
+- **C. Leave the pane out.** A per-user LaunchAgent calling `setDesktopImageURL`, which is what Phase 2 was before 2026-09-14. Its only presence in System Settings would be its switch under General › Login Items & Extensions › Allow in the Background — from general knowledge, not checked on 27. **Ruled out for the system wallpaper, 2026-09-14.** Syd: "I don't see the LaunchAgent method as viable in the system wallpaper case." It never appears in the Wallpaper pane, which is the point of the system wallpaper.
+
+**"Only if it can work"** is read as: it works with SIP on, signed the way a shipped build is signed. Something that works only with SIP off, or only ad-hoc on one Mac, cannot ship, and Syd will not be asked to turn SIP off.
+
+**Sandboxing, and the App Store.** Syd, 2026-09-14: "reverse-engineering the wallpaper extension API will mean we can't sandbox this." Claude's reading was put to him separately: the one Apple extension whose entitlements were read is itself signed with `com.apple.security.app-sandbox`, so an extension on this point runs sandboxed rather than preventing it; what the private entitlement and private frameworks rule out — from general knowledge, not measured — is the App Store, whose review refuses non-public API. Syd: "you are right about the App Store; that is what I meant." **So the extension route costs the App Store**, and Developer ID direct, which `PLAN.md` already chose, has no review. The decision lives in TODO.md's *Sandboxing, and whether the App Store is reachable*, and until it is made both wallpapers stay: "We will continue to support both until I decide on trying to sandbox or not."
+
+## The development extension point
+
+Found 2026-09-14 while answering *How the system does wallpaper*, and added here at Syd's "yes, add both to the plan". **A lead, not an answer.**
+
+**Measured:** `WallpaperAgent`'s `com.apple.extensionkit.host.extension-point-identifiers` names two points, `com.apple.wallpaper` and `com.apple.wallpaper.development`.
+
+**Looked for and not found:**
+
+- a definition among the `.appexpt` files anywhere under `/System/Library` or `/Library` — the only wallpaper one is `com.apple.wallpaper.appexpt`;
+- an `.appexpt` or extension-point file inside `WallpaperAgent.app`;
+- any mention in `WallpaperAgent`'s `Info.plist`;
+- the string `wallpaper.development` in `WallpaperAgent`'s own binary.
+
+**Not searched:** the private wallpaper frameworks. Their code lives in the dyld shared cache rather than as files on disk, so the searches above never reached them, and a point defined in code would be there.
+
+**Why it matters.** `com.apple.wallpaper` requires `com.apple.private.wallpaper.extension`, which is what makes "only if it can work" doubtful. If `com.apple.wallpaper.development` requires less, an extension of ours might be let in where it would otherwise be refused. **What it requires is unknown.** That it is meant for developing wallpapers, perhaps only on Apple's internal builds, is a guess from its name, not a finding.
+
+**Proposed by Claude, not decided:**
+
+- Look for the point's definition in the shared cache before building the probe, since what it requires decides what the probe signs with.
+- Give the probe a second extension on `com.apple.wallpaper.development`, run with the same three gates and the same two signatures as the one on `com.apple.wallpaper`, so the two points are measured side by side.
+
+## The extension probe
+
+Claude's proposal, 2026-09-14. **Not built:** Syd asked for it to be captured here, and has not said to build it.
+
+**Three questions, in order, each yes or no:**
+
+1. **Does macOS register it?** Syd runs `pluginkit -m -v -p com.apple.wallpaper`. Twelve, with ours among them, is a yes.
+2. **Does System Settings › Wallpaper show it?** Syd opens the pane and says.
+3. **Does it run?** The extension logs one `probe:` line when it starts. A refusal leaves a line of its own in the unified log, found by the extension's name; the probe's instructions give the `/usr/bin/log show` predicate for both.
+
+A no at any gate ends it: the answer is "it cannot work", and route A is what is left for the pane. *It read "back to A or C" until C was ruled out for the system wallpaper, 2026-09-14.*
+
+**What is built:**
+
+- A host app, `Photo-Go-Round Wallpaper Probe.app`, `LSUIElement`, which does nothing itself. An ExtensionKit extension ships inside an app, so something has to carry it.
+- One extension in the host's `Contents/Extensions/`, with `EXExtensionPointIdentifier` = `com.apple.wallpaper`; the entitlements `com.apple.private.wallpaper.extension` and `com.apple.security.app-sandbox`, as Apple's carries; and a minimal `@main` on ExtensionFoundation's `AppExtension` that logs the `probe:` line and nothing more.
+- Deployment target macOS 27.0.
+- **Two signatures, as two runs:** ad-hoc, and Syd's development identity. One may be refused where the other is not, and that is measured rather than guessed.
+- **A script with `swiftc` and `codesign`, following `make-agent-bundle.sh`, so the Xcode project is not touched.** Its source sits beside `Scripts/wallpaper-probe.swift`, as the second wallpaper probe.
+- **The output defaults to a directory under DerivedData**, never the checkout.
+- **The script only builds.** Copying the app to `~/Applications` and registering it are Syd's, handed to him as commands, as every install is.
+
+**What it does not answer.** Three yeses say macOS lets an extension of ours in; they say nothing about drawing. What the pane asks an extension for lives in `WallpaperExtensionKit`, `WallpaperFoundation` and `WallpaperTypes`, all private. So a pass leads to a second probe to find that out, and whatever it finds can change with any macOS update — the private store behind route A already moved once, in macOS 26.
+
+**Left to Claude when it is built:** where exactly its source directory sits, and the host's and extension's bundle identifiers.
+
+**Possibly a second extension, on `com.apple.wallpaper.development`** — proposed, not decided. See *The development extension point*.
+
+## The bundle, like the saver's
+
+Claude's proposal, 2026-09-14, in answer to "Wallpapers needs its own binary/bundle so that it can be set from System Settings and run without the app" and "I am expecting something very similar to Scripts/make-saver-bundle.sh". **It was written before the pane was asked for.** If an extension turns out to work, the pane hosts the wallpaper rather than launchd, and much of this changes; it is recorded as proposed.
+
+**The LaunchAgent in it waits on the system wallpaper route.** Syd, 2026-09-14: "I don't see the LaunchAgent method as viable in the system wallpaper case", then "don't want launch agent at all if system wallpaper route can be figured out." So the plist in `~/Library/LaunchAgents`, `launchctl bootout` and `bootstrap`, and the host running the loop under launchd are built only if that route cannot be figured out. The script modelled on `make-saver-bundle.sh` stands either way.
+
+- **An Xcode target, `Photo-Go-Round Wallpaper`**, building `Photo-Go-Round Wallpaper.app`: `LSUIElement`, bundle identifier `com.sydpolk.photogoround.wallpaper`, unsandboxed, linking `PhotoGoRoundAgentAPI` and `PhotoGoRoundDisplay` as the saver does.
+- **A host in `app/wallpaper/Sources`** doing what `AppDelegate` does now: `Wallpaper.desktop()`, `watchTheSystem()`, `resume()`. The loop does not move, and its domain and directory stay `com.sydpolk.photogoround.wallpaper.{dev|prod}`, which cannot collide with the bundle identifier because both carry a suffix.
+- **`Scripts/make-wallpaper-bundle.sh`**, with the saver script's options — `--output`, `--release`, `--install`, `-h` — and `xcodebuild` underneath.
+- **`--install` writes launchd's plist to `~/Library/LaunchAgents` and restarts the job with `launchctl bootout` and `bootstrap`**, where the saver script has its `killall`. Syd: "whatever launchctl needs should be put into ~/Library/LaunchAgents so multiple users don't clobber each other."
+- **The AFTERWARDS text** says the agent must be running, and gives the `/usr/bin/log show` line for category `wallpaper`.
+
+**Where it does not fit what is already decided — each named to Syd, none answered:**
+
+- **Where the bundle lives.** The saver's `--install` copies its bundle into `~/Library/Screen Savers`. For the agent, Syd decided "the binary stays in the app bundle", and *Its own binary* says the wallpaper follows that shape. A standalone install puts the bundle somewhere else — `~/Applications`, as `make-agent-bundle.sh --install-to` suggests.
+- **Whether the script runs `launchctl`.** `make-saver-bundle.sh --install` installs outright; `make-agent-bundle.sh` prints the commands instead, because "putting a login item on a Mac is the owner's call."
+- **Two hosts must not both run the loop.** The app and the bundle together ask for every display twice and spend two cards for one picture. TODO.md's *A wallpaper bundle* says the same.
+- **The checkbox reaches another process late.** `Wallpaper` reads `enabled` once, in `init`, so ticking or unticking it in the app does not start or stop a separate process until that process restarts. The interval has no such problem; it is read on every use.
+
+## Two wallpapers, told apart in the log
+
+Syd, 2026-09-14: "the logging for fetches from the system wallpaper panel should say "system-wallpaper" to distinguish it from the app-based "wallpaper" now. We will continue to support both until I decide on trying to sandbox or not." And of sandboxing: "you are right about the App Store; that is what I meant."
+
+**What says it.** The agent's served line prints `consumer=` as whatever the client put on the wire, so the name is the client's to choose. The pane's wallpaper asks as `system-wallpaper`; the app's keeps asking as `wallpaper`.
+
+**Nothing in the agent changes** — read from the code on 2026-09-14, not run:
+
+- `PictureEndpoint` takes `request.query("consumer")` as it comes, prints it in the served line, and passes it to the dashboard's tally, which counts pictures by consumer name.
+- It registers the deck's consumer as `ConsumerKind(request.query("consumer") ?? "cli")`. `ConsumerKind` is deliberately not an enum, and the schema has no CHECK on the column; `Consumer.swift`: "a new surface is meant to be a new consumer row rather than a new code path in the deck."
+
+**What a second name brings with it:**
+
+- A consumer's identity is `(kind, display)`, so a display fed by both wallpapers has two consumer rows, and the dashboard counts the two apart.
+- Phase 1's exit gate, counted from `consumer=wallpaper`, keeps meaning the app's wallpaper alone.
+- Both still draw from the one shared queue.
+
+**Proposed by Claude, not decided:**
+
+- A constant `ConsumerKind.systemWallpaper`, spelled `system-wallpaper`, beside `.wallpaper`, so no client writes the string by hand.
+- The pane wallpaper's own log lines — as distinct from the agent's served line — prefixed `system-wallpaper:`, beside the app's `wallpaper:`, so one word filters either.
+- If `Documentation/photogoroundd.md` names consumer kinds when this is built, it gains this one, with a test.
+
+**Supporting both:**
+
+- **Both on for one display — answered: not supported.** The pane's wallpaper and the app's would each set that display's desktop: whichever set last shows, and two cards are spent for one picture. It is *The bundle, like the saver's*' "two hosts must not both run the loop" in a new form. Syd, 2026-09-14: "I am ok with not supporting app and system wallpapers and the two systems fighting each other." So nothing detects it, hands over between them, or warns. *That answers the pane's wallpaper against the app's only; the app against a LaunchAgent bundle, route C, is still open under* The bundle, like the saver's.
+- **Route A's fetches.** A folder the pane rotates is also fed from the agent; whether those fetches are `system-wallpaper` too is open.
+- **Where the pane's wallpaper keeps its state.** Whether it shares the per-display change times and the *Shuffle All* interval in `com.sydpolk.photogoround.wallpaper.{dev|prod}` or has its own is open — and a sandboxed extension may not be able to read that domain at all, which is what the saver found inside `legacyScreenSaver` (TODO.md, *An Options button for the screensaver*).
+
+## macOS 27 and later
+
+Syd, 2026-09-14: "this will very soon be MacOS 27+ only." The probe targets 27.0 on its own. `Package.swift` still says `.macOS("26.0")`, with a comment that it is held there so the server runs on a second Mac kept off betas; raising that line is Syd's, and nothing here changes it.
 
 ## Several users on one Mac
 
@@ -367,7 +572,8 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
 - **`PLAN.md`, *Alternatives considered and rejected*,** says "The agent is what makes the wallpaper schedule real." Only in the sense that it serves the pictures.
 - **`Sources/pgr_ctl/ServiceCommand.swift`** and **`app/mac/FEATURES.md`, *The app brings its own agent***, describe `SMAppService.agent` with the plist inside the bundle — "no writing into `~/Library/LaunchAgents`". That is the opposite of the per-user plist Syd specified on 2026-09-10.
 - **TODO.md, *Design the wallpaper***, lists "Who owns the loop" as open. It is answered. Its "Decided, 2026-09-09" entry puts the files in `<container>/wallpapers/` and says `HostEnvironment` should give the path out; both are reversed by "the app should not need to see the agent's container."
-- **TODO.md, *Sandboxing, and whether the App Store is reachable***, does not mention the wallpaper. Sandboxing it would move its files out of `Application Support` and into a real container — Syd: "we will probably have to move it if we want to sandbox."
+- **TODO.md, *Sandboxing, and whether the App Store is reachable***, does not mention the wallpaper. *2026-09-14: Syd's "reverse-engineering the wallpaper extension API will mean we can't sandbox this" — corrected to "you are right about the App Store; that is what I meant" — belongs there too, as does "We will continue to support both until I decide on trying to sandbox or not."; see* Getting into System Settings › Wallpaper. Sandboxing it would move its files out of `Application Support` and into a real container — Syd: "we will probably have to move it if we want to sandbox."
+- **TODO.md, *A wallpaper bundle, so the wallpaper runs without the app***, written earlier on 2026-09-14, does not know that the bundle is meant for the Wallpaper pane, that the probe comes first, or that the saver's script is the model Syd expects. Not changed; Syd asked for this file only.
 
 ## Not yet decided
 
@@ -379,7 +585,17 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
 - **The bounds on `intervalSeconds`, and the thirty-second recheck** — Claude's picks while building.
 - **A pause control beyond the checkbox**, and where it would live — the app, the shipping menu-bar app (TODO.md, *A menu-bar app for shipping*), or the Phase 2 binary.
 - **Whether reapplying on a Space change is wanted at all**, given it overrides a picture the user chose on that Space.
-- **Everything about Phase 2**: bundle or bare executable, menu-bar presence, and how the app installs and removes the plist.
+- **Everything about Phase 2**: bundle or bare executable, menu-bar presence, and how the app installs and removes the plist. *2026-09-14, now also:*
+  - whether to build the extension probe, and then whether an extension of ours can be in the Wallpaper pane at all;
+  - what `com.apple.wallpaper.development` requires, and whether the probe tries it too;
+  - whether to take route A, if it cannot — C is ruled out for the system wallpaper;
+  - a LaunchAgent bundle for the app-style wallpaper — not wanted if the system wallpaper route can be figured out, and open again only if it cannot;
+  - the App Store — whether to try for it, which is Syd's, and which decides how long both wallpapers stay;
+  - where the pane's wallpaper keeps its state;
+  - where the bundle lives, given "the binary stays in the app bundle";
+  - whether `make-wallpaper-bundle.sh --install` runs `launchctl` or prints the commands;
+  - how the app and the bundle hand the loop over, and how the checkbox reaches a separate process;
+  - Phase 2's exit gate.
 - **Separate pools of sources for the wallpaper and the screensaver.** `PLAN.md`, *TODO: separate pools of sources*, and Syd's "in addition to sources later".
 
 # References
@@ -394,3 +610,9 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
 - `Sources/PhotoGoRoundAgentAPI/` — `Host/HostEnvironment.swift`, `Model/Consumer.swift` (`ConsumerKind.wallpaper`), `Support/Log.swift` (`Log.wallpaper`).
 - `Sources/pgr_ctl/ServiceCommand.swift` and `Scripts/make-agent-bundle.sh` — the two agent-installation routes as they stand.
 - Apple: `NSWorkspace.setDesktopImageURL(_:for:options:)`, `desktopImageURL(for:)`, `NSWorkspace.DesktopImageOptionKey`; `launchd.plist(5)` (`LimitLoadToSessionType`); `SMAppService`.
+- `/System/Library/ExtensionKit/ExtensionPoints/com.apple.wallpaper.appexpt` and `/System/Library/ExtensionKit/Extensions/Wallpaper*.appex` — the extension point and Apple's extensions, read 2026-09-14; `pluginkit -m -v -p com.apple.wallpaper`, `codesign -d --entitlements`, `otool -L`.
+- `/System/Library/CoreServices/WallpaperAgent.app` — the host, read 2026-09-14: its entitlements, its links, its `Info.plist` and its strings. `/System/Library/ExtensionKit/Extensions/Wallpaper.appex` and `WallpaperSettingsIntents.appex` — the Settings side.
+- Howard Oakley, *An overview of app extensions and plugins in macOS Sequoia*, The Eclectic Light Company, 2025-04-23 — https://eclecticlight.co/2025/04/23/an-overview-of-app-extensions-and-plugins-in-macos-sequoia/
+- Bart Reardon, *Adding Wallpaper folders to macOS System Settings* (WallpaperFolderManager), 2025-12-04 — https://bartreardon.github.io/2025/12/04/adding-wallpaper-folders-to-macos-system-settings.html
+- `Scripts/make-saver-bundle.sh` — what Phase 2's script follows. `Scripts/make-agent-bundle.sh` — `--install-to`, and printing the `launchctl` commands rather than running them.
+- `Package.swift` — the `.macOS("26.0")` line.
