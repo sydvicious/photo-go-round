@@ -17,6 +17,7 @@ pgr_ctl cache {status | evict | clear [--source <id>] [--unavailable] [--yes]}
 pgr_ctl shuffle-test [--deals <n>] [--photos <n>] [-w <fraction>]
 pgr_ctl photos-spike [-n <count>] [--probe <count>] [--album <id|title>] [--albums]
 pgr_ctl get [<key>] | set <key> <value>
+pgr_ctl wallpaper get [<key>] | wallpaper set <key> <value>
 pgr_ctl notify <topic>
 pgr_ctl log [-f] [--last <time>]
 pgr_ctl register | unregister | service-status
@@ -300,6 +301,22 @@ would use. An unknown key is an error.
 `set <key> <value>`
 Writes one preference, to the current domain. A running agent picks the change
 up immediately. For a list of valid keys, see `get`.
+
+`wallpaper get [<key>]`
+Reads the wallpaper's own preferences, which live in
+`com.sydpolk.photogoround.wallpaper.dev` — or `.prod` with `--prod` — rather than
+in the domain `get` reads. With no key it lists every setting; with a key it
+prints that value alone, for scripts. An unset `enabled` or `interval` reports
+the value the wallpaper would use. The keys are `enabled`, `interval`, and
+`displays`.
+
+`wallpaper set <key> <value>`
+Writes one of them. `enabled` takes `true` or `false`; `interval` takes a
+*Shuffle All* tag such as `thirtyMinutes` or `oneHour`, and anything else is
+refused with the list of valid tags. `displays` is the wallpaper's own record of
+what each display is showing and cannot be set here. The app's Settings window
+writes the same domain, and a running wallpaper picks the change up on its next
+look.
 
 `notify <topic>`
 Announces that something changed, without changing it, so that every process

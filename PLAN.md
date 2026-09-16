@@ -288,11 +288,13 @@ Phases 1 and 2 run on file-backed sources alone — folders and individually sel
 - **Server, then a CLI to exercise it, then the Mac app that calls it, then iOS.** The headless library process is the foundation every surface sits on; the command line proves it correct before any UI exists, and a window showing the shuffle is the shortest proof the idea works. The kit's API is still shaped by iOS's constraints even though iOS arrives third, since retrofitting those is the expensive mistake.
 - **`pgr_ctl` and the Mac app are permanent test harnesses, not scaffolding.** The command line covers anything scriptable, statistical, or concurrent; the app covers anything visual or timing-dependent. Every later surface is exercised through one of them before it gets its own home.
 - **The Mac app is a window that can go full screen, plus a Settings panel for sources and the wallpaper, and an About box linking the agent's dashboard.** A full-screen window is visually what the screensaver will be, so the display behavior gets designed there and Phase 6 is left with only the sandbox to solve. Sources arrive because `pgr_ctl` never ships, which makes it the only user-facing way to add a photograph at all; everything else still belongs to `pgr_ctl`. See `app/mac/FEATURES.md`.
+- **Image widgets on the Mac, not only on iOS.** Syd, 2026-09-15: "I want to support image widgets on the Mac as well." Same WidgetKit code as iOS, and a widget is another HTTP client like every other surface. See *Widgets on macOS, and where the store actually lives*.
 - **"Calls it" means an HTTP request.** The app is a client like every other surface and gets a picture rendered to the size of its window, which buys it out of the App Group container question entirely. The cost is that the service has to be running, which a login item and launchd activation cover.
 
 *Platform and distribution*
 
 - **Mac ships Developer ID direct, the iOS family ships App Store.** Your call, and it is the right one — a sandboxed app cannot install a `.saver` bundle, so App Store distribution and a screensaver are mutually exclusive.
+- **Two Mac products, eventually: a sandboxed App Store version that does what it can, and a Pro version sold direct with the full integration.** Syd, 2026-09-15. **Nothing is built for it yet, and until it is, the Mac is unconstrained** — Syd: "for now, we have full reign over the mac to do whatever we like." See *Two Mac products, sandboxed and Pro*.
 - **A LaunchAgent, not a LaunchDaemon.** Photos access is per-user TCC and requires a user session; a system daemon cannot reach the library at all.
 - **Installs are fully independent — no cross-device sync at all, with one forced exception.** iCloud Photos already puts the same photos on every device, so each install shuffles the same pool on its own; this buys out of `PHCloudIdentifier` mapping, a CloudKit layer, and deal-time conflict resolution entirely. The Apple Watch is the exception, because watchOS has no Photos framework and no sources of its own — the paired iPhone feeds it, one-directionally.
 - **Clients ask the service over HTTP; preferences are the durable store and the control channel, never a client transport.** A surface requests a picture at the resolution it is about to draw at and is handed the pixels — it opens neither the database nor the cache. Multiple simultaneous clients, several of them on other devices, are what force it, since XPC cannot leave the machine. Darwin notifications keep exactly one job and one direction: locally, from the outside world to the service, where `defaults write` reconfigures a running agent and both ends share the preferences domain, so "go look" is still sufficient. Nothing rings the other way: a client wanting an answer asks for one. **One leftover in the code**: the agent still posts `cacheChanged` when a fetch lands or eviction frees space, and nothing observes it. See *The service is the interface* and *The database is private to the service*.
@@ -2387,6 +2389,8 @@ Implementation notes:
 
 ## Widgets on macOS, and where the store actually lives
 
+**Wanted, 2026-09-15.** Syd: "I want to support image widgets on the Mac as well." Until then this section was analysis of what a Mac widget would cost rather than a commitment to build one. What follows still holds: the widget asks the agent over HTTP, so nothing about the storage design changes.
+
 macOS has widgets — Notification Center and, since Sonoma, sitting on the desktop — and they use the same WidgetKit API as iOS. That makes a Mac widget nearly free in code terms, and it is another consumer with its own hand. But it has one consequence that reaches all the way back into the storage design.
 
 **A widget extension is sandboxed even though the Mac agent is not.** App extensions on macOS require the sandbox; there is no opting out. So the unsandboxed agent writing to `~/Library/Application Support/Photo-Go-Round/` produces a store the widget cannot open, for exactly the same reason the screensaver cannot open it.
@@ -2541,6 +2545,17 @@ On iOS an App Group suite would carry app-to-widget settings — the Mac has non
 | visionOS | Yes | Photos read, App Group |
 
 The Mac side being unsandboxed is what makes arbitrary folder access, wallpaper setting, and cross-container cache writes possible without security-scoped bookmark ceremony. The iOS side is sandboxed regardless, but there the container model is a natural fit anyway.
+
+## Two Mac products, sandboxed and Pro
+
+Syd, 2026-09-15: "my long-term vision has clarified. I will submit an app store version that is sandboxed, and the app will do what it can (set wallpaper while app is running, enable widgets, maybe setup screensaver), and it might have to have the agent internal to the app and only be able to do anything while it is running. I will have a separate pro version for sale on my own site which will have the full integration."
+
+**Recorded, not planned.** Syd the same day: "don't worry about that long-term strategy yet; just put it in PLAN.md", and "for now, we have full reign over the mac to do whatever we like." So nothing below constrains what is built now, and no phase, decision or code changes for it yet.
+
+- **The App Store version is sandboxed and does what it can while it is open:** the wallpaper set from the running app, widgets, and perhaps some screensaver setup. The agent may have to live inside the app, which would mean nothing happens while the app is closed.
+- **The Pro version is sold from Syd's own site and carries the full integration:** the separate agent, the screensaver, and the wallpaper extension in System Settings › Wallpaper, which uses private frameworks and temporary exceptions and can never pass review. See `Wallpaper Plan.md`, *The real extension, inside the app*.
+- **What this settles in advance:** the question *whether* to sandbox stops being one decision for one product. *The sandbox contingency* below reads as the App Store version's cost sheet, and this document's unsandboxed Mac is the Pro version.
+- **What it leaves open:** everything. Which surfaces the store version keeps, whether an in-app agent is acceptable, how one codebase builds both, pricing, and when either ships.
 
 ## The sandbox contingency
 

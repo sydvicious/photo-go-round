@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Builds and installs "Photo-Go-Round.saver" — the Mac screensaver.
+# Builds and installs "Photo-Go-Round Screensaver.saver" — the Mac screensaver.
 #
 # The bundle is an Xcode target now, so this drives xcodebuild rather than
 # assembling anything itself. Xcode builds, because that is where the thing can
@@ -23,7 +23,7 @@ SPIKE=0
 
 usage() {
     cat <<'HELPTEXT'
-Builds "Photo-Go-Round.saver" — the Mac screensaver.
+Builds "Photo-Go-Round Screensaver.saver" — the Mac screensaver.
 
 USAGE
   ./Scripts/make-saver-bundle.sh [options]
@@ -75,17 +75,23 @@ if [[ "$SPIKE" -eq 1 ]]; then
     NAME="Photo-Go-Round Spike"
 else
     SCHEME="Photo-Go-Round Saver"
-    NAME="Photo-Go-Round"
+    NAME="Photo-Go-Round Screensaver"
 fi
 
 # By scheme, not -target: a -target build gives the local package targets a
 # "Conditional compilation flags do not have values in Swift" warning that a
 # scheme build, which is how Xcode itself builds, does not. Measured 2026-09-15.
 # xcodebuild makes a scheme for every target on its own.
+#
+# arm64 alone, because "platform=macOS" matches this Mac twice on macOS 27 —
+# once per architecture — so xcodebuild warns and builds both. Syd, 2026-09-15:
+# "there is a difference between dev and shipping the product… for dev purposes,
+# I don't want to waste the time or disk space." A shipping build is where
+# Intel is decided, not here.
 xcodebuild build \
     -project "$PROJECT" \
     -scheme "$SCHEME" \
-    -destination "platform=macOS" \
+    -destination "platform=macOS,arch=arm64" \
     -configuration "$CONFIGURATION" \
     -derivedDataPath "$BUILD_DIR" \
     >/dev/null

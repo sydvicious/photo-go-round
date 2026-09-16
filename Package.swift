@@ -73,7 +73,10 @@ let package = Package(
         // and answering questions is not it.
         .executableTarget(
             name: "pgr_ctl",
-            dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit", "Console"],
+            // `PhotoGoRoundDisplay` for the surfaces' own preferences — the
+            // wallpaper's domain and `ShuffleInterval` — so `wallpaper set`
+            // cannot disagree with what the app writes and the extension reads.
+            dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit", "PhotoGoRoundDisplay", "Console"],
             // Consumed by the linker below, not copied into a bundle.
             exclude: ["Info.plist"],
             swiftSettings: [.swiftLanguageMode(.v6)],
@@ -108,7 +111,7 @@ let package = Package(
         ),
         .testTarget(
             name: "pgr_ctlTests",
-            dependencies: ["PhotoGoRoundAgentAPI", "pgr_ctl"],
+            dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundDisplay", "pgr_ctl"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

@@ -1,12 +1,13 @@
-// The probe's section in System Settings › Wallpaper. `Wallpaper Plan.md`,
-// *The second probe*.
+// The Photo-Go-Round section in System Settings › Wallpaper. `Wallpaper Plan.md`,
+// *The second probe* for how this was measured, and *The real extension, inside
+// the app*.
 //
 // `WallpaperAgent` takes the section as the private class
 // `WallpaperSettingsViewModelsXPC`, which decodes Swift `Codable` values of
 // `WallpaperTypes` from a keyed archive. Those types are not ours to import, so
-// the values are written out here in the same shape — the property names and
-// case names are Apple's, read from Phosphene's mirrors of them — archived under
-// a class name of our own, and unarchived as the real class.
+// the values are written out here in the same shape — the property names and case
+// names are Apple's — archived under a class name of our own, and unarchived as
+// the real class.
 
 import Foundation
 
@@ -112,10 +113,10 @@ struct SettingsViewModels: Encodable {
     let screenSaver: SettingsViewModel?
 }
 
-/// The archive's root object, under a class name of our own that the
-/// unarchiver maps to `WallpaperSettingsViewModelsXPC`. The key is the one the
-/// real class reads.
-@objc(PGRProbeSettingsViewModels)
+/// The archive's root object, under a class name of our own that the unarchiver
+/// maps to `WallpaperSettingsViewModelsXPC`. The key is the one the real class
+/// reads.
+@objc(PGRWallpaperSettingsViewModels)
 final class ArchivedSettingsViewModels: NSObject, NSSecureCoding {
     static var supportsSecureCoding: Bool { true }
 
@@ -130,35 +131,43 @@ final class ArchivedSettingsViewModels: NSObject, NSSecureCoding {
 
     func encode(with coder: NSCoder) {
         guard let archiver = coder as? NSKeyedArchiver else {
-            probe("view models: coder is not a keyed archiver")
+            wallpaperLog("view models: coder is not a keyed archiver")
             return
         }
         do {
             try archiver.encodeEncodable(value, forKey: "WallpaperSettingsViewModels")
         } catch {
-            probe("view models: encoding failed: \(error)")
+            wallpaperLog("view models: encoding failed: \(error)")
         }
     }
 }
 
 enum PaneModels {
-    static let itemID = "probe-picture"
+    /// One item, which is the whole of Photo-Go-Round in the pane: the deck
+    /// decides what it shows, so there is nothing here to choose between.
+    static let itemID = "photo-go-round"
 
     static func make(thumbnail: URL) -> SettingsViewModels {
-        let provider = ProviderID(rawValue: Bundle.main.bundleIdentifier ?? "com.sydpolk.photogoround.wallpaper-probe.extension")
+        let provider = ProviderID(
+            rawValue: Bundle.main.bundleIdentifier ?? "com.sydpolk.photogoround.wallpaper-extension")
         let identity = ChoiceIdentity(
             id: itemID,
             descriptor: .init(provider: provider, identifier: itemID, files: [], configuration: Data(itemID.utf8)))
         let item = SettingsItem(
             id: identity,
-            localizedName: "Probe Picture",
+            // **"Wallpaper", so it cannot be confused with the screensaver.**
+            // Syd, 2026-09-15: one extension and one `.saver` were both called
+            // "Photo-Go-Round", in two lists, and picking the wrong one gave a
+            // screen saver that mirrored the desktop. The section heading below
+            // stays "Photo-Go-Round"; the item says which surface it is.
+            localizedName: "Photo-Go-Round Wallpaper",
             thumbnail: ImageThumbnail(url: thumbnail),
             choice: ChoiceDescription(
                 id: identity,
                 provider: provider,
                 identifier: itemID,
-                name: "Probe Picture",
-                localizedDescription: "Photo-Go-Round wallpaper probe",
+                name: "Photo-Go-Round Wallpaper",
+                localizedDescription: "Photographs from your library, shuffled",
                 thumbnail: ImageThumbnail(url: thumbnail),
                 isDownloaded: true,
                 options: []),
@@ -178,9 +187,17 @@ enum PaneModels {
             shouldHideItemLabels: false)
         let model = SettingsViewModel(
             groups: [group], refreshPolicy: EnumCase(name: "default"), isModificationDisabled: false)
-        // Both pickers, as Phosphene answers: the screen saver is the wallpaper
-        // shown while idle, so the section may appear there too.
-        return SettingsViewModels(desktop: model, screenSaver: model)
+        // **The wallpaper picker only.** Syd, 2026-09-15: "advertise to the
+        // wallpaper picker only." Offering the same item in both pickers put a
+        // Photo-Go-Round entry under Screen Saver as well, drawn by these same
+        // surfaces — so the pane showed identical previews in two places while
+        // the real `.saver` sat installed and unused, and nothing on screen said
+        // which was which. The screensaver is its own product, with its own view
+        // and its own loop; this is the desktop's.
+        //
+        // *Until then both were answered, copying Phosphene, on the reasoning
+        // that the screen saver picker is where the idle wallpaper is chosen.*
+        return SettingsViewModels(desktop: model, screenSaver: nil)
     }
 
     /// The view models as `WallpaperSettingsViewModelsXPC`, or nil with the
@@ -191,33 +208,32 @@ enum PaneModels {
             data = try NSKeyedArchiver.archivedData(
                 withRootObject: ArchivedSettingsViewModels(make(thumbnail: thumbnail)), requiringSecureCoding: false)
         } catch {
-            probe("view models: archiving failed: \(error)")
+            wallpaperLog("view models: archiving failed: \(error)")
             return nil
         }
         guard let realClass = NSClassFromString("WallpaperSettingsViewModelsXPC") else {
-            probe("view models: WallpaperSettingsViewModelsXPC is not loaded")
+            wallpaperLog("view models: WallpaperSettingsViewModelsXPC is not loaded")
             return nil
         }
         let unarchiver: NSKeyedUnarchiver
         do {
             unarchiver = try NSKeyedUnarchiver(forReadingFrom: data)
         } catch {
-            probe("view models: unarchiver failed: \(error)")
+            wallpaperLog("view models: unarchiver failed: \(error)")
             return nil
         }
         unarchiver.requiresSecureCoding = false
         unarchiver.decodingFailurePolicy = .setErrorAndReturn
-        unarchiver.setClass(realClass, forClassName: "PGRProbeSettingsViewModels")
+        unarchiver.setClass(realClass, forClassName: "PGRWallpaperSettingsViewModels")
         let decoded = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey)
         if let error = unarchiver.error {
-            probe("view models: decoding as WallpaperSettingsViewModelsXPC failed: \(error)")
+            wallpaperLog("view models: decoding as WallpaperSettingsViewModelsXPC failed: \(error)")
         }
         unarchiver.finishDecoding()
         guard let decoded else {
-            probe("view models: decoded nothing")
+            wallpaperLog("view models: decoded nothing")
             return nil
         }
-        probe("view models: \(data.count) bytes decoded as \(NSStringFromClass(type(of: decoded as AnyObject)))")
         return decoded as AnyObject
     }
 }

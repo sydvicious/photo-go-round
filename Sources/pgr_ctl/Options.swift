@@ -26,10 +26,18 @@ struct Options {
         case photosSpike
         case getPreferences(key: String?)
         case setPreference(key: String, value: String)
+        case wallpaper(WallpaperAction)
         case notify(topic: String)
         case log
         case service(ServiceAction)
         case help
+    }
+
+    /// The wallpaper's own preferences, which live in their own domain rather
+    /// than the agent's. Reading is the harmless verb, as everywhere else here.
+    enum WallpaperAction: Equatable {
+        case get(key: String?)
+        case set(key: String, value: String)
     }
 
     /// One source named on the command line.
@@ -339,6 +347,19 @@ struct Options {
             }
             return .setPreference(key: key, value: value)
 
+        case "wallpaper":
+            switch verb(1) {
+            case nil, "get":
+                return .wallpaper(.get(key: verb(1) == nil ? nil : verb(2)))
+            case "set":
+                guard let key = verb(2), let value = verb(3) else {
+                    throw OptionsError.missingValue(flag: "wallpaper set <key> <value>")
+                }
+                return .wallpaper(.set(key: key, value: value))
+            case .some(let other):
+                throw OptionsError.unknownVerb("wallpaper \(other)")
+            }
+
         case "notify":
             guard let topic = verb(1) else {
                 throw OptionsError.missingValue(flag: "notify <topic>")
@@ -402,6 +423,11 @@ struct Options {
                                     pulled and checked. Read-only
           get [<key>] [--no-default-values]
           set <key> <value>         Preferences, in the domain the agent reads
+          wallpaper get [<key>]
+          wallpaper set <key> <value>
+                                    The wallpaper's own preferences, in its own
+                                    domain: enabled, interval, and the displays
+                                    it is keeping track of
           notify <topic>            Ring a doorbell by hand: prefs, deck,
                                     sources, cache
           log [-f] [--last <time>]  What every process has been logging
@@ -454,6 +480,8 @@ struct Options {
           pgr_ctl status
           pgr_ctl shuffle-test --deals 50000 --photos 4000
           pgr_ctl photos-spike -n 20 --album Favorites
+          pgr_ctl wallpaper get
+          pgr_ctl wallpaper set interval thirtyMinutes
         """
 }
 

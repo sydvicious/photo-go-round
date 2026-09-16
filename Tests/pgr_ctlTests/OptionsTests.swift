@@ -189,6 +189,18 @@ struct OptionsTests {
         #expect(throws: (any Error).self) { try command(["set", "queueSize"]) }
     }
 
+    @Test("The wallpaper's preferences are their own family, and reading is the default")
+    func wallpaperPreferences() throws {
+        #expect(try command(["wallpaper"]) == .wallpaper(.get(key: nil)))
+        #expect(try command(["wallpaper", "get"]) == .wallpaper(.get(key: nil)))
+        #expect(try command(["wallpaper", "get", "interval"]) == .wallpaper(.get(key: "interval")))
+        #expect(
+            try command(["wallpaper", "set", "interval", "oneHour"])
+                == .wallpaper(.set(key: "interval", value: "oneHour")))
+        #expect(throws: (any Error).self) { try command(["wallpaper", "set", "interval"]) }
+        #expect(throws: (any Error).self) { try command(["wallpaper", "sideways"]) }
+    }
+
     @Test("Doorbells are rung by name")
     func notifyTakesATopic() throws {
         #expect(try command(["notify", "sources"]) == .notify(topic: "sources"))

@@ -91,7 +91,10 @@ public final class Wallpaper {
     /// "wallpaper will default to "1 hour"." It was thirty minutes from
     /// 2026-09-13, sixty seconds from 2026-09-10, and thirty minutes before
     /// that, which is what `Wallpaper Plan.md` was written around.
-    public static let defaultInterval = ShuffleInterval.oneHour
+    /// `nonisolated` so anything can name the default without hopping to the
+    /// main actor: the app, the wallpaper, and `pgr_ctl wallpaper get`, which is
+    /// a command-line tool with no main actor to hop to. It is a tag, not state.
+    public nonisolated static let defaultInterval = ShuffleInterval.oneHour
     /// The loop never sleeps longer than this, so a changed interval
     /// is noticed within it rather than at the next change — no preference
     /// ever needs a restart. A round with nothing due costs one file check per

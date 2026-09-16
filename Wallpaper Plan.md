@@ -22,6 +22,7 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
   - First, the extension probe: does macOS register an extension of ours on `com.apple.wallpaper`, does the Wallpaper pane list it, and does it run — all with SIP on. **Built and run 2026-09-14: registered, launched and connected to by `WallpaperAgent` with no private entitlement; the pane lists nothing, because the probe answers nothing.** *Until then this read "Proposed 2026-09-14; not built."* See *The extension probe*.
   - Next, the second probe: a Photo-Go-Round section in the pane that can be chosen and draws a still. **Built and run 2026-09-14: all three gates passed — the section shows, choosing it reaches the extension, and the desktop shows the picture.** *Until then: "Drafted 2026-09-14; not built."* *This bullet first read "If all three pass, a second probe for what the private wallpaper frameworks expect an extension to do."* See *The second probe*.
   - Next, the third probe: snapshots, the export `WallpaperAgent` makes from them, and the lock screen. **Run 2026-09-15: the export succeeds and the lock screen shows the picture**, at version 0.3.2, after a bug in the probe's own surface bookkeeping turned 0.3's desktop gray. *Until then: "Built 2026-09-14; not yet run", and before that "Drafted 2026-09-14; not built."* See *What the third probe found*.
+  - Then the real extension, an appex inside the app: the probes' code, a timer per display, and settings read from the wallpaper domain. **Drafted 2026-09-15; not built.** See *The real extension, inside the app*.
   - Next, the fourth probe: pictures from the agent — permission to connect, finding the port from inside the extension's sandbox, and a photograph on the desktop served to `system-wallpaper`. **Built and run 2026-09-15: all three gates passed — the port is found from inside the sandbox, the agent serves `system-wallpaper`, and the desktop shows the photograph.** *Until then: "Drafted 2026-09-15; not built."* See *What the fourth probe found*.
   - If any fails, it cannot work, and what is left for the pane is a folder registered in Apple's private store. *Until 2026-09-14 a bundle that is only a LaunchAgent was the other choice; Syd: "I don't see the LaunchAgent method as viable in the system wallpaper case."* See *Getting into System Settings › Wallpaper*.
   - `Scripts/make-wallpaper-bundle.sh`, very similar to `Scripts/make-saver-bundle.sh`. See *The bundle, like the saver's*. *Claude's reading, 2026-09-14: it builds and installs whatever ships — the pane's extension if that route works — and has no launchd step unless it does not.*
@@ -79,11 +80,13 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 - **"1."** — snapshots and the lock screen next, of the open items offered.
 - **"yes, build the third probe"**
 - **"you can go ahead and upgrade everything to our minimum support to macOS 27, so yes, use the OS 27 APIs"**, and **"you can update the plan files with this decision."** Every minimum in the project is 27.0, and the probe hands its renderer a frame the macOS 27 way. See *macOS 27 and later*.
-- **"and really, all of this should be executed in the build script. I have to open the system settings panel, but until then, this is all mechanical command-line stuff, and there is no reason that the build script should not do everything until I have to open the settings panel"** — 2026-09-15. The probe's script now stops the old extension, replaces the copy in `~/Applications`, registers it, and waits for `pluginkit` to show the new version. `--build-only` skips all of that. The steps after it are in `Documentation/Wallpaper Extension Probe.md`.
+- **"and really, all of this should be executed in the build script. I have to open the system settings panel, but until then, this is all mechanical command-line stuff, and there is no reason that the build script should not do everything until I have to open the settings panel"** — 2026-09-15. The probe's script now stops the old extension, replaces the copy in `~/Applications`, registers it, and waits for `pluginkit` to show the new version. `--build-only` skips all of that. The steps after it are in `Documentation/Wallpaper Extension Probe.md`. *That file was renamed `Documentation/Wallpaper Extension.md` on 2026-09-15 when it stopped describing a probe; the probe script now points at `Documentation/Wallpaper Extension Probe Steps.md`, which is not written yet.*
 - **"please go ahead and put the "--sign <arg>" directly in the build script. This is unlikely to change anytime soon."** — 2026-09-15. The script signs with `Apple Development: Sydney Polk (W8E4GRMLBV)` unless told otherwise; `--sign -` builds ad-hoc.
 - **"yes, build 0.3.2"**, and **"yes, record it in the plan"** — 2026-09-15.
 - **"1."** — pictures from the agent next, of the open items offered, 2026-09-15; and **"yes, draft it in the plan"**.
 - **"yes, build the fourth probe"**, and **"yes, record it in the plan"** — 2026-09-15.
+- **"Let's build the real extension. For now, we should just use the agent as the source of everything, and you can only change settings using the application or the command-line tool. The next stage would be to put a sources panel and timing slider directly into the extension"** — 2026-09-15. See *The real extension, inside the app*.
+- **"the app is NOT sandboxed, and you should know that"** — 2026-09-15, correcting a sloppy sentence of Claude's. The app target is unsandboxed; only the appex is sandboxed, which the extension point requires and which the probes ran with.
 
 *Decided before this plan*
 
@@ -180,7 +183,7 @@ Recorded in order, because one step of it was a wrong turn of a kind this projec
 52. Syd: "yes, build the third probe". Claude built it; it has not been run.
 53. Syd, of the one deprecation warning left: "you probably can't do anything about these warnings". Claude answered that it had been kept on purpose and could be replaced with the macOS 27 API. Syd: "you can go ahead and upgrade everything to our minimum support to macOS 27, so yes, use the OS 27 APIs", then "you can update the plan files with this decision." Every macOS minimum in the project went to 27.0, and the probe's `enqueue` was replaced.
 54. Syd ran 0.3, 2026-09-15: "no, the desktop is a dark gray image. The wallpaper is set to Photo-Go-Round, but the picture is wrong". The log showed the frame enqueued and the snapshot sent, so either could be the cause. Syd: "yes, build that variant" — 0.3.1, answering no snapshots.
-55. Syd asked for the steps the script printed to go in a Markdown file, and to be walked through them one at a time, with routine commands in one block. They went to `Documentation/Wallpaper Extension Probe.md`, and the script stopped printing them.
+55. Syd asked for the steps the script printed to go in a Markdown file, and to be walked through them one at a time, with routine commands in one block. They went to `Documentation/Wallpaper Extension Probe.md`, and the script stopped printing them. *Renamed `Documentation/Wallpaper Extension.md` on 2026-09-15.*
 56. Syd: "and really, all of this should be executed in the build script…" The script took over the install and registration, up to the Settings pane.
 57. Syd, of 0.3.1: "wallpaper is now blue and yellow test image". So answering the snapshot was what turned 0.3 gray, not the macOS 27 enqueue.
 58. Syd: "yes" to reading how Apple's snapshot class encodes. Claude disassembled it, sent a snapshot through a real `NSXPCConnection` in a harness, and compared the 0.3 and 0.3.1 logs. The snapshot was intact; the probe's surface bookkeeping was not. Syd also had the signing identity put in the script.
@@ -191,6 +194,8 @@ Recorded in order, because one step of it was a wrong turn of a kind this projec
 63. Syd: "yes, build the fourth probe". Claude built it as 0.4. A compile error — `CGDisplayCreateUUIDFromDisplayID` needs `ColorSync` without AppKit — was fixed, and a harness outside the sandbox checked the port reads, the display UUID and the decode, without asking the agent for a card.
 64. Syd ran it, and sent the pane's thumbnail — the generated picture, which the thumbnail always is. The probe's log showed the port read, the request answered and the photograph enqueued. Syd: "but I do see a picture from the rotation", with the agent's own log showing the same card served to `system-wallpaper`.
 65. Syd: "yes, record it in the plan".
+66. Asked whether to probe further or build the real thing, Syd: "Let's build the real extension", with the agent as the source of everything and settings changed only in the app or `pgr_ctl`. Claude read the app's wallpaper loop, `pgr_ctl`'s commands and preference keys, the saver target's settings and the app target's sandbox setting, and proposed the shape in prose.
+67. Syd: "the app is NOT sandboxed, and you should know that". Corrected: the app target is unsandboxed and stays so; the appex is sandboxed on its own. Syd: "yes, draft it in the plan".
 
 ## Where the loop runs
 
@@ -569,7 +574,7 @@ Run on Syd's MacBook Pro, 2026-09-15, development-signed, in three builds.
 
 - `PaneHandler.swift` — surfaces keyed by display and by desktop or preview; the id's fields logged with their values; `answersSnapshots`, false for 0.3.1 and true again for 0.3.2.
 - `Scripts/make-wallpaper-extension-probe.sh` — version 0.3.2, build 5; installs and registers after building, unless `--build-only`; signs with Syd's development identity by default.
-- `Documentation/Wallpaper Extension Probe.md` — the steps, new.
+- `Documentation/Wallpaper Extension Probe.md` — the steps, new. *Renamed `Documentation/Wallpaper Extension.md` on 2026-09-15.*
 
 ## The fourth probe: pictures from the agent
 
@@ -602,7 +607,30 @@ Claude's draft, 2026-09-15, after Syd chose pictures from the agent as the next 
   - log the status, byte count and time taken;
   - decode the photograph and enqueue it on that surface's layer, replacing the generated picture; if any step fails, the generated picture stays and the log says which step.
 - **`snapshot`** answers with whatever that display's surface is showing — the photograph once it has arrived.
-- **The preview** keeps the generated picture, so the pane does not spend a card each time it is opened.
+- **The two products are named apart, 2026-09-15.** Syd: "make one extension named 'Photo-Go-Round Wallpaper' and the other 'Photo-Go-Round Screensaver'." The extension's pane item is now **Photo-Go-Round Wallpaper** — its `localizedName` and its choice's `name`; the section heading stays "Photo-Go-Round", since the section names the family. The saver's `PRODUCT_NAME` is now **Photo-Go-Round Screensaver**, so the bundle is `Photo-Go-Round Screensaver.saver` and, because its `CFBundleName` is `$(PRODUCT_NAME)`, that is what the Screen Saver list shows. `Scripts/make-saver-bundle.sh`, `install-saver.sh` and `uninstall.sh` follow the new bundle name. **A previously installed `Photo-Go-Round.saver` is not touched by any of them** and has to be removed by hand, or both appear in the list.
+- **Measured step by step, 2026-09-15**, to Syd's method: "Build the Wallpaper extension. set the wallpaper. check the logs. set the screensaver. check the logs. invoke the screensaver. check the logs."
+  - *Setting the wallpaper*: `presentationMode default` acquires only — desktop and its preview — one fetch as `consumer=system-wallpaper`, card 7261, drawn on 2 of 2 desktop surfaces.
+  - *Setting the screensaver*: still only `default`, card 3159 to `system-wallpaper`, drawn on 3 of 3 desktop surfaces. **Choosing the screen saver never reaches the screen saver slot**, and the Screen Saver pane's own preview arrives as a *desktop* preview — which is why it shows the wallpaper's photograph and why per-slot pictures cannot fix it. Syd saw this before it was measured: "I don't think that the preview in Screen Saver is behaving identically to when the screen saver comes up for real."
+  - *Invoking the screensaver*: `presentationMode idle, serving the screen saver`, one fetch as **`consumer=system-screensaver`**, card 4980, drawn on 1 of 1 screen saver surfaces.
+  - **The `.saver` bundle logged nothing throughout.** The screen saver on screen is the extension's, not the bundle's. *It was `Photo-Go-Round.saver` when this was measured; renamed `Photo-Go-Round Screensaver.saver` later the same evening.*
+- **Each slot asks as its own consumer.** Syd, 2026-09-15: "doesn't the agent log have the calling entity for the fetch?" It has whatever the client sends, and both slots were sending `system-wallpaper` — so in the agent's log the desktop's card and the screen saver's were indistinguishable, and, worse, they shared a consumer row: identity is `(kind, displayID)`, so two slots on one display counted as one surface and shared a shuffle position. The desktop now asks as `system-wallpaper` and the screen saver as **`system-screensaver`** — beside the app's `wallpaper` and the saver's `screensaver`, so the prefix says which host is drawing and the noun says which surface it is. *Claude first wrote `system-wallpaper-idle`, naming it after Apple's `presentationMode` value rather than the project's own taxonomy; Syd: "this used to be 'screensaver' and 'wallpaper'. What happened?"* `ConsumerKind` is deliberately not an enum and the schema carries no CHECK, so the agent needed no change.
+- **The acquire request says which slot it is for: `presentationMode`.** Measured 2026-09-15, after Syd asked the question that mattered — "Does the wallpaper know when it is being called as a wallpaper, and when it is called as a screensaver?" The request carries `rawValue.presentationMode`, `rawValue.activityState`, `rawValue.isPreview`, `rawValue.destination.{size, colorSpace, scaleFactor, directDisplayID}`, `rawValue.descriptor.{files, configuration, optionValues}`, `rawValue.cacheDirectory`, `rawValue.systemAppearance` and `rawValue.debugBackgrounds`. Fourteen acquires reported `presentationMode default` — the desktop and its previews — and one reported **`presentationMode idle`**, with `isPreview false`, appearing only once the screen saver actually ran. `activityState` stayed `active` throughout and distinguishes nothing here.
+  - **So the extension can serve the two slots differently**: refuse the idle one, or give it its own rotation and its own photographs. It also makes combining the wallpaper and the screensaver into one product a real option rather than a guess.
+  - **Repeated 2026-09-15**: a second screen saver run produced a second `presentationMode idle` acquire, both with `isPreview false`, against five `default` in the same window. The signal is consistent.
+  - **Untested:** whether an `idle` acquire arrives when the screen saver is merely *selected*, rather than running. Refusing at selection time depends on that; both sightings were of a screen saver actually on screen.
+  - *Three earlier explanations for the identical previews were wrong: a cached picker list, a stale stored selection, and a per-picker signal in `provideSettingsViewModels` that the log showed does not exist — every call passes the same content-type set. The truncation in Claude's own logging hid `presentationMode` for most of the evening.*
+- **The wallpaper refuses the screen saver slot.** Syd, 2026-09-15: "refuse the idle slot." An `acquire` whose `presentationMode` is `idle` is answered with an error rather than a surface; `default` is served as before. The screensaver is `Photo-Go-Round Screensaver.saver`, a separate product with its own loop, its own interval domain and the pan ahead of it.
+  - **It works, measured the same evening.** Two `idle` acquires were refused and **macOS fell back to Apple's screen saver** rather than showing the desktop's photograph or going black.
+  - **The wart:** the extension still appears in the Screen Saver list, because nothing we answer removes it, and choosing it now silently produces Apple's screen saver. Nothing tells the person why.
+  - **What the refusal cannot fix:** the Screen Saver pane's *preview*. Every preview acquire arrives as `presentationMode default` with `isPreview true`, whichever pane drew it — so the pane's screen saver preview is indistinguishable on the wire from the wallpaper's, and both show the same photograph. Syd saw it: "I don't think that the preview in Screen Saver is behaving identically to when the screen saver comes up for real." He was right; the two have different signals, and only the real one is distinguishable.
+- **The extension can still be *selected* as the screen saver, and then mirrors the wallpaper.** Measured 2026-09-15: with `Idle` and `Desktop` both naming `com.sydpolk.photogoround.wallpaper.extension`, every surface drew the same remembered photograph and the two previews changed together, while the real `.saver` never ran. Syd: "THEY SHOULD BE INDEPENDENT OF EACH OTHER, AND THE PREVIEW SHOULD BE A TINY SCREENSAVER." Choosing an Apple screen saver separated them at once. **`screenSaver: nil` stops the item being offered; it does not stop a selection already made from being honoured.** Two fixes are open: refusing an `acquire` for the idle slot outright — which needs the request's fields read, since only size, scale, display and `isPreview` have ever been looked at — and renaming the extension's item so it cannot be confused with the `.saver`, both being "Photo-Go-Round" in their respective lists.
+- **Confirmed on screen 2026-09-15**, after the day's fixes: selecting Photo-Go-Round showed the remembered photograph at once, then the newly fetched one. Syd: "it showed my last photograph immediately, then a new one. That's beautiful." No default picture in between, one fetch, both surfaces drawn together.
+- **One rotation per display, and every surface starts from a photograph.** Both fixed 2026-09-15, both bugs of Claude's making that afternoon. A preview that found nothing to show started a rotation of its own, so a display ran two timers and spent two cards an hour — Syd saw a second photograph arrive seconds after the first. It now asks once, with no timer, because the desktop's rotation is the display's. Separately, only previews consulted the remembered picture, so a fresh desktop surface drew the mark while the pane's preview already showed the last photograph; every surface now starts from the desktop's current picture, or the last one kept, and the mark is the last resort.
+- **The request timeout is ninety seconds, not ten.** Measured 2026-09-15: the extension gave up at 21:55:37 and the agent served the picture at 21:55:38, having spent the seconds before it fetching and caching two originals — its own budget for that is "up to 60 seconds". Two cards were dealt to a client that had stopped listening, and the desktop kept the mark while the log said "unreachable", which was untrue. A wallpaper can afford to wait: the only thing waiting is a picture already on screen.
+- **The last photograph is kept in the extension's own container.** Syd, 2026-09-15: "the wallpaper extension has its own preference domain and can do with it what it pleases", and "wallpaper should store an identifier for the last picture fetched, and use it for the preview." So `LastPicture` writes the picture as HEIC in the extension's Application Support, with `X-PGR-Card`, the time and the pixel size in its own defaults — its own container, no entitlement, nothing shared. A preview then shows the desktop's picture, or the last one kept, and asks the agent only when it has neither. *The identifier alone was not enough: the agent has no route that serves a named card — `/v1/next` pops the queue — so re-fetching "the picture already showing" is impossible without an agent change, which was not made.*
+- **The extension offers itself to the wallpaper picker only.** Syd, 2026-09-15: "advertise to the wallpaper picker only." It had answered both pickers since the second probe, copying Phosphene on the reasoning that the screen saver picker is where the idle wallpaper is chosen — so System Settings showed a Photo-Go-Round entry under Screen Saver as well, drawn by the extension's own surfaces. Syd saw it as identical previews in both places, with the real `.saver` installed and running nothing. The screensaver is a separate product with its own view and loop; `SettingsViewModels(desktop: model, screenSaver: nil)` keeps them apart.
+- **Surfaces are keyed by the wallpaper's UUID.** Changed 2026-09-15, after the preview went blank and stopped following the desktop. `WallpaperAgent` acquires the preview more than once — contexts 1511763678 then 1378937553 in the same minute — and the key was the role, "display 1, preview", so the second acquire replaced the first in the table and freed a remote context the pane was still showing. The id object carries a real `WallpaperID(id:)`, which is unique per acquire and stable for its life; `invalidate` now releases exactly that one, and a new photograph is drawn on every live surface for the display rather than on one plus a guessed sibling. **This is the third time the key was wrong**: the address of the id object left the desktop grey in the third probe, the role left the preview blank here, and the UUID is what both were standing in for.
+- **The pane's item is a fixed mark; the pane's preview follows the desktop.** Decided 2026-09-15. Syd, of the generated gradient: "the icon in system settings is stupid". Offered the current photograph as the item's picture, he took it and then reversed: "actually, don't do it that way. This will match the app icon once we have one" — so the item is a stable identity, and what is drawn there now is a placeholder for an app icon that does not exist yet. Then: "but the preview should update with the current picture", so a preview `acquire` starts from the photograph the desktop is showing, and every later photograph is put on the preview's surface as well as the desktop's. **No second card either way**: the preview shows the picture already in hand, so opening System Settings never asks the agent for anything.
 - **Its own lines** keep the `probe:` prefix. The `system-wallpaper:` prefix belongs to the real extension.
 - **No code shared with the app.** The probe writes its own small port read and request rather than linking `PhotoGoRoundDisplay`, as the earlier probes are built with `swiftc` from their own sources. Whether the real extension links `ServicePort` and `PictureClient` is for when it is built.
 
@@ -644,9 +672,55 @@ Run on Syd's MacBook Pro, 2026-09-15, at 08:59, development-signed, against the 
 - **Which exception each read needs.** Both were granted, so the run shows that each read works with both in place, not that either is enough alone. In `legacyScreenSaver`, which has no preference exception for our domain, the suite came back empty.
 - **Whether a stale plist port bites.** The agent had been running for a while, so the file and the suite agreed.
 
+**The next step is the real extension.** See *The real extension, inside the app*.
+
+**The real extension ran for the first time 2026-09-15**, from the shell app and against the agent installed as a launchd job: the section appeared, the desktop took `IMG_7534.JPG` from Photos › Favorites — `served status=200 consumer=system-wallpaper`, card 5292, deal #82734, 722 kB at 3600×2338 — and Syd: "the wallpaper extension appears to be working". Two things from that run are not settled: the request took **9041 ms** against the fourth probe's 225 ms, with the agent caching an original at the time, and the rotation has only been seen at its `oneHour` setting, never observed actually firing.
+
 **So a Photo-Go-Round extension in the Wallpaper pane can find the agent, ask it as `system-wallpaper`, and put a photograph from the shared queue on the desktop**, still sandboxed, still with no private entitlement, and now with `network.client` and two temporary exceptions. Not yet asked: changing the picture on a timer; refreshing the snapshot when the picture changes; several displays and Spaces; sleep and wake; the empty state; the ad-hoc signed run.
 
+## The real extension, inside the app
+
+Claude's draft, 2026-09-15, at Syd's "Let's build the real extension". **Not built.** It replaces *The bundle, like the saver's* for everything except the parts marked there as still open.
+
+**What Syd specified**, 2026-09-15: "For now, we should just use the agent as the source of everything, and you can only change settings using the application or the command-line tool. The next stage would be to put a sources panel and timing slider directly into the extension."
+
+**The shape:**
+
+- **An ExtensionKit appex target, `Photo-Go-Round Wallpaper`**, bundle identifier `com.sydpolk.photogoround.wallpaper.extension`, on `com.apple.wallpaper`, with its own `Info.plist` and entitlements as the saver target has its own `Info.plist`. *The identifier was `…wallpaper-extension` until 2026-09-15, when Xcode refused to embed an appex whose identifier is not prefixed by its container's; see `Build Plan.md`.*
+- **In development it is embedded in a shell app of its own**, `Photo-Go-Round Wallpaper Host`, and **not** in the main app. *Until 2026-09-15 this read "embedded in the main app, at `Photo-Go-Round.app/Contents/Extensions/`"; Syd: "I don't want the wallpaper extension installed every time I run the app even if there is no source change in it", then "for dev, we can make a shell app to put it in".* An appex registers only from inside a signed app bundle, so it needs some container; the shell app is that container, and building or running `Photo-Go-Round` now touches the extension not at all. In release every bundle goes inside the app wrapper and the app installs them — later work. See `Build Plan.md`.
+- **The app stays unsandboxed** — `ENABLE_APP_SANDBOX = NO` in both configurations, measured 2026-09-15 — and the appex carries its own sandbox, inheriting nothing. So does the shell app. That is the probes' arrangement, which ran four times.
+- **Registration is `pluginkit -a` on the shell app's embedded appex**, with nothing launched — measured 2026-09-15, along with the two ways that fail: a bare `.appex`, and an unsigned bundle holding only an `Info.plist`. Launching a containing app also registers it, which is how the four probes did it. No `lsregister` step, no LaunchAgent, no `launchctl`.
+- **Its sources are `app/wallpaper-extension/Sources`**, and it links `PhotoGoRoundDisplay` and `PhotoGoRoundAgentAPI`, rather than carrying the probe's private copies of `ServicePort` and the picture request.
+- **Entitlements, as the fourth probe measured them:** `com.apple.security.app-sandbox`, `com.apple.security.network.client`, and read-only temporary exceptions for the preference domains and their plists — the agent's, for the port, and the wallpaper's, for the interval.
+
+**What moves in from the probe**, unchanged in shape: the pane's section and item; the remote `CAContext` and `AVSampleBufferDisplayLayer`; `snapshot`; and the request to the agent as `system-wallpaper` with the display's UUID at the desktop's pixel size.
+
+**What is new:**
+
+- **A timer per display.** Each display asks the agent again when its interval has passed, and the new picture goes onto the surface already held — measured in the fourth probe as a second `enqueueImmediately` on the same receiver.
+- **The snapshot follows the picture.** Whatever a display currently shows is what `snapshot` answers, so the export and the lock screen stop holding the first picture.
+- **Its log lines are prefixed `system-wallpaper:`**, beside the app's `wallpaper:` and the saver's `saver:`.
+
+**Settings, as Syd specified:**
+
+- **The agent is the source of everything.** Sources, the queue and the cache are the agent's, and are changed in the app or with `pgr_ctl`. The extension asks for pictures and nothing else.
+- **The extension only reads settings, from the app's wallpaper domain.** **Decided 2026-09-15** — Syd: "shared domain". The interval comes from `com.sydpolk.photogoround.wallpaper.{dev|prod}`, which `Wallpaper` already writes under the key `interval`, through a read-only exception of the same shape as the port's. One setting times both wallpapers, and the app's existing pop-up is the control.
+- **`enabled` is not read.** Choosing the wallpaper in System Settings is what turns the extension on; the checkbox stays the app's own wallpaper.
+- **A gap, named 2026-09-15 and closed the same day.** `pgr_ctl` had no wallpaper preferences at all; its keys were the agent's — sources, queue, cache, service port. Syd: "add wallpaper prefs and command to pgr_ctl". It now has `wallpaper get [<key>]` and `wallpaper set <key> <value>` in the wallpaper's own domain, over `enabled` and `interval`, with the wallpaper's `displays` record readable but not writable, and an `interval` that is refused unless it is a *Shuffle All* tag. So a Mac whose app is never opened can still be set from a terminal. See `Documentation/pgr_ctl.md`.
+- **Next stage, Syd's:** a sources panel and a timing slider inside the extension, which is what the pane's own settings view models are for. Not in this build.
+
+**Costs and what is not answered:**
+
+- **Both wallpapers can run and fight.** Syd, 2026-09-14: "I am ok with not supporting app and system wallpapers and the two systems fighting each other."
+- **Several displays and Spaces, sleep and wake, and the empty state when the agent is not running** are unmeasured, and are the first things this build has to face that no probe did.
+- **Temporary exceptions** keep the App Store out of reach, which private frameworks already do.
+- **Whether a picture should change on a Space change, or only on the timer**, is open, as it is for the app's wallpaper.
+
+**Proposed exit gate:** the extension is chosen in System Settings › Wallpaper, every display shows a photograph, each display changes on the interval, the agent's log shows `consumer=system-wallpaper` per display, and the app is not running.
+
 ## The bundle, like the saver's
+
+**Superseded 2026-09-15 by *The real extension, inside the app*,** for the extension route: no standalone bundle, no `make-wallpaper-bundle.sh`, and no launchd. What stays open from it is named there.
 
 Claude's proposal, 2026-09-14, in answer to "Wallpapers needs its own binary/bundle so that it can be set from System Settings and run without the app" and "I am expecting something very similar to Scripts/make-saver-bundle.sh". **It was written before the pane was asked for.** If an extension turns out to work, the pane hosts the wallpaper rather than launchd, and much of this changes; it is recorded as proposed.
 
@@ -669,7 +743,7 @@ Claude's proposal, 2026-09-14, in answer to "Wallpapers needs its own binary/bun
 
 Syd, 2026-09-14: "the logging for fetches from the system wallpaper panel should say "system-wallpaper" to distinguish it from the app-based "wallpaper" now. We will continue to support both until I decide on trying to sandbox or not." And of sandboxing: "you are right about the App Store; that is what I meant."
 
-**What says it.** The agent's served line prints `consumer=` as whatever the client put on the wire, so the name is the client's to choose. The pane's wallpaper asks as `system-wallpaper`; the app's keeps asking as `wallpaper`.
+**What says it.** The agent's served line prints `consumer=` as whatever the client put on the wire, so the name is the client's to choose. The pane's wallpaper asks as `system-wallpaper`; the app's keeps asking as `wallpaper`. *Since 2026-09-15 there are four, because the extension fills two slots: `wallpaper` and `screensaver` for the app-side pair, `system-wallpaper` and `system-screensaver` for the extension's desktop and screen saver. The prefix says which host is drawing; the noun says which surface it is.*
 
 **Nothing in the agent changes** — read from the code on 2026-09-14, not run. *Run 2026-09-15 by the fourth probe: the agent served `consumer=system-wallpaper` unchanged; see* What the fourth probe found.
 
@@ -684,7 +758,7 @@ Syd, 2026-09-14: "the logging for fetches from the system wallpaper panel should
 
 **Proposed by Claude, not decided:**
 
-- A constant `ConsumerKind.systemWallpaper`, spelled `system-wallpaper`, beside `.wallpaper`, so no client writes the string by hand.
+- Constants `ConsumerKind.systemWallpaper` and `.systemScreensaver`, spelled `system-wallpaper` and `system-screensaver`, beside `.wallpaper` and `.screensaver`, so no client writes the strings by hand. *The extension spells both by hand today, in `AgentPicture.consumer(for:)`, because it does not link the kit.*
 - The pane wallpaper's own log lines — as distinct from the agent's served line — prefixed `system-wallpaper:`, beside the app's `wallpaper:`, so one word filters either.
 - If `Documentation/photogoroundd.md` names consumer kinds when this is built, it gains this one, with a test.
 
@@ -908,6 +982,8 @@ What no test can reach is whether the desktop actually changes, whether the same
 
 **The Xcode project file changed during the first app build, and nothing here edited it.** `app/Photo-Go-Round.xcodeproj/project.pbxproj` was modified at 21:15:45, while `xcodebuild` was building the app and the saver: the `pgr_ctl` target's exception keeping `Sources/pgr_ctl/Info.plist` out of the target was removed, and a group's comment renamed. That exception matters, since `pgr_ctl` embeds that plist through the linker. Not reverted; Syd's to decide.
 
+**The four extension probes are retired, 2026-09-15.** Syd: "retire the probe script". `Scripts/make-wallpaper-extension-probe.sh` and the six files in `Scripts/wallpaper-extension-probe/` were deleted once the real extension did everything they had proved — the pane, the desktop, the export, the lock screen, and pictures from the agent. Git holds them, and the four sections above hold what each one found. **The entries below describe those files as they were on the day each probe ran, and are left as written.**
+
 **Phase 2's first extension probe, built 2026-09-14.** Not part of anything that ships; *The extension probe* holds what it found.
 
 - `Scripts/make-wallpaper-extension-probe.sh` — builds and signs the probe, and installs nothing. *Since 2026-09-15 it also installs and registers it, unless `--build-only`.*
@@ -925,14 +1001,14 @@ What no test can reach is whether the desktop actually changes, whether the same
 
 - `Scripts/wallpaper-extension-probe/PaneHandler.swift` and `ProbePicture.swift` — the snapshot, and surfaces held by display.
 - `Scripts/make-wallpaper-extension-probe.sh` — installs and registers, and signs with Syd's identity by default.
-- `Documentation/Wallpaper Extension Probe.md` — the steps Syd follows after the script.
+- `Documentation/Wallpaper Extension Probe.md` — the steps Syd follows after the script. *Renamed `Documentation/Wallpaper Extension.md` on 2026-09-15.*
 
 **Phase 2's fourth extension probe, built and run 2026-09-15 at 0.4,** in the same place; *What the fourth probe found* holds the results.
 
 - `Scripts/wallpaper-extension-probe/AgentPicture.swift` — the port reads, the request and the decode.
 - `Scripts/wallpaper-extension-probe/PaneHandler.swift` — the photograph swapped onto the desktop's surface, and the snapshot drawn from what is shown.
 - `Scripts/make-wallpaper-extension-probe.sh` — the network entitlement and the two read-only exceptions.
-- `Documentation/Wallpaper Extension Probe.md` — the 0.4 steps.
+- `Documentation/Wallpaper Extension Probe.md` — the 0.4 steps. *Renamed `Documentation/Wallpaper Extension.md` on 2026-09-15.*
 
 ## What this leaves stale elsewhere
 
@@ -966,11 +1042,18 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
   - whether to take route A, if it cannot — C is ruled out for the system wallpaper;
   - a LaunchAgent bundle for the app-style wallpaper — not wanted if the system wallpaper route can be figured out, and open again only if it cannot;
   - the App Store — whether to try for it, which is Syd's, and which decides how long both wallpapers stay;
-  - where the pane's wallpaper keeps its state;
-  - where the bundle lives, given "the binary stays in the app bundle";
-  - whether `make-wallpaper-bundle.sh --install` runs `launchctl` or prints the commands;
-  - how the app and the bundle hand the loop over, and how the checkbox reaches a separate process;
-  - Phase 2's exit gate.
+  - ~~where the pane's wallpaper keeps its state~~ — *answered 2026-09-15, Syd: "shared domain". It reads the app's wallpaper domain and writes nothing; see* The real extension, inside the app;
+  - ~~where the bundle lives, given "the binary stays in the app bundle"~~ — *answered 2026-09-15: the appex lives inside the app, which is also what registers it*;
+  - ~~whether `make-wallpaper-bundle.sh --install` runs `launchctl` or prints the commands~~ — *moot on the extension route: no script and no launchd*;
+  - how the app and the bundle hand the loop over, and how the checkbox reaches a separate process — *not on the extension route, where both may run and fight*;
+  - ~~whether `pgr_ctl` gains the wallpaper domain's interval, or the app stays the only place settings change~~ — *answered 2026-09-15, Syd: "add wallpaper prefs and command to pgr_ctl". Built the same day as `pgr_ctl wallpaper get|set`, over `enabled`, `interval` and a read-only `displays`*;
+  - the app icon, which the pane's item stands in for — Syd, 2026-09-15: "This will match the app icon once we have one";
+  - ~~whether the section also appears in the Screen Saver picker~~ — *answered 2026-09-15: it did, and no longer does. See* The real extension, inside the app;
+  - ~~why the first real run's request took 9041 ms, when the fourth probe measured 225 ms~~ — *answered 2026-09-15: the agent was fetching and caching an original at the time. Later requests in the same session took 402, 1409 and 1702 ms*;
+  - **a card is spent per `acquire`, on top of the interval.** Each `acquire` asks the agent at once and then starts its rotation, so opening the pane or re-choosing the wallpaper costs a picture immediately. Worth weighing against the alternative, which is a desktop that keeps the previous picture until the next tick. *An earlier note here claimed rotations were stacking, from three fetches seen in ten seconds on 2026-09-15; that was wrong — the interval had been set to `tenSeconds` and the timer was firing exactly as asked.*
+  - whether unregistering a *selected* extension wedges `WallpaperAgent` permanently. Observed once on 2026-09-15: every `acquire` failed with `NSCocoaErrorDomain` 4099 and `runningboardd` logged no launch attempt at all, while the bundle was present and both signatures verified. Recovery was a `killall WallpaperAgent` **and** re-selecting the wallpaper, so which of the two mattered is not established;
+  - ~~whether the rotation fires as set~~ — *answered 2026-09-15: it does. At `tenSeconds` the agent served cards 6398, 4654, 8996, 5993 and 6223 at 21:10:02, :12, :22, :32 and :43 — ten seconds apart, each a new picture on the desktop, and Syd: "the picture is changing"*;
+  - Phase 2's exit gate — *proposed 2026-09-15 in* The real extension, inside the app.
 - **Separate pools of sources for the wallpaper and the screensaver.** `PLAN.md`, *TODO: separate pools of sources*, and Syd's "in addition to sources later".
 
 # References
@@ -997,7 +1080,7 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
 - `Package.swift` — the `.macOS("27.0")` line; `.macOS("26.0")` until 2026-09-14.
 - `Scripts/make-wallpaper-extension-probe.sh` and `Scripts/wallpaper-extension-probe/` — the first extension probe. `~/Library/Logs/DiagnosticReports/WallpaperProbeExtension-2026-09-14-204957.ips` — its first run's crash report.
 - `Scripts/wallpaper-extension-probe/PaneHandler.swift`, `PaneModels.swift`, `ProbePicture.swift` — the second extension probe.
-- `Documentation/Wallpaper Extension Probe.md` — the steps for running the probe, 2026-09-15.
+- `Documentation/Wallpaper Extension.md` — the steps for building, registering and running the real extension, 2026-09-15. *Named `Wallpaper Extension Probe.md` until that day, when it stopped describing a probe.*
 - `/System/Library/PrivateFrameworks/WallpaperExtensionKit.framework` — `WallpaperSnapshotXPC`'s `encodeWithCoder:` and `initWithCoder:`, disassembled 2026-09-15 for *What the third probe found*, from a harness that loaded the framework; and the same harness sending a snapshot through an anonymous `NSXPCListener`. Both harnesses were built under `~/.claude/build/photo-go-round/`, not kept in the repository.
 - Read for *The fourth probe*: `Screensaver Plan.md`, Phase 1 and *The question the entitlements do not answer: finding the port*; `Sources/PhotoGoRoundDisplay/ServicePort.swift` and `PictureClient.swift`; `Sources/photogoroundd/Service/PictureEndpoint.swift`; `Sources/PhotoGoRoundAgentAPI/Model/Consumer.swift`; and the entitlements of `/System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex`, 2026-09-15.
 - Phosphene, read for *The third probe*: `PhospheneExtension/SnapshotCreation.swift`, `createSnapshotXPC` in `RuntimeHelpers.swift`, `BMPCache.swift`, the `invalidateSnapshots` calls in `WallpaperXPCHandler.swift`, and the README's *Quirks worth knowing*.

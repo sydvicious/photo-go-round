@@ -2,6 +2,7 @@ import Console
 import Foundation
 import PhotoGoRoundKit
 import PhotoGoRoundAgentAPI
+import PhotoGoRoundDisplay
 
 // The rig.
 //
@@ -83,6 +84,13 @@ do {
 
     case .setPreference(let key, let value):
         try PreferenceCommands.set(key: key, value: value, environment: hostEnvironment(options))
+
+    case .wallpaper(.get(let key)):
+        try WallpaperCommands.get(key: key, domain: WallpaperHome(deployment: options.deployment).domain)
+
+    case .wallpaper(.set(let key, let value)):
+        try WallpaperCommands.set(
+            key: key, value: value, domain: WallpaperHome(deployment: options.deployment).domain)
 
     case .notify(let topic):
         try NotifyCommand.run(topic: topic, environment: hostEnvironment(options))

@@ -39,7 +39,7 @@ The saver's tile in the Screen Saver pane is the system's generic placeholder �
 Installing Photo-Go-Round should be the whole of installing Photo-Go-Round. **Needs its own plan document.**
 
 - **The agent half is already designed** and not built: `app/mac/FEATURES.md`, *The app brings its own agent* — `photogoroundd` inside the app bundle at `Contents/Library/LoginItems/`, registered with `SMAppService.agent(plistName:)`. See also `PLAN.md`, *An installer is probably unnecessary*. **Changed 2026-09-10:** the agent installs as a per-user plist in `~/Library/LaunchAgents`, with the binary left in the app bundle — "this needs to support multiple users on the same machine."
-- **The saver half is not designed at all.** An unsandboxed Developer ID app can copy `Photo-Go-Round.saver` into `~/Library/Screen Savers` itself, which is what `Scripts/make-saver-bundle.sh --install` does today by hand.
+- **The saver half is not designed at all.** An unsandboxed Developer ID app can copy `Photo-Go-Round Screensaver.saver` into `~/Library/Screen Savers` itself, which is what `Scripts/make-saver-bundle.sh --install` does today by hand. *The bundle was `Photo-Go-Round.saver` until 2026-09-15.*
 - **Selecting it is probably not ours to do.** Installing a screensaver and making it the user's screensaver are different acts, and the second one is theirs.
 - **Updating is the part that bites.** `legacyScreenSaver` caches the loaded bundle for the life of its process and System Settings caches its list, so replacing an installed saver means killing both — the script already does this, and an app doing it silently to a running screensaver needs thought.
 - **Decide which deployment a shipped app runs in.** The app and the saver both ask for `.development` today; a shipped one must not.
@@ -190,3 +190,22 @@ Syd, 2026-09-10: *"all build products you produce should be in ~/.claude/build, 
 - **What has to be designed**: where development storage lives once no build does, and how every process finds the same place without a `.build` to walk to. `--container` and `PGR_CONTAINER` already exist for moving it by hand; the question is the default.
 - `Scripts/scrub-dev.sh` hardcodes `$REPO/.build/pgr-container`, `$REPO/.build/pgr-cache` and a `pgrep` on `$REPO/.build/…photogoroundd`, and follows whatever is decided.
 - The `build/` and `.build/` lines in `.gitignore` can go once nothing writes there.
+
+## Build for arm64 only
+
+Syd, 2026-09-15: "don't build arch:x86_64 at all". And the scope of it, the same day: "there is a difference between dev and shipping the product. At this point, macOS 27 supports intel, and if I ever ship this to the public, I will build for it. But for dev purposes, I don't want to waste the time or disk space." **So this is about development builds. Whether a shipping build is universal is Syd's, and undecided.**
+
+**Done 2026-09-15: `Scripts/make-saver-bundle.sh` passes `-destination "platform=macOS,arch=arm64"`.** A clean build through it gives a saver that `lipo -archs` reports as `arm64`, and the "multiple matching destinations" warning is gone. It is the only script that runs `xcodebuild`. The project's build settings were deliberately left alone, so a release build can still be universal.
+
+**Still open:** whether anything else produces x86_64 — Xcode's own builds go through `ONLY_ACTIVE_ARCH` and were not checked after this change, and the local package targets were not checked at all.
+
+- **What builds x86_64 today — measured 2026-09-15 with `lipo -archs` on products under `~/.claude/build/photo-go-round`, before the change:**
+  - Several Debug builds of `Photo-Go-Round.saver` and `Photo-Go-Round.app` from `xcodebuild` are `x86_64 arm64`, although the project sets `ONLY_ACTIVE_ARCH = YES`.
+  - Some other Debug builds of the same targets are `arm64` alone, so it depends on how `xcodebuild` was invoked. Which invocation gave which is not recorded.
+  - `Scripts/make-wallpaper-extension-probe.sh` built `arm64` alone: its `swiftc` target came from `uname -m`. *Retired 2026-09-15.*
+  - `swift build` builds the host's architecture.
+  - On Plex the same day, `Scripts/make-saver-bundle.sh` printed `xcodebuild: WARNING: Using the first of multiple matching destinations:`, listing `My Mac` twice, once `arch:arm64` and once `arch:x86_64`. Its `-destination "platform=macOS"` matches both.
+- **What is left, if anything still builds x86_64:**
+  - `ARCHS = arm64` in the project's build settings — not set, since it would follow a release build too;
+  - the wallpaper probe script's `$(uname -m)`, which would build x86_64 on an Intel Mac, and is the right answer for a dev build there.
+- **Check the local packages too.** The C++ hardening setting in the project did not reach the local package targets (`PLAN.md`, *Builds with no warnings*), so an architecture setting may not either. Verify with `lipo -archs` on every product after a clean build, not by reading settings.
