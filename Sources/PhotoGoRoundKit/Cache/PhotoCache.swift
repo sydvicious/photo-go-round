@@ -786,7 +786,11 @@ public struct PhotoCache {
     /// **Every picture is still checked against its source in the moment before
     /// it is returned**, including one we hold our own copy of. That is the
     /// guarantee: a photograph the user deleted is never shown again, not even
-    /// in the minutes before a refresh would have noticed.
+    /// in the minutes before a refresh would have noticed. **Unless the source
+    /// will not say.** The check has `ServiceTiming.serveCheckBudget` for the
+    /// whole request, and a source that runs it out is `.unknown` — the held
+    /// copy goes out, because a client that has stopped listening is shown
+    /// nothing at all.
     ///
     /// **The box the caller is about to draw into is no longer its business.**
     /// `serve` took a `fitting:` size until 2026-09-06, so that a photograph
@@ -797,14 +801,31 @@ public struct PhotoCache {
         to consumerID: Int64? = nil,
         now: Date = Date()
     ) async throws -> ServedPhoto? {
+        var timing = StageTimes()
+        return try await serve(to: consumerID, now: now, timing: &timing)
+    }
+
+    /// The same, charging each step to `timing` for the endpoint's `TIMING:`
+    /// line: `queue` for reading and walking the head, `wait` for a cold
+    /// card's bytes, `check` for asking the source, `remove` for the pop, and
+    /// `shown` for recording the deal.
+    public func serve(
+        to consumerID: Int64? = nil,
+        now: Date = Date(),
+        timing: inout StageTimes
+    ) async throws -> ServedPhoto? {
         var skipped = 0
         // How long this request may still wait for a cold card. Spent once.
         var patience = serveWait
+        // How long this request may spend asking sources whether the card going
+        // out is still there. Also spent once, across every card it checks.
+        let checking = RequestBudget(ServiceTiming.serveCheckBudget)
 
         while true {
             // **Always the head.** Every turn either serves it or takes it off
             // the queue, so the head is the only card a request ever looks at.
             guard let card = try queue.peek().first else {
+                timing.lap("queue")
                 log(.nothingToShow(walked: skipped, because: "out of cards"))
                 return nil
             }
@@ -876,7 +897,10 @@ public struct PhotoCache {
                 log(.waiting(photo: card.spokenName, source: card.sourceID, upTo: patience, queued: depth()))
                 // Join the fetch already running for it, or have one started.
                 ensureFetching()
-                switch try await waitForBytes(of: card, upTo: patience) {
+                timing.lap("queue")
+                let waited = try await waitForBytes(of: card, upTo: patience)
+                timing.lap("wait")
+                switch waited {
                 case .landed(let url):
                     lookedUp(.miss(.landed))
                     bytes = url
@@ -899,8 +923,21 @@ public struct PhotoCache {
             // **Is it still there? — asked last, and only about the one card
             // that is going out.** It is a promise about what is *displayed*,
             // so it belongs to the card being displayed and to no other.
+            //
+            // **Inside one budget for the whole request, and silence is
+            // `.unknown`.** A source that does not answer in time has said
+            // nothing about the photograph, which is exactly what `.unknown`
+            // means — so the copy we hold goes out, as it would have after the
+            // source's own, much longer, bound. See
+            // `ServiceTiming.serveCheckBudget` for the twenty seconds this was.
             var unconfirmed: String?
-            switch await provider.existence(of: card.externalID, in: source) {
+            let externalID = card.externalID
+            timing.lap("queue")
+            let existence =
+                await checking.attempt { await provider.existence(of: externalID, in: source) }
+                ?? .unknown(reason: Self.checkUnanswered)
+            timing.lap("check")
+            switch existence {
             case .absent:
                 skipped += 1
                 log(.dropped(photo: card.spokenName, source: card.sourceID, because: "gone from a source that is right there", queued: depth()))
@@ -911,7 +948,12 @@ public struct PhotoCache {
                 // **Offline and gone are opposite answers**: one keeps
                 // everything and serves the copy we hold, the other means these
                 // photographs are never coming back.
-                if case .gone(let why) = await provider.availability(of: source) {
+                //
+                // Out of the same budget. A source that has not answered in
+                // time is not `.gone`, so running out keeps the picture.
+                let availability = await checking.attempt { await provider.availability(of: source) }
+                timing.lap("check")
+                if case .gone(let why)? = availability {
                     skipped += 1
                     log(.dropped(photo: card.spokenName, source: card.sourceID, because: "its source is \(why)", queued: depth()))
                     try self.remove(card.id)
@@ -926,7 +968,10 @@ public struct PhotoCache {
             // **The pop, and the atomicity.** Two consumers may both have
             // chosen this card; the `DELETE` under `BEGIN IMMEDIATE` lets
             // exactly one of them take it, and the other goes round again.
-            guard try await queue.remove(photoID: card.id) else { continue }
+            timing.lap("queue")
+            let removed = try await queue.remove(photoID: card.id)
+            timing.lap("remove")
+            guard removed else { continue }
 
             log(
                 .serving(
@@ -934,6 +979,7 @@ public struct PhotoCache {
                     unconfirmed: unconfirmed, queued: depth()))
             let seq = try await deck.markShown(photoID: card.id, now: now)
             if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
+            timing.lap("shown")
             // The deck moved, so anything mirroring its position — a diagnostic
             // panel, another surface's idea of what is next — should go and look.
             doorbells?.post(.deckAdvanced)
@@ -956,6 +1002,11 @@ public struct PhotoCache {
     /// either way — the wait decides how long one is given first, not whether
     /// it keeps its place.
     public var serveWait: Duration = .seconds(2)
+
+    /// Why a card went out unconfirmed when its source ran out the request's
+    /// check budget. Logged on the `SERVE:` line as *unconfirmed (…)*.
+    static let checkUnanswered =
+        "its source did not answer within \(ServiceTiming.serveCheckBudget.spokenSeconds)"
 
     /// Asked to make sure the card a request is waiting on is being fetched.
     /// The agent wires it to the queue fetcher's kick, which is absorbed when

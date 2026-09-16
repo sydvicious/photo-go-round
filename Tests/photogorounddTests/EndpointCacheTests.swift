@@ -160,6 +160,37 @@ struct EndpointCacheTests {
         response.headers
     }
 
+    // MARK: - Timing
+
+    /// **Every step a served picture goes through, named, in order.** The
+    /// `TIMING:` line is only worth reading if a slow request's time lands in a
+    /// stage — a step that is not timed is where the missing seconds hide.
+    @Test("A served picture's record times every step it went through")
+    func servedPictureIsTimedStepByStep() async throws {
+        let library = try Library()
+        try await library.fill()
+
+        #expect(try await library.get("consumer=app&w=100&h=100").status == 200)
+
+        let stages = try #require(library.log.all.last?.stages)
+        #expect(
+            stages.stages.map(\.name)
+                == ["waited", "open", "register", "queue", "check", "remove", "shown", "resize wait",
+                    "render", "delivered", "top up"])
+    }
+
+    @Test("The original, sent unrendered, is timed as its own step")
+    func originalIsTimed() async throws {
+        let library = try Library()
+        try await library.fill()
+
+        #expect(try await library.getOriginal().status == 200)
+
+        let stages = try #require(library.log.all.last?.stages)
+        #expect(stages.stages.map(\.name).contains("original"))
+        #expect(!stages.stages.map(\.name).contains("render"))
+    }
+
     // MARK: - Hit and miss
 
     @Test("A delivered picture is counted, and counted once per request")

@@ -67,6 +67,10 @@ let package = Package(
         .executableTarget(
             name: "photogoroundd",
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit", "Console"],
+            // The dashboard's page, stylesheet and script. Not package
+            // resources: the Xcode target copies them into the app bundle, and
+            // `DashboardPage` reads them from here when there is no bundle.
+            exclude: ["js"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The rig. A separate binary because the service has exactly one job

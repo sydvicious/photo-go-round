@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo-Go-Round Agent</title>
+<link rel="stylesheet" href="/dashboard/dashboard.css">
+</head>
+<body>
+<header>
+  <h1>Photo-Go-Round Agent</h1>
+  <span id="state">connecting…</span>
+</header>
+<main id="main">
+  <section class="wide">
+    <h2>Last picture served</h2>
+    <div id="lastEmpty" class="sub">nothing served since launch</div>
+    <div id="lastBody" class="last" hidden>
+      <div class="frame">
+        <img id="thumb" alt="the last picture served">
+        <span id="thumbMissing" hidden>no longer here to draw</span>
+      </div>
+      <div class="caption">
+        <div id="lastName"></div>
+        <div id="lastID" hidden></div>
+        <div id="lastSource"></div>
+        <div id="lastWhen"></div>
+      </div>
+    </div>
+  </section>
+  <section class="wide">
+    <h2>Agent errors</h2>
+    <div class="sub note">A standing condition stays until it clears; anything else leaves a minute after it last happened.</div>
+    <div id="errorsEmpty" class="sub">nothing standing, and nothing in the last minute</div>
+    <ol id="errors" class="errors" hidden></ol>
+  </section>
+  <section>
+    <h2>Photos in the database</h2>
+    <div class="figure" id="photos">—</div>
+    <div class="sub" id="changesEmpty">none added or removed since launch</div>
+    <table id="changes" class="changes" hidden></table>
+  </section>
+  <section>
+    <h2>Photos in the cache</h2>
+    <div class="figure" id="cached">—</div>
+    <div class="sub" id="queue">&nbsp;</div>
+  </section>
+  <section>
+    <h2>Cache on disk</h2>
+    <div class="figure" id="cacheBytes">—</div>
+    <div class="meter"><div id="cacheMeter"></div></div>
+    <div class="sub" id="cacheCeiling">&nbsp;</div>
+    <div class="sub" id="free">&nbsp;</div>
+  </section>
+  <section>
+    <h2>Served since launch</h2>
+    <table id="served"></table>
+    <div class="sub" id="since">&nbsp;</div>
+  </section>
+  <section>
+    <h2>Serve: cache lookups since launch</h2>
+    <table id="lookups"></table>
+    <div class="sub" id="hitRate">&nbsp;</div>
+  </section>
+  <section>
+    <h2>Fetch: cache lookups since launch</h2>
+    <table id="fetchLookups"></table>
+    <div class="sub" id="fetchHitRate">&nbsp;</div>
+  </section>
+  <section>
+    <h2>Cache evictions since launch</h2>
+    <div class="figure" id="evicted">—</div>
+    <div class="sub" id="evictedBytes">&nbsp;</div>
+    <div class="sub" id="evictedWhen">&nbsp;</div>
+  </section>
+</main>
+<script src="/dashboard/dashboard.js"></script>
+</body>
+</html>

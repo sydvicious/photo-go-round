@@ -91,7 +91,7 @@ private struct DashboardLinkLine: View {
                     .monospacedDigit()
             case .notRunning:
                 // The words the picture window uses for the same condition.
-                Text("Photo-Go-Round Is Not Running")
+                Text("Waiting for Photos")
                     .font(.callout)
             case .unreadable(let reason):
                 Text("The agent's port could not be read: \(reason)")

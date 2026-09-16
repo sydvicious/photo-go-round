@@ -296,7 +296,7 @@ What cannot be unit-tested is the part that is new: whether a bundle loads, whet
 Listed rather than asked, one at a time as they come up:
 
 - **How a stale published port is handled**, which the file fallback inherits and the spike did not exercise: the agent synchronizes after publishing, or the client tolerates a stale value and retries.
-- **Whether `Trouble` gains a case for an unreadable port.** `PictureClient` distinguishes it; the window does not, and says "No agent" for both. They are the same predicament for the person looking at the glass and nothing alike in the log, which is where the distinction is currently spent.
+- **Whether `Trouble` gains a case for an unreadable port.** `PictureClient` distinguishes it; the window does not, and says "No agent" for both — "Waiting for Photos" since 2026-09-16. They are the same predicament for the person looking at the glass and nothing alike in the log, which is where the distinction is currently spent.
 - **Whether `Shuffle` keeps its name** once it is shared by three surfaces and sits one import away from the deck's own use of the word.
 - **Whether the dwell becomes a preference.** It is `Shuffle.defaultDwell`, ten seconds, and `PLAN.md` holds *Everything user-settable is a user default* back to Beyond 0.1 on the grounds that "a number nobody has looked at yet is not worth a key." Two surfaces wanting different numbers is the thing that would change that, and this phase is where the second one arrives.
 - **Whether the saver is ever installed by the app,** which is a 1.0 distribution question but decides whether an App Group is available to solve port discovery properly.

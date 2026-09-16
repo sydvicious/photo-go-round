@@ -59,6 +59,22 @@ done <<< "$others"
 # ordinary: there may be no job yet.
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 
+# **`bootout` returns before the job is gone.** Measured 2026-09-16: bootstrap
+# ran at 13:29:11.409 and failed with "37: Operation already in progress", and
+# launchd logged "removing service" for the old job at 13:29:11.417. Xcode shows
+# that as "Bootstrap failed: 5: Input/output error", and the agent is left not
+# running at all. So wait for launchd to stop knowing the label — bounded past
+# the job's five-second exit timeout, so a job that will not leave is reported
+# rather than waited on for ever.
+for _ in $(seq 1 100); do
+    launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.1
+done
+if launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
+    echo "install-agent: $LABEL is still loaded ten seconds after bootout" >&2
+    exit 1
+fi
+
 cat > "$PLIST" <<PLIST_END
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

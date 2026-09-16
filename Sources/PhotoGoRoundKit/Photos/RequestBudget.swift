@@ -1,6 +1,5 @@
 import Foundation
 import PhotoGoRoundAgentAPI
-import PhotoGoRoundKit
 
 /// One budget for all the library work a single response needs.
 ///
@@ -21,12 +20,18 @@ import PhotoGoRoundKit
 ///
 /// So the whole response shares one budget, and the client's bound sits well
 /// above it. The agent always answers, and always in time to be heard.
-struct RequestBudget {
+///
+/// **In the kit since 2026-09-16, so serving can spend one too.** It lived in
+/// the agent's service while only endpoints used it. `PhotoCache.serve` asks a
+/// source whether the picture going out is still there, and against a silent
+/// Photos library that question took twenty seconds of a five-second client
+/// bound. See `ServiceTiming.serveCheckBudget`.
+public struct RequestBudget {
 
     /// **Held in `ServiceTiming` beside the client's bound**, because the two
     /// numbers only mean anything relative to each other and the bug was that
     /// they lived apart and drifted into equality. See that file.
-    static let `default` = ServiceTiming.responseBudget
+    public static let `default` = ServiceTiming.responseBudget
 
     private let deadline: ContinuousClock.Instant
     /// What this budget was given, as opposed to what is left of it.
@@ -37,18 +42,18 @@ struct RequestBudget {
     /// makes a log impossible to compare against yesterday's.
     private let limit: Duration
 
-    init(_ limit: Duration = RequestBudget.default) {
+    public init(_ limit: Duration = RequestBudget.default) {
         self.limit = limit
         deadline = .now + limit
     }
 
     /// What is left, never negative.
-    var remaining: Duration {
+    public var remaining: Duration {
         let left = deadline - .now
         return left > .zero ? left : .zero
     }
 
-    var isSpent: Bool { remaining == .zero }
+    public var isSpent: Bool { remaining == .zero }
 
     /// Runs `work` against what is left, and answers nil when the budget is
     /// gone or the work would not answer inside it.
@@ -56,7 +61,7 @@ struct RequestBudget {
     /// For the questions a reply is *better* for having answered and does not
     /// need — a title, whether an album has a successor. Nil means fall back to
     /// what the store already knows.
-    func attempt<T: Sendable>(_ work: @escaping @Sendable () async -> T) async -> T? {
+    public func attempt<T: Sendable>(_ work: @escaping @Sendable () async -> T) async -> T? {
         guard !isSpent else { return nil }
         return try? await Deadline.run(within: remaining, work)
     }
@@ -66,7 +71,7 @@ struct RequestBudget {
     /// For the questions a reply cannot be written without. The error is the
     /// same one the library itself raises, so a route reports one sentence
     /// whether the library ran out of patience or this did.
-    func require<T: Sendable>(
+    public func require<T: Sendable>(
         _ what: String, _ work: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         guard !isSpent else {

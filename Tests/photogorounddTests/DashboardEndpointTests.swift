@@ -157,23 +157,59 @@ struct DashboardEndpointTests {
 
     // MARK: - Routes
 
-    @Test("The page is HTML, and draws itself from the JSON route")
-    func pageIsServed() async throws {
-        let library = try Library()
-        let response = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
-
-        #expect(response.status == 200)
-        #expect(response.headers["Content-Type"] == "text/html; charset=utf-8")
+    /// The body of a dashboard route, or nil after recording why not.
+    private func text(_ response: HTTPListener.Response) -> String? {
         guard case .data(let bytes) = response.body else {
-            Issue.record("the page answered without a body")
-            return
+            Issue.record("answered without a body")
+            return nil
         }
-        let page = String(decoding: bytes, as: UTF8.self)
-        #expect(page.contains(#"fetch("/v1/dashboard""#))
-        #expect(page.contains("/v1/dashboard/thumbnail?photo="))
+        return String(decoding: bytes, as: UTF8.self)
     }
 
-    @Test("Only GET is served, and nothing under the JSON route but the thumbnail")
+    /// **Three files from `Sources/photogoroundd/js/`** since 2026-09-16, when
+    /// the page stopped being a string in `DashboardPage.swift`. Under
+    /// `swift test` there is no app bundle, so these are read from the source
+    /// folder — the second place `DashboardPage` looks.
+    @Test("The page is HTML that links its stylesheet and script, and draws itself from the JSON route")
+    func pageIsServed() async throws {
+        let library = try Library()
+
+        let page = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
+        #expect(page.status == 200)
+        #expect(page.headers["Content-Type"] == "text/html; charset=utf-8")
+        let html = try #require(text(page))
+        #expect(html.contains(#"href="/dashboard/dashboard.css""#))
+        #expect(html.contains(#"src="/dashboard/dashboard.js""#))
+
+        let style = await library.dashboard.route(try get("/dashboard/dashboard.css"))
+        #expect(style.status == 200)
+        #expect(style.headers["Content-Type"] == "text/css; charset=utf-8")
+
+        let script = await library.dashboard.route(try get("/dashboard/dashboard.js"))
+        #expect(script.status == 200)
+        #expect(script.headers["Content-Type"] == "text/javascript; charset=utf-8")
+        let js = try #require(text(script))
+        #expect(js.contains(#"fetch("/v1/dashboard""#))
+        #expect(js.contains("/v1/dashboard/thumbnail?photo="))
+        // A busy resizer is "not yet": the page keeps the image it has.
+        #expect(js.contains("response.status === 503"))
+    }
+
+    /// The app bundle first, so an installed agent never reads a source folder
+    /// it may not be next to; the source folder second, for a build with no bundle.
+    @Test("The page's files are looked for in the app bundle, then beside the agent's sources")
+    func assetsAreFoundInOrder() throws {
+        let source = "/repo/Sources/photogoroundd/Service/DashboardPage.swift"
+        let bundle = try #require(Bundle(path: URL.temporaryDirectory.path(percentEncoded: false)))
+        let looked = DashboardPage.candidates(for: .js, bundle: bundle, source: source)
+            .map { $0.path(percentEncoded: false) }
+
+        #expect(looked.last == "/repo/Sources/photogoroundd/js/dashboard.js")
+        #expect(looked.count == 2)
+        #expect(DashboardPage.contents(of: .js, bundle: bundle, source: source) == nil)
+    }
+
+    @Test("Only GET is served, and nothing under the JSON route but the thumbnail, nor under the page but its files")
     func refusals() async throws {
         let library = try Library()
 
@@ -182,11 +218,14 @@ struct DashboardEndpointTests {
             method: "POST", path: post.path, query: [:], headers: [:], receivedAt: .now)
         #expect(await library.dashboard.route(post).status == 405)
         #expect(await library.dashboard.route(try get("/v1/dashboard/nope")).status == 404)
+        #expect(await library.dashboard.route(try get("/dashboard/nope.js")).status == 404)
     }
 
-    @Test("The dashboard claims its routes and what is under the JSON one, and nothing else")
+    @Test("The dashboard claims its routes and what is under them, and nothing else")
     func claims() {
         #expect(DashboardEndpoint.claims("/dashboard"))
+        #expect(DashboardEndpoint.claims("/dashboard/dashboard.js"))
+        #expect(DashboardEndpoint.claims("/dashboard/dashboard.css"))
         #expect(DashboardEndpoint.claims("/v1/dashboard"))
         #expect(DashboardEndpoint.claims("/v1/dashboard/thumbnail"))
 
@@ -273,12 +312,16 @@ struct DashboardEndpointTests {
     @Test("The page draws the changes by source, and a standing condition as standing")
     func pageHasChangesAndStanding() async throws {
         let library = try Library()
-        let response = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
-        guard case .data(let bytes) = response.body else {
-            Issue.record("the page answered without a body")
+        // The headings are the page's and the drawing is the script's, both in
+        // `Sources/photogoroundd/js/`; what is asserted is that the two together
+        // draw it.
+        let html = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
+        let script = await library.dashboard.route(try get("/dashboard/dashboard.js"))
+        guard case .data(let htmlBytes) = html.body, case .data(let scriptBytes) = script.body else {
+            Issue.record("the page or its script answered without a body")
             return
         }
-        let page = String(decoding: bytes, as: UTF8.self)
+        let page = String(decoding: htmlBytes + scriptBytes, as: UTF8.self)
         #expect(page.contains("s.libraryChanges"))
         #expect(page.contains("e.standing"))
         #expect(page.contains("e.until"))
@@ -337,12 +380,16 @@ struct DashboardEndpointTests {
     @Test("The page draws a serve panel and a fetch panel")
     func pageHasBothSides() async throws {
         let library = try Library()
-        let response = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
-        guard case .data(let bytes) = response.body else {
-            Issue.record("the page answered without a body")
+        // The headings are the page's and the drawing is the script's, both in
+        // `Sources/photogoroundd/js/`; what is asserted is that the two together
+        // draw it.
+        let html = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
+        let script = await library.dashboard.route(try get("/dashboard/dashboard.js"))
+        guard case .data(let htmlBytes) = html.body, case .data(let scriptBytes) = script.body else {
+            Issue.record("the page or its script answered without a body")
             return
         }
-        let page = String(decoding: bytes, as: UTF8.self)
+        let page = String(decoding: htmlBytes + scriptBytes, as: UTF8.self)
         #expect(page.contains("Serve: cache lookups since launch"))
         #expect(page.contains("Fetch: cache lookups since launch"))
         #expect(page.contains("s.serveLookups"))
@@ -376,12 +423,16 @@ struct DashboardEndpointTests {
     @Test("The page draws the evictions panel from the JSON")
     func pageHasEvictions() async throws {
         let library = try Library()
-        let response = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
-        guard case .data(let bytes) = response.body else {
-            Issue.record("the page answered without a body")
+        // The headings are the page's and the drawing is the script's, both in
+        // `Sources/photogoroundd/js/`; what is asserted is that the two together
+        // draw it.
+        let html = await library.dashboard.route(try get(DashboardEndpoint.pagePath))
+        let script = await library.dashboard.route(try get("/dashboard/dashboard.js"))
+        guard case .data(let htmlBytes) = html.body, case .data(let scriptBytes) = script.body else {
+            Issue.record("the page or its script answered without a body")
             return
         }
-        let page = String(decoding: bytes, as: UTF8.self)
+        let page = String(decoding: htmlBytes + scriptBytes, as: UTF8.self)
         #expect(page.contains("Cache evictions since launch"))
         #expect(page.contains("s.evictions"))
     }
@@ -492,6 +543,38 @@ struct DashboardEndpointTests {
         #expect(!bytes.isEmpty)
         #expect(try library.cache.queue.size() == queued, "a thumbnail spent a card")
         #expect(library.served.all.isEmpty)
+    }
+
+    /// **A stalled resizer is "not yet", not "never".** Measured 2026-09-16: a
+    /// thumbnail waited 38.9 s behind the picture requests' resizes, and the
+    /// page's image fell further behind its filename with every picture. Syd
+    /// chose to give it the same budget as `/v1/next`; the page keeps the image
+    /// it has and asks again on its next redraw.
+    @Test("A thumbnail whose resize stalls answers 503 inside the budget")
+    func stalledThumbnailIsNotReady() async throws {
+        let library = try Library(photographs: 1)
+        try await library.fill()
+        let photo = try #require(try library.cache.queue.peek().first).id
+
+        let gate = DispatchSemaphore(value: 0)
+        var dashboard = library.dashboard
+        dashboard.resizer = Resizer()
+        dashboard.resize = { _, _ in
+            _ = gate.wait(timeout: .now() + 60)
+            throw PhotoRenderer.Failure.decodeFailed
+        }
+        defer { gate.signal() }
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let response = await dashboard.route(
+            try get("\(DashboardEndpoint.thumbnailPath)?photo=\(photo)"))
+        let took = clock.now - started
+
+        #expect(response.status == 503)
+        #expect(response.headers["Retry-After"] == "1")
+        #expect(took >= ServiceTiming.resizeBudget)
+        #expect(took < ServiceTiming.pictureReadLimit, "took \(took)")
     }
 
     @Test("A thumbnail names its photograph, and one that is not here is a 404")

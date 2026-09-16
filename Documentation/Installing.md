@@ -12,7 +12,7 @@ The app itself is not installed: run the **Photo-Go-Round** scheme from Xcode. `
 
 ## 1. Install Agent
 
-Scheme **Install Agent**, ⌘B. The script `Scripts/install-agent.sh` boots out any running job, writes `~/Library/LaunchAgents/com.sydpolk.photogoround.server.plist` pointing at the built bundle, bootstraps it, waits for the port, then asks Photos for access if it has never been asked. Allow the prompt. macOS may also ask for Documents and iCloud Drive if a source lives there.
+Scheme **Install Agent**, ⌘B. The script `Scripts/install-agent.sh` boots out any running job and waits for launchd to finish removing it, writes `~/Library/LaunchAgents/com.sydpolk.photogoround.server.plist` pointing at the built bundle, bootstraps it, waits for the port, then asks Photos for access if it has never been asked. Allow the prompt. macOS may also ask for Documents and iCloud Drive if a source lives there.
 
 The agent logs to `/tmp/com.sydpolk.photogoround.server.log`:
 

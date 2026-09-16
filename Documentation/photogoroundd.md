@@ -232,12 +232,16 @@ and the client asks again. Two clients asking at once never receive the same
 picture: the removal runs under the database's write lock, so exactly one wins
 and the other looks again.
 
-**`w` and `h` are maximums.** No image returned will exceed either bound. What
-comes back is the largest that fits inside them with its aspect ratio intact,
-upright, and ready to draw 1:1 — a client never resamples what it is handed.
-Nothing is ever enlarged, so asking for a box larger than the original returns
-the original's pixels; `X-PGR-Pixels` reports what was actually produced. Naming
-neither returns the original bytes, untouched.
+**`w` and `h` are maximums.** A resized image never exceeds either bound. What
+comes back is the largest that fits inside them with its aspect ratio intact and
+upright. Nothing is ever enlarged, so asking for a box larger than the original
+returns the original's pixels; `X-PGR-Pixels` reports what was actually produced.
+Naming neither returns the original bytes, untouched.
+
+**A resize that takes longer than one second returns the original instead**,
+untouched and without `X-PGR-Pixels`, and the agent's console says
+`RESIZE: gave up after 1000ms on …`. A client must be ready to scale and orient
+an original. Resizes run one at a time.
 
 Today that is the only fit: shrink or grow, aspect ratio preserved. More options
 will be added to the endpoint later.
@@ -351,12 +355,21 @@ keeps the database and preferences and never makes a web request.
 ### Dashboard
 
     GET /dashboard                             a page for a browser
+    GET /dashboard/dashboard.css               its stylesheet
+    GET /dashboard/dashboard.js                its script
     GET /v1/dashboard                          what the page shows, as JSON
     GET /v1/dashboard/thumbnail?photo=<id>     a small JPEG of one photograph
 
 The agent prints the dashboard's address when its listener is ready. **The page
 redraws itself every second**, and says `not answering` when the agent stops
 replying.
+
+The page, stylesheet and script are `Sources/photogoroundd/js/dashboard.html`,
+`dashboard.css` and `dashboard.js`, read from the agent's app bundle, or from that
+folder when the agent has no bundle. A missing one is `500`, naming where it was looked for.
+
+The thumbnail is `503` with `Retry-After: 1` when its resize takes longer than one
+second; the page keeps the image it has and asks again.
 
 It shows the last picture served, with a caption, and how many photographs the database holds, how many each source added and
 removed since the agent launched, how many originals the cache

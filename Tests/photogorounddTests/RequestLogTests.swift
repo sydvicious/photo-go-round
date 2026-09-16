@@ -117,7 +117,61 @@ struct RequestLogTests {
         #expect(collector.all.first?.consumer == "anonymous")
     }
 
+    /// An empty library still opens, registers, and looks at the queue, and a
+    /// slow empty answer needs placing as much as a slow picture does.
+    @Test("An empty answer is timed too")
+    func emptyAnswerIsTimed() async throws {
+        let collector = Collector()
+        let (endpoint, cleanup) = try endpoint(collector)
+        defer { cleanup() }
+
+        _ = await endpoint.route(try request("GET /v1/next?consumer=app&w=1&h=1 HTTP/1.1"))
+
+        let stages = try #require(collector.all.first?.stages)
+        #expect(stages.stages.map(\.name) == ["waited", "open", "register", "queue"])
+    }
+
+    /// A request refused before any step ran has nothing to time, and says
+    /// nothing rather than a line of zeros.
+    @Test("A refused request has no timing line")
+    func refusedRequestIsNotTimed() async throws {
+        let collector = Collector()
+        let (endpoint, cleanup) = try endpoint(collector)
+        defer { cleanup() }
+
+        _ = await endpoint.route(try request("POST /v1/next HTTP/1.1"))
+
+        #expect(collector.all.first?.timing == nil)
+    }
+
     // MARK: - What the line says
+
+    @Test("The RESIZE line says how long it waited, which photograph, and that the original went")
+    func resizeGaveUpLine() {
+        #expect(
+            PictureEndpoint.resizeGaveUp(
+                name: "IMG_0327.HEIC (B5E295AD-B306-4E08-9876-135BBF49E2AA/L0/001)", card: 6921,
+                deal: 84642, after: .seconds(1))
+                == "RESIZE: gave up after 1000ms on IMG_0327.HEIC (B5E295AD-B306-4E08-9876-135BBF49E2AA/L0/001) · card 6921 · deal #84642; serving the original")
+    }
+
+    @Test("The timing line names the consumer, the status, the deal, each step, and the total")
+    func timingLine() {
+        let start = ContinuousClock.now
+        var stages = StageTimes(from: start)
+        stages.lap("waited", now: start + .milliseconds(3))
+        stages.lap("check", now: start + .milliseconds(1003))
+        stages.lap("shown", now: start + .milliseconds(29_003))
+
+        let entry = PictureEndpoint.Served(
+            status: 200, detail: "IMG_2481.HEIC", consumer: "app",
+            width: "1280", height: "673", card: 4821, deal: 83911,
+            bytes: 164_000, milliseconds: 29_012.4, stages: stages)
+
+        #expect(
+            entry.timing
+                == "TIMING: app · 200 · deal #83911 · waited 3ms · check 1000ms · shown 28000ms · total 29012ms")
+    }
 
     @Test("A served picture reports its deal, its size, and its latency")
     func servedSummary() {

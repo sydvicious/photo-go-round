@@ -44,6 +44,58 @@ public final class Database {
     /// page contention on statements that have no retry of their own.
     static let incidentalWait: Int32 = 50
 
+    /// How long a transaction may hold the write lock before it says so on a
+    /// `LOCK:` line.
+    ///
+    /// **`incidentalWait`, and not by coincidence.** That is all the patience
+    /// a statement outside a transaction gets, so a lock held longer than this
+    /// is one that turns somebody else's bare write into `database is locked` —
+    /// which is what failed two downloads at 13:30:52 on 2026-09-16. Syd, the
+    /// same day: "long locks in the database are death." A constant, not a
+    /// preference: nobody should need to tune how long a lock may be held.
+    public static let longLockThreshold = Duration.milliseconds(Int(incidentalWait))
+
+    /// Told about every transaction that held the write lock for
+    /// `longLockThreshold` or longer. Writes the `LOCK:` line by default; a test
+    /// collects instead, since `os_log` cannot be read back while an assertion
+    /// is still interesting.
+    public var reportLongLock: (LongLock) -> Void = { $0.report() }
+
+    /// One transaction that held the write lock too long.
+    ///
+    /// `Agent Performance Overhaul.md`, *The `LOCK:` line*.
+    public struct LongLock: Sendable, Equatable {
+        /// From `BEGIN` succeeding to `COMMIT` returning.
+        public let held: Duration
+        /// From the first attempt to the one that got the lock. A long wait
+        /// beside a short hold is somebody else's long lock.
+        public let waited: Duration
+        public let attempts: Int
+        /// The caller, as `#function`, `#fileID` and `#line` gave it.
+        public let function: String
+        public let fileID: String
+        public let line: Int
+
+        /// `LOCK: held 812ms · waited 3ms · 2 attempts · upsert(_:to:at:isolation:onAdded:) (PhotoPool.swift:96)`
+        ///
+        /// Filter on the prefix:
+        ///
+        ///     /usr/bin/log show --info --predicate 'eventMessage BEGINSWITH "LOCK:"'
+        public var text: String {
+            let file = fileID.split(separator: "/").last.map(String.init) ?? fileID
+            return [
+                "LOCK: held \(StageTimes.milliseconds(held))",
+                "waited \(StageTimes.milliseconds(waited))",
+                attempts == 1 ? "1 attempt" : "\(attempts) attempts",
+                "\(function) (\(file):\(line))",
+            ].joined(separator: " · ")
+        }
+
+        public func report() {
+            Log.sql.notice("\(text, privacy: .public)")
+        }
+    }
+
     // MARK: - Opening
 
     /// Opens (creating if necessary) the database at `path`.
@@ -233,9 +285,13 @@ public final class Database {
     public func transaction<T>(
         _ kind: TransactionKind = .immediate,
         within budget: Duration? = nil,
+        function: String = #function, fileID: String = #fileID, line: Int = #line,
         _ body: () throws -> T
     ) throws -> T {
-        try retrying(kind, within: budget, body) { delay in Thread.sleep(forTimeInterval: delay) }
+        let caller = Caller(function: function, fileID: fileID, line: line)
+        return try retrying(kind, within: budget, caller: caller, body) { delay in
+            Thread.sleep(forTimeInterval: delay)
+        }
     }
 
     /// The same transaction, for a caller that is already `async`.
@@ -254,6 +310,7 @@ public final class Database {
         _ kind: TransactionKind = .immediate,
         within budget: Duration? = nil,
         isolation: isolated (any Actor)? = #isolation,
+        function: String = #function, fileID: String = #fileID, line: Int = #line,
         _ body: () throws -> T
     ) async throws -> T {
         // Written out here rather than delegated to a helper: a separate
@@ -263,10 +320,16 @@ public final class Database {
         // belongs to.
         if transactionDepth > 0 { return try savepoint(body) }
 
-        let deadline = ContinuousClock.now + (budget ?? busyTimeout)
+        let caller = Caller(function: function, fileID: fileID, line: line)
+        let firstAttempt = ContinuousClock.now
+        let deadline = firstAttempt + (budget ?? busyTimeout)
         var attempt = 0
         while true {
-            if let result = try attemptTransaction(kind, body) { return result }
+            if let result = try attemptTransaction(
+                kind, since: firstAttempt, attempt: attempt + 1, caller: caller, body)
+            {
+                return result
+            }
             attempt += 1
             guard ContinuousClock.now < deadline else { throw SQLiteError.busyAfterWaiting }
             Log.sql.debug(
@@ -287,15 +350,27 @@ public final class Database {
     /// Returns nil when the attempt was refused for contention and is worth
     /// making again, so both retry loops share every rule except how they wait.
     private func attemptTransaction<T>(
-        _ kind: TransactionKind, _ body: () throws -> T
+        _ kind: TransactionKind, since firstAttempt: ContinuousClock.Instant, attempt: Int,
+        caller: Caller, _ body: () throws -> T
     ) throws -> T? {
         do {
             try execute("BEGIN \(kind.rawValue);")
+            let locked = ContinuousClock.now
             transactionDepth = 1
             do {
                 let result = try body()
                 try execute("COMMIT;")
                 transactionDepth = 0
+                // Only a transaction that took the write lock at `BEGIN`. A
+                // deferred one may never take it at all, and its length is a
+                // reader's, which blocks nobody under WAL.
+                let held = ContinuousClock.now - locked
+                if kind == .immediate, held >= Self.longLockThreshold {
+                    reportLongLock(
+                        LongLock(
+                            held: held, waited: locked - firstAttempt, attempts: attempt,
+                            function: caller.function, fileID: caller.fileID, line: caller.line))
+                }
                 return result
             } catch {
                 // ROLLBACK can itself fail if the transaction was already
@@ -313,6 +388,7 @@ public final class Database {
     private func retrying<T>(
         _ kind: TransactionKind,
         within budget: Duration?,
+        caller: Caller,
         _ body: () throws -> T,
         wait: (TimeInterval) -> Void
     ) throws -> T {
@@ -320,16 +396,28 @@ public final class Database {
         // outermost one, since only it can replay the whole unit of work.
         if transactionDepth > 0 { return try savepoint(body) }
 
-        let deadline = ContinuousClock.now + (budget ?? busyTimeout)
+        let firstAttempt = ContinuousClock.now
+        let deadline = firstAttempt + (budget ?? busyTimeout)
         var attempt = 0
         while true {
-            if let result = try attemptTransaction(kind, body) { return result }
+            if let result = try attemptTransaction(
+                kind, since: firstAttempt, attempt: attempt + 1, caller: caller, body)
+            {
+                return result
+            }
             attempt += 1
             guard ContinuousClock.now < deadline else { throw SQLiteError.busyAfterWaiting }
             Log.sql.debug(
                 "retrying transaction after busy, attempt \(attempt, privacy: .public)")
             wait(Self.backoffInterval(attempt: attempt))
         }
+    }
+
+    /// Where a transaction was started from, for its `LOCK:` line.
+    private struct Caller {
+        let function: String
+        let fileID: String
+        let line: Int
     }
 
     private func savepoint<T>(_ body: () throws -> T) throws -> T {

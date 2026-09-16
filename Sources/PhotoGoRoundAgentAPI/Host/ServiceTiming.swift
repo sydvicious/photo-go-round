@@ -45,4 +45,42 @@ public enum ServiceTiming {
     /// person can act on — and only the longer bound lets them be told which of
     /// the two they have.
     public static let clientReadLimit = Duration.seconds(20)
+
+    /// What a picture client waits for one picture. `PictureClient.defaultLimit`
+    /// is this, and the reasoning for five seconds is written there.
+    ///
+    /// **Moved here on 2026-09-16** so `serveCheckBudget` could be held against
+    /// it. While it lived only in `PhotoGoRoundDisplay`, nothing on the agent's
+    /// side could see it, which is the same drift this file exists to stop.
+    public static let pictureReadLimit = Duration.seconds(5)
+
+    /// What serving allows itself, in total, to ask a source whether the picture
+    /// going out is still there.
+    ///
+    /// **Measured 2026-09-16.** `photolibraryd` stopped answering and serving a
+    /// cached Photos picture took 21 seconds: `existence` waited out a
+    /// ten-second library bound, came back *unknown*, and `availability` waited
+    /// out another. The picture then went out anyway, as *unknown* always lets
+    /// it — to a client that had given up sixteen seconds earlier.
+    ///
+    /// **One second, against questions measured in milliseconds.** It is spent
+    /// after `Preferences.serveWait`'s two, and the two together have to finish
+    /// inside `pictureReadLimit`. What running out costs is an unconfirmed
+    /// picture: one we hold, shown without checking that nobody deleted it in
+    /// the minutes since the last scan.
+    public static let serveCheckBudget = Duration.seconds(1)
+
+    /// How long a request waits for its resize — its turn on the resizer and
+    /// the resize together — before it sends the original instead.
+    ///
+    /// **Measured 2026-09-16.** One resize took 89 s inside Apple's HEIC
+    /// decoder at 17:02, with nothing ahead of it on the queue, and the
+    /// wallpaper and the app waited 92 s and 93 s behind it. Syd: "just serve
+    /// the original image if the resizer stalls."
+    ///
+    /// **One second, Claude's number.** A healthy resize measured 0.10–0.24 s
+    /// one at a time, and this is spent after `Preferences.serveWait`'s two and
+    /// `serveCheckBudget`'s one, all of which must finish inside
+    /// `pictureReadLimit`. `BoundOrderingTests` holds the sum.
+    public static let resizeBudget = Duration.seconds(1)
 }

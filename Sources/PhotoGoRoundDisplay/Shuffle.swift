@@ -76,7 +76,7 @@ public final class Shuffle {
         public var words: String {
             switch self {
             case .noPhotos: "No Photos Available"
-            case .noAgent, .silent: "Photo-Go-Round Is Not Running"
+            case .noAgent, .silent: "Waiting for Photos"
             }
         }
 
@@ -85,17 +85,19 @@ public final class Shuffle {
         /// The reason a failure was constructed with is a fact about the agent
         /// and not an instruction to anybody, so it stays in `line` and out of
         /// this. Nothing is broken when there are no photographs — nobody has
-        /// added any — and nothing the person can read will unstick a wedged
-        /// agent, so both cases name a place to go instead.
+        /// added any — so that case names a place to go.
         ///
-        /// **The agent wording is wrong inside the app and right inside the
-        /// saver**, because the app *is* the application it tells you to open.
-        /// It stands until the first-launch work gives the window its Install
-        /// and Launch buttons, which is what it should show instead.
+        /// **Agent trouble has nothing underneath.** Until 2026-09-16 it said
+        /// "Open the Photo-Go-Round application to start it." — shown inside the
+        /// application it named, and wrong everywhere once launchd started the
+        /// agent at login: opening the app starts nothing, and an agent that is
+        /// still starting or busy is running. Syd: "fix the wording. it's
+        /// stupid." There is no instruction that would help, so there is none;
+        /// the Install and Launch buttons in `TODO.md` are what would go here.
         public var detail: String? {
             switch self {
             case .noPhotos: "Use the Settings panel in the application to add images."
-            case .noAgent, .silent: "Open the Photo-Go-Round application to start it."
+            case .noAgent, .silent: nil
             }
         }
 
@@ -341,7 +343,7 @@ public final class Shuffle {
                 return .fixed(whenEmpty)
             }
             emptyAnswers = 0
-            guard let image = await Self.decode(picture.data) else {
+            guard let image = await Self.decode(picture.data, fitting: box) else {
                 // The service skips a photograph that will not render and
                 // retires it after three tries; this is the same failure on
                 // our side of the wire, and the answer is the same — ask for
@@ -425,10 +427,42 @@ public final class Shuffle {
 
     /// Off the main thread, because a decode during a pan is exactly the moment
     /// a stutter would be noticed.
-    private static func decode(_ data: Data) async -> CGImage? {
+    ///
+    /// **Upright, and no larger than the box.** Until 2026-09-16 this decoded
+    /// the bytes as they stood, which was right while the agent always sent a
+    /// picture already resized to the box and already rotated upright. Since
+    /// then it sends the original when a resize stalls (`Agent Performance
+    /// Overhaul.md`, Phase 2a): as large as the camera made it, a 48-megapixel
+    /// HEIC costing about 190 MB decoded whole, and carrying its orientation as
+    /// EXIF, which `CGImageSourceCreateImageAtIndex` ignores — a portrait
+    /// photograph would have gone up sideways. The thumbnail call does both, and
+    /// for a picture the agent already resized it changes nothing.
+    static func decode(_ data: Data, fitting box: PixelSize) async -> CGImage? {
         await Task.detached(priority: .userInitiated) { () -> Decoded? in
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                width > 0, height > 0
+            else { return nil }
+            // Orientations 5 to 8 turn the picture a quarter, so its upright
+            // width is its stored height.
+            let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+            let turned = (5...8).contains(orientation)
+            let upright = CGSize(
+                width: turned ? height : width, height: turned ? width : height)
+            let fitted = AspectFit.size(
+                of: upright, in: CGSize(width: box.width, height: box.height))
+            // Never larger than the original: the view scales up, the decoder
+            // need not.
+            let longest = min(
+                max(Int(fitted.width.rounded()), Int(fitted.height.rounded())), max(width, height))
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(1, longest),
+                kCGImageSourceCreateThumbnailWithTransform: true,
+            ]
+            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
             else { return nil }
             return Decoded(image: image)
         }.value?.image

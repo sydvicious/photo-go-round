@@ -24,7 +24,9 @@ public struct PictureClient: PictureSource {
     /// has been looking at a stalled window wondering. It is also two orders of
     /// magnitude above a healthy serve, which is a queue pop and a file
     /// streamed off the boot volume.
-    public static let defaultLimit = Duration.seconds(5)
+    ///
+    /// Held in `ServiceTiming`, beside the budget serving spends inside it.
+    public static let defaultLimit = ServiceTiming.pictureReadLimit
 
     /// Injected so a test can prove the bound without waiting out the real
     /// one, which is the same reason `SourcesModel` takes its poll interval.

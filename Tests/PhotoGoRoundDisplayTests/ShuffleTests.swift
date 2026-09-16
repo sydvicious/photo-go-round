@@ -124,7 +124,7 @@ struct ShuffleTests {
         #expect(shuffle.shown?.picture == shown.picture)
         // The words, not the whole sentence: how `Duration` renders itself is
         // not this test's business.
-        #expect(shuffle.trouble?.words == "Photo-Go-Round Is Not Running")
+        #expect(shuffle.trouble?.words == "Waiting for Photos")
     }
 
     /// **One predicament, one message — and the distinction kept where it pays.**
@@ -145,12 +145,27 @@ struct ShuffleTests {
         #expect(wedged.line.contains("not answering"))
     }
 
+    /// **Waiting, and nothing to do about it.** It said "Photo-Go-Round Is Not
+    /// Running" with "Open the Photo-Go-Round application to start it."
+    /// underneath until 2026-09-16 — shown inside the application it named, and,
+    /// once launchd started the agent at login, wrong everywhere: opening the
+    /// app starts nothing, and an agent still starting up or busy *is* running.
+    /// Syd: "fix the wording. it's stupid."
+    @Test("Agent trouble says it is waiting, and gives no instruction")
+    func agentTroubleIsWaiting() {
+        for trouble in [Shuffle.Trouble.noAgent("no port"), .silent("said nothing")] {
+            #expect(trouble.words == "Waiting for Photos")
+            #expect(trouble.detail == nil)
+        }
+    }
+
     /// The words never carry the reason, so nothing on the glass depends on a
     /// string written for a log.
     @Test("What is shown never leaks the diagnostic it was built with")
     func theReasonStaysInTheLog() {
         let trouble = Shuffle.Trouble.noAgent("nothing is listening on 9000 — connection refused")
-        #expect(trouble.detail?.contains("9000") == false)
+        #expect(!trouble.words.contains("9000"))
+        #expect(trouble.detail?.contains("9000") != true)
         #expect(trouble.line.contains("9000"))
     }
 

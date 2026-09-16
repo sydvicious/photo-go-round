@@ -1,0 +1,59 @@
+/* The dashboard's styles. Served at /dashboard/dashboard.css by the agent;
+   see DashboardEndpoint and DashboardPage. */
+:root {
+  color-scheme: light dark;
+  --ground: #f5f5f7; --panel: #ffffff; --ink: #1d1d1f; --muted: #6e6e73;
+  --rule: #d2d2d7; --fill: #0a64d8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #1c1c1e; --panel: #2c2c2e; --ink: #f5f5f7; --muted: #a1a1a6;
+    --rule: #3a3a3c; --fill: #4d9bff;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; padding: 24px; background: var(--ground); color: var(--ink);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-bottom: 20px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0; }
+#state { color: var(--muted); font-variant-numeric: tabular-nums; }
+#state.stale { color: var(--ink); font-weight: 600; }
+main.stale section { opacity: 0.45; }
+main { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+section { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 16px; min-width: 0; }
+section.wide { grid-column: 1 / -1; }
+h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 8px; }
+.figure { font-size: 32px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sub { color: var(--muted); font-variant-numeric: tabular-nums; }
+.meter { height: 8px; border-radius: 4px; background: var(--rule); margin: 10px 0 6px; overflow: hidden; }
+.meter > div { height: 100%; width: 0; background: var(--fill); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+td { padding: 3px 0; }
+td:last-child { text-align: right; }
+tr.total td { border-top: 1px solid var(--rule); font-weight: 600; padding-top: 6px; }
+tr.minor td { color: var(--muted); }
+tr.outcome td { color: var(--muted); }
+tr.outcome td:first-child { padding-left: 14px; }
+.last { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.frame {
+  width: 240px; height: 240px; flex: none; display: flex; align-items: center; justify-content: center;
+  background: var(--ground); border-radius: 6px; overflow: hidden; color: var(--muted); text-align: center; padding: 8px;
+}
+.frame img { max-width: 100%; max-height: 100%; display: block; }
+.caption { min-width: 0; flex: 1 1 240px; }
+#lastName { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
+#lastID { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; margin-top: 2px; }
+#lastSource { color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
+#lastWhen { color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 8px; }
+.errors { list-style: none; margin: 0; padding: 0; }
+.errors li { padding: 8px 0; border-top: 1px solid var(--rule); }
+.errors li:first-child { border-top: 0; padding-top: 0; }
+.errors .message { overflow-wrap: anywhere; }
+.errors .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 2px; overflow-wrap: anywhere; }
+.note { font-size: 12px; margin-bottom: 8px; }
+.changes { margin-top: 8px; }
+.changes td:first-child { overflow-wrap: anywhere; padding-right: 8px; }
+.changes td.n { text-align: right; white-space: nowrap; padding-left: 8px; }

@@ -6,6 +6,8 @@ import PhotoGoRoundAgentAPI
 ///
 /// ```
 /// GET /dashboard                            the page
+/// GET /dashboard/dashboard.css               its stylesheet
+/// GET /dashboard/dashboard.js                its script
 /// GET /v1/dashboard                         what the page shows, as JSON
 /// GET /v1/dashboard/thumbnail?photo=<id>    a small JPEG of one photograph
 /// ```
@@ -14,8 +16,9 @@ import PhotoGoRoundAgentAPI
 /// anybody reads, and its unified log has to be dug out with `log show`; this is
 /// the same facts, one URL away, redrawn every second.
 ///
-/// **The page is a string in the binary, and draws itself.** It holds no
-/// numbers: its script asks `/v1/dashboard` once a second and fills them in. The
+/// **The page is three files in `js/`, beside these sources, and draws itself.** See
+/// `DashboardPage` for where they are found. It holds no numbers: its script
+/// asks `/v1/dashboard` once a second and fills them in. The
 /// listener closes every connection after one answer, so there is nothing to
 /// push over — and a poll against loopback is a few milliseconds.
 ///
@@ -38,6 +41,20 @@ struct DashboardEndpoint {
     /// the agent; a test hands in its own.
     var changes: LibraryChanges = .shared
 
+    /// Resizes an original to a thumbnail no larger than `side` on its longest
+    /// edge, as JPEG. A hook so a test can make it hang.
+    var resize: @Sendable (_ original: URL, _ side: Int) throws -> PhotoRenderer.Rendered = {
+        original, side in
+        try PhotoRenderer.render(contentsOf: original, fitting: side, by: side, as: .jpeg)
+    }
+
+    /// Where `resize` runs: the agent's one resizer, shared with `/v1/next`.
+    var resizer: Resizer = .shared
+
+    /// How long a thumbnail waits for its resize before answering 503.
+    /// `ServiceTiming.resizeBudget`, the same as a picture request's.
+    var resizeBudget: Duration = ServiceTiming.resizeBudget
+
     static let pagePath = "/dashboard"
     static let path = "/v1/dashboard"
     static let thumbnailPath = "/v1/dashboard/thumbnail"
@@ -48,7 +65,8 @@ struct DashboardEndpoint {
     /// Every route, and anything under the JSON one, so a mistyped path there is
     /// answered here rather than logged by the pictures as a stray request.
     static func claims(_ path: String) -> Bool {
-        path == pagePath || path == Self.path || path.hasPrefix(Self.path + "/")
+        path == pagePath || path.hasPrefix(pagePath + "/") || path == Self.path
+            || path.hasPrefix(Self.path + "/")
     }
 
     /// Everything the page draws.
@@ -121,20 +139,35 @@ struct DashboardEndpoint {
         }
         switch request.path {
         case Self.pagePath:
-            return HTTPListener.Response(
-                status: 200, reason: "OK",
-                headers: [
-                    "Content-Type": "text/html; charset=utf-8",
-                    "Cache-Control": "no-store",
-                ],
-                body: .data(Data(DashboardPage.html.utf8)))
+            return asset(.html)
+        case Self.pagePath + "/" + DashboardPage.Asset.css.rawValue:
+            return asset(.css)
+        case Self.pagePath + "/" + DashboardPage.Asset.js.rawValue:
+            return asset(.js)
         case Self.path:
             return answer()
         case Self.thumbnailPath:
-            return thumbnail(request)
+            return await thumbnail(request)
         default:
             return .text("no such endpoint\n", status: 404, reason: "Not Found")
         }
+    }
+
+    /// One of the page's files, or a 500 naming it and where it was looked for.
+    private func asset(_ asset: DashboardPage.Asset) -> HTTPListener.Response {
+        guard let data = DashboardPage.contents(of: asset) else {
+            let looked = DashboardPage.candidates(for: asset).map { $0.path(percentEncoded: false) }
+            Log.deck.error(
+                kind: "dashboard.asset-missing",
+                "dashboard could not find \(asset.rawValue); looked in \(looked.joined(separator: ", "))")
+            return .text(
+                "\(asset.rawValue) is missing; looked in \(looked.joined(separator: ", "))\n",
+                status: 500, reason: "Internal Server Error")
+        }
+        return HTTPListener.Response(
+            status: 200, reason: "OK",
+            headers: ["Content-Type": asset.contentType, "Cache-Control": "no-store"],
+            body: .data(data))
     }
 
     private func answer() -> HTTPListener.Response {
@@ -229,7 +262,7 @@ struct DashboardEndpoint {
     /// the deck is touched**: no card is taken, nothing is counted as served,
     /// and a photograph that will not decode here is not charged a render
     /// failure, since the page asking is not a consumer asking.
-    private func thumbnail(_ request: HTTPListener.Request) -> HTTPListener.Response {
+    private func thumbnail(_ request: HTTPListener.Request) async -> HTTPListener.Response {
         guard let photo = request.query("photo").flatMap({ Int64($0) }) else {
             return .text("name a photo: ?photo=<id>\n", status: 400, reason: "Bad Request")
         }
@@ -251,8 +284,35 @@ struct DashboardEndpoint {
         }
 
         do {
-            let rendered = try PhotoRenderer.render(
-                contentsOf: url, fitting: Self.thumbnailSize, by: Self.thumbnailSize, as: .jpeg)
+            // On the agent's one resizer, like every other resize. See `Resizer`.
+            // **Bounded, and "not yet" when the bound runs out.** Measured
+            // 2026-09-16: a thumbnail waited 38.9 s behind the picture
+            // requests' resizes, and the page's image fell further behind its
+            // filename with every picture. Syd chose the same budget as
+            // `/v1/next`. A browser cannot be handed the original — not every
+            // one draws HEIC — so the answer is 503, and the page keeps the
+            // image it has and asks again.
+            let resize = self.resize
+            let resizer = self.resizer
+            let ticket = Resizer.Ticket()
+            let outcome: (result: PhotoRenderer.Rendered, started: ContinuousClock.Instant)
+            do {
+                outcome = try await Deadline.run(within: resizeBudget) {
+                    try await resizer.run(ticket) { try resize(url, Self.thumbnailSize) }
+                }
+            } catch is Deadline.Expired {
+                ticket.abandon()
+                Log.deck.info(
+                    "RESIZE: dashboard thumbnail gave up after \(StageTimes.milliseconds(resizeBudget), privacy: .public) on photo \(photo, privacy: .public); answering 503")
+                return HTTPListener.Response(
+                    status: 503, reason: "Service Unavailable",
+                    headers: [
+                        "Content-Type": "text/plain; charset=utf-8", "Retry-After": "1",
+                        "Cache-Control": "no-store",
+                    ],
+                    body: .data(Data("the resizer is busy; ask again\n".utf8)))
+            }
+            let rendered = outcome.result
             return HTTPListener.Response(
                 status: 200, reason: "OK",
                 headers: [

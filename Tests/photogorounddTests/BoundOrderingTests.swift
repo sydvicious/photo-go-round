@@ -41,6 +41,26 @@ struct BoundOrderingTests {
         #expect(ServiceTiming.clientReadLimit > ServiceTiming.responseBudget * 2)
     }
 
+    /// **Serving spends three waits before a picture goes out**: up to
+    /// `serveWait` for a cold card's bytes, up to `serveCheckBudget` asking
+    /// whether the card is still there, and up to `resizeBudget` for its resize.
+    /// All three, at their defaults, have to finish while the picture client is
+    /// still listening.
+    ///
+    /// Measured 2026-09-16: with no budget on the check, a silent Photos library
+    /// made it twenty seconds against five; with none on the resize, a stalled
+    /// HEIC decoder made it ninety-nine.
+    @Test("A picture request's waits finish before its client gives up")
+    func servingFinishesInsideThePictureBound() {
+        let name = scratchSuiteName("bounds")
+        defer { discardScratchSuite(name) }
+        let preferences = Preferences(defaults: UserDefaults(suiteName: name)!)
+
+        #expect(
+            preferences.serveWait + ServiceTiming.serveCheckBudget + ServiceTiming.resizeBudget
+                < ServiceTiming.pictureReadLimit)
+    }
+
     /// One budget for the whole response, however many sources it describes.
     /// This is what stops a list of twenty albums costing twenty bounds.
     @Test("A budget spent once stays spent")

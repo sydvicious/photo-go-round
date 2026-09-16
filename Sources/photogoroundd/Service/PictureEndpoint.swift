@@ -68,6 +68,39 @@ struct PictureEndpoint {
     /// is not about counting.
     var tally: LaunchTally?
 
+    /// Resizes an original to the box a request asked for.
+    ///
+    /// **So a test can make a resize hang.** Added 2026-09-16 for `Agent
+    /// Performance Overhaul.md`, Phase 1. The agent's `TIMING:` lines that
+    /// afternoon had single resizes taking up to 741 seconds, and a thread
+    /// sample caught one waiting on a synchronous call to the system's video
+    /// decoder. A resize that fast machines finish in a fraction of a second
+    /// cannot reproduce what that did to the agent; one that blocks on purpose
+    /// can.
+    ///
+    /// Always run on `resizer`, never on the request's own thread.
+    var resize: @Sendable (_ original: URL, _ width: Int, _ height: Int, _ format: PhotoRenderer.Format)
+        throws -> PhotoRenderer.Rendered = { original, width, height, format in
+            try PhotoRenderer.render(contentsOf: original, fitting: width, by: height, as: format)
+        }
+
+    /// Where `resize` runs: one at a time, off the shared pool. See `Resizer`.
+    var resizer: Resizer = .shared
+
+    /// How long a request waits for its resize before it sends the original.
+    /// `ServiceTiming.resizeBudget`; see there.
+    var resizeBudget: Duration = ServiceTiming.resizeBudget
+
+    /// `RESIZE: gave up after 1000ms on IMG_0327.HEIC (…) · card 6921 · deal #84642; serving the original`
+    ///
+    /// The one line a stalled resize leaves, on the console and in the unified
+    /// log. Filter on the prefix.
+    static func resizeGaveUp(name: String, card: Int64, deal: Int64?, after budget: Duration) -> String {
+        var parts = ["RESIZE: gave up after \(StageTimes.milliseconds(budget)) on \(name)", "card \(card)"]
+        if let deal { parts.append("deal #\(deal)") }
+        return parts.joined(separator: " · ") + "; serving the original"
+    }
+
     /// One request, as it happened. A value rather than a formatted line, so the
     /// facts can be asserted without parsing the sentence they end up in.
     struct Served: Sendable, Equatable {
@@ -119,6 +152,9 @@ struct PictureEndpoint {
         /// depth that is falling says the walk is outrunning the deck, and one
         /// pinned at its target says it is not.
         var queued: Int?
+        /// How long each step of the request took, for the `TIMING:` line. Nil
+        /// for a request that was refused before any step ran.
+        var stages: StageTimes? = nil
 
         /// Everything after the name, and the only place that wording lives.
         var summary: String {
@@ -160,6 +196,25 @@ struct PictureEndpoint {
                 queued=\(queued ?? -1, privacy: .public) ms=\(milliseconds, privacy: .public)
                 """
             )
+            if let timing { Log.deck.notice("\(timing, privacy: .public)") }
+        }
+
+        /// `TIMING: app · 200 · deal #83911 · waited 0ms · open 2ms · … · total 29012ms`
+        ///
+        /// **Every step, every request, in the unified log only.** Added
+        /// 2026-09-16 when requests took 10–50 seconds during a refresh and
+        /// nothing said where. `waited` is the time between the request being
+        /// read and this endpoint starting on it, which is the one to watch for
+        /// an agent whose threads are all busy. Filter on the prefix:
+        ///
+        ///     /usr/bin/log show --info --predicate 'eventMessage BEGINSWITH "TIMING:"'
+        var timing: String? {
+            guard let stages else { return nil }
+            var parts = ["TIMING: \(consumer)", "\(status)"]
+            if let deal { parts.append("deal #\(deal)") }
+            if !stages.stages.isEmpty { parts.append(stages.summary) }
+            parts.append("total \(Int(milliseconds))ms")
+            return parts.joined(separator: " · ")
         }
     }
 
@@ -218,7 +273,8 @@ struct PictureEndpoint {
         card: DeckCard? = nil,
         bytes: Int64 = 0,
         cacheBytes: Int64? = nil,
-        queued: Int? = nil
+        queued: Int? = nil,
+        timing: StageTimes? = nil
     ) {
         let consumer = request.query("consumer") ?? "anonymous"
         // Here rather than beside each `return` of a 200, so the count and the
@@ -240,17 +296,22 @@ struct PictureEndpoint {
                 bytes: bytes,
                 milliseconds: (ContinuousClock.now - request.receivedAt).totalSeconds * 1000,
                 cacheBytes: cacheBytes,
-                queued: queued
+                queued: queued,
+                stages: timing
             )
         )
     }
 
     private func next(_ request: HTTPListener.Request) async -> HTTPListener.Response {
+        var timing = StageTimes(from: request.receivedAt)
+        timing.lap("waited")
         let context: (cache: PhotoCache, deck: Deck)
         do {
             context = try self.context()
+            timing.lap("open")
         } catch {
-            report(request, status: 503, detail: "library unavailable")
+            timing.lap("open")
+            report(request, status: 503, detail: "library unavailable", timing: timing)
             Log.deck.error(kind: "serve.library-unavailable", "could not open the library: \(error)")
             return .text("library unavailable\n", status: 503, reason: "Service Unavailable")
         }
@@ -261,13 +322,14 @@ struct PictureEndpoint {
         let consumerID = try? context.deck.register(
             kind: kind, displayID: request.query("display")
         ).id
+        timing.lap("register")
 
         let box = Self.requestedSize(request)
         let accept = request.header("Accept")
         // Refused before the pop: a request that cannot be answered in any
         // format must not spend a card finding that out.
         guard let format = PhotoRenderer.Format.negotiated(accept: accept) else {
-            report(request, status: 406, detail: "no acceptable format")
+            report(request, status: 406, detail: "no acceptable format", timing: timing)
             return .text(
                 "neither image/heic nor image/jpeg is acceptable\n",
                 status: 406, reason: "Not Acceptable")
@@ -283,33 +345,16 @@ struct PictureEndpoint {
             // a rendering held at exactly this size. Nothing is held but
             // originals since 2026-09-06, so what comes back is the original and
             // the resize happens here, on every request.
-            while let served = try await context.cache.serve(to: consumerID) {
+            while let served = try await context.cache.serve(to: consumerID, timing: &timing) {
 
                 guard let box else {
                     // No size asked for: the original, untouched — opened now,
                     // for the same reason as above.
-                    guard let stream = HTTPListener.Response.StreamedFile(url: served.url) else {
-                        vanished(served, context: context)
-                        continue
-                    }
-                    try? context.deck.markDelivered(photoID: served.card.id)
-                    // **A deal follows a picture that reached somebody**, not a
-                    // request that arrived. Rung at the top of this loop it
-                    // fired once per card *taken*, so a request walking past
-                    // three unrenderable photographs bought four fresh cards —
-                    // against `PhotoCache`'s own statement that "a skip no
-                    // longer buys a fresh card". `markDelivered` is the
-                    // endpoint's existing notion of a 200 in hand, so this
-                    // belongs beside it and nowhere else.
-                    queueRanShort()
-                    report(
-                        request, status: 200, detail: served.card.spokenName, source: served.source,
-                        card: served.card, bytes: stream.byteCount)
-                    return HTTPListener.Response(
-                        status: 200, reason: "OK",
-                        headers: Self.headers(
-                            for: served, contentType: Self.contentType(of: served.url)),
-                        body: .file(stream))
+                    guard
+                        let response = original(
+                            served, request: request, context: context, timing: &timing)
+                    else { continue }
+                    return response
                 }
 
                 do {
@@ -321,13 +366,47 @@ struct PictureEndpoint {
                     // takes. The decode is ~109 ms median, measured, and it is
                     // spent inside the gap between pictures rather than on a
                     // blank frame.
-                    let rendered = try PhotoRenderer.render(
-                        contentsOf: served.url, fitting: box.width, by: box.height, as: format)
+                    // **Its turn on the resizer, then the resize**, timed apart:
+                    // a long `resize wait` is a busy queue, a long `render` a
+                    // slow picture.
+                    //
+                    // **Bounded, and the original goes when the bound runs
+                    // out.** Syd, 2026-09-16: "just serve the original image if
+                    // the resizer stalls." A stalled decoder says nothing about
+                    // the photograph, so it is not charged a render failure.
+                    let resize = self.resize
+                    let resizer = self.resizer
+                    let ticket = Resizer.Ticket()
+                    let outcome: (result: PhotoRenderer.Rendered, started: ContinuousClock.Instant)
+                    do {
+                        outcome = try await Deadline.run(within: resizeBudget) {
+                            try await resizer.run(ticket) {
+                                try resize(served.url, box.width, box.height, format)
+                            }
+                        }
+                    } catch is Deadline.Expired {
+                        ticket.abandon()
+                        timing.lap("resize gave up")
+                        let line = Self.resizeGaveUp(
+                            name: served.card.spokenName, card: served.card.id,
+                            deal: served.card.dealSeq, after: resizeBudget)
+                        Console.event(line)
+                        Log.deck.notice("\(line, privacy: .public)")
+                        guard
+                            let response = original(
+                                served, request: request, context: context, timing: &timing)
+                        else { continue }
+                        return response
+                    }
+                    let rendered = outcome.result
+                    timing.lap("resize wait", now: outcome.started)
+                    timing.lap("render")
 
                     var headers = Self.headers(
                         for: served, contentType: rendered.format.mimeType)
                     headers["X-PGR-Pixels"] = "\(rendered.width)x\(rendered.height)"
                     try? context.deck.markDelivered(photoID: served.card.id)
+                    timing.lap("delivered")
                     // **A deal follows a picture that reached somebody**, not a
                     // request that arrived. Rung at the top of this loop it
                     // fired once per card *taken*, so a request walking past
@@ -337,16 +416,19 @@ struct PictureEndpoint {
                     // endpoint's existing notion of a 200 in hand, so this
                     // belongs beside it and nowhere else.
                     queueRanShort()
+                    timing.lap("top up")
                     report(
                         request, status: 200, detail: served.card.spokenName, source: served.source,
                         card: served.card, bytes: Int64(rendered.bytes.count),
                         cacheBytes: store.totals.byteCount,
-                        queued: try? context.cache.queue.size())
+                        queued: try? context.cache.queue.size(), timing: timing)
                     return HTTPListener.Response(
                         status: 200, reason: "OK", headers: headers,
                         body: .data(rendered.bytes))
                 } catch {
+                    timing.lap("render")
                     let failures = (try? context.deck.recordRenderFailure(photoID: served.card.id)) ?? 0
+                    timing.lap("render failure")
                     // Visible on the console as well as in the log, because a
                     // photograph leaving the library for good is a state change
                     // somebody watching should see happen.
@@ -377,10 +459,10 @@ struct PictureEndpoint {
             // itself, and a client that asks again in a few seconds will find
             // whatever landed in between.
             deckCameUpEmpty()
-            report(request, status: 204, detail: "no photos available")
+            report(request, status: 204, detail: "no photos available", timing: timing)
             return .noContent()
         } catch {
-            report(request, status: 500, detail: "could not serve a picture")
+            report(request, status: 500, detail: "could not serve a picture", timing: timing)
             Log.deck.error(kind: "serve.failed", "serving failed: \(error)")
             return .text("could not serve a picture\n", status: 500, reason: "Internal Server Error")
         }
@@ -394,6 +476,34 @@ struct PictureEndpoint {
     /// its look and this open. Skipped the same way; the record is corrected by
     /// the next request that draws the card, or by the launch walk, whichever
     /// comes first.
+    /// Streams the original of `served` and reports it: the answer to a
+    /// request that asked for no size, and to one whose resize stalled. Nil
+    /// when the file vanished between the index and the open, so the caller
+    /// moves on to the next card.
+    private func original(
+        _ served: PhotoCache.ServedPhoto, request: HTTPListener.Request,
+        context: (cache: PhotoCache, deck: Deck), timing: inout StageTimes
+    ) -> HTTPListener.Response? {
+        guard let stream = HTTPListener.Response.StreamedFile(url: served.url) else {
+            vanished(served, context: context)
+            return nil
+        }
+        timing.lap("original")
+        try? context.deck.markDelivered(photoID: served.card.id)
+        timing.lap("delivered")
+        // **A deal follows a picture that reached somebody**, not a request
+        // that arrived; see the resized branch in `next`.
+        queueRanShort()
+        timing.lap("top up")
+        report(
+            request, status: 200, detail: served.card.spokenName, source: served.source,
+            card: served.card, bytes: stream.byteCount, timing: timing)
+        return HTTPListener.Response(
+            status: 200, reason: "OK",
+            headers: Self.headers(for: served, contentType: Self.contentType(of: served.url)),
+            body: .file(stream))
+    }
+
     private func vanished(_ served: PhotoCache.ServedPhoto, context: (cache: PhotoCache, deck: Deck)) {
         Console.event(
             "\(served.card.spokenName) vanished between the index and the open; skipping it")
