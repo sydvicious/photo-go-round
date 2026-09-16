@@ -6,7 +6,7 @@ Things to look into, deferred out of the phase list. Each one earns its own plan
 
 Some savers show one in System Settings. `ScreenSaverView` provides it through `hasConfigureSheet` and `configureSheet`, both of which `PGRScreenSaverView` currently answers `false` and `nil`.
 
-- **The blocker to establish first is where a setting would be written.** The Phase 1 spike found the saver cannot even *read* the agent's preference domain from inside `legacyScreenSaver`'s sandbox — `UserDefaults(suiteName:)` returns a suite that opens cleanly and is empty. It certainly cannot write one.
+- **The blocker to establish first is where a setting would be written.** The Phase 1 spike found the saver cannot even *read* the agent's preference domain from inside `legacyScreenSaver`'s sandbox — `UserDefaults(suiteName:)` returns a suite that opens cleanly and is empty. It certainly cannot write one. *Answered 2026-09-16: through the agent, over HTTP. See* Settings inside the wallpaper extension and the screensaver bundle *below.*
 - **The available route is the agent.** Every other client changes things over HTTP; a settings endpoint does not exist yet. See `PLAN.md`, *The database is private to the service*.
 - **Whether the sheet is presented at all is untested.** `hasConfigureSheet` is queried — it appears in the call sequence on `FB9835060` — so the button probably shows. Whether the sheet displays is unknown, and the preview instance being 0x0 is a reason to check rather than assume.
 - **What would go in it** is also open: dwell, fit, an upscale cap. All are `PLAN.md`'s *Beyond 0.1* today, and *Everything user-settable is a user default* is held back with them.
@@ -103,6 +103,22 @@ The agent should answer for its own configuration over HTTP, and its preference 
 - **It reverses a stated position and that should be recorded in `PLAN.md` when it happens.** *Preferences* there treats `defaults write` as a first-class interface — "two rules follow from `defaults write` being a first-class interface" — and that is what a black box takes away.
 - `pgr_ctl` keeps its direct access, as the rig rather than a client. Same exception it already holds for the database.
 - The screensaver's Options sheet is the first thing that needs this, and the reason it is parked above.
+
+## Settings inside the wallpaper extension and the screensaver bundle
+
+Syd, 2026-09-16: *"explore putting settings directly into both the wallpaper extension and the screensaver bundle."* Today settings change only in the app or through `pgr_ctl`. Nothing is designed.
+
+- **The wallpaper half is already Syd's named next stage.** 2026-09-15: "The next stage would be to put a sources panel and timing slider directly into the extension." `Wallpaper Plan.md`, *The real extension, inside the app*.
+- **The saver half is *An Options button for the screensaver* above**, and inherits everything open there.
+- **The two routes into System Settings are unlike each other.** The saver's is public: `hasConfigureSheet` and `configureSheet`, a sheet of our own. The wallpaper's is the private one the extension already uses: the pane draws whatever the extension answers to `WallpaperAgent`'s `provideSettingsViewModels`, and the extension can call back with `updateSettingsViewModels`, read from Phosphene and not yet called by us. Whether those view models can carry a slider or a list, rather than a section and its items, is unknown and the first thing to find out.
+- **The extension should have read-write to its own preferences.** Syd, 2026-09-16. Its own domain is `com.sydpolk.photogoround.wallpaper.{dev|prod}`, where the *Shuffle All* choice lives. Today it reads that domain through `temporary-exception.shared-preference.read-only`, and `Rotation.swift` says a slider "replaces the reading, not the writing". That line goes when this is done.
+- **The screensaver should have read-write to its preferences.** Syd, 2026-09-16. **The obstacle is that the saver has no entitlements of its own.** It runs inside `legacyScreenSaver`, under the host's sandbox, and the host names no exception for our domains; that is why the suite reads empty and the port is read from the `.plist` as a file. `Screensaver Plan.md`, *The question the entitlements do not answer*.
+  - **Decided, 2026-09-16: over HTTP to the agent.** Syd: "the saver can use http to the agent to read and write prefs." So the saver's half waits on *Settings endpoints* above.
+  - Open: where the agent keeps the saver's preferences — its own domain, or a saver domain of their own the way the wallpaper has one.
+  - Not taken: `ScreenSaverDefaults`, which is writable but lands in the host's container where the app and `pgr_ctl` would not see it; and an App Group suite, which needs the saver embedded in the app's bundle.
+- **Sources are the agent's either way.** They are in the database, not a preference domain, so a sources panel in either surface goes through `/v1/sources`.
+- **One design, or two.** Whether both surfaces share one settings model, or each keeps its own, is open. The saver's dwell and the wallpaper's *Shuffle All* interval are different settings today.
+- **What becomes of the app's Settings window** once a surface configures itself: whether it keeps the same controls. The app and the extension would both write the wallpaper domain, so the last write wins, and each has to notice the other's change.
 
 ## Design the wallpaper
 
