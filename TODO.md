@@ -65,8 +65,8 @@ Syd, 2026-09-14: *"we need a TODO in the app to setup a wallpaper bundle like th
 
 - **Already planned as `Wallpaper Plan.md` Phase 2, *Its own binary*, and not designed.** What is settled there: a per-user plist in `~/Library/LaunchAgents`, with the binary staying inside the app bundle, the same shape as the agent.
 - **"Like the screensaver bundle"** suggests the same pieces: an Xcode target, and a `Scripts/make-wallpaper-bundle.sh --install` beside `make-saver-bundle.sh` and `make-agent-bundle.sh`.
-- **The loop does not move.** `Wallpaper` is in `PhotoGoRoundDisplay` precisely so a second host is new code around it rather than a move; `AppDelegate` is the whole of the app's host today.
-- **Its settings already live where a separate process can read them.** The *Also set wallpapers* checkbox and the *Shuffle All* choice are in `com.sydpolk.photogoround.wallpaper.{dev|prod}`, not in the app's domain. The checkbox is to stay "until we have a standalone wallpaper binary" (`app/mac/FEATURES.md`, *Time between pictures*), so what the Wallpaper panel offers once this exists is open.
+- **The loop does not move.** `Wallpaper` is in `PhotoGoRoundDisplay` precisely so a second host is new code around it rather than a move; `AppDelegate` is the whole of the app's host today. *2026-09-16: the loop is removed, not moved. The wallpaper is the extension, `app/wallpaper-extension`, which runs without the app; this item is answered by it. `Wallpaper Plan.md`, *The app's loop, removed*.*
+- **Its settings already live where a separate process can read them.** The *Also set wallpapers* checkbox and the *Shuffle All* choice are in `com.sydpolk.photogoround.wallpaper.{dev|prod}`, not in the app's domain. The checkbox is to stay "until we have a standalone wallpaper binary" (`app/mac/FEATURES.md`, *Time between pictures*), so what the Wallpaper panel offers once this exists is open. *Answered 2026-09-16: the checkbox is gone, and the panel offers the *Shuffle All* row, which times the extension.*
 - **Two hosts must never run the loop at once.** If the app and the bundle both run it, each display is asked for twice, and two cards are spent where one is shown. Handing the loop over has to be designed, not left to chance.
 - **Open, from `Wallpaper Plan.md`:**
   - whether it is a bare executable or an `LSUIElement` bundle;
@@ -123,7 +123,7 @@ The agent should answer for its own configuration over HTTP, and its preference 
 - **Who owns the loop.** Phase 7 says "scheduled by the server". The agent is unsandboxed and already holds the bytes, so it can call `NSWorkspace` itself — but that makes the agent a consumer of its own queue rather than purely a server, which is a shape change worth arguing rather than assuming. The alternative is a client like every other surface, which then hits the file-path problem above from the wrong side of the wire. **Answered 2026-09-10: a client.** Syd: "The agent's job is just to serve pictures." The file-path problem goes away because the client owns its files.
 - **Its rate is nothing like the screensaver's.** Hours rather than ten seconds, against a shared queue that a long screensaver session can roll the whole library through — `PLAN.md` already accepts that the wallpaper therefore sees a near-random sample rather than a slow walk, and that is worth confirming still reads as correct once it is running.
 - **Per-Space is a known hole**: the call sets the current Space on that screen only, and there is no public API to enumerate Spaces. The mitigation on record is re-applying on `activeSpaceDidChangeNotification`. *2026-09-10: re-applied at launch and on display and Space changes.*
-- **A pause control** is named in `PLAN.md` as the obvious way to stop us reasserting; where it lives — Settings panel, menu bar — is not decided. *2026-09-10: the app's* Also set wallpapers *checkbox is the first way to stop it; whether a separate pause is still wanted is open in `Wallpaper Plan.md`.*
+- **A pause control** is named in `PLAN.md` as the obvious way to stop us reasserting; where it lives — Settings panel, menu bar — is not decided. *2026-09-10: the app's* Also set wallpapers *checkbox is the first way to stop it; whether a separate pause is still wanted is open in `Wallpaper Plan.md`.* *2026-09-16: the checkbox is gone with the app's loop; choosing another wallpaper in System Settings is how the extension stops.*
 
 ## What System Settings › Wallpaper needs from us
 
@@ -134,7 +134,7 @@ Syd, 2026-09-10: *"Add a TODO.md item to see what we need to do in System Settin
 - **The fill colour.** The wallpaper uses the colour chosen here: where it lives in the pane on 27, and whether it is per display or per Space. See `Wallpaper Plan.md`, *The fit*.
 - **Showing on all Spaces.** Whether the pane has such an option on 27, and whether it reaches a file set through `setDesktopImageURL`. If so it could do more for the per-Space hole than re-applying on every Space change.
 - **Dynamic and Aerial wallpapers.** What happens when one is selected and we set a still over it, and whether it comes back on its own — a candidate for the reversions `PLAN.md`'s *Wallpaper is asserted continuously* describes.
-- **What the user should be told**, if anything, when *Also set wallpapers* is ticked.
+- ~~**What the user should be told**, if anything, when *Also set wallpapers* is ticked.~~ *Gone with the checkbox, 2026-09-16.*
 - Whatever this turns up goes into `Wallpaper Plan.md` before its Phase 1 is built, since several of these could change what Phase 1 does.
 
 ## Removing every source leaves the window showing a photograph

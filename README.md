@@ -137,3 +137,9 @@ curl -sS -X PATCH "http://localhost:9000/v1/sources/<uuid>" -H 'Content-Type: ap
   agent's man page: options, environment, preferences, files.
 - [`Documentation/pgr_ctl.md`](Documentation/pgr_ctl.md) — the command-line
   tool's man page: subcommands, options, exit status.
+- [`Documentation/Installing.md`](Documentation/Installing.md) — installing the
+  agent, the wallpaper extension and the screensaver on a Mac from Xcode, in
+  order, and removing them.
+- [`Documentation/Wallpaper Extension.md`](Documentation/Wallpaper%20Extension.md) —
+  checking the wallpaper extension once it is installed: registration, the
+  gates, the logs.

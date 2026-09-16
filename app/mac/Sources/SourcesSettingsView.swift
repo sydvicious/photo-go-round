@@ -17,9 +17,6 @@ struct SourcesSettingsView: View {
     static let windowID = "sources-settings"
 
     @Environment(\.openWindow) private var openWindow
-    /// The app's wallpaper, which the checkbox under the panels turns on and
-    /// off. Handed in by `PhotoGoRoundApp` from `AppDelegate`.
-    @Environment(Wallpaper.self) private var wallpaper
 
     @State private var model = SourcesModel()
     /// The row whose options are open. A value rather than a flag, so the sheet
@@ -38,10 +35,13 @@ struct SourcesSettingsView: View {
     /// window appears, since `defaults write` and another window can change
     /// either, and neither domain rings anything this view could hear.
     @State private var screensaverInterval = ScreensaverPreferences.defaultInterval
-    @State private var wallpaperInterval = Wallpaper.defaultInterval
+    @State private var wallpaperInterval = WallpaperPreferences.defaultInterval
 
     /// The screensaver's domain, which this window writes and the saver reads.
     private static let screensaver = ScreensaverPreferences(deployment: .development)
+    /// The wallpaper's, which this window writes and the wallpaper extension
+    /// reads at each change of picture.
+    private static let wallpaper = WallpaperPreferences(deployment: .development)
 
     var body: some View {
         // Syd, 2026-09-14: "There should be THREE panels. One for the sources;
@@ -78,7 +78,7 @@ struct SourcesSettingsView: View {
         .onAppear {
             model.beginPolling()
             screensaverInterval = Self.screensaver.interval
-            wallpaperInterval = wallpaper.choice
+            wallpaperInterval = Self.wallpaper.interval
         }
         .onDisappear { model.endPolling() }
         // A change made in this app's own picker, rather than one the timer
@@ -129,47 +129,23 @@ struct SourcesSettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The checkbox, and the pop-up underneath it. Syd: "Wallpaper needs its
-    /// own panel with the enable checkbox, and the slider underneath it."
+    /// The wallpaper extension's interval. It was an *Also set wallpapers*
+    /// checkbox with this row greyed beneath it, from 2026-09-10 until the
+    /// app's own loop went on 2026-09-16; the extension is turned on by being
+    /// chosen in System Settings › Wallpaper, so the only setting is the time.
     private var wallpaperPanel: some View {
         Panel("Wallpaper") {
-            VStack(spacing: 0) {
-                wallpaperCheckbox
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                // A drawn rule, for the reason the folder list gives.
-                Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
-                    .frame(height: 1)
-                    .padding(.horizontal, 10)
-                ShuffleAllRow(
-                    selection: Binding(
-                        get: { wallpaperInterval },
-                        set: { choice in
-                            Log.sources.notice(
-                                "panel: wallpaper shuffle set to \(choice.rawValue, privacy: .public)")
-                            wallpaperInterval = choice
-                            wallpaper.setChoice(choice)
-                        }))
-                // A dependent control, greyed while what it depends on is off.
-                .disabled(!wallpaper.isEnabled)
-            }
+            ShuffleAllRow(
+                selection: Binding(
+                    get: { wallpaperInterval },
+                    set: { choice in
+                        Log.sources.notice(
+                            "panel: wallpaper shuffle set to \(choice.rawValue, privacy: .public)")
+                        wallpaperInterval = choice
+                        Self.wallpaper.set(choice)
+                    }))
         }
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    /// Syd, 2026-09-10: "a checkbox which says 'Also set wallpapers'."
-    ///
-    /// **Off until ticked**, and unticking leaves the desktop as it is. It
-    /// stays "until we have a standalone wallpaper binary" — Syd, 2026-09-14.
-    private var wallpaperCheckbox: some View {
-        Toggle(
-            "Also set wallpapers",
-            isOn: Binding(
-                get: { wallpaper.isEnabled },
-                set: { wallpaper.setEnabled($0) }))
-        .toggleStyle(.checkbox)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - The panels

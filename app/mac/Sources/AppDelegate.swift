@@ -2,15 +2,15 @@ import AppKit
 import OSLog
 import PhotoGoRoundDisplay
 
-/// The one thing SwiftUI's scenes give no moment for: starting the wallpaper
-/// once the application has finished launching, and keeping it for as long as
-/// the app runs.
+/// The moments SwiftUI's scenes give none of: before the first window, and
+/// once the application has finished launching.
 ///
-/// **The app hosts the wallpaper; it is not the wallpaper.** Everything it does
-/// is `Wallpaper`, in the display library, so a binary of its own can host the
-/// same loop later. See `Wallpaper Plan.md`, *Where the loop runs*.
+/// **The app is not the wallpaper.** It hosted a wallpaper loop of its own from
+/// 2026-09-10 until 2026-09-16, started here; the wallpaper is the extension
+/// now, chosen in System Settings, and the app only writes its interval. Syd:
+/// "remove the whole in-app loop; we might need it later for sandboxed app, but
+/// for now it is gone."
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let wallpaper = Wallpaper.desktop()
 
     /// **No tabs.** Syd, 2026-09-14: "we are just removing tab support in the
     /// window, and replacing it with this window settings item." Turning
@@ -65,8 +65,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         watchTheViewMenu()
-        wallpaper.watchTheSystem()
-        // Runs only if *Also set wallpapers* is ticked.
-        wallpaper.resume()
     }
 }

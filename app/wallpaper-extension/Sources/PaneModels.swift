@@ -148,8 +148,19 @@ enum PaneModels {
     static let itemID = "photo-go-round"
 
     static func make(thumbnail: URL) -> SettingsViewModels {
+        // **The provider id must be the bundle identifier.** Measured 2026-09-16,
+        // by trying otherwise: Apple's extensions declare choices under ids like
+        // `com.apple.wallpaper.choice.image`, distinct from their bundle ids, and
+        // the hypothesis was that a wallpaper-specific id would keep this item
+        // out of the Screen Saver list. It did not — and it broke the desktop.
+        // `WallpaperAgent` logged "Could not find translator for:
+        // com.sydpolk.photogoround.choice.wallpaper; eagerly assuming it's an
+        // extension with the same identifier", then "no provider found", and the
+        // desktop fell back to Golden Gate. Apple's ids work because a built-in
+        // translator maps them; a third party's provider is looked up as an
+        // extension by that exact identifier, so it has to be ours.
         let provider = ProviderID(
-            rawValue: Bundle.main.bundleIdentifier ?? "com.sydpolk.photogoround.wallpaper-extension")
+            rawValue: Bundle.main.bundleIdentifier ?? "com.sydpolk.photogoround.wallpaper.extension")
         let identity = ChoiceIdentity(
             id: itemID,
             descriptor: .init(provider: provider, identifier: itemID, files: [], configuration: Data(itemID.utf8)))
@@ -197,7 +208,16 @@ enum PaneModels {
         //
         // *Until then both were answered, copying Phosphene, on the reasoning
         // that the screen saver picker is where the idle wallpaper is chosen.*
-        return SettingsViewModels(desktop: model, screenSaver: nil)
+        // **An empty screen-saver model, not nil.** Measured 2026-09-16: with
+        // `nil` here, the Screen Saver pane kept showing a copy of the item as it
+        // was *before* the rename, through restarts of WallpaperAgent, quits of
+        // System Settings and rebuilds — and selecting it recorded our provider
+        // with the old configuration, `photo-go-round`. So macOS keeps the last
+        // non-nil screen-saver model per extension and reads `nil` as "no
+        // update", not "none". A model with no groups is the way to say none.
+        let none = SettingsViewModel(
+            groups: [], refreshPolicy: EnumCase(name: "default"), isModificationDisabled: false)
+        return SettingsViewModels(desktop: model, screenSaver: none)
     }
 
     /// The view models as `WallpaperSettingsViewModelsXPC`, or nil with the

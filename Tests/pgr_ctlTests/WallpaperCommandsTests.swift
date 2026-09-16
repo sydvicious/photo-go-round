@@ -17,21 +17,20 @@ struct WallpaperCommandsTests {
         deinit { discardScratchSuite(name) }
     }
 
-    @Test("An unset preference reports what the wallpaper would use")
+    @Test("An unset interval reports what the wallpaper would use")
     func unsetReportsTheDefault() {
         let scratch = Scratch()
-        #expect(WallpaperCommands.value(of: .enabled, in: scratch.defaults) == "false")
-        #expect(WallpaperCommands.value(of: .interval, in: scratch.defaults) == Wallpaper.defaultInterval.rawValue)
-        #expect(WallpaperCommands.value(of: .displays, in: scratch.defaults) == "none recorded")
+        #expect(
+            WallpaperCommands.value(of: .interval, in: scratch.defaults)
+                == WallpaperPreferences.defaultInterval.rawValue)
     }
 
-    @Test("What was set is what is read back")
+    @Test("What was set is what is read back, by this and by the wallpaper")
     func setThenGet() throws {
         let scratch = Scratch()
         try WallpaperCommands.set(key: "interval", value: "thirtyMinutes", domain: scratch.name)
-        try WallpaperCommands.set(key: "enabled", value: "true", domain: scratch.name)
         #expect(WallpaperCommands.value(of: .interval, in: scratch.defaults) == "thirtyMinutes")
-        #expect(WallpaperCommands.value(of: .enabled, in: scratch.defaults) == "true")
+        #expect(WallpaperPreferences(domain: scratch.name).interval == .thirtyMinutes)
     }
 
     /// The app writes the tag, not seconds, so anything else would be read back
@@ -45,29 +44,24 @@ struct WallpaperCommandsTests {
         #expect(scratch.defaults.object(forKey: "interval") == nil)
     }
 
-    @Test("Unknown keys are refused, and the wallpaper's own record cannot be written")
+    /// `enabled` and `displays` were keys until the app's own loop went,
+    /// 2026-09-16; they are refused like any other unknown key.
+    @Test("Unknown keys are refused, reading and writing")
     func refusals() {
         let scratch = Scratch()
         #expect(throws: (any Error).self) {
             try WallpaperCommands.set(key: "queueSize", value: "20", domain: scratch.name)
         }
         #expect(throws: (any Error).self) {
-            try WallpaperCommands.set(key: "displays", value: "{}", domain: scratch.name)
+            try WallpaperCommands.set(key: "enabled", value: "true", domain: scratch.name)
         }
-        #expect(throws: (any Error).self) { try WallpaperCommands.get(key: "queueSize", domain: scratch.name) }
+        #expect(throws: (any Error).self) { try WallpaperCommands.get(key: "displays", domain: scratch.name) }
     }
 
-    /// The domain the app writes and every wallpaper reads, spelled once.
+    /// The domain the app writes and the extension reads, spelled once.
     @Test("The domain follows the deployment")
     func domainFollowsDeployment() {
-        #expect(WallpaperHome(deployment: .development).domain == "com.sydpolk.photogoround.wallpaper.dev")
-        #expect(WallpaperHome(deployment: .production).domain == "com.sydpolk.photogoround.wallpaper.prod")
-    }
-
-    @Test("A display the wallpaper recorded is listed")
-    func displaysAreListed() {
-        let scratch = Scratch()
-        scratch.defaults.set(["37D8832A": ["changedAt": Date(), "file": "/tmp/a.heic"]], forKey: "displays")
-        #expect(WallpaperCommands.value(of: .displays, in: scratch.defaults) == "37D8832A")
+        #expect(WallpaperPreferences(deployment: .development).domain == "com.sydpolk.photogoround.wallpaper.dev")
+        #expect(WallpaperPreferences(deployment: .production).domain == "com.sydpolk.photogoround.wallpaper.prod")
     }
 }

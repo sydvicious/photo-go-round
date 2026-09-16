@@ -81,6 +81,13 @@ for attempt in $(seq 1 30); do
     if registered_paths | grep -qF "$APPEX"; then
         echo "install-wallpaper-extension: registered $EXTENSION_ID"
         echo "  $APPEX"
+        # WallpaperAgent does not re-acquire the desktop from the new process
+        # on its own — measured 2026-09-16: the extension was killed above, the
+        # desktop went dark grey, and it stayed that way until Syd chose
+        # another wallpaper and chose this one again. Restarted, the agent
+        # comes straight back under launchd and re-acquires every surface from
+        # the store, which is what `uninstall.sh` relies on too.
+        killall WallpaperAgent 2>/dev/null && echo "install-wallpaper-extension: restarted WallpaperAgent" || true
         # A wallpaper with no library behind it fails the way a saver does, so
         # the same check runs here. Syd, 2026-09-15, of the saver's install.
         "$(dirname "${BASH_SOURCE[0]}")/ensure-photos-access.sh"

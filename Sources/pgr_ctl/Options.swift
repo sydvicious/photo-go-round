@@ -426,8 +426,7 @@ struct Options {
           wallpaper get [<key>]
           wallpaper set <key> <value>
                                     The wallpaper's own preferences, in its own
-                                    domain: enabled, interval, and the displays
-                                    it is keeping track of
+                                    domain: interval
           notify <topic>            Ring a doorbell by hand: prefs, deck,
                                     sources, cache
           log [-f] [--last <time>]  What every process has been logging

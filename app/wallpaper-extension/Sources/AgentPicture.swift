@@ -53,7 +53,7 @@ enum AgentPicture {
         let card: String?
     }
 
-    /// The display's UUID, spelled as the app's wallpaper and the saver spell it,
+    /// The display's UUID, spelled as the saver spells it,
     /// so the agent counts one consumer per display rather than per surface.
     static func displayUUID(_ display: UInt32?) -> String? {
         guard let display, let uuid = CGDisplayCreateUUIDFromDisplayID(display)?.takeRetainedValue() else {

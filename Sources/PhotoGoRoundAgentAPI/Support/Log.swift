@@ -30,7 +30,6 @@ public enum Log {
     public static let sources = Logger(subsystem: subsystem, category: "sources")
     public static let photos = Logger(subsystem: subsystem, category: "photos")
     public static let prefs = Logger(subsystem: subsystem, category: "prefs")
-    public static let wallpaper = Logger(subsystem: subsystem, category: "wallpaper")
     public static let saver = Logger(subsystem: subsystem, category: "saver")
     public static let widget = Logger(subsystem: subsystem, category: "widget")
 

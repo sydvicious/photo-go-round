@@ -306,17 +306,14 @@ up immediately. For a list of valid keys, see `get`.
 Reads the wallpaper's own preferences, which live in
 `com.sydpolk.photogoround.wallpaper.dev` — or `.prod` with `--prod` — rather than
 in the domain `get` reads. With no key it lists every setting; with a key it
-prints that value alone, for scripts. An unset `enabled` or `interval` reports
-the value the wallpaper would use. The keys are `enabled`, `interval`, and
-`displays`.
+prints that value alone, for scripts. An unset `interval` reports the value the
+wallpaper would use. The only key is `interval`.
 
 `wallpaper set <key> <value>`
-Writes one of them. `enabled` takes `true` or `false`; `interval` takes a
-*Shuffle All* tag such as `thirtyMinutes` or `oneHour`, and anything else is
-refused with the list of valid tags. `displays` is the wallpaper's own record of
-what each display is showing and cannot be set here. The app's Settings window
-writes the same domain, and a running wallpaper picks the change up on its next
-look.
+Writes one of them. `interval` takes a *Shuffle All* tag such as
+`thirtyMinutes` or `oneHour`, and anything else is refused with the list of
+valid tags. The app's Settings window writes the same domain, and the wallpaper
+extension reads it again at each change of picture.
 
 `notify <topic>`
 Announces that something changed, without changing it, so that every process

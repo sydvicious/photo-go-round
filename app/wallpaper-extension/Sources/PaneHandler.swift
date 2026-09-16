@@ -608,7 +608,7 @@ enum Surfaces {
             }
         }
         ask()
-        entry.surface.rotation = Rotation.every(Rotation.clamped(Rotation.interval.duration), ask)
+        entry.surface.rotation = Rotation.run(ask)
         wallpaperLog(
             "the \(slot.name) on display \(display.map { String($0) } ?? "unknown") will ask again every \(Rotation.interval.rawValue)"
         )

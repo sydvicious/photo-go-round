@@ -13,8 +13,7 @@ import SwiftUI
 @main
 struct PhotoGoRoundApp: App {
     @Environment(\.openWindow) private var openWindow
-    /// Holds the wallpaper, which the Settings window's checkbox turns on and
-    /// off. See `AppDelegate`.
+    /// Turns window tabbing off and logs the View menu. See `AppDelegate`.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
@@ -71,7 +70,6 @@ struct PhotoGoRoundApp: App {
         // `.commands` above are the whole price.
         Window("\(Bundle.main.displayName) Settings", id: SourcesSettingsView.windowID) {
             SourcesSettingsView()
-                .environment(delegate.wallpaper)
         }
         // The content names a floor and the rest is the user's. A list of
         // sources has no natural length: somebody with forty should be able to

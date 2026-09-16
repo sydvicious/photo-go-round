@@ -71,10 +71,9 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - Leave a development agent alone if one is already serving on the same preference domain; two agents on one library is the failure this must not cause.
   - Say what happened when registration is refused. It is the one failure that leaves the window with nothing to show and no way for the user to fix it, which is why it is the one that names somewhere to write to: "Problem launching the agent. Contact support@sydpolk.com."
   - `Scripts/make-agent-bundle.sh` and `pgr_ctl register` stay the rig's way in; decide whether the script is subsumed by a copy phase.
-- *Also set wallpapers* — a checkbox that turns the wallpaper on. **Built 2026-09-10**, under the two panels in the Settings window, and in the Wallpaper panel since 2026-09-14. Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wallpapers'."
-  - While it is ticked, the app runs the wallpaper: a new picture on each display at the *Shuffle All* interval, a tag under `interval` in the wallpaper's own domain that defaults to one hour since 2026-09-14. It was `intervalSeconds`, in seconds: thirty minutes by default, and sixty seconds from 2026-09-10 to 2026-09-13. See *Time between pictures*. Unticking stops it and leaves the desktop as it is.
-  - **Off until ticked.** Claude's pick when building; what it defaults to is still open in `Wallpaper Plan.md`, which owns the design.
-  - `AppDelegate` hosts it; the loop itself is `Wallpaper`, in `PhotoGoRoundDisplay`, so a binary of its own can host it later.
+- *Also set wallpapers* — a checkbox that turned the app's own wallpaper loop on. **Built 2026-09-10, removed 2026-09-16.** Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wallpapers'." Then, once the wallpaper extension was working, "remove the whole in-app loop; we might need it later for sandboxed app, but for now it is gone."
+  - While it was ticked, the app ran the wallpaper: a new picture on each display at the *Shuffle All* interval. The loop was `Wallpaper`, in `PhotoGoRoundDisplay`, hosted by `AppDelegate`; it is in git at the commit before its removal.
+  - The wallpaper is now the extension, `app/wallpaper-extension`, turned on by being chosen in System Settings › Wallpaper. The app's Wallpaper panel keeps only the *Shuffle All* pop-up, which sets the extension's interval. See *Time between pictures*.
 - *The agent's dashboard, from the About box* — **built 2026-09-12.** Syd, 2026-09-12: "the reason I want it in the about box is that gives me the port number. it should open the dashboard in the system browser, not a webview in the app."
   - The link's text is the dashboard's URL, port and all. Clicking it opens the default browser; `Link` hands the URL to the system, and there is no web view in the app.
   - Re-read every two seconds while the box is open, because the agent takes a new port every launch.
@@ -82,7 +81,7 @@ Building the first of them forced a decision that is **not** app-specific: the d
   - The dashboard itself is the agent's: `photogoroundd(1)`, *SERVICE → Dashboard*.
 - *Time between pictures* — how long each picture stays up, chosen in Settings: one pop-up for the screensaver, one for the wallpaper. **Done 2026-09-14.** Syd: "Please mark this feature as complete." The picture window's picker was built later the same day, as separate work. The tests pass. Syd, the same day, once it was running: "app is running and is looking great." And after using it: "I have changed the screensaver settings a couple of times, and created a new app window. things look great." **The log confirms the window's copy:** `panel: screensaver shuffle set to oneMinute` at 09:11:20, then a new window's `app: starting, each picture up for 60 seconds` at 09:11:29. **The screensaver was exercised once it was installed with `--install`:** see *Behaviour* in *Time between pictures* below.
   - Settings has three panels: Sources, with subpanels for Apple Photos, Google Photos (eventually), and files; Screensaver; and Wallpaper.
-  - Screensaver and Wallpaper each hold a "Shuffle All" pop-up. Wallpaper also holds the *Also set wallpapers* checkbox, above the pop-up, until the wallpaper is a binary of its own.
+  - Screensaver and Wallpaper each hold a "Shuffle All" pop-up. Wallpaper held the *Also set wallpapers* checkbox above its pop-up until 2026-09-16; the wallpaper's pop-up now sets the wallpaper extension's interval.
   - The screensaver defaults to every ten seconds and the wallpaper to every hour.
   - A new picture window takes the screensaver's interval when it is created and keeps its own copy, even if the screensaver's interval changes later.
   - The picture window's picker was built after the rest, as separate work. See *The window's picker*.
@@ -266,7 +265,7 @@ Added with the Settings panel, because the model is where the panel's behaviour 
 
 ## What the panel could get without the agent
 
-**Captured, not acted on. The app does not write the agent's preferences, and is not to start.** Everything it changes in the library still goes over HTTP; the one agent preference it reads is `servicePort`, which is how it finds the agent at all. Its own settings are another matter, and live in domains the agent does not read: the *Also set wallpapers* checkbox in the wallpaper's (`Wallpaper Plan.md`), and `advanceIntervalSeconds` in the app's (*Advancing costs a card*).
+**Captured, not acted on. The app does not write the agent's preferences, and is not to start.** Everything it changes in the library still goes over HTTP; the one agent preference it reads is `servicePort`, which is how it finds the agent at all. Its own settings are another matter, and live in domains the agent does not read: the wallpaper's *Shuffle All* interval in the wallpaper's (`Wallpaper Plan.md`), and `advanceIntervalSeconds` in the app's (*Advancing costs a card*).
 
 **That one preference is a single point of confusion, and it bit on 2026-08-24.** The port is published by whichever agent started most recently, and the app follows it without asking whose it is. A second agent — started for a scratch run with `--container` and `--cache-root`, which isolate storage but *not* the preference domain — published over the running one, and the app began serving from an empty scratch library: real photographs, but a deck starting at ordinal 1 and every request a cold miss. When that scratch agent exited, the published port pointed at nothing and the window said "No agent" while a perfectly healthy agent was listening on the port it used to own. Neither state is distinguishable from a real fault by looking at the app. This is written down because it matters when the next source kind arrives, and because it is the sort of thing that gets rediscovered expensively.
 
@@ -350,7 +349,7 @@ If both were sandboxed, the source list would carry bookmark data rather than pa
 - **Three panels:** "One for the sources; one for screensaver-specific settings; one for wallpaper-specific settings."
 - **Sources:** "One sources panel, with subpanels for apple photos, google photos (eventually), and one for files."
 - **Screensaver:** the "Shuffle All" row.
-- **Wallpaper:** the *Also set wallpapers* checkbox, with the "Shuffle All" row underneath it. The checkbox stays "until we have a standalone wallpaper binary". The row is disabled while the checkbox is unticked.
+- **Wallpaper:** the "Shuffle All" row, which sets the wallpaper extension's interval. It had the *Also set wallpapers* checkbox above it, with the row disabled while the checkbox was unticked, until the app's own loop went on 2026-09-16.
 
 ### The control
 
