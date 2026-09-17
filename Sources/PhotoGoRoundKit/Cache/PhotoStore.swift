@@ -1,5 +1,6 @@
 import Foundation
 import PhotoGoRoundAgentAPI
+import Synchronization
 
 /// The bytes on disk, and the only record of them.
 ///
@@ -41,6 +42,8 @@ public final class PhotoStore: @unchecked Sendable {
 
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
+    /// Whether an eviction is running in this process. See `claimEviction()`.
+    private let evicting = Mutex(false)
     /// Which source each photograph belongs to, so a key can be turned into a
     /// path without asking the database.
     private var sourceOfPhoto: [String: String] = [:]
@@ -127,6 +130,9 @@ public final class PhotoStore: @unchecked Sendable {
         for sourceDirectory in (try? manager.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
         {
+            // The resize cache is not a source, and its files are accounted for
+            // by their rows rather than by this walk.
+            guard sourceDirectory.lastPathComponent != ResizedCopies.directoryName else { continue }
             // Files kept from this one source, so a directory left holding
             // nothing can be recognised below.
             var keptHere = 0
@@ -353,6 +359,27 @@ public final class PhotoStore: @unchecked Sendable {
     }
 
     /// One source's whole directory, which is why the layout has that level.
+    /// **The one place a deleted photograph's bytes go**: its original, and its
+    /// resized copies. A photograph found absent, one a refresh no longer finds,
+    /// and a removed source all end here, so a copy can never outlive a
+    /// photograph that was actually deleted. Syd, 2026-09-16: "delete them
+    /// straight away", and "only if they are actually deleted. if the source is
+    /// offline, don't" — which is why nothing about an offline source calls it.
+    @discardableResult
+    public func discard(_ removal: PhotoPool.Removal) -> Int64 {
+        var freed: Int64 = 0
+        for uuid in removal.orphaned { freed += remove(photoUUID: uuid) }
+        freed += ResizedCopies.removeFiles(removal.orphanedCopies, root: root)
+        return freed
+    }
+
+    /// A removed source's originals, and its photographs' resized copies,
+    /// whose files the caller read before the rows went.
+    @discardableResult
+    public func removeSource(_ sourceUUID: String, copies: [String]) -> Int64 {
+        removeSource(sourceUUID) + ResizedCopies.removeFiles(copies, root: root)
+    }
+
     @discardableResult
     public func removeSource(_ sourceUUID: String) -> Int64 {
         lock.lock()
@@ -383,87 +410,93 @@ public final class PhotoStore: @unchecked Sendable {
     public struct Eviction: Sendable, Equatable {
         public let evicted: Int
         public let bytesFreed: Int64
-        /// Photographs that went, so the caller can clear their `cached_at`.
-        /// One file per photograph, so this is simply what was evicted.
         public let releasedOriginals: Set<String>
+        /// The files of the resized copies whose files were deleted. Their rows
+        /// are the caller's to delete.
+        public let evictedCopies: [String]
 
-        init(evicted: Int, bytesFreed: Int64, releasedOriginals: Set<String> = []) {
+        init(
+            evicted: Int, bytesFreed: Int64, releasedOriginals: Set<String> = [],
+            evictedCopies: [String] = []
+        ) {
             self.evicted = evicted
             self.bytesFreed = bytesFreed
             self.releasedOriginals = releasedOriginals
+            self.evictedCopies = evictedCopies
         }
     }
 
-    /// Evicts in the order the caller gives, until the ceiling is met.
+    /// Claims the one eviction this process runs at a time. False when another
+    /// holds it; `endEviction()` gives it back.
     ///
-    /// **Least-recently-viewed first, and the last photo standing is exempt.**
-    /// `order` is photographs oldest-first by
-    /// `COALESCE(last_shown_at, cached_at, added_at)`, which only the database
-    /// can answer. `Entry` carried a `createdAt` — the file's modification date
-    /// — until 2026-09-06; nothing ever read it, because a write time says
-    /// nothing about when anybody looked at the photograph.
+    /// **Skipped rather than waited for.** Eviction follows every file written,
+    /// and fetches run several at a time beside the resizer, so two can finish
+    /// together. Side by side, each would count what the other is already
+    /// taking and take it again. Waiting would hold a thread for the length of
+    /// somebody else's pass; skipping leaves the cache over its ceiling until
+    /// the next write, which Syd accepted on 2026-09-16: "you might temporarily
+    /// exceed the space, but that's fine".
+    func claimEviction() -> Bool {
+        evicting.withLock { running in
+            defer { running = true }
+            return !running
+        }
+    }
+
+    func endEviction() {
+        evicting.withLock { $0 = false }
+    }
+
+    /// One file eviction may take.
+    public enum EvictionCandidate: Sendable, Equatable {
+        /// An original, by its photograph's UUID.
+        case original(String)
+        /// A resized copy, by its file name, with its size from its row.
+        case copy(file: String, bytes: Int64)
+    }
+
+    /// Takes files in `order` until the originals held and `copyBytes` together
+    /// are under the ceiling.
     ///
-    /// A photograph that has never been shown counts as of the moment it
-    /// arrived, so it is the *newest* thing in the cache and the last to go. It
-    /// moves up the queue on its own as everything around it is shown; a
-    /// download nobody ever picks is eventually evicted on the same rule, with
-    /// no special case for it.
+    /// `order` is oldest file first, originals and copies mixed —
+    /// `PhotoCache.evictionOrder`. An original the order does not name has no
+    /// row claiming it, so nothing will miss it: it goes before anything named.
     ///
-    /// **The cache is never emptied.** A cache holding nothing meets any
-    /// ceiling perfectly and makes the product do the one thing it must never
-    /// do, which is show a blank frame. So eviction stops at one entry and the
-    /// ceiling is missed rather than the frame — a single file larger than the
-    /// whole budget is simply held. It also makes a very small cache a usable
-    /// setting instead of a way to switch the product off.
-    ///
-    /// **What it kept is released by the ordinary order, with no rule for it.**
-    /// A cache down to one entry has held that entry while it was the only
-    /// thing servable, so it has been shown, and it carries a real
-    /// `last_shown_at`. Anything arriving afterwards has never been shown and
-    /// counts as of the moment it arrived — newer by construction. So the
-    /// survivor is always first out the next time anything else is cached, and
-    /// a budget that had room for one picture has room for many again without
-    /// anybody deciding to let go of it.
-    ///
-    /// **This is not the `protecting:` set coming back.** That held back every
-    /// photograph the deck was carrying, which made the ceiling unreachable in
-    /// the ordinary case: set `byteCeiling` low, or let the volume fill from
-    /// outside, and we sat over the limit holding entries we were forbidden to
-    /// touch. It was also unnecessary — the endpoint opens the file before it
-    /// writes any header, so unlinking a file mid-serve does not disturb the
-    /// transfer. This is exactly one photograph, and only ever the last one, so
-    /// the ceiling is met in every case where meeting it is possible at all.
-    ///
+    /// **The last original is never taken**, so there is always something to
+    /// show; copies carry no such protection, since a copy is never the only
+    /// way to show a photograph.
     @discardableResult
-    public func evictIfNeeded(inOrder order: [String]) -> Eviction {
+    public func evictIfNeeded(
+        inOrder order: [EvictionCandidate], copyBytes: Int64 = 0
+    ) -> Eviction {
         lock.lock()
-        var total = entries.values.reduce(Int64(0)) { $0 + $1.byteCount }
+        var total = entries.values.reduce(Int64(0)) { $0 + $1.byteCount } + copyBytes
         guard total > byteCeiling else {
             lock.unlock()
             return Eviction(evicted: 0, bytesFreed: 0)
         }
 
-        var rank: [String: Int] = [:]
-        for (index, uuid) in order.enumerated() { rank[uuid] = index }
+        var named = Set<String>()
+        for case .original(let uuid) in order { named.insert(uuid) }
+        let unranked = entries.keys.filter { !named.contains($0) }
+            .map { EvictionCandidate.original($0) }
 
-        // A photograph the caller did not rank has no row claiming it, so
-        // nothing will miss it: it goes first.
-        let queue = entries.sorted { left, right in
-            (rank[left.key] ?? -1) < (rank[right.key] ?? -1)
-        }
-
-        // Whatever survives is the tail of the queue, which is the most
-        // recently shown — `order` runs oldest-first.
         var surviving = entries.count
-
-        var going: [(String, Entry)] = []
-        for (uuid, entry) in queue {
+        var goingOriginals: [(String, Entry)] = []
+        var goingCopies: [(file: String, bytes: Int64)] = []
+        for candidate in unranked + order {
             guard total > byteCeiling else { break }
-            guard surviving > 1 else { break }
-            going.append((uuid, entry))
-            entries.removeValue(forKey: uuid)
-            surviving -= 1
-            total -= entry.byteCount
+            switch candidate {
+            case .original(let uuid):
+                guard surviving > 1, let entry = entries[uuid] else { continue }
+                goingOriginals.append((uuid, entry))
+                entries.removeValue(forKey: uuid)
+                surviving -= 1
+                total -= entry.byteCount
+            case .copy(let file, let bytes):
+                goingCopies.append((file, bytes))
+                total -= bytes
+            }
         }
         let remaining = total
         lock.unlock()
@@ -479,18 +512,26 @@ public final class PhotoStore: @unchecked Sendable {
         }
 
         var freed: Int64 = 0
-        for (_, entry) in going {
+        for (_, entry) in goingOriginals {
             try? FileManager.default.removeItem(at: entry.url)
             freed += entry.byteCount
         }
-        if !going.isEmpty {
+        let copyFiles = goingCopies.map(\.file)
+        ResizedCopies.removeFiles(copyFiles, root: root)
+        freed += goingCopies.reduce(0) { $0 + $1.bytes }
+        let evicted = goingOriginals.count + goingCopies.count
+        if evicted > 0 {
             Log.cache.info(
-                "evicted \(going.count, privacy: .public) cache entries, freeing \(freed, privacy: .public) bytes"
+                """
+                evicted \(goingOriginals.count, privacy: .public) originals and \
+                \(goingCopies.count, privacy: .public) resized copies, freeing \
+                \(freed, privacy: .public) bytes
+                """
             )
         }
         return Eviction(
-            evicted: going.count, bytesFreed: freed,
-            releasedOriginals: Set(going.lazy.map(\.0)))
+            evicted: evicted, bytesFreed: freed,
+            releasedOriginals: Set(goingOriginals.lazy.map(\.0)), evictedCopies: copyFiles)
     }
 
     // MARK: - What it holds

@@ -39,6 +39,18 @@ public struct PhotoCache {
     /// held. Nothing by default; the agent counts them for its dashboard.
     public var dealLookedUp: @Sendable (DealLookup) -> Void = { _ in }
 
+    /// Whether this launch has cleared resized-copy files that no row records.
+    /// The process's own by default; a test brings its own.
+    public var copySweep: ResizedCopies.Sweep = .launch
+
+    /// Told what an eviction took, when it took anything. The agent counts it
+    /// for the dashboard and says so on the console; see `evictAfterWriting()`.
+    public var evicted: @Sendable (EvictionResult) -> Void = { _ in }
+
+    /// Rows deleted per transaction when evicted copies are forgotten. "Long
+    /// locks in the database are death."
+    static let copyRowPage = 100
+
     /// Which library's bells this cache rings. Nil rings nothing, so a cache
     /// built in a test cannot tell every agent on the Mac that its deck moved.
     public var doorbells: DarwinNotification.Doorbells?
@@ -243,6 +255,12 @@ public struct PhotoCache {
         public let queued: Int
     }
 
+    /// What the cache occupies against its ceiling: originals and resized
+    /// copies, which share it.
+    public func bytesOnDisk() throws -> Int64 {
+        store.totals.byteCount + (try ResizedCopies.byteCount(in: database))
+    }
+
     public func status() throws -> Status {
         let materialized =
             try database.scalarInt(
@@ -256,7 +274,7 @@ public struct PhotoCache {
             residentCount: totals.entries,
             referencedCount: referenced,
             pendingCount: max(0, materialized - totals.entries),
-            bytesOnDisk: totals.byteCount,
+            bytesOnDisk: try bytesOnDisk(),
             byteCeiling: settings.byteCeiling,
             freeBytesOnVolume: freeBytesOnVolume(),
             queued: try queue.size()
@@ -457,6 +475,8 @@ public struct PhotoCache {
                 kind: nil, "photo \(card.id) was fetched and could not be kept: \(error)")
             return .failed("it was fetched and could not be kept: \(error)", card)
         }
+
+        evictAfterWriting()
 
         // **Nothing about the queue changes here**, including when the card
         // these bytes were fetched for is no longer on it. Usually it is, and
@@ -739,6 +759,9 @@ public struct PhotoCache {
         /// so there is no longer a second thing this could be, and the caller
         /// renders from it on every request.
         public let url: URL
+        /// The resized copy for the box the request asked for, when the cache
+        /// keeps one. Nil for a request that asked for no box.
+        public var copy: ResizedCopies.Copy? = nil
     }
 
     /// **Serving takes the head card, waits for its bytes if they are not here
@@ -792,17 +815,21 @@ public struct PhotoCache {
     /// copy goes out, because a client that has stopped listening is shown
     /// nothing at all.
     ///
-    /// **The box the caller is about to draw into is no longer its business.**
-    /// `serve` took a `fitting:` size until 2026-09-06, so that a photograph
-    /// whose original had been evicted could still be answered from a rendering
-    /// held at exactly that size. Nothing holds renderings now, so what is here
-    /// is the original or nothing, and the caller resizes what it is handed.
+    /// **The box the caller is about to draw into is its business again since
+    /// 2026-09-16.** `serve` took a `fitting:` size until 2026-09-06, so that a
+    /// photograph whose original had been evicted could still be answered from
+    /// a rendering held at that size, and dropped it when renderings stopped
+    /// being kept. With resized copies kept again, `fitting:` is back for the
+    /// same reason: a card is ready if its original is here **or** it has a copy
+    /// for the box asked for, and `ServedPhoto.copy` carries that copy. A
+    /// request with no box needs the original, as before.
     public func serve(
         to consumerID: Int64? = nil,
-        now: Date = Date()
+        now: Date = Date(),
+        fitting request: ResizedCopies.Request? = nil
     ) async throws -> ServedPhoto? {
         var timing = StageTimes()
-        return try await serve(to: consumerID, now: now, timing: &timing)
+        return try await serve(to: consumerID, now: now, fitting: request, timing: &timing)
     }
 
     /// The same, charging each step to `timing` for the endpoint's `TIMING:`
@@ -812,6 +839,7 @@ public struct PhotoCache {
     public func serve(
         to consumerID: Int64? = nil,
         now: Date = Date(),
+        fitting request: ResizedCopies.Request? = nil,
         timing: inout StageTimes
     ) async throws -> ServedPhoto? {
         var skipped = 0
@@ -830,6 +858,17 @@ public struct PhotoCache {
                 return nil
             }
             let foundBytes = try bytesHere(for: card)
+            // **The copy for the box asked for, if the cache keeps one**, so a
+            // card whose original has been evicted is ready all the same. Syd,
+            // 2026-09-16: "You can serve the copy if the original has been
+            // evicted." Until then a card was ready only if its original was
+            // here, and one whose original had gone waited for a fetch and was
+            // dropped, however many copies of it were kept.
+            let copy = try request.flatMap {
+                try ResizedCopies.find(
+                    photoID: card.id, boxWidth: $0.width, boxHeight: $0.height, format: $0.format,
+                    root: store.root, database: database)
+            }
 
             // Neither guard below is a photograph that has *gone*, so neither
             // deletes anything. A missing source row is only reachable as a
@@ -847,9 +886,9 @@ public struct PhotoCache {
 
             // Counted here, after the provider guard, so a card skipped for
             // want of a source is not a lookup at all.
-            if foundBytes != nil, card.storage == .materialized { lookedUp(.hit) }
+            if foundBytes != nil || copy != nil, card.storage == .materialized { lookedUp(.hit) }
 
-            var bytes = foundBytes
+            var bytes = foundBytes ?? copy?.url
             if bytes == nil {
                 // A referenced photograph *is* its file; there is nothing to
                 // wait for. Its file being gone is the eviction race's last
@@ -991,7 +1030,8 @@ public struct PhotoCache {
                     originalFilename: card.originalFilename
                 ),
                 source: source,
-                url: url
+                url: url,
+                copy: copy
             )
         }
     }
@@ -1099,7 +1139,7 @@ public struct PhotoCache {
     @discardableResult
     public func remove(_ photoIDs: [Int64]) throws -> PhotoPool.Removal {
         let removal = try sources.pool.remove(photoIDs)
-        for uuid in removal.orphaned { store.remove(photoUUID: uuid) }
+        store.discard(removal)
         return removal
     }
 
@@ -1119,56 +1159,40 @@ public struct PhotoCache {
         public var ceilingHalved: Bool = false
     }
 
-    /// Photographs oldest-first by when anybody last had a reason to keep them.
+    /// Every file the cache holds, oldest first by when it was made: originals
+    /// by `cached_at`, resized copies by `created_at`, in one order.
     ///
-    /// **Every photograph, not only the ones with bytes fetched for them.** The
-    /// first version asked for `WHERE cached_at IS NOT NULL`, which reads as
-    /// "the ones the cache holds" and was wrong while the cache also held
-    /// renderings: a photograph on the boot volume is *referenced*, read in
-    /// place, never copied, so it has no `cached_at` and never will — and the
-    /// renderings that were the only thing held for one were absent from this
-    /// list, so they were evicted the moment the cache went over its ceiling.
+    /// **Changed 2026-09-16.** Until then this ranked photographs by the latest
+    /// of `last_shown_at`, `cached_at` and `added_at` — when anybody last had a
+    /// reason to keep one — and the store held originals only. When the resize
+    /// cache came back and shared the ceiling, Syd: "oldest file first, whether
+    /// or not is an original", and asked whether an original shown a minute ago
+    /// should still count as new, "when the file was made." So an original
+    /// fetched a month ago and shown a minute ago is among the first to go.
     ///
-    /// **That case is gone with the renderings, on 2026-09-06.** A referenced
-    /// photograph now occupies no cache bytes at all, so it cannot be evicted
-    /// and never reaches the store. The predicate stays off anyway: it costs
-    /// nothing, and an order that ranks a photograph the store does not hold is
-    /// harmless where one that fails to rank a photograph it does hold is not.
+    /// The 2026-09-06 fault this replaced — a card fetched seconds ago evicted
+    /// before it was shown, because showing outranked landing — cannot recur
+    /// under this order, since landing is now the only thing that counts. See
+    /// `CacheTests.freshlyFetchedOutlivesRecentlyShown`.
     ///
-    /// **The rank is the most recent of the three, and it was the first of the
-    /// three until 2026-09-06.** There are three ways to have had a reason to
-    /// keep a photograph: it was last shown; or it landed in the cache; or it is
-    /// merely known about. Reading a missing value as *viewed infinitely long
-    /// ago* would invert the policy in each case, which is what the zeroes are
-    /// for — `MAX` over NULL is NULL in SQLite, so each term is coalesced before
-    /// the comparison rather than after.
-    ///
-    /// **This was `COALESCE(last_shown_at, cached_at, added_at)`, and that is a
-    /// different query.** `COALESCE` takes the first non-null, so once a
-    /// photograph had ever been shown, the moment it landed in the cache was
-    /// never consulted again. A card dealt for a photograph last displayed ten
-    /// hours ago was fetched, landed with `cached_at` of *now*, and still sorted
-    /// at rank 1 — so it was evicted on the next maintenance tick, before it was
-    /// ever shown, and the card reached the head of the queue with no bytes and
-    /// downloaded it again. On a live agent at a 1 GB ceiling the front of the
-    /// order was thirteen cards, every one on the queue and every one cached
-    /// seconds earlier, while what it kept was photographs shown half an hour
-    /// before that the repeat window guarantees will not be wanted for hours.
-    ///
-    /// It was invisible at a 10 GB ceiling because eviction almost never ran.
-    /// Dropping the ceiling to 1 GB made it run every tick, and every tick takes
-    /// from the front. See `CacheTests.freshlyFetchedOutlivesRecentlyShown`.
-    func evictionOrder() throws -> [String] {
-        try database.all(
-            """
-            SELECT uuid FROM photo
-             ORDER BY MAX(
-                        COALESCE(last_shown_at, 0),
-                        COALESCE(cached_at, 0),
-                        COALESCE(added_at, 0)
-                      ), id;
-            """
-        ) { try $0.string("uuid") }
+    /// Ties go to the original, then by row id, so the order is stable.
+    func evictionOrder() throws -> [PhotoStore.EvictionCandidate] {
+        let originals = try database.all(
+            "SELECT uuid, COALESCE(cached_at, 0) AS made, id FROM photo WHERE cached_at IS NOT NULL;"
+        ) {
+            (made: try $0.int64("made"), kind: 0, id: try $0.int64("id"),
+             candidate: PhotoStore.EvictionCandidate.original(try $0.string("uuid")))
+        }
+        let copies = try database.all(
+            "SELECT id, file, byte_size, created_at FROM resized;"
+        ) {
+            (made: try $0.int64("created_at"), kind: 1, id: try $0.int64("id"),
+             candidate: PhotoStore.EvictionCandidate.copy(
+                file: try $0.string("file"), bytes: try $0.int64("byte_size")))
+        }
+        return (originals + copies)
+            .sorted { ($0.made, $0.kind, $0.id) < ($1.made, $1.kind, $1.id) }
+            .map(\.candidate)
     }
 
     /// Least-recently-wanted first, bounded by bytes, one entry per photograph.
@@ -1195,6 +1219,12 @@ public struct PhotoCache {
     /// the point at which this wants measuring rather than reasoning about.
     @discardableResult
     public func evictIfNeeded() throws -> EvictionResult {
+        guard store.claimEviction() else {
+            Log.cache.info("an eviction is already running; this one is skipped")
+            return EvictionResult(evicted: 0, bytesFreed: 0, ceilingHalved: false)
+        }
+        defer { store.endEviction() }
+
         // The disk-space guard evicts ahead of the ceiling, folded in as a lower
         // effective ceiling rather than as a second pass.
         let free = freeBytesOnVolume()
@@ -1208,12 +1238,70 @@ public struct PhotoCache {
             store.byteCeiling = settings.byteCeiling
         }
 
-        let result = store.evictIfNeeded(inOrder: try evictionOrder())
+        // Copies share the ceiling with originals. Syd, 2026-09-16: "no,
+        // combined limit."
+        let copyBytes = try ResizedCopies.byteCount(in: database)
+        guard store.totals.byteCount + copyBytes > store.byteCeiling else {
+            return EvictionResult(evicted: 0, bytesFreed: 0, ceilingHalved: halved)
+        }
+        // A file with no row — a copy written and never recorded, which takes
+        // dying between the two — is cleared at the first eviction after launch.
+        if copySweep.claim() {
+            try ResizedCopies.removeUnclaimedFiles(root: store.root, database: database)
+        }
+
+        let result = store.evictIfNeeded(inOrder: try evictionOrder(), copyBytes: copyBytes)
         // An evicted original is no longer servable, so it leaves the deck's
         // pool in the same breath as it leaves the disk.
         try releaseResidency(ofPhotos: result.releasedOriginals)
+        // An evicted copy's row goes after its file, a hundred at a time.
+        for page in result.evictedCopies.chunked(into: Self.copyRowPage) {
+            try database.transaction(.immediate) {
+                for file in page {
+                    try database.run("DELETE FROM resized WHERE file = :file;", ["file": .text(file)])
+                }
+            }
+        }
         return EvictionResult(
             evicted: result.evicted, bytesFreed: result.bytesFreed, ceilingHalved: halved)
+    }
+
+    /// Evicts if the file just written took the cache over its ceiling.
+    ///
+    /// **After every file written to the cache, and at no other time.** Syd,
+    /// 2026-09-16: "you should evict when you know the total size is too big,
+    /// and not any other time", then "ditch the timer", and "So, after you
+    /// write any file to the cache, run evict()." Until then eviction ran on
+    /// the agent's maintenance heartbeat, every `maintenanceIntervalSeconds`.
+    /// The files written are an original a fetch adopts and a resized copy
+    /// kept (`keep`). Between the write and this, the cache is over its
+    /// ceiling — "you might temporarily exceed the space, but that's fine".
+    ///
+    /// A failure is logged and the write stands: the file is the point, and
+    /// the next write evicts again.
+    func evictAfterWriting() {
+        do {
+            let result = try evictIfNeeded()
+            if result.evicted > 0 { evicted(result) }
+        } catch {
+            Log.cache.error(kind: nil, "eviction after a write failed: \(error)")
+        }
+    }
+
+    /// Saves a resized copy, and evicts if it took the cache over its ceiling.
+    ///
+    /// Nil, and nothing evicted, when the photograph went while it was being
+    /// resized; see `ResizedCopies.save`.
+    @discardableResult
+    public func keep(
+        _ rendered: PhotoRenderer.Rendered, photoID: Int64, photoUUID: String,
+        boxWidth: Int, boxHeight: Int, now: Date = Date()
+    ) throws -> ResizedCopies.Copy? {
+        let copy = try ResizedCopies.save(
+            rendered, photoID: photoID, photoUUID: photoUUID, boxWidth: boxWidth,
+            boxHeight: boxHeight, root: root, database: database, now: now)
+        if copy != nil { evictAfterWriting() }
+        return copy
     }
 
     // MARK: - Clearing on purpose
@@ -1301,18 +1389,43 @@ public struct PhotoCache {
             bindings
         ) { try $0.string("uuid") }
 
-        var freed: Int64 = 0
+        // The resized copies in scope go too: clearing is asking for the
+        // cache's bytes back, and copies are the cache's bytes. Read before
+        // anything is deleted, so `.everything`, which removes the whole root,
+        // still counts them.
+        let copies = try database.all(
+            """
+            SELECT r.file AS file, r.byte_size AS bytes
+              FROM resized r JOIN photo p ON p.id = r.photo_id JOIN source s ON s.id = p.source_id
+             WHERE \(predicate);
+            """,
+            bindings
+        ) { (file: try $0.string("file"), bytes: try $0.int64("bytes")) }
+
+        var freed: Int64 = copies.reduce(0) { $0 + $1.bytes }
         var cleared = 0
+        if scope != .everything {
+            ResizedCopies.removeFiles(copies.map(\.file), root: store.root)
+        }
+        try database.transaction(.immediate) {
+            try database.run(
+                """
+                DELETE FROM resized
+                 WHERE photo_id IN (SELECT p.id FROM photo p JOIN source s ON s.id = p.source_id
+                                     WHERE \(predicate));
+                """,
+                bindings)
+        }
 
         switch scope {
         case .everything:
-            freed = store.removeAll()
+            freed += store.removeAll()
             cleared = uuids.count
         case .source(let sourceID):
             // One directory removal rather than thousands of unlinks, which is
             // the whole reason the layout has that level.
             if let uuid = try sources.source(id: sourceID)?.uuid {
-                freed = store.removeSource(uuid)
+                freed += store.removeSource(uuid)
             }
             cleared = uuids.count
         case .unavailableSources:

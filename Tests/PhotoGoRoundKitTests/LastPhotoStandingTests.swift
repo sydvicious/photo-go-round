@@ -39,7 +39,7 @@ struct LastPhotoStandingTests {
         try Self.store(5_000, as: photo, in: store)
         _ = store.rebuild(photos: [photo: "SOURCE"])
 
-        let result = store.evictIfNeeded(inOrder: [photo])
+        let result = store.evictIfNeeded(inOrder: [photo].map(PhotoStore.EvictionCandidate.original))
 
         #expect(result.evicted == 0)
         #expect(store.url(forPhoto: photo) != nil)
@@ -58,7 +58,7 @@ struct LastPhotoStandingTests {
         _ = store.rebuild(photos: [oldest: "SOURCE", middle: "SOURCE", newest: "SOURCE"])
 
         // Oldest-first, which is the order `evictionOrder()` produces.
-        let result = store.evictIfNeeded(inOrder: [oldest, middle, newest])
+        let result = store.evictIfNeeded(inOrder: [oldest, middle, newest].map(PhotoStore.EvictionCandidate.original))
 
         #expect(result.evicted == 2)
         #expect(store.url(forPhoto: oldest) == nil)
@@ -78,7 +78,7 @@ struct LastPhotoStandingTests {
         for photo in photos { try Self.store(1_000, as: photo, in: store) }
         _ = store.rebuild(photos: Dictionary(uniqueKeysWithValues: photos.map { ($0, "SOURCE") }))
 
-        let result = store.evictIfNeeded(inOrder: photos)
+        let result = store.evictIfNeeded(inOrder: photos.map(PhotoStore.EvictionCandidate.original))
 
         // Four thousand bytes against a ceiling of two and a half: two go.
         #expect(result.evicted == 2)
@@ -100,7 +100,7 @@ struct LastPhotoStandingTests {
         let giant = UUID().uuidString.lowercased()
         try Self.store(5_000, as: giant, in: store)
         _ = store.rebuild(photos: [giant: "SOURCE"])
-        store.evictIfNeeded(inOrder: [giant])
+        store.evictIfNeeded(inOrder: [giant].map(PhotoStore.EvictionCandidate.original))
         #expect(store.url(forPhoto: giant) != nil)
 
         // Something smaller arrives. The giant is older, so it is first in the
@@ -109,7 +109,7 @@ struct LastPhotoStandingTests {
         try Self.store(200, as: small, in: store)
         _ = store.rebuild(photos: [giant: "SOURCE", small: "SOURCE"])
 
-        let result = store.evictIfNeeded(inOrder: [giant, small])
+        let result = store.evictIfNeeded(inOrder: [giant, small].map(PhotoStore.EvictionCandidate.original))
 
         #expect(result.evicted == 1)
         #expect(store.url(forPhoto: giant) == nil)

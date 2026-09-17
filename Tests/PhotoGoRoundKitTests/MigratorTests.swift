@@ -97,12 +97,14 @@ struct MigratorTests {
 
     // MARK: - What the schema guarantees
 
-    @Test("Every v1 table is present")
+    @Test("Every table is present")
     func allTablesExist() throws {
         let database = try Self.fullyMigratedDatabase()
         let snapshot = try SchemaSnapshot(of: database)
         let names = Set(snapshot.tables.map(\.name))
-        #expect(names == ["source", "photo", "queue", "consumer", "deck_state", "deck_event"])
+        // `resized` since migration 13, 2026-09-16: the resize cache's rows.
+        #expect(
+            names == ["source", "photo", "queue", "consumer", "deck_state", "deck_event", "resized"])
 
         // No `available` flag on photo: a picture gone from a reachable source is
         // deleted, and a source that lost everything keeps its rows untouched.

@@ -68,6 +68,10 @@ struct PictureEndpoint {
     /// is not about counting.
     var tally: LaunchTally?
 
+    /// Told what an eviction took after a resized copy was kept. See
+    /// `PhotoCache.evictAfterWriting()`.
+    var evicted: @Sendable (PhotoCache.EvictionResult) -> Void = { _ in }
+
     /// Resizes an original to the box a request asked for.
     ///
     /// **So a test can make a resize hang.** Added 2026-09-16 for `Agent
@@ -95,6 +99,35 @@ struct PictureEndpoint {
     ///
     /// The one line a stalled resize leaves, on the console and in the unified
     /// log. Filter on the prefix.
+    /// Saves a resize as a resized copy, on the resizer's thread, and evicts if
+    /// it took the cache over its ceiling.
+    ///
+    /// Its own connection, opened here, because the resizer's thread is not the
+    /// request's. A copy that cannot be kept is logged and the picture still goes
+    /// out: the cache is an optimisation, never a reason to fail a request.
+    static func keep(
+        _ rendered: PhotoRenderer.Rendered, of card: DeckCard, box: (width: Int, height: Int),
+        into place: CopyPlace
+    ) {
+        do {
+            let cache = try place.open()
+            try cache.keep(
+                rendered, photoID: card.id, photoUUID: card.uuid, boxWidth: box.width,
+                boxHeight: box.height)
+        } catch {
+            Log.cache.error(
+                kind: "cache.resized-copy-not-kept",
+                "resized copy of \(card.spokenName) at \(box.width)x\(box.height) was not kept: \(error)")
+        }
+    }
+
+    /// Where a resized copy is kept, carried onto the resizer's thread.
+    var copyPlace: CopyPlace {
+        CopyPlace(
+            databasePath: databasePath, cacheRoot: cacheRoot, settings: preferences.cacheSettings,
+            store: store, evicted: evicted)
+    }
+
     static func resizeGaveUp(name: String, card: Int64, deal: Int64?, after budget: Duration) -> String {
         var parts = ["RESIZE: gave up after \(StageTimes.milliseconds(budget)) on \(name)", "card \(card)"]
         if let deal { parts.append("deal #\(deal)") }
@@ -345,7 +378,12 @@ struct PictureEndpoint {
             // a rendering held at exactly this size. Nothing is held but
             // originals since 2026-09-06, so what comes back is the original and
             // the resize happens here, on every request.
-            while let served = try await context.cache.serve(to: consumerID, timing: &timing) {
+            // The box and format go to `serve`, so a card whose original has
+            // been evicted is still served from a copy kept for that box.
+            let wanted = box.map { ResizedCopies.Request(width: $0.width, height: $0.height, format: format) }
+            while let served = try await context.cache.serve(
+                to: consumerID, fitting: wanted, timing: &timing)
+            {
 
                 guard let box else {
                     // No size asked for: the original, untouched — opened now,
@@ -357,15 +395,39 @@ struct PictureEndpoint {
                     return response
                 }
 
+                // **A resized copy, if the cache keeps one for this box, before
+                // the resizer is asked.** Syd, 2026-09-16: "hits should be
+                // service before the Resizer is asked. That's the entire point
+                // of caching the resized images". A copy whose file has gone is
+                // not a hit; `find` drops its row and this falls through.
+                if let copy = served.copy,
+                    let stream = HTTPListener.Response.StreamedFile(url: copy.url)
+                {
+                    timing.lap("resized copy")
+                    var headers = Self.headers(for: served, contentType: format.mimeType)
+                    headers["X-PGR-Pixels"] = "\(copy.pixelWidth)x\(copy.pixelHeight)"
+                    try? context.deck.markDelivered(photoID: served.card.id)
+                    timing.lap("delivered")
+                    queueRanShort()
+                    timing.lap("top up")
+                    report(
+                        request, status: 200, detail: served.card.spokenName, source: served.source,
+                        card: served.card, bytes: stream.byteCount,
+                        cacheBytes: try? context.cache.bytesOnDisk(),
+                        queued: try? context.cache.queue.size(), timing: timing)
+                    return HTTPListener.Response(
+                        status: 200, reason: "OK", headers: headers, body: .file(stream))
+                }
+
                 do {
-                    // **Rendered and thrown away.** The bytes went into the
-                    // cache under `(photo, resolution)` until 2026-09-06, where
-                    // they were a gigabyte of near-duplicate boxes — a window
-                    // moved two pixels and the whole set was made again — for a
-                    // hit that a shuffle with a repeat window almost never
-                    // takes. The decode is ~109 ms median, measured, and it is
-                    // spent inside the gap between pictures rather than on a
-                    // blank frame.
+                    // **Resized, and kept.** The bytes went into the cache under
+                    // `(photo, resolution)` until 2026-09-06, were thrown away
+                    // from then, and are kept again since 2026-09-16 — as a
+                    // resized copy with a row, saved on the resizer's thread
+                    // even when this request has already given up on it. Syd:
+                    // "save the copy of the file that did not finish resizing in
+                    // 1 second. Maybe it will be asked for again."
+                    //
                     // **Its turn on the resizer, then the resize**, timed apart:
                     // a long `resize wait` is a busy queue, a long `render` a
                     // slow picture.
@@ -377,11 +439,14 @@ struct PictureEndpoint {
                     let resize = self.resize
                     let resizer = self.resizer
                     let ticket = Resizer.Ticket()
+                    let place = copyPlace
                     let outcome: (result: PhotoRenderer.Rendered, started: ContinuousClock.Instant)
                     do {
                         outcome = try await Deadline.run(within: resizeBudget) {
                             try await resizer.run(ticket) {
-                                try resize(served.url, box.width, box.height, format)
+                                let rendered = try resize(served.url, box.width, box.height, format)
+                                Self.keep(rendered, of: served.card, box: box, into: place)
+                                return rendered
                             }
                         }
                     } catch is Deadline.Expired {
@@ -420,7 +485,7 @@ struct PictureEndpoint {
                     report(
                         request, status: 200, detail: served.card.spokenName, source: served.source,
                         card: served.card, bytes: Int64(rendered.bytes.count),
-                        cacheBytes: store.totals.byteCount,
+                        cacheBytes: try? context.cache.bytesOnDisk(),
                         queued: try? context.cache.queue.size(), timing: timing)
                     return HTTPListener.Response(
                         status: 200, reason: "OK", headers: headers,

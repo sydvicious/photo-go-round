@@ -258,18 +258,13 @@ three failures it is retired and never offered again. The row stays — the file
 still on disk, and deleting the row would only mean the next rescan found it
 again.
 
-**Renderings are not kept.** Asking twice for the same photograph at the same
-size decodes twice. The cache holds originals and nothing else, so serving can
-never grow it.
-
-They were kept until 2026-09-06, under `(photo, display box)`, with an
-`X-PGR-Cache` header saying `hit` or `miss`. The box is the client's window in
-pixels, so it drifts: a window moved two pixels made a second full set beside
-the first, and a shuffle with a repeat window almost never asks for the same
-photograph at the same size twice anyway. The development cache held 0.99 GB of
-them against a hit rate near zero. A render measured 109 ms at the median and
-about a second for a 38 MB original, spent inside the gap between pictures
-rather than on a blank frame.
+**Resized copies are kept.** Each resize is saved as a copy of that photograph
+for that `w`, `h` and format, in `.resized/` under the cache root, with a row in
+the database. A request that matches a copy is answered from it without resizing,
+even while another resize is running, and even when the photograph's original has
+been evicted; a photograph can have a copy for every size asked for. A resize that finishes after its request has sent the original is
+still saved. Copies count against `cacheByteCeiling` with the originals, and are
+deleted with their photograph when it is deleted, not when its source is offline.
 
 Serving is also what notices the queue has run short, and what deals more. **Every
 card dealt is fetched by the queue's own fetcher**, head first and
@@ -465,8 +460,9 @@ start empty at launch and are not kept.
 **Preferences are read on every request**, so a changed `cacheByteCeiling` or
 `queueSize` is in the next reading once the agent has re-read its preferences —
 at once after `pgr_ctl` or the app writes one, within thirty seconds after a
-bare `defaults write`. The cache itself shrinks to a lowered ceiling at the next
-maintenance pass, so the page can show it over its ceiling until then.
+bare `defaults write`. The cache itself shrinks to a lowered ceiling when the
+agent next writes a file to it, so the page can show it over its ceiling until
+then.
 
 **A serve lookup is a queued card reaching the head of the queue with its photograph
 stored in the cache** — materialized, not referenced in place, which never
@@ -488,9 +484,10 @@ outcome. It is counted at the deal because the fetcher only ever asks for cards
 whose originals are not held. Referenced photographs are counted on neither
 side.
 
-**`evictions` counts what the agent's maintenance took from the cache.**
-`photos` and `bytesFreed` are totals across `passes`, the maintenance passes
-that evicted anything; `lastAt` is when the most recent of those ran, absent
+**`evictions` counts what eviction took from the cache.** The agent evicts
+after every file it writes there — an original a fetch brings in, and a resized
+copy — and at no other time. `photos` and `bytesFreed` are totals across
+`passes`, the eviction passes that evicted anything; `lastAt` is when the most recent of those ran, absent
 until one has. `lastCeilingHalved` says that pass was aiming at half the byte
 ceiling because free space was below `cacheCriticalFreeBytes`, so it was the disk
 driving eviction rather than the cache's size. `pgr_ctl cache evict` and
@@ -522,9 +519,8 @@ without restarting it and without any cooperation:
 | `queueRefreshIntervalSeconds` | how often to top the queue up; serving tops it up too | 5 |
 | `serveWaitSeconds` | how long a request waits for the head card's bytes before dropping that card; spent once, after which every cold card met is dropped without waiting. 0 never waits, and still drops | 2 |
 | `scanIntervalSeconds` | how often to rescan sources for changes | 300 |
-| `maintenanceIntervalSeconds` | how often to evict at the byte ceiling | 30 |
 | `downloadConcurrency` | fetches running at once, across all sources | 4 |
-| `cacheByteCeiling` | bytes of cached photographs to keep | 1 GB |
+| `cacheByteCeiling` | bytes of cached originals and resized copies to keep | 1 GB |
 | `cacheMinimumFreeBytes` | stop fetching below this much free space | 5 GB |
 | `cacheCriticalFreeBytes` | evict ahead of the ceiling below this much | 2 GB |
 

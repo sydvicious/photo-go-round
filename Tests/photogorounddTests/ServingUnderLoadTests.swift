@@ -43,12 +43,18 @@ struct ServingUnderLoadTests {
     /// hold a thread the way a synchronous XPC call to the decoder did.
     final class Hang: Sendable {
         private let entered = Mutex(0)
+        private let armed = Mutex(true)
         private let gate = DispatchSemaphore(value: 0)
 
+        /// Every resize asked for, hanging or not.
         var count: Int { entered.withLock { $0 } }
+
+        /// Whether a resize hangs. Armed by default.
+        func arm(_ hanging: Bool) { armed.withLock { $0 = hanging } }
 
         func block() {
             entered.withLock { $0 += 1 }
+            guard armed.withLock({ $0 }) else { return }
             // Bounded, so a test that fails before releasing cannot hold these
             // threads for the rest of the run.
             _ = gate.wait(timeout: .now() + 60)
@@ -80,12 +86,13 @@ struct ServingUnderLoadTests {
         let queued: Int
         let hang = Hang()
         let pictures: PictureEndpoint
+        let cache: PhotoCache
 
-        init() async throws {
+        init(photographs: Int = ServingUnderLoadTests.photographs) async throws {
             directory = URL.temporaryDirectory.appending(path: "pgr-hang-\(UUID().uuidString)")
             let photos = directory.appending(path: "photos")
             try FileManager.default.createDirectory(at: photos, withIntermediateDirectories: true)
-            for index in 0..<ServingUnderLoadTests.photographs {
+            for index in 0..<photographs {
                 try ServingUnderLoadTests.writePNG(to: photos.appending(path: "photo-\(index).png"))
             }
 
@@ -97,13 +104,14 @@ struct ServingUnderLoadTests {
             let sources = SourceStore(database: database, bytes: bytes)
             var cache = PhotoCache(
                 database: database, root: root, sources: sources,
-                queueSize: ServingUnderLoadTests.photographs, store: bytes)
+                queueSize: photographs, store: bytes)
             cache.log = { _ in }
             try cache.prepare()
             let source = try sources.add(
                 kind: .folder, locator: photos.path(percentEncoded: false))
             _ = await sources.refresh(source)
-            queued = try await cache.fillCompletely(limit: ServingUnderLoadTests.photographs)
+            queued = try await cache.fillCompletely(limit: photographs)
+            self.cache = cache
 
             let hang = hang
             var pictures = PictureEndpoint(
@@ -119,6 +127,71 @@ struct ServingUnderLoadTests {
         }
 
         deinit { try? FileManager.default.removeItem(at: directory) }
+
+        /// One sized request, with the queue topped up first — with one
+        /// photograph, every request is for the same photograph.
+        func sized(_ box: String, consumer: String = "test") async throws -> (HTTPListener.Response, Duration) {
+            _ = try await cache.fillCompletely(limit: 10)
+            let clock = ContinuousClock()
+            let started = clock.now
+            let response = await pictures.route(
+                try #require(HTTPListener.parse("GET /v1/next?consumer=\(consumer)&\(box) HTTP/1.1")))
+            return (response, clock.now - started)
+        }
+    }
+
+    // MARK: - The resize cache
+
+    /// **The entire point of the cache.** Syd, 2026-09-16: "hits should be
+    /// service before the Resizer is asked. That's the entire point of caching
+    /// the resized images". A photograph already resized for a box is served
+    /// while the resizer is stuck on something else.
+    @Test("A kept copy is served while the resizer hangs, without asking it")
+    func hitWhileResizerHangs() async throws {
+        let library = try await Library(photographs: 1)
+        library.hang.arm(false)
+        let (first, _) = try await library.sized("w=200&h=200")
+        #expect(first.status == 200)
+        #expect(library.hang.count == 1)
+
+        // Something else holds the resizer.
+        library.hang.arm(true)
+        let pictures = library.pictures
+        _ = try await library.cache.fillCompletely(limit: 10)
+        let stuck = Task {
+            await pictures.route(
+                HTTPListener.parse("GET /v1/next?consumer=stuck&w=300&h=300 HTTP/1.1")!)
+        }
+        while library.hang.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+
+        let (hit, took) = try await library.sized("w=200&h=200")
+        #expect(hit.status == 200)
+        #expect(hit.headers["X-PGR-Pixels"] == "1x1", "the kept copy's pixels")
+        #expect(took < .milliseconds(500), "took \(took); a hit does not wait on the resizer")
+        #expect(library.hang.count == 2, "the resizer was asked for a copy it already had")
+
+        library.hang.release(1)
+        _ = await stuck.value
+        _ = try await pictures.resizer.run {}
+    }
+
+    /// Syd, 2026-09-16: "save the copy of the file that did not finish resizing
+    /// in 1 second. Maybe it will be asked for again."
+    @Test("A resize that finished after its request gave up keeps its copy for the next request")
+    func lateResizeKeepsItsCopy() async throws {
+        let library = try await Library(photographs: 1)
+        let (gaveUp, _) = try await library.sized("w=200&h=200")
+        #expect(gaveUp.status == 200)
+        #expect(gaveUp.headers["X-PGR-Pixels"] == nil, "the original went")
+
+        library.hang.release(1)
+        _ = try await library.pictures.resizer.run {}
+        library.hang.arm(false)
+
+        let (next, _) = try await library.sized("w=200&h=200")
+        #expect(next.status == 200)
+        #expect(next.headers["X-PGR-Pixels"] == "1x1", "the late resize's copy")
+        #expect(library.hang.count == 1, "resized again though a copy was kept")
     }
 
     @Test("A request with no size and the source list answer while resizes hang")

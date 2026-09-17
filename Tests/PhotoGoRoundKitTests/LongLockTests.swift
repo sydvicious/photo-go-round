@@ -40,6 +40,7 @@ struct LongLockTests {
         let lock = try #require(heard.locks.first)
         #expect(heard.locks.count == 1)
         #expect(lock.held >= Self.tooLong)
+        #expect(lock.held - lock.committing >= Self.tooLong, "the body's time was charged to the commit")
         #expect(lock.attempts == 1)
         #expect(lock.function == "longHoldIsReported()")
         #expect(lock.fileID.hasSuffix("LongLockTests.swift"))
@@ -81,27 +82,27 @@ struct LongLockTests {
         #expect(heard.locks.isEmpty)
     }
 
-    @Test("The line says how long it held, how long it waited, the attempts, and the caller")
+    @Test("The line says how long it held, how much of that was the commit, how long it waited, the attempts, and the caller")
     func wording() {
         let lock = Database.LongLock(
-            held: .milliseconds(812), waited: .milliseconds(3), attempts: 2,
+            held: .milliseconds(812), committing: .milliseconds(790), waited: .milliseconds(3), attempts: 2,
             function: "upsert(_:to:at:isolation:onAdded:)",
             fileID: "PhotoGoRoundKit/PhotoPool.swift", line: 96)
 
         #expect(
             lock.text
-                == "LOCK: held 812ms · waited 3ms · 2 attempts · upsert(_:to:at:isolation:onAdded:) (PhotoPool.swift:96)")
+                == "LOCK: held 812ms · commit 790ms · waited 3ms · 2 attempts · upsert(_:to:at:isolation:onAdded:) (PhotoPool.swift:96)")
     }
 
     @Test("One attempt is singular")
     func oneAttempt() {
         let lock = Database.LongLock(
-            held: .milliseconds(60), waited: .zero, attempts: 1,
+            held: .milliseconds(60), committing: .zero, waited: .zero, attempts: 1,
             function: "register(kind:displayID:now:)",
             fileID: "PhotoGoRoundKit/Deck+Consumers.swift", line: 29)
 
         #expect(
             lock.text
-                == "LOCK: held 60ms · waited 0ms · 1 attempt · register(kind:displayID:now:) (Deck+Consumers.swift:29)")
+                == "LOCK: held 60ms · commit 0ms · waited 0ms · 1 attempt · register(kind:displayID:now:) (Deck+Consumers.swift:29)")
     }
 }

@@ -26,7 +26,7 @@ import PhotoGoRoundDisplay
 @MainActor
 enum DisplayShuffles {
 
-    private static let log = Logger(subsystem: "com.sydpolk.photogoround", category: "saver")
+    private static let log = Logger(subsystem: Log.subsystem, category: "saver")
 
     /// A display with no identity of its own still gets exactly one loop rather
     /// than one per view, which is the whole point.

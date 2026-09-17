@@ -40,6 +40,9 @@ struct DashboardEndpoint {
     /// The agent's count of photographs added and removed. The shared one in
     /// the agent; a test hands in its own.
     var changes: LibraryChanges = .shared
+    /// Told what an eviction took after a thumbnail was kept. See
+    /// `PhotoCache.evictAfterWriting()`.
+    var evicted: @Sendable (PhotoCache.EvictionResult) -> Void = { _ in }
 
     /// Resizes an original to a thumbnail no larger than `side` on its longest
     /// edge, as JPEG. A hook so a test can make it hang.
@@ -96,7 +99,7 @@ struct DashboardEndpoint {
         /// What dealing found in the cache since launch, and what became of
         /// the fetches — on a large library, mostly misses.
         var fetchLookups: LaunchTally.FetchLookups
-        /// What the agent's maintenance evicted from the cache since launch.
+        /// What eviction took from the cache since launch.
         var evictions: LaunchTally.Evictions
         /// The picture most recently handed over. Absent until one has been.
         var last: Last?
@@ -268,9 +271,19 @@ struct DashboardEndpoint {
         }
 
         let url: URL?
+        let uuid: String?
+        let copy: ResizedCopies.Copy?
         do {
             let database = try Database(path: databasePath)
             try Migrator.migrate(database)
+            // **The resize cache first**, as for a picture request: a thumbnail
+            // shown a minute ago is a hit and never waits on the resizer. Syd,
+            // 2026-09-16: "yes, same cache".
+            copy = try ResizedCopies.find(
+                photoID: photo, boxWidth: Self.thumbnailSize, boxHeight: Self.thumbnailSize,
+                format: .jpeg, root: cacheRoot, database: database)
+            uuid = try database.first(
+                "SELECT uuid FROM photo WHERE id = :id;", ["id": .int(photo)], { try $0.string("uuid") })
             url = try makeCache(database: database, deck: Deck(database: database))
                 .residentURL(forPhoto: photo)
         } catch {
@@ -279,7 +292,13 @@ struct DashboardEndpoint {
                 "dashboard could not look up photo \(photo): \(error)")
             return .text("library unavailable\n", status: 503, reason: "Service Unavailable")
         }
-        guard let url else {
+        if let copy, let stream = HTTPListener.Response.StreamedFile(url: copy.url) {
+            return HTTPListener.Response(
+                status: 200, reason: "OK",
+                headers: ["Content-Type": PhotoRenderer.Format.jpeg.mimeType, "Cache-Control": "no-store"],
+                body: .file(stream))
+        }
+        guard let url, let uuid else {
             return .text("photo \(photo) is not here to draw\n", status: 404, reason: "Not Found")
         }
 
@@ -295,10 +314,26 @@ struct DashboardEndpoint {
             let resize = self.resize
             let resizer = self.resizer
             let ticket = Resizer.Ticket()
+            let place = CopyPlace(
+                databasePath: databasePath, cacheRoot: cacheRoot,
+                settings: preferences.cacheSettings, store: store, evicted: evicted)
             let outcome: (result: PhotoRenderer.Rendered, started: ContinuousClock.Instant)
             do {
                 outcome = try await Deadline.run(within: resizeBudget) {
-                    try await resizer.run(ticket) { try resize(url, Self.thumbnailSize) }
+                    try await resizer.run(ticket) {
+                        let rendered = try resize(url, Self.thumbnailSize)
+                        // Kept on the resizer's thread, like a picture request's.
+                        do {
+                            try place.open().keep(
+                                rendered, photoID: photo, photoUUID: uuid,
+                                boxWidth: Self.thumbnailSize, boxHeight: Self.thumbnailSize)
+                        } catch {
+                            Log.cache.error(
+                                kind: "cache.resized-copy-not-kept",
+                                "dashboard thumbnail of photo \(photo) was not kept: \(error)")
+                        }
+                        return rendered
+                    }
                 }
             } catch is Deadline.Expired {
                 ticket.abandon()

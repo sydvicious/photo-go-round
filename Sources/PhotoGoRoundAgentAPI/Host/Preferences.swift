@@ -76,7 +76,6 @@ public struct Preferences: @unchecked Sendable {
         public static let cacheMinimumFreeBytes = Key("cacheMinimumFreeBytes")
         public static let cacheCriticalFreeBytes = Key("cacheCriticalFreeBytes")
         public static let scanIntervalSeconds = Key("scanIntervalSeconds")
-        public static let maintenanceIntervalSeconds = Key("maintenanceIntervalSeconds")
         public static let downloadConcurrency = Key("downloadConcurrency")
         public static let queueSize = Key("queueSize")
         public static let queueRefreshIntervalSeconds = Key("queueRefreshIntervalSeconds")
@@ -176,11 +175,6 @@ public struct Preferences: @unchecked Sendable {
         .seconds(number(.scanIntervalSeconds, default: 300, in: 1...86_400))
     }
 
-    /// How often the agent verifies residency, sweeps orphans, and evicts.
-    public var maintenanceInterval: Duration {
-        .seconds(number(.maintenanceIntervalSeconds, default: 30, in: 1...3600))
-    }
-
     /// How many fetches run at once, across every source.
     ///
     /// Fetching is nearly all latency, so one at a time leaves the queue of
@@ -244,9 +238,8 @@ public struct Preferences: @unchecked Sendable {
 
     /// How often the queue is topped up.
     ///
-    /// Separate from the maintenance interval, because they answer to different
-    /// pressures: topping up should be frequent enough that a queue drained by a
-    /// fast consumer refills promptly, while sweeping and evicting can be lazy.
+    /// Frequent enough that a queue drained by a fast consumer refills
+    /// promptly.
     public var queueRefreshInterval: Duration {
         .seconds(number(.queueRefreshIntervalSeconds, default: 5, in: 1...3600))
     }
@@ -552,7 +545,6 @@ public struct Preferences: @unchecked Sendable {
         case .cacheMinimumFreeBytes: String(cacheSettings.minimumFreeBytes)
         case .cacheCriticalFreeBytes: String(cacheSettings.criticalFreeBytes)
         case .scanIntervalSeconds: String(Int(scanInterval.totalSeconds))
-        case .maintenanceIntervalSeconds: String(Int(maintenanceInterval.totalSeconds))
         case .downloadConcurrency: String(downloadConcurrency)
         case .queueSize: String(queueSize)
         case .queueRefreshIntervalSeconds: String(Int(queueRefreshInterval.totalSeconds))
@@ -576,7 +568,7 @@ public struct Preferences: @unchecked Sendable {
     public static let allKeys: [Key] = [
         .repeatWindowFraction, .cacheByteCeiling,
         .cacheMinimumFreeBytes, .cacheCriticalFreeBytes,
-        .scanIntervalSeconds, .maintenanceIntervalSeconds, .downloadConcurrency, .queueSize,
+        .scanIntervalSeconds, .downloadConcurrency, .queueSize,
         .queueRefreshIntervalSeconds, .serveWaitSeconds,
     ]
 }

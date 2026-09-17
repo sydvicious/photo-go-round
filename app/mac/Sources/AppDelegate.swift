@@ -1,6 +1,7 @@
 import AppKit
 import OSLog
 import PhotoGoRoundDisplay
+import PhotoGoRoundAgentAPI
 
 /// The moments SwiftUI's scenes give none of: before the first window, and
 /// once the application has finished launching.
@@ -22,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// `menu:` lines, filterable in one word.
-    private let menuLog = Logger(subsystem: "com.sydpolk.photogoround", category: "menu")
+    private let menuLog = Logger(subsystem: Log.subsystem, category: "menu")
     /// Held for the life of the app; see `watchTheViewMenu()`.
     private var menuObserver: (any NSObjectProtocol)?
     /// The last View menu logged, so an unchanged menu is not a line per click.

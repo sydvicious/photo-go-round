@@ -59,6 +59,7 @@
 		AA00000000000000000000E9 /* PhotoGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000EB /* PhotoGoRoundAgentAPI */; };
 		AA00000000000000000000EA /* PhotoGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000EC /* PhotoGoRoundDisplay */; };
 		AA00000000000000000000FE /* Photo-Go-Round Wallpaper.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E1 /* Photo-Go-Round Wallpaper.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		AA0000000000000000000A02 /* PhotoGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000A03 /* PhotoGoRoundDisplay */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -208,6 +209,7 @@
 				AA00000000000000000000D9 /* PhotoGoRoundAgentAPI in Frameworks */,
 				AA00000000000000000000DA /* PhotoGoRoundKit in Frameworks */,
 				AA00000000000000000000DB /* Console in Frameworks */,
+				AA0000000000000000000A02 /* PhotoGoRoundDisplay in Frameworks */,
 			);
 		};
 		AA00000000000000000000E3 /* Frameworks */ = {
@@ -397,6 +399,7 @@
 				AA00000000000000000000DC /* PhotoGoRoundAgentAPI */,
 				AA00000000000000000000DD /* PhotoGoRoundKit */,
 				AA00000000000000000000DE /* Console */,
+				AA0000000000000000000A03 /* PhotoGoRoundDisplay */,
 			);
 			productName = pgr_ctl;
 			productReference = AA00000000000000000000D1 /* pgr_ctl */;
@@ -700,6 +703,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LM_SKIP_METADATA_EXTRACTION = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -766,6 +770,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LM_SKIP_METADATA_EXTRACTION = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -1070,7 +1075,7 @@
 				INFOPLIST_FILE = "wallpaper-extension/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.wallpaper.extension;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photogoround.wallpaper$(WALLPAPER_ID_SUFFIX).extension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
@@ -1079,6 +1084,8 @@
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
+				WALLPAPER_ID_SUFFIX = .debug;
+				WALLPAPER_NAME_SUFFIX = " (Debug)";
 			};
 			name = Debug;
 		};
@@ -1092,7 +1099,7 @@
 				INFOPLIST_FILE = "wallpaper-extension/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.wallpaper.extension;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photogoround.wallpaper$(WALLPAPER_ID_SUFFIX).extension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
@@ -1101,6 +1108,8 @@
 				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
+				WALLPAPER_ID_SUFFIX = "";
+				WALLPAPER_NAME_SUFFIX = "";
 			};
 			name = Release;
 		};
@@ -1114,7 +1123,7 @@
 				INFOPLIST_FILE = "wallpaper-host/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.wallpaper;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photogoround.wallpaper$(WALLPAPER_ID_SUFFIX)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
@@ -1123,6 +1132,8 @@
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
+				WALLPAPER_ID_SUFFIX = .debug;
+				WALLPAPER_NAME_SUFFIX = " (Debug)";
 			};
 			name = Debug;
 		};
@@ -1136,7 +1147,7 @@
 				INFOPLIST_FILE = "wallpaper-host/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.wallpaper;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photogoround.wallpaper$(WALLPAPER_ID_SUFFIX)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				SKIP_INSTALL = YES;
@@ -1145,6 +1156,8 @@
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
+				WALLPAPER_ID_SUFFIX = "";
+				WALLPAPER_NAME_SUFFIX = "";
 			};
 			name = Release;
 		};
@@ -1356,6 +1369,10 @@
 			productName = PhotoGoRoundAgentAPI;
 		};
 		AA00000000000000000000EC /* PhotoGoRoundDisplay */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoGoRoundDisplay;
+		};
+		AA0000000000000000000A03 /* PhotoGoRoundDisplay */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PhotoGoRoundDisplay;
 		};

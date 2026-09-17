@@ -9,6 +9,34 @@ screensaver, widgets, and apps across Apple's platforms. The library problem
 (what to show, in what order, cached where) is split from the display problem
 (how to show it), so one deck feeds every surface.
 
+## Building and installing from Xcode
+
+Open `app/Photo-Go-Round.xcodeproj`. Everything below is the Debug configuration; a Release build installs nothing yet.
+
+| To | Scheme | Key |
+|---|---|---|
+| Install the agent, and restart it | **Install Agent** | ⌘B |
+| Install the wallpaper extension | **Install Wallpaper Extension** | ⌘B |
+| Install the screensaver | **Install Screen Saver** | ⌘B |
+| Run the app | **Photo-Go-Round** | ⌘R |
+
+`pgr_ctl` has no shared scheme; run it from the repo root with `swift run pgr_ctl`.
+
+Install the agent first; the wallpaper and the screensaver get their pictures from it. The install schemes build what they install, then install it, so ⌘B is the whole step. Rebuilding a scheme reinstalls it.
+
+Then choose them in System Settings:
+
+- **Wallpaper** › *Photo-Go-Round* › **Photo-Go-Round Wallpaper (Debug)**
+- **Screen Saver** › *Other* › **Photo-Go-Round Screensaver**
+
+To take all three off the Mac, leaving the library, cache and preferences alone:
+
+```bash
+./Scripts/uninstall.sh
+```
+
+[`Documentation/Installing.md`](Documentation/Installing.md) has what each install does and how to check it worked.
+
 ## Running the agent
 
 ```

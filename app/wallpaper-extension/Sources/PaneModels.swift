@@ -143,11 +143,16 @@ final class ArchivedSettingsViewModels: NSObject, NSSecureCoding {
 }
 
 enum PaneModels {
-    /// One item, which is the whole of Photo-Go-Round in the pane: the deck
-    /// decides what it shows, so there is nothing here to choose between.
-    static let itemID = "photo-go-round"
-
-    static func make(thumbnail: URL) -> SettingsViewModels {
+    /// Nil when the bundle does not say who it is; see `Identity`.
+    static func make(thumbnail: URL) -> SettingsViewModels? {
+        // One item, which is the whole of Photo-Go-Round in the pane: the deck
+        // decides what it shows, so there is nothing here to choose between.
+        guard let bundleID = Identity.bundleID, let itemID = Identity.itemID,
+            let itemName = Identity.itemName
+        else {
+            wallpaperLog("view models: \(Identity.summary)")
+            return nil
+        }
         // **The provider id must be the bundle identifier.** Measured 2026-09-16,
         // by trying otherwise: Apple's extensions declare choices under ids like
         // `com.apple.wallpaper.choice.image`, distinct from their bundle ids, and
@@ -159,8 +164,7 @@ enum PaneModels {
         // desktop fell back to Golden Gate. Apple's ids work because a built-in
         // translator maps them; a third party's provider is looked up as an
         // extension by that exact identifier, so it has to be ours.
-        let provider = ProviderID(
-            rawValue: Bundle.main.bundleIdentifier ?? "com.sydpolk.photogoround.wallpaper.extension")
+        let provider = ProviderID(rawValue: bundleID)
         let identity = ChoiceIdentity(
             id: itemID,
             descriptor: .init(provider: provider, identifier: itemID, files: [], configuration: Data(itemID.utf8)))
@@ -170,14 +174,15 @@ enum PaneModels {
             // Syd, 2026-09-15: one extension and one `.saver` were both called
             // "Photo-Go-Round", in two lists, and picking the wrong one gave a
             // screen saver that mirrored the desktop. The section heading below
-            // stays "Photo-Go-Round"; the item says which surface it is.
-            localizedName: "Photo-Go-Round Wallpaper",
+            // stays "Photo-Go-Round"; the item says which surface it is, and
+            // which build — `Identity`.
+            localizedName: itemName,
             thumbnail: ImageThumbnail(url: thumbnail),
             choice: ChoiceDescription(
                 id: identity,
                 provider: provider,
                 identifier: itemID,
-                name: "Photo-Go-Round Wallpaper",
+                name: itemName,
                 localizedDescription: "Photographs from your library, shuffled",
                 thumbnail: ImageThumbnail(url: thumbnail),
                 isDownloaded: true,
@@ -188,6 +193,10 @@ enum PaneModels {
             disposability: EnumCase(name: "none"))
         // Sort order and sort id are Phosphene's, which are known to put a
         // section in the pane; what they mean has not been looked into.
+        //
+        // **One section for every build.** Syd, 2026-09-16: "I would prefer
+        // that they both go in the same section". The same identifier and
+        // heading in Release, Debug and Claude's builds; only the item differs.
         let group = SettingsGroup(
             id: WrappedID(id: "photo-go-round"),
             items: [item],
@@ -223,10 +232,11 @@ enum PaneModels {
     /// The view models as `WallpaperSettingsViewModelsXPC`, or nil with the
     /// reason logged.
     static func archived(thumbnail: URL) -> AnyObject? {
+        guard let models = make(thumbnail: thumbnail) else { return nil }
         let data: Data
         do {
             data = try NSKeyedArchiver.archivedData(
-                withRootObject: ArchivedSettingsViewModels(make(thumbnail: thumbnail)), requiringSecureCoding: false)
+                withRootObject: ArchivedSettingsViewModels(models), requiringSecureCoding: false)
         } catch {
             wallpaperLog("view models: archiving failed: \(error)")
             return nil

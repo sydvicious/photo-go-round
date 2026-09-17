@@ -18,6 +18,8 @@ public struct PhotoPool {
     /// Where what is added and removed is counted, once each batch commits.
     /// The shared record everywhere; a test hands in its own.
     public let changes: LibraryChanges
+    /// Where each batch's `REFRESH:` line goes. See `RefreshBatchTiming`.
+    public var reportBatch: @Sendable (RefreshBatchTiming) -> Void = { $0.report() }
 
     public init(database: Database, changes: LibraryChanges = .shared) {
         self.database = database
@@ -71,16 +73,15 @@ public struct PhotoPool {
 
     /// The same upsert, for a caller that is already `async`.
     ///
-    /// **This is the write that holds SQLite's writer longest.** A scan of a
-    /// network folder inserts thousands of rows, five hundred to a transaction,
-    /// for as long as the walk takes — thirty-nine seconds for one source on
-    /// 2026-08-25. Done through the synchronous form from an async task, every
-    /// contended batch parks a cooperative-pool thread, and four concurrent
-    /// walks are enough to leave nothing for serving to run on: eight picture
-    /// requests went unanswered across ninety-two seconds, returning neither a
-    /// photograph nor a `204`.
+    /// **This is the write that held SQLite's writer longest.** A scan of a
+    /// network folder writes for as long as the walk takes — thirty-nine seconds
+    /// for one source on 2026-08-25. Done through the synchronous form from an
+    /// async task, every contended page parks a cooperative-pool thread, and
+    /// four concurrent walks were enough to leave nothing for serving to run on:
+    /// eight picture requests went unanswered across ninety-two seconds,
+    /// returning neither a photograph nor a `204`.
     ///
-    /// Awaiting between batches also gives the rest of the process a turn, which
+    /// Awaiting between pages also gives the rest of the process a turn, which
     /// the synchronous loop never did.
     @discardableResult
     public func upsert(
@@ -92,13 +93,29 @@ public struct PhotoPool {
     ) async throws -> (added: Int, updated: Int) {
         var added = 0
         var updated = 0
-        for batch in photos.chunked(into: Self.batchSize) {
-            let counts = try await database.transaction(.immediate) {
-                try applyUpsert(batch, to: source, at: now, onAdded: onAdded)
+        for page in photos.chunked(into: Self.batchSize) {
+            var timing = RefreshBatchTiming(work: .upsert, rows: page.count, source: source.id)
+            let plan = try planUpsert(page, to: source, timing: &timing)
+            var written = UpsertWrite()
+            if !plan.isEmpty {
+                timing.locked = true
+                let asked = ContinuousClock.now
+                var bodyEnded = asked
+                written = try await database.transaction(.immediate) {
+                    timing.waited = ContinuousClock.now - asked
+                    let holding = ContinuousClock.now
+                    defer {
+                        bodyEnded = ContinuousClock.now
+                        timing.held = bodyEnded - holding
+                    }
+                    return try applyUpsert(plan, to: source, at: now, timing: &timing)
+                }
+                timing.commit = ContinuousClock.now - bodyEnded
+                timing.held += timing.commit
             }
-            changes.added(counts.added, toSource: source.id)
-            added += counts.added
-            updated += counts.updated
+            finishUpsert(written, to: source, timing: &timing, onAdded: onAdded)
+            added += written.added.count
+            updated += written.updated
         }
         return (added, updated)
     }
@@ -107,25 +124,38 @@ public struct PhotoPool {
     @discardableResult
     public func remove(
         _ photoIDs: [Int64],
+        countingChanges: Bool = true,
         isolation: isolated (any Actor)? = #isolation
     ) async throws -> Removal {
         guard !photoIDs.isEmpty else { return .none }
-        var removed = 0
-        var orphaned: [String] = []
-        for batch in photoIDs.chunked(into: Self.batchSize) {
-            let batchResult = try await database.transaction(.immediate) {
-                try applyRemoval(batch)
+        var removal = Removal.none
+        for page in photoIDs.chunked(into: Self.batchSize) {
+            var timing = RefreshBatchTiming(work: .remove, rows: page.count, source: nil)
+            let rows = try planRemoval(page, timing: &timing)
+            var deleted: [RemovalRow] = []
+            if !rows.isEmpty {
+                timing.locked = true
+                let asked = ContinuousClock.now
+                var bodyEnded = asked
+                deleted = try await database.transaction(.immediate) {
+                    timing.waited = ContinuousClock.now - asked
+                    let holding = ContinuousClock.now
+                    defer {
+                        bodyEnded = ContinuousClock.now
+                        timing.held = bodyEnded - holding
+                    }
+                    return try applyRemoval(rows, timing: &timing)
+                }
+                timing.commit = ContinuousClock.now - bodyEnded
+                timing.held += timing.commit
             }
-            for (source, count) in batchResult.bySource {
-                changes.removed(count, fromSource: source)
-            }
-            removed += batchResult.removed
-            orphaned.append(contentsOf: batchResult.orphaned)
+            reportBatch(timing)
+            finishRemoval(deleted, into: &removal, countingChanges: countingChanges)
         }
-        if removed > 0 {
-            Log.sources.notice("removed \(removed, privacy: .public) entries from the pool")
+        if removal.count > 0 {
+            Log.sources.notice("removed \(removal.count, privacy: .public) entries from the pool")
         }
-        return Removal(count: removed, orphaned: orphaned)
+        return removal
     }
 
     /// What makes two rows the same photograph, whichever source found them.
@@ -154,20 +184,32 @@ public struct PhotoPool {
         return externalID
     }
 
-    /// Rows per write transaction. Large enough that a fifty-thousand-photo
-    /// folder is not fifty thousand transactions, small enough that it never
-    /// holds the single writer lock long enough for a consumer to notice.
-    public static let batchSize = 500
+    /// Rows per page: what one unlocked read decides, and one write lock covers.
+    ///
+    /// **100 since 2026-09-16; it was 500.** Syd: "long locks in the database
+    /// are death", and "pages of 100". The probe that night measured 500-row
+    /// batches holding the writer up to 1,114 ms while adding nothing, and on
+    /// why pages at all: "I don't mind building large lists in memory, doing a
+    /// lock, and doing a large SQL command; however, doing this 100 at a time
+    /// saves ram and keeps the database locks short". `Agent Performance
+    /// Overhaul.md`, *The refresh locks only to write*.
+    public static let batchSize = 100
 
-    /// Inserts what is new and updates what changed, one batch at a time.
+    /// Inserts what is new and updates what changed, a page at a time.
+    ///
+    /// **Each page is read before it is written.** The lookups that decide what
+    /// a page must write run with no lock, and the lock is taken only when they
+    /// found something — so a refresh that finds its source as it left it takes
+    /// no write lock for its photographs at all. Until 2026-09-16 every page
+    /// took the lock and did its lookups inside it.
     ///
     /// Two statements rather than an upsert, because the caller needs to know
     /// which photos were *new* — that is what gets reported as a change — and
-    /// `changes()` cannot tell an insert from a conflict-update. The second
-    /// statement only runs when the first found the row already there.
+    /// `changes()` cannot tell an insert from a conflict-update.
     ///
-    /// `onAdded` fires per new photo so the caller can report it without
-    /// collecting a list. Nothing here retains a photo past its batch.
+    /// `onAdded` fires per new photo, after its page commits, so the caller can
+    /// report it without collecting a list. Nothing here retains a photo past
+    /// its page.
     @discardableResult
     public func upsert(
         _ photos: [DiscoveredPhoto],
@@ -177,29 +219,90 @@ public struct PhotoPool {
     ) throws -> (added: Int, updated: Int) {
         var added = 0
         var updated = 0
-        for batch in photos.chunked(into: Self.batchSize) {
-            let counts = try database.transaction(.immediate) {
-                try applyUpsert(batch, to: source, at: now, onAdded: onAdded)
+        for page in photos.chunked(into: Self.batchSize) {
+            var timing = RefreshBatchTiming(work: .upsert, rows: page.count, source: source.id)
+            let plan = try planUpsert(page, to: source, timing: &timing)
+            var written = UpsertWrite()
+            if !plan.isEmpty {
+                timing.locked = true
+                let asked = ContinuousClock.now
+                var bodyEnded = asked
+                written = try database.transaction(.immediate) {
+                    timing.waited = ContinuousClock.now - asked
+                    let holding = ContinuousClock.now
+                    defer {
+                        bodyEnded = ContinuousClock.now
+                        timing.held = bodyEnded - holding
+                    }
+                    return try applyUpsert(plan, to: source, at: now, timing: &timing)
+                }
+                timing.commit = ContinuousClock.now - bodyEnded
+                timing.held += timing.commit
             }
-            changes.added(counts.added, toSource: source.id)
-            added += counts.added
-            updated += counts.updated
+            finishUpsert(written, to: source, timing: &timing, onAdded: onAdded)
+            added += written.added.count
+            updated += written.updated
         }
         return (added, updated)
     }
 
-    /// One batch, assumed to be inside a transaction already — which is what
-    /// lets the synchronous and `async` forms above differ in nothing but how
-    /// they wait for the writer.
-    private func applyUpsert(
-        _ batch: ArraySlice<DiscoveredPhoto>,
-        to source: Source,
-        at now: Date,
-        onAdded: ((DiscoveredPhoto) -> Void)?
-    ) throws -> (added: Int, updated: Int) {
-        var added = 0
+    /// What a page's lookups found it must write.
+    struct UpsertPlan {
+        var additions: [DiscoveredPhoto] = []
+        var changes: [DiscoveredPhoto] = []
+        var isEmpty: Bool { additions.isEmpty && changes.isEmpty }
+    }
+
+    /// What a page's write did.
+    struct UpsertWrite {
+        var added: [DiscoveredPhoto] = []
         var updated = 0
-        for photo in batch {
+    }
+
+    /// Reads, with no lock, what a page must write: the photographs this source
+    /// holds no row for, and those whose storage or size moved.
+    ///
+    /// A photograph another source already holds under the same identity is
+    /// neither. It stays that source's, as `INSERT OR IGNORE` left it before
+    /// (`SchemaV9`).
+    private func planUpsert(
+        _ page: ArraySlice<DiscoveredPhoto>, to source: Source, timing: inout RefreshBatchTiming
+    ) throws -> UpsertPlan {
+        let started = ContinuousClock.now
+        defer { timing.lookups = ContinuousClock.now - started }
+        var plan = UpsertPlan()
+        for photo in page {
+            let row = try database.first(
+                "SELECT storage, byte_size FROM photo WHERE source_id = :source AND external_id = :external;",
+                ["source": .int(source.id), "external": .text(photo.externalID)],
+                { (storage: try $0.string("storage"), size: try $0.optionalInt64("byte_size")) }
+            )
+            if let row {
+                if row.storage != photo.storage.rawValue || row.size != photo.byteSize {
+                    plan.changes.append(photo)
+                }
+                continue
+            }
+            let elsewhere = try database.scalarInt(
+                "SELECT COUNT(*) FROM photo WHERE identity = :identity;",
+                ["identity": .text(Self.identity(of: photo.externalID, in: source))]) ?? 0
+            if elsewhere == 0 { plan.additions.append(photo) }
+        }
+        return plan
+    }
+
+    /// A page's writes, inside a transaction already.
+    ///
+    /// **The statements keep their guards** — `INSERT OR IGNORE`, and the
+    /// update's `WHERE` on what moved — so a row another writer added or
+    /// changed between the lookups and the lock is left as that writer made it,
+    /// and the next refresh sees it as it is.
+    private func applyUpsert(
+        _ plan: UpsertPlan, to source: Source, at now: Date, timing: inout RefreshBatchTiming
+    ) throws -> UpsertWrite {
+        var written = UpsertWrite()
+        let inserting = ContinuousClock.now
+        for photo in plan.additions {
             try database.run(
                 """
                 INSERT OR IGNORE INTO photo
@@ -215,10 +318,8 @@ public struct PhotoPool {
                     "uuid": .text(UUID().uuidString.lowercased()),
                     "source": .int(source.id),
                     "external": .text(photo.externalID),
-                    // The second `OR IGNORE` this statement can hit, and the
-                    // one that matters here: the row is already present from
-                    // *another* source. It stays that source's, and this scan
-                    // moves on. See `SchemaV9`.
+                    // The row may have arrived from *another* source since
+                    // the lookups. It stays that source's. See `SchemaV9`.
                     "identity": .text(Self.identity(of: photo.externalID, in: source)),
                     "media": .text(photo.mediaType.rawValue),
                     "enabled": SQLValue(source.enabled),
@@ -228,16 +329,14 @@ public struct PhotoPool {
                     "now": SQLValue(now),
                 ]
             )
-            if database.changes == 1 {
-                added += 1
-                onAdded?(photo)
-                continue
-            }
+            if database.changes == 1 { written.added.append(photo) }
+        }
+        timing.inserts = ContinuousClock.now - inserting
 
-            // Already known. Update only if something we track moved,
-            // so an unchanged library does not dirty a page per photo
-            // per scan. `IS NOT` rather than `<>` because byte_size is
-            // nullable and `NULL <> NULL` is null, not true.
+        // `IS NOT` rather than `<>` because byte_size is nullable and
+        // `NULL <> NULL` is null, not true.
+        let updating = ContinuousClock.now
+        for photo in plan.changes {
             try database.run(
                 """
                 UPDATE photo
@@ -252,71 +351,147 @@ public struct PhotoPool {
                     "size": SQLValue(photo.byteSize),
                 ]
             )
-            updated += database.changes
+            written.updated += database.changes
         }
-        return (added, updated)
+        timing.updates = ContinuousClock.now - updating
+        return written
+    }
+
+    /// After a page's lock: the callbacks, the count, and the `REFRESH:` line.
+    private func finishUpsert(
+        _ written: UpsertWrite, to source: Source, timing: inout RefreshBatchTiming,
+        onAdded: ((DiscoveredPhoto) -> Void)?
+    ) {
+        let calling = ContinuousClock.now
+        if let onAdded { for photo in written.added { onAdded(photo) } }
+        timing.callbacks = ContinuousClock.now - calling
+        timing.added = written.added.count
+        timing.changed = written.updated
+        reportBatch(timing)
+        changes.added(written.added.count, toSource: source.id)
     }
 
     /// What a removal left behind for someone else to clean up.
     public struct Removal: Sendable, Equatable {
-        public let count: Int
+        public var count: Int
         /// The identities of the photographs that went. The pool has no idea
         /// where the cache root is, so it reports these rather than deleting
         /// anything; whoever owns the bytes discards them by identity.
-        public let orphaned: [String]
+        public var orphaned: [String]
+        /// The files of the resized copies that went with them. Their rows
+        /// cascade away with the photographs'; the files are read first, so
+        /// whoever owns the bytes can delete those too. `PhotoStore.discard`.
+        public var orphanedCopies: [String] = []
 
         public static let none = Removal(count: 0, orphaned: [])
     }
 
-    /// Removes entries by row id.
+    /// Removes entries by row id, a page at a time.
     ///
     /// Queue entries for these photos cascade away, so removing from the pool
     /// takes them out of the queue in the same statement.
+    ///
+    /// **Each page is read before the lock**, like an upsert's: the identity,
+    /// source and copies of each row, which are needed after it goes. A copy
+    /// saved in the moment between is left as a file with no row, which the
+    /// first eviction after the next launch clears.
+    ///
+    /// `countingChanges` is false for a whole source going, which is counted
+    /// once as the source's (`LibraryChanges.sourceRemoved`).
     @discardableResult
-    public func remove(_ photoIDs: [Int64]) throws -> Removal {
+    public func remove(_ photoIDs: [Int64], countingChanges: Bool = true) throws -> Removal {
         guard !photoIDs.isEmpty else { return .none }
-        var removed = 0
-        var orphaned: [String] = []
-
-        for batch in photoIDs.chunked(into: Self.batchSize) {
-            let result = try database.transaction(.immediate) { try applyRemoval(batch) }
-            for (source, count) in result.bySource {
-                changes.removed(count, fromSource: source)
+        var removal = Removal.none
+        for page in photoIDs.chunked(into: Self.batchSize) {
+            var timing = RefreshBatchTiming(work: .remove, rows: page.count, source: nil)
+            let rows = try planRemoval(page, timing: &timing)
+            var deleted: [RemovalRow] = []
+            if !rows.isEmpty {
+                timing.locked = true
+                let asked = ContinuousClock.now
+                var bodyEnded = asked
+                deleted = try database.transaction(.immediate) {
+                    timing.waited = ContinuousClock.now - asked
+                    let holding = ContinuousClock.now
+                    defer {
+                        bodyEnded = ContinuousClock.now
+                        timing.held = bodyEnded - holding
+                    }
+                    return try applyRemoval(rows, timing: &timing)
+                }
+                timing.commit = ContinuousClock.now - bodyEnded
+                timing.held += timing.commit
             }
-            removed += result.removed
-            orphaned.append(contentsOf: result.orphaned)
+            reportBatch(timing)
+            finishRemoval(deleted, into: &removal, countingChanges: countingChanges)
         }
-        if removed > 0 {
-            Log.sources.notice("removed \(removed, privacy: .public) entries from the pool")
+        if removal.count > 0 {
+            Log.sources.notice("removed \(removal.count, privacy: .public) entries from the pool")
         }
-        return Removal(count: removed, orphaned: orphaned)
+        return removal
     }
 
-    /// One batch, assumed to be inside a transaction already.
-    private func applyRemoval(
-        _ batch: ArraySlice<Int64>
-    ) throws -> (removed: Int, orphaned: [String], bySource: [Int64: Int]) {
-        var removed = 0
-        var orphaned: [String] = []
-        var bySource: [Int64: Int] = [:]
-        for id in batch {
-            // Read the identity and the source before the row goes: the one
-            // is how the bytes are found afterwards, the other is what the
-            // removal is counted against. No row means nothing to delete.
-            //
+    /// One row a removal page found, with what must be known before it goes.
+    struct RemovalRow {
+        let id: Int64
+        /// How the bytes are found afterwards.
+        let uuid: String
+        /// What the removal is counted against.
+        let source: Int64
+        /// Its resized copies' files; their rows cascade with it.
+        let copies: [String]
+    }
+
+    /// Reads, with no lock, the rows of a page that are still there.
+    private func planRemoval(
+        _ page: ArraySlice<Int64>, timing: inout RefreshBatchTiming
+    ) throws -> [RemovalRow] {
+        let started = ContinuousClock.now
+        defer { timing.lookups = ContinuousClock.now - started }
+        var rows: [RemovalRow] = []
+        for id in page {
             // The closure is parenthesized rather than trailing, so the call
             // reads the same wherever it is moved to.
-            let row = try database.first(
-                "SELECT uuid, source_id FROM photo WHERE id = :id;", ["id": .int(id)],
-                { (uuid: try $0.string("uuid"), source: try $0.int64("source_id")) }
-            )
-            if let row { orphaned.append(row.uuid) }
-            try database.run("DELETE FROM photo WHERE id = :id;", ["id": .int(id)])
-            let deleted = database.changes
-            removed += deleted
-            if let row, deleted > 0 { bySource[row.source, default: 0] += deleted }
+            guard
+                let row = try database.first(
+                    "SELECT uuid, source_id FROM photo WHERE id = :id;", ["id": .int(id)],
+                    { (uuid: try $0.string("uuid"), source: try $0.int64("source_id")) }
+                )
+            else { continue }
+            rows.append(
+                RemovalRow(
+                    id: id, uuid: row.uuid, source: row.source,
+                    copies: try ResizedCopies.files(ofPhotos: [id], in: database)))
         }
-        return (removed, orphaned, bySource)
+        return rows
+    }
+
+    /// A page's deletes, inside a transaction already. Answers the rows it
+    /// deleted: one another writer took first is not this removal's.
+    private func applyRemoval(
+        _ rows: [RemovalRow], timing: inout RefreshBatchTiming
+    ) throws -> [RemovalRow] {
+        let deleting = ContinuousClock.now
+        defer { timing.deletes = ContinuousClock.now - deleting }
+        var deleted: [RemovalRow] = []
+        for row in rows {
+            try database.run("DELETE FROM photo WHERE id = :id;", ["id": .int(row.id)])
+            if database.changes > 0 { deleted.append(row) }
+        }
+        return deleted
+    }
+
+    /// After a page's lock: what went, added to the removal so far.
+    private func finishRemoval(
+        _ deleted: [RemovalRow], into removal: inout Removal, countingChanges: Bool
+    ) {
+        removal.count += deleted.count
+        removal.orphaned += deleted.map(\.uuid)
+        removal.orphanedCopies += deleted.flatMap(\.copies)
+        guard countingChanges else { return }
+        for (source, rows) in Dictionary(grouping: deleted, by: \.source) {
+            changes.removed(rows.count, fromSource: source)
+        }
     }
 
     @discardableResult

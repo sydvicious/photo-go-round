@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Synchronization
 import Testing
 
 @testable import PhotoGoRoundKit
@@ -13,22 +14,60 @@ import Testing
 /// the kind that looks right and is not: a body that spans two TCP reads, a
 /// `Content-Length` nobody honours, a client that hangs up halfway. None of that
 /// is visible from `parse`, so these speak HTTP at a bound port.
-@Suite("Request bodies")
+///
+/// **A listener that never becomes ready fails at the suite's time limit**, not
+/// at a clock of its own; see `BoundPort`.
+@Suite("Request bodies", .timeLimit(.minutes(1)))
 struct RequestBodyTests {
 
-    /// Every wait in this file is bounded by one of these, and none of them is
-    /// generous — a listener that has decided not to answer will never change
-    /// its mind, so waiting longer only turns a failure into a wedged suite with
-    /// nothing to read.
+    /// Every reply wait in this file is bounded by one of these, and none of
+    /// them is generous — a listener that has decided not to answer will never
+    /// change its mind, so waiting longer only turns a failure into a wedged
+    /// suite with nothing to read.
     private enum Deadline {
-        /// Long enough for a bind on a loaded machine, short enough that a
-        /// listener that never becomes ready is a failed test rather than a
-        /// stalled run.
-        static let ready = Duration.seconds(2)
         /// The whole exchange is loopback and the pauses this file inserts
         /// between writes are milliseconds, so a reply that has not begun by now
         /// is not coming.
         static let reply = Duration.seconds(2)
+    }
+
+    /// The port a listener bound, awaited from its `onReady` rather than polled.
+    ///
+    /// **Polling on a clock is what made this suite flaky.** It checked every
+    /// 10 ms for two seconds, and in full parallel runs on 2026-09-16 the
+    /// listener was always ready by the first check — but the 10 ms sleep
+    /// before it resumed 1.2 to 1.96 s late, on a cooperative pool other
+    /// suites were holding, and past two seconds the loop gave up without
+    /// looking again: "timed out waiting for the listener to bind a port"
+    /// about a port already bound. Syd: "we fixed flaky timing tests at Indeed
+    /// by using await Task {}.run." So the test waits on the callback itself,
+    /// and a listener that never calls it fails at the suite's time limit.
+    final class BoundPort: Sendable {
+        private let state = Mutex<(port: UInt16?, waiting: CheckedContinuation<UInt16, Never>?)>(
+            (nil, nil))
+
+        /// The listener's `onReady`.
+        func set(_ port: UInt16) {
+            let waiting = state.withLock { state in
+                state.port = port
+                defer { state.waiting = nil }
+                return state.waiting
+            }
+            waiting?.resume(returning: port)
+        }
+
+        var value: UInt16 {
+            get async {
+                await withCheckedContinuation { continuation in
+                    let port = state.withLock { state -> UInt16? in
+                        if let port = state.port { return port }
+                        state.waiting = continuation
+                        return nil
+                    }
+                    if let port { continuation.resume(returning: port) }
+                }
+            }
+        }
     }
 
     private struct TimedOut: Error, CustomStringConvertible {
@@ -40,7 +79,7 @@ struct RequestBodyTests {
     /// what arrived rather than about what any endpoint did with it.
     private final class Echo: @unchecked Sendable {
         let listener: HTTPListener
-        private let ready = Ready()
+        private let ready = BoundPort()
 
         init() throws {
             listener = HTTPListener(
@@ -61,28 +100,8 @@ struct RequestBodyTests {
 
         /// The bound port, waited for rather than assumed: binding is
         /// asynchronous and the number is only known once it has happened.
-        func port() async throws -> UInt16 {
-            let giveUp = ContinuousClock.now + Deadline.ready
-            while ContinuousClock.now < giveUp {
-                if let port = ready.value { return port }
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            throw TimedOut(waitingFor: "the listener to bind a port")
-        }
-
-        private final class Ready: @unchecked Sendable {
-            private let lock = NSLock()
-            private var port: UInt16?
-            func set(_ new: UInt16) {
-                lock.lock()
-                port = new
-                lock.unlock()
-            }
-            var value: UInt16? {
-                lock.lock()
-                defer { lock.unlock() }
-                return port
-            }
+        func port() async -> UInt16 {
+            await ready.value
         }
     }
 
@@ -190,7 +209,7 @@ struct RequestBodyTests {
         let body = #"[{"path": "/tmp/one"}]"#
         let answer = try await speak(
             [head("/v1/sources", contentLength: body.utf8.count) + body],
-            to: try await echo.port())
+            to: await echo.port())
 
         #expect(answer.contains("200 OK"))
         #expect(answer.hasSuffix("POST /v1/sources \(body.utf8.count) \(body)"))
@@ -204,7 +223,7 @@ struct RequestBodyTests {
         // rather than answering the moment the blank line lands.
         let answer = try await speak(
             [head("/v1/sources", contentLength: body.utf8.count), body],
-            to: try await echo.port())
+            to: await echo.port())
 
         #expect(answer.contains("200 OK"))
         #expect(answer.hasSuffix("POST /v1/sources \(body.utf8.count) \(body)"))
@@ -217,7 +236,7 @@ struct RequestBodyTests {
         let body = pieces.joined()
         let answer = try await speak(
             [head("/v1/sources", contentLength: body.utf8.count)] + pieces,
-            to: try await echo.port())
+            to: await echo.port())
 
         #expect(answer.hasSuffix("POST /v1/sources \(body.utf8.count) \(body)"))
     }
@@ -227,7 +246,7 @@ struct RequestBodyTests {
         let echo = try Echo()
         let answer = try await speak(
             ["GET /v1/next?w=10&h=10 HTTP/1.1\r\nHost: localhost\r\n\r\n"],
-            to: try await echo.port())
+            to: await echo.port())
 
         #expect(answer.contains("200 OK"))
         #expect(answer.hasSuffix("GET /v1/next 0 "))
@@ -253,13 +272,7 @@ struct RequestBodyTests {
         let payload = String(repeating: "0123456789", count: 60_000)
         try Data(payload.utf8).write(to: file)
 
-        final class Ready: @unchecked Sendable {
-            private let lock = NSLock()
-            private var port: UInt16?
-            func set(_ new: UInt16) { lock.lock(); port = new; lock.unlock() }
-            var value: UInt16? { lock.lock(); defer { lock.unlock() }; return port }
-        }
-        let ready = Ready()
+        let ready = BoundPort()
         let listener = HTTPListener(
             port: nil, advertising: "/file", onReady: { [ready] in ready.set($0) }
         ) { _ in
@@ -273,12 +286,7 @@ struct RequestBodyTests {
         try listener.start()
         defer { listener.stop() }
 
-        var port: UInt16?
-        for _ in 0..<100 {
-            if let bound = ready.value { port = bound; break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let bound = try #require(port)
+        let bound = await ready.value
 
         let answer = try await speak(["GET /file HTTP/1.1\r\n\r\n"], to: bound)
         #expect(answer.contains("200 OK"))
@@ -297,7 +305,7 @@ struct RequestBodyTests {
         // which is the point: the refusal cannot depend on reading the body.
         let answer = try await speak(
             [head("/v1/sources", contentLength: HTTPListener.maximumBodyBytes + 1)],
-            to: try await echo.port())
+            to: await echo.port())
 
         #expect(answer.contains("413 Payload Too Large"))
     }
@@ -308,7 +316,7 @@ struct RequestBodyTests {
         // A FIN before the blank line ever arrives. The request is truncated,
         // not oversized, and the refusal should say which.
         let answer = try await speak(
-            ["GET /v1/nex"], to: try await echo.port(), thenHangUp: true)
+            ["GET /v1/nex"], to: await echo.port(), thenHangUp: true)
 
         #expect(answer.contains("400 Bad Request"))
         #expect(!answer.contains("431"))
@@ -321,7 +329,7 @@ struct RequestBodyTests {
         // case the 431 exists for.
         let filler = "X-Filler: " + String(repeating: "a", count: 70 * 1024) + "\r\n"
         let answer = try await speak(
-            ["GET /echo HTTP/1.1\r\n" + filler], to: try await echo.port())
+            ["GET /echo HTTP/1.1\r\n" + filler], to: await echo.port())
 
         #expect(answer.contains("431"))
     }
@@ -331,7 +339,7 @@ struct RequestBodyTests {
         let echo = try Echo()
         let answer = try await speak(
             [head("/v1/sources", contentLength: 64) + "[{\"path\":"],
-            to: try await echo.port(), thenHangUp: true)
+            to: await echo.port(), thenHangUp: true)
 
         #expect(answer.contains("400 Bad Request"))
         // Half a list of sources is not a list of sources.

@@ -14,8 +14,9 @@
 import ExtensionFoundation
 import Foundation
 import OSLog
+import PhotoGoRoundAgentAPI
 
-let extensionLog = Logger(subsystem: "com.sydpolk.photogoround", category: "system-wallpaper")
+let extensionLog = Logger(subsystem: Log.subsystem, category: "system-wallpaper")
 
 /// One `.notice` line. Public: nothing here is private, and the log is how a
 /// process with no window is diagnosed at all.
@@ -29,6 +30,7 @@ final class WallpaperExtension: AppExtension {
         let info = ProcessInfo.processInfo
         let sandbox = info.environment["APP_SANDBOX_CONTAINER_ID"] ?? "none"
         wallpaperLog("extension started, pid \(info.processIdentifier), sandbox container \(sandbox)")
+        wallpaperLog(Identity.summary)
 
         // The private classes `WallpaperAgent` sends, and expects back, live
         // here. Nothing can be decoded or answered until it is loaded.

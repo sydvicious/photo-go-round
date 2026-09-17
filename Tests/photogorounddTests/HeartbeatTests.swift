@@ -50,7 +50,6 @@ struct HeartbeatTests {
         #expect(!heartbeat.isDue(.refresh, every: .seconds(300), at: epoch))
         // Never run, so due — a long refresh must not make the queue look fresh.
         #expect(heartbeat.isDue(.queue, every: .seconds(30), at: epoch))
-        #expect(heartbeat.isDue(.maintenance, every: .seconds(600), at: epoch))
     }
 
     @Test("The doorbell overrides the clock")

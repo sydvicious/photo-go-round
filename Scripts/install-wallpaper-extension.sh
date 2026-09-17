@@ -22,15 +22,18 @@
 # is dead and worth clearing; one pointing at a bundle somebody else built is
 # theirs.
 #
+# **The identifier is read from the bundle it is given.** Release, Syd's Debug
+# builds and Claude's builds each have their own — `…wallpaper.extension`,
+# `…wallpaper.debug.extension`, `…wallpaper.claude.extension` — so that no build
+# registers over, or is removed as, another's. `Wallpaper Plan.md`, *Debug
+# builds under their own identity*.
+#
 # **It needs `ENABLE_USER_SCRIPT_SANDBOXING = NO`**, which the install target
 # sets. Under the sandbox `pluginkit -a` still registers, but `pluginkit -m`
 # returns nothing, so this script cannot see its own work and fails an install
 # that in fact succeeded. Measured 2026-09-15.
 
 set -euo pipefail
-
-EXTENSION_ID="com.sydpolk.photogoround.wallpaper.extension"
-EXTENSION_PROCESS="Photo-Go-Round Wallpaper"
 
 APPEX="${1:-${BUILT_PRODUCTS_DIR:-}/${CONTENTS_FOLDER_PATH:-}/Extensions/Photo-Go-Round Wallpaper.appex}"
 
@@ -39,35 +42,61 @@ if [[ ! -d "$APPEX" ]]; then
     exit 1
 fi
 
-# Every copy holding this identifier, whatever path it was built at.
+EXTENSION_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APPEX/Contents/Info.plist" 2>/dev/null || true)"
+if [[ "$EXTENSION_ID" != com.sydpolk.photogoround.wallpaper*.extension ]]; then
+    echo "install-wallpaper-extension: $APPEX has no Photo-Go-Round wallpaper identifier (read \"$EXTENSION_ID\")" >&2
+    exit 1
+fi
+
+# Every Photo-Go-Round wallpaper registration, as "identifier path", whatever
+# identity and whatever path it was built at.
 #
 # `pluginkit -m -D -v` prints one record per line: identifier(version), a UUID,
 # then a date whose own fields vary, then the path. Counting fields gets the date
 # wrong — measured, it left "+0000 " glued to the front of the path — so the path
 # is taken as everything from the first slash on, which is unambiguous because a
 # bundle path is absolute and nothing before it contains one.
-registered_paths() {
+registrations() {
     pluginkit -m -D -v -p com.apple.wallpaper 2>/dev/null \
-        | grep -F "$EXTENSION_ID(" \
-        | sed -n 's|^[^/]*\(/.*\)$|\1|p'
+        | sed -n 's|^[[:space:]]*\(com\.sydpolk\.photogoround\.wallpaper[^(]*\)([^/]*\(/.*\)$|\1 \2|p'
 }
 
-while IFS= read -r other; do
+# `if`, not `&&`: under `pipefail` a last record for another identity would
+# otherwise end the loop non-zero and fail the check below that found its path.
+registered_paths() {
+    registrations | while IFS=' ' read -r id path; do
+        if [[ "$id" == "$EXTENSION_ID" ]]; then echo "$path"; fi
+    done
+}
+
+# **A registration is dead when its bundle is gone, or no longer holds the
+# identifier it was registered under** — the second is what a rebuild at the
+# same path under a new identity leaves behind, as Syd's Debug build did when it
+# moved from `…wallpaper.extension` to `…wallpaper.debug.extension`. A live
+# registration is somebody else's build and is left alone, whichever identity.
+while IFS=' ' read -r id other; do
     [[ -n "$other" ]] || continue
-    [[ "$other" == "$APPEX" ]] && continue
-    if [[ -d "$other" ]]; then
+    [[ "$id" == "$EXTENSION_ID" && "$other" == "$APPEX" ]] && continue
+    holds="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$other/Contents/Info.plist" 2>/dev/null || true)"
+    if [[ "$holds" == "$id" ]]; then
         echo "install-wallpaper-extension: leaving another live copy registered"
-        echo "  $other"
+        echo "  $id  $other"
         continue
     fi
-    echo "install-wallpaper-extension: removing a registration whose bundle is gone"
-    echo "  $other"
+    if [[ -d "$other" ]]; then
+        echo "install-wallpaper-extension: removing a registration whose bundle now holds $holds"
+    else
+        echo "install-wallpaper-extension: removing a registration whose bundle is gone"
+    fi
+    echo "  $id  $other"
     pluginkit -r "$other" 2>/dev/null || true
-done < <(registered_paths)
+done < <(registrations)
 
 # A suspended extension process keeps answering after a rebuild, which cost a
-# debugging round during the probes. It is launched again on demand.
-killall "$EXTENSION_PROCESS" 2>/dev/null || true
+# debugging round during the probes. It is launched again on demand. **Only the
+# process running from this bundle**: every identity's process has the same name,
+# so `killall` by name would stop another build's wallpaper too.
+pkill -f "$APPEX/Contents/MacOS/" 2>/dev/null || true
 
 pluginkit -a "$APPEX"
 

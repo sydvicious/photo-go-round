@@ -30,6 +30,7 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
   - macOS 27 and later only.
   - The pane's wallpaper asks the agent as `system-wallpaper`; the app's keeps asking as `wallpaper`. See *Two wallpapers, told apart in the log*. *Since 2026-09-16 nothing asks as `wallpaper`.*
   - The app's wallpaper stays alongside the pane's until Syd decides on the App Store. *Reversed 2026-09-16: the app's loop is removed, and comes back from git if the sandboxed version needs it. See* The app's loop, removed.
+  - Debug builds under their own identifier and name, so a development build never replaces the wallpaper that is chosen. **Built 2026-09-16: the probe passed all five gates, then the second slice, installed on Syd's machine that night.** *Until then: "Proposed 2026-09-16; not built."* See *Debug builds under their own identity*.
   - **Exit gate:** not yet decided.
 
 # Design Decisions
@@ -87,6 +88,12 @@ The wallpaper is the other half of the original complaint: Apple's picker chokes
 - **"yes, build the fourth probe"**, and **"yes, record it in the plan"** — 2026-09-15.
 - **"Let's build the real extension. For now, we should just use the agent as the source of everything, and you can only change settings using the application or the command-line tool. The next stage would be to put a sources panel and timing slider directly into the extension"** — 2026-09-15. See *The real extension, inside the app*.
 - **"the app is NOT sandboxed, and you should know that"** — 2026-09-15, correcting a sloppy sentence of Claude's. The app target is unsandboxed; only the appex is sandboxed, which the extension point requires and which the probes ran with.
+- **"is there a way to build debug builds of the wallpaper that have a different title and bundle id?"**, then **"yes, plan the debug wallpaper identities"** and **"section in Wallpaper Plan.md"** — 2026-09-16. See *Debug builds under their own identity*.
+- **"three identities"** — 2026-09-16: Release, Syd's Debug builds, and Claude's builds each have their own. See *Debug builds under their own identity*.
+- **"those names are fine"** — 2026-09-16: *Photo-Go-Round Wallpaper (Debug)* and *Photo-Go-Round Wallpaper (Claude)* in the pane.
+- **"yes, probe first"** — 2026-09-16. See *Debug builds under their own identity*, *Probe first*.
+- **"yes"** — 2026-09-16, to Claude's `.claude` build staying registered while Syd looks at the pane, then being removed. See *Probe first*.
+- **"I would prefer that they both go in the same section"** — 2026-09-16, of the Release or Debug item and Claude's in the pane. See *What the probe found*.
 
 *Decided before this plan*
 
@@ -1043,6 +1050,84 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
 - **TODO.md, *Sandboxing, and whether the App Store is reachable***, does not mention the wallpaper. *2026-09-14: Syd's "reverse-engineering the wallpaper extension API will mean we can't sandbox this" — corrected to "you are right about the App Store; that is what I meant" — belongs there too, as does "We will continue to support both until I decide on trying to sandbox or not."; see* Getting into System Settings › Wallpaper. Sandboxing it would move its files out of `Application Support` and into a real container — Syd: "we will probably have to move it if we want to sandbox."
 - **TODO.md, *A wallpaper bundle, so the wallpaper runs without the app***, written earlier on 2026-09-14, does not know that the bundle is meant for the Wallpaper pane, that the probe comes first, or that the saver's script is the model Syd expects. Not changed; Syd asked for this file only.
 
+## Debug builds under their own identity
+
+Syd, 2026-09-16: "is there a way to build debug builds of the wallpaper that have a different title and bundle id?", then "yes, plan the debug wallpaper identities". **Proposed 2026-09-16; not built. Everything below is Claude's until Syd decides it.**
+
+**The problem.** Every build of the extension is `com.sydpolk.photogoround.wallpaper.extension`, and pkd keeps one registration per identifier. Whichever build registered last is the one `WallpaperAgent` launches, and in the pane they look the same. It has already happened three times: on 2026-09-15 a copy built by Claude registered itself and was loaded instead of Syd's; on 2026-09-16 building the `Photo-Go-Round Wallpaper` scheme into Claude's DerivedData re-embedded the appex into an old host and registered that; and the same evening **removing** one of Claude's stray copies stopped Syd's — see *What the probe found*.
+
+**Three identities.** *Syd's, 2026-09-16: "three identities" — Release, his Debug builds, and Claude's, rather than Claude's builds sharing the Debug one.*
+
+| Build | Host | Extension | Name in the pane |
+|---|---|---|---|
+| Release | `com.sydpolk.photogoround.wallpaper` | `com.sydpolk.photogoround.wallpaper.extension` | Photo-Go-Round Wallpaper |
+| Debug, from Syd's Xcode | `com.sydpolk.photogoround.wallpaper.debug` | `com.sydpolk.photogoround.wallpaper.debug.extension` | Photo-Go-Round Wallpaper (Debug) |
+| Claude's builds | `com.sydpolk.photogoround.wallpaper.claude` | `com.sydpolk.photogoround.wallpaper.claude.extension` | Photo-Go-Round Wallpaper (Claude) |
+
+*The names in the pane are Syd's, 2026-09-16: "those names are fine".*
+
+- **Release does not change.** Same identifiers, same names.
+- **The extension's identifier stays prefixed by the host's**, which an embedded extension requires.
+- **Claude's builds are Debug too**, so `#if DEBUG` and the configuration alone cannot tell them from Syd's. Claude's third identity comes from the `xcodebuild` command line instead.
+
+**How it is set.**
+
+- **Two build settings on the host and extension targets:** `WALLPAPER_ID_SUFFIX` (empty in Release, `.debug` in Debug) and `WALLPAPER_NAME_SUFFIX` (empty in Release, ` (Debug)` in Debug). `PRODUCT_BUNDLE_IDENTIFIER` becomes `com.sydpolk.photogoround.wallpaper$(WALLPAPER_ID_SUFFIX)` and `…$(WALLPAPER_ID_SUFFIX).extension`. The setting names are Claude's.
+- **Claude builds with `WALLPAPER_ID_SUFFIX=.claude` and `"WALLPAPER_NAME_SUFFIX= (Claude)"`** on the `xcodebuild` line. A command-line setting applies to every target in the build, so host and extension agree.
+- **The names come from the bundle, not from `#if DEBUG`.** Both Info.plists get `CFBundleDisplayName` with the suffix, and two new keys in the extension's carry the pane item's identifier and name, `PGRWallpaperItemID` (`photo-go-round$(WALLPAPER_ID_SUFFIX)`) and `PGRWallpaperName`. `Identity` reads them from `Bundle.main`; `PaneModels` uses them for the item. **The section is the same in every build**, `photo-go-round` headed *Photo-Go-Round* — Syd, 2026-09-16: "I would prefer that they both go in the same section". *Until then the section took the suffix too; see* What the probe found. `PaneThumbnail` draws the item's name on the placeholder picture; the pane's small thumbnail has no title.
+- **A missing name fails loudly.** `PaneModels` falls back to the literal Release identifier when `Bundle.main.bundleIdentifier` is nil; that fallback goes, and so does any fallback for the name, so a bundle built wrong shows up as an error in the log rather than as the Release wallpaper.
+- **Signing is automatic** under team `R5PQPZARC5`, so the new identifiers should get their profiles without anything registered by hand. *Not yet tried.*
+
+**What follows the identifier.**
+
+- **`Scripts/install-wallpaper-extension.sh`** hard-codes the Release identifier. It reads it instead from the appex it was given, with `/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier"`, so it registers, waits for and reports whichever identity was built. *Built 2026-09-16, and it fails loudly on a bundle with no Photo-Go-Round wallpaper identifier. Its stale-registration sweep now covers every identity, and counts a registration dead when its bundle is gone **or no longer holds the identifier it was registered under** — what a rebuild at the same path under a new identity leaves.*
+- **`Scripts/uninstall.sh`** hard-codes it too. `--wallpaper` removes all three identities. *Built 2026-09-16.*
+- **`killall "Photo-Go-Round Wallpaper"`** in both scripts. `PRODUCT_NAME` does not change, so the process name is the same for all three and an install stops every identity's running extension, not only its own. ~~*Claude's reading: harmless, since `WallpaperAgent` relaunches the one that is chosen — not measured.*~~ *Changed when built, 2026-09-16: the install stops only the process running from the bundle it installs, `pkill -f "$APPEX/Contents/MacOS/"`, since the probe showed a stopped chosen extension can leave `WallpaperAgent` wedged. `uninstall.sh --wallpaper` still stops them all by name, since it removes them all.*
+- **The sandbox container** is named by the extension's identifier, so each identity has its own `Application Support`, and `LastPicture` remembers pictures for each identity apart. A new identity starts with nothing remembered and shows the generated picture until the agent answers.
+- **Preferences and agents do not follow it.** The extension reads `com.sydpolk.photogoround.wallpaper.dev` and `.prod` by deployment, and asks the development agent and then the production one, whatever its own identifier. The entitlement's exceptions name those domains, not the bundle, and do not change. A Debug and a Release wallpaper share settings.
+- **The log.** Every identity logs under the same subsystem and process name. The extension logs its bundle identifier once at launch, so a line says which identity ran.
+- **Claude's own clean-up** after a build still unregisters and deletes its copy — Xcode registers every host it builds, whatever the identifier. The identity stops the collision; it does not stop the registration. The check becomes `pluginkit -m -D -v -p com.apple.wallpaper` for `.claude.extension`.
+
+**Moving Syd's machine over.** Syd's wallpaper today is a Debug build under the Release identifier. After this lands, the Install Wallpaper Extension scheme registers `.debug.extension` from the same path, and the pane's current choice names a provider that is no longer built. Syd re-chooses *Photo-Go-Round Wallpaper (Debug)* once, and the old registration is removed with `./Scripts/uninstall.sh --wallpaper` before the install. *Simpler as built, 2026-09-16: no uninstall. The install finds the old `…wallpaper.extension` registration pointing at a bundle that now holds `…wallpaper.debug.extension`, removes it as dead, registers the new one, and restarts `WallpaperAgent`; Syd re-chooses the item once. **Run on Syd's machine at 22:04 the same night**, Syd: "wallpaper extension installed and Debug chosen". `pluginkit` then listed only `…wallpaper.debug.extension`, from his DerivedData — the old `…wallpaper.extension` registration was gone; the extension logged `identifier com.sydpolk.photogoround.wallpaper.debug.extension, item identifier photo-go-round.debug`, and at 22:04:19 the agent served it two pictures that the desktop showed.*
+
+**Probe first.** *Syd's, 2026-09-16: "yes, probe first".* **Built 2026-09-16 at Syd's "yes, build the probe"; all five gates pass.** *Until then: "Proposed the same day; not built."*
+
+*Claude's proposal:* the probe is the first slice of the real thing, not a throwaway, and it is run with Claude's identity so Syd's wallpaper is never touched.
+
+- **In the project:** `WALLPAPER_ID_SUFFIX` and `WALLPAPER_NAME_SUFFIX`, **empty in both Debug and Release**, and the identifiers and names built from them as above. `PaneModels` and `PaneThumbnail` read the name from the bundle, and the extension logs its identifier at launch. Every build of Syd's comes out exactly as today.
+- **Claude builds the host scheme with `WALLPAPER_ID_SUFFIX=.claude` and `"WALLPAPER_NAME_SUFFIX= (Claude)"`** into `~/.claude/build/photo-go-round`. Xcode registers it, as it registers every host it builds.
+- **It stays registered while Syd looks at the pane**, then Claude unregisters and deletes it as after any build. *Syd's, 2026-09-16: "yes" — an exception, for this probe, to Claude's builds being unregistered at once.*
+- **The scripts and Syd's `.debug` suffix are the second slice**, after the probe passes.
+
+The gates:
+
+1. **Both registered.** `pluginkit -m -D -v -p com.apple.wallpaper` lists `com.sydpolk.photogoround.wallpaper.extension` from Syd's DerivedData and `com.sydpolk.photogoround.wallpaper.claude.extension` from Claude's. Claude checks.
+2. **Two sections in the pane**, *Photo-Go-Round* and *Photo-Go-Round (Claude)*. The group and item identifiers are both `photo-go-round` in each, and whether the pane keys them by provider or they collide is not known. Syd looks.
+3. **Syd's chosen wallpaper keeps running** while Claude's is registered: the agent keeps serving `system-wallpaper` at Syd's interval, and the extension's launch lines name only his identifier. Claude reads the log.
+4. **Automatic signing** makes profiles for the `.claude` identifiers from the command line without a prompt. Claude sees it in the build.
+5. **Removing Claude's copy leaves Syd's running.** Added 2026-09-16 after *What the probe found*: when Claude unregisters and deletes the `.claude` copy, Syd's extension process is not terminated and his next change still happens. Claude reads the log.
+
+*Not covered by the probe:* whether the install script's `killall` of the shared process name disturbs another identity, and moving Syd's machine over. Both belong to the second slice.
+
+### What the probe found
+
+*2026-09-16, evening.*
+
+- **Built** with `WALLPAPER_ID_SUFFIX=.claude` and `"WALLPAPER_NAME_SUFFIX= (Claude)"`, `-allowProvisioningUpdates`, into `~/.claude/build/photo-go-round/DerivedData`. No warnings or errors in the build's output. The host is `com.sydpolk.photogoround.wallpaper.claude`, *Photo-Go-Round Wallpaper Host (Claude)*; the extension is `com.sydpolk.photogoround.wallpaper.claude.extension`, *Photo-Go-Round (Claude)*, with `PGRWallpaperName` *Photo-Go-Round Wallpaper (Claude)* and `PGRWallpaperSectionName` *Photo-Go-Round (Claude)*. Without the overrides, `-showBuildSettings` gives `com.sydpolk.photogoround.wallpaper` in both Debug and Release, as before.
+- **Gate 1 passes.** `pluginkit` lists `com.sydpolk.photogoround.wallpaper.claude.extension` from Claude's DerivedData beside `com.sydpolk.photogoround.wallpaper.extension` from Syd's, which kept its 13:26 registration.
+- **Gate 4 passes.** Signed under team `R5PQPZARC5` from the command line with no prompt.
+- **Syd's wallpaper was already stopped, and had been since 20:12:21 — by Claude, not by the probe.** Its last picture was served at 20:03, on a thirty-minute interval, and nothing after. At 20:12:21.93 its process, pid 811, exited on `SIGTERM`, and runningboardd removed it. At **20:12:20.7**, 1.2 seconds earlier, Claude had run `pluginkit -r` on a stray copy of its own under the same identifier, `com.sydpolk.photogoround.wallpaper.extension`, from `~/.claude/build/photo-go-round/intents-check`. Nothing else touched the wallpaper in that window: no build in Syd's DerivedData since 2026-09-16 18:01, and no pkd, `pluginkit` or build-service lines. Since then `WallpaperAgent` (pid 740, never restarted) fails every update with `NSCocoaErrorDomain` 4099 and has not relaunched the extension — at 21:03:11, for one. *Claude's reading: removing a registration under the identifier of a running, chosen extension terminated it, and left `WallpaperAgent` wedged as it was once before (see* Not yet decided*). The timing is measured; that the one caused the other is not, beyond the 1.2 seconds.* It is the problem this section exists to solve, from the other side: not only registering a copy under the shared identifier, but removing one.
+- **Gates 2, 3 and 5 wait** until Syd's wallpaper is running again. *At 21:12 Syd ran `killall WallpaperAgent`; the new `WallpaperAgent` acquired his extension for the desktop at 21:12:49.*
+- **Gate 2 failed first time: one section.** Syd, 21:12: "I see yours but not mine." Both extensions answered `provideSettingsViewModels`, three times each, and the pane showed only *Photo-Go-Round (Claude)*. Both used `photo-go-round` for the section's and the item's identifier. *Fixed the same evening:* a third key, `PGRWallpaperItemID`, is `photo-go-round$(WALLPAPER_ID_SUFFIX)` and names both, so Release keeps `photo-go-round` — and with it the configuration Syd's chosen wallpaper is stored under — and Claude's is `photo-go-round.claude`. Which of the two identifiers collided was not separated. Rebuilt; waiting on Syd to look again.
+- **Gate 2 passes with two sections.** Syd, after reopening System Settings: "I see both sections now."
+- **Syd wants one section.** Same message: "I would prefer that they both go in the same section". *Claude's proposal, not built:* the section's identifier and heading stay `photo-go-round` and *Photo-Go-Round* in every build, and only the item's identifier and name take the suffix. Not known: whether the pane puts two providers' items with the same section identifier into one section, or keeps only the last answer's section as it did when both identifiers were shared. The placeholder picture's title would take the item's name, since the heading no longer says which build it is.
+- **Built at Syd's "yes, try it"**, the same evening: `PGRWallpaperSectionName` is gone, the section is `photo-go-round` and *Photo-Go-Round* in code, and the placeholder's title is the item's name. Claude's copy rebuilt with no warnings or errors, and registered again; Syd's extension kept running through it. Waiting on Syd to look.
+- **Gate 2 passes with one section.** Syd: "both items are in the same section now." So the pane merges two providers' items under one section identifier; it was the shared *item* identifier that left one.
+- **Syd's wallpaper is chosen and running again.** At 21:17:11 `WallpaperAgent` acquired his extension for the desktop, and at 21:17:12 the agent served card 5138 to `system-wallpaper`. His interval is `tenMinutes`, so gate 3 is his next change, due about 21:27, with Claude's copy still registered.
+- **Gate 3 passes.** At 21:27:11 the agent served card 3658 to `system-wallpaper` from Syd's extension, pid 58311, with Claude's copy registered and running beside it.
+- **Gate 5 passes.** At 21:27:33 Claude ran `pluginkit -r` on its copy, deleted the host and the stray appex from its products, and stopped its copy's process by pid — not by name, which would have taken Syd's too. Syd's pid 58311 kept running, and at 21:37:12 the agent served it card 2086. Unlike 20:12, when Claude removed a copy under Syd's own identifier and his extension was terminated 1.2 seconds later.
+- **All five gates pass.** The second slice — the `.debug` suffix for Syd's builds, the scripts reading the identifier from the bundle, `uninstall.sh` removing all three, and moving Syd's machine over — is next, and not yet approved to build. *Built the same night at Syd's "yes, build the wallpaper second slice": Debug is `…wallpaper.debug` and `…wallpaper.debug.extension`, named "(Debug)"; Release unchanged; `-showBuildSettings` confirms all three identities. The scripts are checked by `bash -n` and the registration parser against `pluginkit`'s real output and a path with spaces; the install itself is first run by Syd.*
+
 ## Not yet decided
 
 - **Selecting a background colour as an option.** Syd: "We may add selecting background color as an option later." It joins the other options held for later.
@@ -1072,9 +1157,10 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
   - ~~whether the section also appears in the Screen Saver picker~~ — *answered 2026-09-15: it did, and no longer does. See* The real extension, inside the app;
   - ~~why the first real run's request took 9041 ms, when the fourth probe measured 225 ms~~ — *answered 2026-09-15: the agent was fetching and caching an original at the time. Later requests in the same session took 402, 1409 and 1702 ms*;
   - **a card is spent per `acquire`, on top of the interval.** Each `acquire` asks the agent at once and then starts its rotation, so opening the pane or re-choosing the wallpaper costs a picture immediately. Worth weighing against the alternative, which is a desktop that keeps the previous picture until the next tick. *An earlier note here claimed rotations were stacking, from three fetches seen in ten seconds on 2026-09-15; that was wrong — the interval had been set to `tenSeconds` and the timer was firing exactly as asked.*
-  - whether unregistering a *selected* extension wedges `WallpaperAgent` permanently. Observed once on 2026-09-15: every `acquire` failed with `NSCocoaErrorDomain` 4099 and `runningboardd` logged no launch attempt at all, while the bundle was present and both signatures verified. Recovery was a `killall WallpaperAgent` **and** re-selecting the wallpaper, so which of the two mattered is not established;
+  - whether unregistering a *selected* extension wedges `WallpaperAgent` permanently. Observed on 2026-09-15, and again from 20:12 on 2026-09-16 (see *What the probe found*): every `acquire` failed with `NSCocoaErrorDomain` 4099 and `runningboardd` logged no launch attempt at all, while the bundle was present and both signatures verified. Recovery was a `killall WallpaperAgent` **and** re-selecting the wallpaper, so which of the two mattered is not established;
   - ~~whether the rotation fires as set~~ — *answered 2026-09-15: it does. At `tenSeconds` the agent served cards 6398, 4654, 8996, 5993 and 6223 at 21:10:02, :12, :22, :32 and :43 — ten seconds apart, each a new picture on the desktop, and Syd: "the picture is changing"*;
   - Phase 2's exit gate — *proposed 2026-09-15 in* The real extension, inside the app.
+- ~~**Everything in *Debug builds under their own identity*** — *three identities and their names in the pane decided 2026-09-16;* the suffixes on the `xcodebuild` line for Claude's builds, names read from the bundle, and how the probe is run — *probe first decided 2026-09-16*.~~ *Built 2026-09-16; see* What the probe found.
 - **Separate pools of sources for the wallpaper and the screensaver.** `PLAN.md`, *TODO: separate pools of sources*, and Syd's "in addition to sources later".
 
 # References

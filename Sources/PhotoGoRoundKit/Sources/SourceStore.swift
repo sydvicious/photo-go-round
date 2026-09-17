@@ -66,8 +66,8 @@ public struct SourceStore {
     /// same way rather than reaching for a path.
     public let fileAccess: any FileAccess
     /// Add and remove entries. The queue pulls from this and does not care who
-    /// filled it.
-    public let pool: PhotoPool
+    /// filled it. A `var` so a test can hear its `REFRESH:` lines.
+    public var pool: PhotoPool
     /// What is on disk, so that removing a photograph's row can remove its bytes
     /// in the same breath.
     ///
@@ -258,17 +258,41 @@ public struct SourceStore {
     /// *source* is touched: removal is not deletion.
     @discardableResult
     public func remove(id: Int64) throws -> Int64 {
-        // Read before the row goes, and in the same transaction as the delete:
-        // the cascade takes the photographs with it, so afterwards there is
-        // nothing left to count or to name, and a refresh landing a batch in
-        // between would be deleted without being counted.
-        let (gone, photos) = try database.transaction(.immediate) {
-            let gone = try source(id: id)
-            let photos = try pool.size(forSource: id)
-            try database.run("DELETE FROM source WHERE id = :id;", ["id": .int(id)])
-            return (gone, photos)
+        // **Its photographs in pages of 100, then the row.** Until 2026-09-16
+        // this was one transaction around the source's `DELETE`, whose cascade
+        // took every photograph with it: for Favorites, 8,547 deletes under one
+        // lock while every surface asked for pictures. `Agent Performance
+        // Overhaul.md`, *Removing a source*.
+        //
+        // **The count is read before the first page.** A refresh that lands a
+        // page for this source between removal's pages adds rows it does not
+        // include; they go all the same, in a later page or in the row's final
+        // cascade. Syd: "pages of 100, accept the count".
+        let gone = try source(id: id)
+        let photos = try pool.size(forSource: id)
+        var copies: [String] = []
+        while true {
+            let page = try database.all(
+                "SELECT id FROM photo WHERE source_id = :id LIMIT :limit;",
+                ["id": .int(id), "limit": .int(Int64(PhotoPool.batchSize))]
+            ) { try $0.int64("id") }
+            guard !page.isEmpty else { break }
+            // Counted once, below, as the whole source's.
+            let removal = try pool.remove(page, countingChanges: false)
+            copies += removal.orphanedCopies
+            // Rows found and not deleted were taken by another writer first;
+            // stopping here leaves them to the row's cascade rather than
+            // reading the same page forever.
+            if removal.count == 0 { break }
         }
-        let freed = gone.map { bytes?.removeSource($0.uuid) ?? 0 } ?? 0
+        // The row, and whatever arrived after the last page, which cascades.
+        // Those photographs' copies are named first.
+        copies += try database.transaction(.immediate) {
+            let late = try ResizedCopies.files(ofSource: id, in: database)
+            try database.run("DELETE FROM source WHERE id = :id;", ["id": .int(id)])
+            return late
+        }
+        let freed = gone.map { bytes?.removeSource($0.uuid, copies: copies) ?? 0 } ?? 0
         if let gone {
             pool.changes.sourceRemoved(gone, photos: photos)
             errors.clearStanding(source: id)
@@ -486,9 +510,9 @@ public struct SourceStore {
         {
             // **The source was removed while this scan was walking it.**
             //
-            // A walk of a large folder runs for minutes and writes in batches
-            // of five hundred. Removing that source from the panel deletes its
-            // row, every `photo` row cascades away with it, and the next batch
+            // A walk of a large folder runs for minutes and writes in pages
+            // of 100. Removing that source from the panel deletes its
+            // row, every `photo` row cascades away with it, and the next page
             // inserts a `source_id` that no longer names anything. `OR IGNORE`
             // does not cover foreign keys, so it lands here.
             //
@@ -589,17 +613,19 @@ public struct SourceStore {
         try database.run(
             "DELETE FROM walk_seen WHERE source_id = :id;", ["id": .int(source.id)])
 
-        // **`async`, so the batch write suspends rather than blocking.** This is
-        // the write that holds SQLite's writer longest — thousands of rows, five
-        // hundred to a transaction, for as long as a network walk takes. Doing
-        // it synchronously from an async task parked a cooperative-pool thread
-        // on every contended batch, and four concurrent walks left nothing for
-        // serving to run on. See `PhotoPool.upsert`'s async form.
+        // **`async`, so a page's write suspends rather than blocking.** This is
+        // the write that held SQLite's writer longest — thousands of rows, for
+        // as long as a network walk takes. Doing it synchronously from an async
+        // task parked a cooperative-pool thread on every contended page, and
+        // four concurrent walks left nothing for serving to run on. Since
+        // 2026-09-16 a page is 100 photographs, read before the lock and
+        // written only if something changed. See `PhotoPool.upsert`.
         func flush() async throws {
             guard !pending.isEmpty else { return }
             let counts = try await pool.upsert(pending, to: source, at: now) { photo in
                 onChange?(.added(externalID: photo.externalID))
             }
+            let recording = ContinuousClock.now
             for photo in pending {
                 try database.run(
                     """
@@ -609,6 +635,9 @@ public struct SourceStore {
                     ["source": .int(source.id), "external": .text(photo.externalID)]
                 )
             }
+            let line = RefreshBatchTiming.walkSeen(
+                rows: pending.count, source: source.id, took: ContinuousClock.now - recording)
+            Log.sources.info("\(line, privacy: .public)")
             added += counts.added
             updated += counts.updated
             pending.removeAll(keepingCapacity: true)
@@ -617,8 +646,10 @@ public struct SourceStore {
         let reachability = try await provider.enumerate(source) { photo in
             seen += 1
             pending.append(photo)
-            // Batched only to keep the write transaction count sane. The buffer
-            // is five hundred entries, not a library.
+            // **A page of 100, written as the walk goes.** Syd, 2026-09-16:
+            // "as the walk goes, 100 at a time" — so a first walk of a large
+            // album shows its photographs while it runs. The buffer is a page,
+            // not a library.
             if pending.count >= PhotoPool.batchSize { try await flush() }
         }
 
@@ -675,6 +706,7 @@ public struct SourceStore {
         var freed: Int64 = 0
 
         while true {
+            let querying = ContinuousClock.now
             let departed = try database.all(
                 """
                 SELECT p.id AS id, p.external_id AS external_id
@@ -688,6 +720,9 @@ public struct SourceStore {
                 """,
                 ["id": .int(source.id), "limit": .int(Int64(PhotoPool.batchSize))]
             ) { (id: try $0.int64("id"), externalID: try $0.string("external_id")) }
+            let line = RefreshBatchTiming.departedQuery(
+                source: source.id, found: departed.count, took: ContinuousClock.now - querying)
+            Log.sources.info("\(line, privacy: .public)")
             guard !departed.isEmpty else { break }
 
             for entry in departed { onChange?(.removed(externalID: entry.externalID)) }
@@ -698,9 +733,7 @@ public struct SourceStore {
             // nested in one that is no longer recursive — is not coming back,
             // and the cached original and its renderings were the only things
             // still holding that space.
-            for uuid in removal.orphaned {
-                freed += bytes?.remove(photoUUID: uuid) ?? 0
-            }
+            freed += bytes?.discard(removal) ?? 0
         }
 
         // Done with, and dropped rather than left for the connection's lifetime:

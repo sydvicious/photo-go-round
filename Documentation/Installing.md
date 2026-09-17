@@ -24,9 +24,11 @@ It ends with `serving pictures on http://localhost:<port>/v1/next` when it is up
 
 ## 2. Install Wallpaper Extension
 
-Scheme **Install Wallpaper Extension**, ⌘B. It builds **Photo-Go-Round Wallpaper Host**, the shell app that carries the extension, then `Scripts/install-wallpaper-extension.sh` stops any running extension process, registers the appex with `pluginkit`, waits for `pkd` to record it, restarts `WallpaperAgent` so the desktop is re-acquired, and checks Photos access.
+Scheme **Install Wallpaper Extension**, ⌘B. It builds **Photo-Go-Round Wallpaper Host**, the shell app that carries the extension, then `Scripts/install-wallpaper-extension.sh` stops the extension process running from that bundle, removes dead registrations, registers the appex with `pluginkit`, waits for `pkd` to record it, restarts `WallpaperAgent` so the desktop is re-acquired, and checks Photos access.
 
-Then System Settings › Wallpaper › **Photo-Go-Round Wallpaper**, in the Photo-Go-Round section:
+A Debug build is `com.sydpolk.photogoround.wallpaper.debug.extension`, named **Photo-Go-Round Wallpaper (Debug)**; Release is `com.sydpolk.photogoround.wallpaper.extension`, **Photo-Go-Round Wallpaper**. Both appear in the same Photo-Go-Round section.
+
+Then System Settings › Wallpaper › **Photo-Go-Round Wallpaper (Debug)**, in the Photo-Go-Round section:
 
 ```bash
 open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
@@ -62,7 +64,7 @@ grep "▸" /tmp/com.sydpolk.photogoround.server.log | tail -10
 
 ## Reinstalling
 
-Build the same target again. Each script replaces its own product and nothing else: the agent's plist is rewritten, the extension's stale registrations — those whose bundle no longer exists — are removed and the new copy registered, the saver's old bundle is replaced. Selections in System Settings survive.
+Build the same target again. Each script replaces its own product and nothing else: the agent's plist is rewritten, the extension's dead registrations — those whose bundle no longer exists, or now holds a different identifier — are removed and the new copy registered, the saver's old bundle is replaced. Selections in System Settings survive.
 
 ## Removing
 

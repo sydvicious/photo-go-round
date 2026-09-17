@@ -181,11 +181,8 @@ reading.
 
 `sources remove <id>`
 Drops it from preferences; its photos and their queue entries go with it by
-cascade. Its cached bytes are *not* deleted at that moment — the rows that named
-them are gone, so nothing is left pointing at the files. A running agent
-reclaims them on its next maintenance pass, which sweeps cached files no pool
-entry claims. To free the space immediately, or with no agent running, use
-`cache clear --source <id>` **before** removing it.
+cascade, and its cached bytes — originals and resized copies — are deleted at
+that moment. Reports what it freed.
 
 `sources enable <id>`, `sources disable <id>`
 Switch a source off without discarding it. **Disabling is not removing**: the
@@ -253,22 +250,24 @@ means the fetches are not keeping up.
 
 `cache status`
 Originals held, how many photographs are referenced in place rather than copied,
-how many are waiting for bytes, what is on disk against the byte ceiling, and
+how many are waiting for bytes, what is on disk against the byte ceiling —
+originals and resized copies together — and
 what is free on the volume. Also the number of queued pictures.
 
 `cache evict`
-Runs an eviction pass now rather than waiting for the agent's maintenance
-interval. Reports what went and what it freed.
+Runs an eviction pass now: the same pass the agent runs after every file it
+writes to the cache. When everything fits under the ceiling it takes nothing, and says so.
+Reports what went and what it freed.
 
-**Longest-unseen first, and nothing is exempt.** A photograph that has never been
-shown counts as of the moment it arrived, so it is the newest thing in the cache
-and the last to go rather than the first. Nothing is held back — an exemption is
-a ceiling that cannot be reached, which matters when the ceiling is set low or
-the volume fills from outside the agent.
+**Oldest file first, originals and resized copies alike, by when the file was
+made.** An original's age is when it was fetched, however recently it was shown.
+Nothing is held back but the last original — an exemption is a ceiling that
+cannot be reached, which matters when the ceiling is set low or the volume fills
+from outside the agent.
 
 `cache clear`
-Discards cached bytes, optionally scoped by `--source` or to
-`--unavailable` sources. Prompts with data of how much would be cleared and asks
+Discards cached bytes — originals and resized copies — optionally scoped by
+`--source` or to `--unavailable` sources. Prompts with data of how much would be cleared and asks
 for confirmation to proceed. It does not touch anything else in the system, including
 shuffle order (_internal testing only_).
 

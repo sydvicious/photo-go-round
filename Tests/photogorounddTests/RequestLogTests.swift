@@ -11,7 +11,7 @@ import Testing
 /// system's log store and are read back with `log show`, long after anything
 /// could assert on them. So the endpoint writes through an injected sink, and
 /// these tests collect the values instead of watching a terminal.
-@Suite("Request logging")
+@Suite("Request logging", .timeLimit(.minutes(2)))
 struct RequestLogTests {
 
     private final class Collector: @unchecked Sendable {
@@ -46,7 +46,7 @@ struct RequestLogTests {
             preferences: Preferences(defaults: scratchSuite("log")),
             store: PhotoStore(root: cacheRoot),
             queueRanShort: {}
-        )
+        ).awaitingResizes()
         endpoint.log = { collector.record($0) }
         return (endpoint, { try? FileManager.default.removeItem(at: directory) })
     }

@@ -22,8 +22,6 @@ struct Heartbeat: Sendable {
         case refresh
         /// Seed the queue if it is empty.
         case queue
-        /// Evict cached bytes over the ceiling.
-        case maintenance
     }
 
     /// When each job last *finished*. Absent means never, which is due now.
@@ -73,7 +71,7 @@ struct Heartbeat: Sendable {
     /// a queue seeded on a tick reflects whatever the refresh just found.
     static func order(launching: Bool) -> [Work] {
         launching
-            ? [.preferences, .queue, .refresh, .maintenance]
-            : [.preferences, .refresh, .queue, .maintenance]
+            ? [.preferences, .queue, .refresh]
+            : [.preferences, .refresh, .queue]
     }
 }

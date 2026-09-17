@@ -2,6 +2,7 @@ import AppKit
 import OSLog
 import PhotoGoRoundDisplay
 import ScreenSaver
+import PhotoGoRoundAgentAPI
 
 /// The screensaver: one photograph at a time, sized to fit, on black.
 ///
@@ -24,7 +25,7 @@ public final class PGRScreenSaverView: ScreenSaverView {
 
     /// `nonisolated` so `deinit`, which is not on the main actor, can say the
     /// view went away. `Logger` is `Sendable`, so nothing is lost by it.
-    private nonisolated static let log = Logger(subsystem: "com.sydpolk.photogoround", category: "saver")
+    private nonisolated static let log = Logger(subsystem: Log.subsystem, category: "saver")
 
     /// The photograph. A subview rather than this view's own layer, because it
     /// is the same one the window uses and it owns its own geometry.

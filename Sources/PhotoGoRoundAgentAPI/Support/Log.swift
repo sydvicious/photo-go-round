@@ -22,7 +22,27 @@ import OSLog
 /// `QueueEvent.report`, which names photographs throughout — were already
 /// public whole.
 public enum Log {
-    public static let subsystem = "com.sydpolk.photogoround"
+    /// `com.sydpolk.photogoround`, or `com.sydpolk.photogoround.tests` in a
+    /// test run.
+    ///
+    /// **A test run logs apart. Since 2026-09-16.** Every test wrote under the
+    /// agent's subsystem, as `swiftpm-testing-helper`, so `log show` on the Mac
+    /// that ran them mixed fake photographs, port 9000 and `test:` consumers in
+    /// with the real agent's lines. Syd: "fix that test logging". Everything
+    /// that logs names this rather than spelling the string, so one decision
+    /// covers the kit, the display module, the app, the saver and the wallpaper.
+    public static let subsystem = subsystem(
+        forProcess: ProcessInfo.processInfo.processName,
+        environment: ProcessInfo.processInfo.environment)
+
+    /// A test run is `swift test`'s helper or `xctest`, or any process Xcode
+    /// started to host tests, which it marks with `XCTestConfigurationFilePath`.
+    static func subsystem(forProcess name: String, environment: [String: String]) -> String {
+        let testing =
+            name == "swiftpm-testing-helper" || name == "xctest"
+            || environment["XCTestConfigurationFilePath"] != nil
+        return testing ? "com.sydpolk.photogoround.tests" : "com.sydpolk.photogoround"
+    }
 
     public static let sql = Logger(subsystem: subsystem, category: "sql")
     public static let deck = Logger(subsystem: subsystem, category: "deck")

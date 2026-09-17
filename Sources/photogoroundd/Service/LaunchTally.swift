@@ -4,7 +4,7 @@ import PhotoGoRoundKit
 
 /// What the agent has done since it launched: pictures handed over, by
 /// consumer, the last one handed over, what serving and dealing found in the
-/// cache, and what maintenance evicted from it.
+/// cache, and what eviction took from it.
 ///
 /// **In memory, and gone at exit, on purpose.** The dashboard asks "since
 /// launch", and a count that survived a restart would answer a different
@@ -47,15 +47,17 @@ final class LaunchTally: @unchecked Sendable {
         case timedOut
     }
 
-    /// What maintenance took from the cache.
+    /// What eviction took from the cache.
     ///
-    /// **The agent's own passes only.** `pgr_ctl cache evict` and `cache clear`
-    /// run in another process and are not seen here, and bytes that left because
-    /// their photograph or source left the library are not evictions at all.
+    /// **The agent's own passes only**, which follow every file it writes to
+    /// the cache — see `PhotoCache.evictAfterWriting()`. `pgr_ctl cache evict`
+    /// and `cache clear` run in another process and are not seen here, and
+    /// bytes that left because their photograph or source left the library are
+    /// not evictions at all.
     struct Evictions: Codable, Equatable, Sendable {
         var photos = 0
         var bytesFreed: Int64 = 0
-        /// Maintenance passes that evicted anything.
+        /// Eviction passes that evicted anything.
         var passes = 0
         /// When the most recent of those passes ran. Absent until one has.
         var lastAt: Date? = nil
@@ -149,7 +151,7 @@ final class LaunchTally: @unchecked Sendable {
         }
     }
 
-    /// One maintenance pass. A pass that evicted nothing is not counted.
+    /// One eviction pass. A pass that evicted nothing is not counted.
     func record(_ eviction: PhotoCache.EvictionResult, at now: Date = Date()) {
         guard eviction.evicted > 0 else { return }
         lock.lock()

@@ -44,11 +44,13 @@ enum PaneThumbnail {
                 locations: [0, 1])
         else { return nil }
         context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
-        guard title else { return context.makeImage() }
+        // The title is the item's name, suffix and all, so a development
+        // build's placeholder says which build it is. No name, no title.
+        guard title, let name = Identity.itemName else { return context.makeImage() }
 
         let font = CTFontCreateWithName("Helvetica-Bold" as CFString, CGFloat(height) / 14, nil)
         let text = NSAttributedString(
-            string: "Photo-Go-Round",
+            string: name,
             attributes: [
                 NSAttributedString.Key(kCTFontAttributeName as String): font,
                 NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 1, alpha: 1),

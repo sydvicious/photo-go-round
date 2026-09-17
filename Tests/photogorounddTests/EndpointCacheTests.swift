@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 
@@ -21,7 +22,7 @@ import UniformTypeIdentifiers
 /// consecutive requests normally hand out different pictures; with one
 /// photograph every request is the same card, which is what makes a hit
 /// observable.
-@Suite("Endpoint cache")
+@Suite("Endpoint cache", .timeLimit(.minutes(2)))
 struct EndpointCacheTests {
 
     /// Collects what the endpoint said it did, so the records can be read
@@ -82,7 +83,8 @@ struct EndpointCacheTests {
             endpoint = PictureEndpoint(
                 databasePath: path, cacheRoot: cacheRoot,
                 preferences: Preferences(defaults: defaults),
-                store: store, queueRanShort: {}, log: { collector.record($0) })
+                store: store, queueRanShort: {}, log: { collector.record($0) }
+            ).awaitingResizes()
         }
 
         deinit { try? FileManager.default.removeItem(at: directory) }
@@ -303,33 +305,71 @@ struct EndpointCacheTests {
         #expect(!(try #require(records.last).summary.contains("· cache ")))
     }
 
-    @Test("The same size asked for twice renders twice and keeps nothing on disk")
-    func nothingIsKeptBetweenRequests() async throws {
+    /// **Reversed on 2026-09-16.** This test was "the same size asked for twice
+    /// renders twice and keeps nothing on disk", the contract of *The resize
+    /// cache is removed*. Syd, bringing the cache back: "we should start caching
+    /// the resized images again to reduce the workload on the resize queue."
+    @Test("The same size asked for twice resizes once; another size resizes again")
+    func theSameSizeIsResizedOnce() async throws {
         let library = try Library()
         try await library.fill()
-
-        let before = library.cache.store.totals
-
-        _ = try await library.get("w=200&h=200")
-        _ = try await library.get("w=200&h=200")
-
-        // **The contract this replaced the resize cache with.** The bytes went
-        // under `(photo, resolution)` until 2026-09-06, where a window moved two
-        // pixels remade the whole set for a hit a shuffle almost never takes.
-        // Only originals are held now, so serving cannot grow the store.
-        let after = library.cache.store.totals
-        #expect(after.entries == before.entries)
-        #expect(after.byteCount == before.byteCount)
-
-        // And nothing is on disk beside `.original`.
-        let manager = FileManager.default
-        let sources = (try? manager.contentsOfDirectory(
-            at: library.cache.store.root, includingPropertiesForKeys: nil)) ?? []
-        for source in sources {
-            let children = (try? manager.contentsOfDirectory(
-                at: source, includingPropertiesForKeys: nil)) ?? []
-            #expect(children.allSatisfy { $0.lastPathComponent == ".original" })
+        let resizes = Mutex(0)
+        var endpoint = library.endpoint
+        endpoint.resizer = Resizer()
+        endpoint.resize = { original, width, height, format in
+            resizes.withLock { $0 += 1 }
+            return try PhotoRenderer.render(contentsOf: original, fitting: width, by: height, as: format)
         }
+        let originals = library.cache.store.totals
+
+        func get(_ box: String) async throws -> HTTPListener.Response {
+            _ = try await library.cache.fillCompletely()
+            return await endpoint.route(try library.request("/v1/next?\(box)"))
+        }
+        let first = try await get("w=200&h=200")
+        let second = try await get("w=200&h=200")
+        #expect(first.status == 200 && second.status == 200)
+        #expect(resizes.withLock { $0 } == 1)
+        #expect(second.headers["X-PGR-Pixels"] == first.headers["X-PGR-Pixels"])
+
+        #expect(try await get("w=300&h=300").status == 200)
+        #expect(resizes.withLock { $0 } == 2, "a different box is a different copy")
+
+        // The originals are what they were: copies are kept beside them.
+        #expect(library.cache.store.totals == originals)
+    }
+
+    /// Syd, 2026-09-16: "You can serve the copy if the original has been
+    /// evicted."
+    @Test("A sized request is served from its copy after the original has been evicted")
+    func copyOutlivesItsOriginal() async throws {
+        let library = try Library()
+        try await library.fill(materialized: true)
+        let resizes = Mutex(0)
+        var endpoint = library.endpoint
+        endpoint.resizer = Resizer()
+        endpoint.resize = { original, width, height, format in
+            resizes.withLock { $0 += 1 }
+            return try PhotoRenderer.render(contentsOf: original, fitting: width, by: height, as: format)
+        }
+
+        _ = try await library.cache.fillCompletely()
+        let first = await endpoint.route(try library.request("/v1/next?w=200&h=200"))
+        #expect(first.status == 200)
+        #expect(resizes.withLock { $0 } == 1)
+
+        // Evict the original, and deal its card again without fetching it back.
+        let card = try #require(try library.sources.database.first(
+            "SELECT id, uuid FROM photo;", [:], { (id: try $0.int64("id"), uuid: try $0.string("uuid")) }))
+        library.cache.store.remove(photoUUID: card.uuid)
+        try library.cache.releaseResidency(ofPhotos: [card.uuid])
+        #expect(try library.cache.deal())
+
+        let again = await endpoint.route(try library.request("/v1/next?w=200&h=200"))
+        #expect(again.status == 200)
+        #expect(again.headers["X-PGR-Pixels"] == first.headers["X-PGR-Pixels"])
+        #expect(resizes.withLock { $0 } == 1, "resized from an original that is not there")
+        #expect(library.cache.store.url(forPhoto: card.uuid) == nil, "nothing fetched it back")
     }
 
     @Test("One record per request, and no record for work that was skipped")
@@ -339,6 +379,30 @@ struct EndpointCacheTests {
 
         for _ in 0..<4 { _ = try await library.get("w=100&h=100") }
         #expect(library.log.all.count == 4)
+    }
+
+    /// **This fixture awaits its resizes**; see `awaitingResizes()`.
+    @Test("A sized request is resized however long another resize holds the shared resizer")
+    func fixtureIsNotRacingTheBudget() async throws {
+        let library = try Library()
+        try await library.fill()
+        let inside = Mutex(false)
+        let busy = Task.detached {
+            _ = try? await Resizer.shared.run {
+                inside.withLock { $0 = true }
+                Thread.sleep(forTimeInterval: 1.5)
+            }
+        }
+        while !inside.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(10)) }
+
+        var jpeg = try library.request("/v1/next?w=200&h=200")
+        jpeg = HTTPListener.Request(
+            method: jpeg.method, path: jpeg.path, query: jpeg.query,
+            headers: ["accept": "image/jpeg"], receivedAt: jpeg.receivedAt)
+        let response = await library.endpoint.route(jpeg)
+        await busy.value
+
+        #expect(headers(response)["Content-Type"] == "image/jpeg", "served the original, not a resize")
     }
 
     @Test("`Accept` decides the format when a rendering is produced")

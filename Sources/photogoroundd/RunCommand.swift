@@ -50,7 +50,7 @@ struct RunCommand {
         var preferences = environment.preferences
 
         // One index for the whole process, shared by everything that touches
-        // bytes: the endpoint's per-request caches, the producer's, maintenance,
+        // bytes: the endpoint's per-request caches, the producer's, the fetcher's,
         // and the source store — which needs it so that removing a photograph's
         // row removes its bytes in the same breath.
         let store = PhotoStore(
@@ -112,6 +112,17 @@ struct RunCommand {
         // sides, evictions — from here to exit. Made before the fetcher, which
         // reports what became of each fetch.
         let tally = LaunchTally()
+        // **Eviction follows every file written to the cache**, wherever it was
+        // written — a fetch's original, or a resized copy on the resizer's
+        // thread — so what it took is said from one place. Until 2026-09-16 it
+        // ran on the maintenance heartbeat; Syd: "ditch the timer", and "after
+        // you write any file to the cache, run evict()". See
+        // `PhotoCache.evictAfterWriting()`.
+        let evicted: @Sendable (PhotoCache.EvictionResult) -> Void = { eviction in
+            tally.record(eviction)
+            Console.event(Self.evictedLine(eviction))
+            environment.announce(.cacheChanged)
+        }
         // Rebuilt per use rather than shared: a `Database` belongs to one
         // isolation domain, and these run on whichever lane reaches them.
         let cacheForFetch: @Sendable () -> PhotoCache? = {
@@ -124,6 +135,7 @@ struct RunCommand {
                 store: store)
             cache.log = Self.speak
             cache.bench = bench
+            cache.evicted = evicted
             return cache
         }
 
@@ -233,7 +245,8 @@ struct RunCommand {
             ensureFetching: { Task { await fetcher.kick() } },
             bench: bench,
             speak: Self.speak,
-            tally: tally
+            tally: tally,
+            evicted: evicted
         )
         // Sources are managed over the same listener, because a client cannot
         // meaningfully write preferences and should not open the database. The
@@ -258,7 +271,7 @@ struct RunCommand {
             photos: PhotosEndpoint(catalog: catalog, library: photos),
             dashboard: DashboardEndpoint(
                 databasePath: databasePath, cacheRoot: environment.cacheRoot,
-                preferences: preferences, store: store, tally: tally)
+                preferences: preferences, store: store, tally: tally, evicted: evicted)
         )
         // Where the service is, written where every local client can find it:
         // a preference domain is a name rather than a path, which is the only
@@ -464,7 +477,7 @@ struct RunCommand {
             // rather than after the slowest network share has been walked.
             for work in order {
                 switch work {
-                case .preferences, .maintenance:
+                case .preferences:
                     continue  // handled around this loop
 
                 case .refresh:
@@ -478,8 +491,7 @@ struct RunCommand {
                     else { continue }
                     // **The loop does not wait for the walk.** Every source
                     // was walked inside the tick, so nothing else in the loop
-                    // ran meanwhile — no maintenance, no eviction, no
-                    // preference re-read. That read as solved when the
+                    // ran meanwhile — no eviction, no preference re-read. That read as solved when the
                     // `walk_seen` diff took a 5,093-photograph source from
                     // eighty-five minutes to 1.1 seconds; a network share of
                     // 4,510 put it back to **30.9 seconds** on 2026-08-26.
@@ -524,25 +536,6 @@ struct RunCommand {
                 }
             }
 
-            if heartbeat.isDue(
-                .maintenance, every: preferences.maintenanceInterval, at: now, forced: once)
-            {
-                try await runMaintenance(
-                    cache: PhotoCache(
-                        database: database,
-                        root: environment.cacheRoot,
-                        settings: preferences.cacheSettings,
-                        sources: sources,
-                        deck: deck,
-                        store: store
-                    ),
-                    deck: deck,
-                    preferences: preferences,
-                    environment: environment,
-                    tally: tally
-                )
-                heartbeat.finished(.maintenance, at: Date())
-            }
 
             let status = try describe(
                 cache: PhotoCache(
@@ -749,27 +742,11 @@ struct RunCommand {
         }
     }
 
-    private func runMaintenance(
-        cache: PhotoCache,
-        deck: Deck,
-        preferences: Preferences,
-        environment: MacHostEnvironment,
-        tally: LaunchTally
-    ) async throws {
-        // No residency check and no orphan sweep: the index is built from the
-        // filesystem at launch, so it cannot disagree with it, and a file whose
-        // UUID nothing claims is deleted there rather than swept later.
-        let eviction = try cache.evictIfNeeded()
-        // For the dashboard, which counts the passes that took something.
-        tally.record(eviction)
-        if eviction.evicted > 0 {
-            Console.event(
-                "evicted \(eviction.evicted) cache entries, freed \(Self.bytes(eviction.bytesFreed))"
-                    + (eviction.ceilingHalved
-                        ? " — free space is below the critical floor, so the ceiling was halved" : "")
-            )
-            environment.announce(.cacheChanged)
-        }
+    /// The console line for an eviction that took something.
+    static func evictedLine(_ eviction: PhotoCache.EvictionResult) -> String {
+        "evicted \(eviction.evicted) cache entries, freed \(Self.bytes(eviction.bytesFreed))"
+            + (eviction.ceilingHalved
+                ? " — free space is below the critical floor, so the ceiling was halved" : "")
     }
 
     private func describe(cache: PhotoCache, deck: Deck, preferences: Preferences) throws -> String {

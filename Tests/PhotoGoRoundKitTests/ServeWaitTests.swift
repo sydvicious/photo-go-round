@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import PhotoGoRoundAgentAPI
@@ -43,6 +44,41 @@ struct ServeWaitTests {
             lock.lock()
             defer { lock.unlock() }
             return entries
+        }
+    }
+
+    /// A fetch started at most once, from inside a request, and awaited after.
+    final class BackgroundFetch: Sendable {
+        let path: String
+        let root: URL
+        let bytes: PhotoStore
+        private let task = Mutex<Task<Void, Never>?>(nil)
+
+        init(path: String, root: URL, bytes: PhotoStore) {
+            self.path = path
+            self.root = root
+            self.bytes = bytes
+        }
+
+        func start() {
+            let path = path
+            let root = root
+            let bytes = bytes
+            task.withLock { task in
+                guard task == nil else { return }
+                task = Task.detached {
+                    guard let database = try? Database(path: path) else { return }
+                    let cache = PhotoCache(
+                        database: database, root: root,
+                        sources: SourceStore(database: database, bytes: bytes), store: bytes)
+                    try? await cache.fetchAllQueued()
+                }
+            }
+        }
+
+        /// Returns once the fetch has, or at once if serving never started one.
+        func finished() async {
+            await task.withLock { $0 }?.value
         }
     }
 
@@ -101,20 +137,27 @@ struct ServeWaitTests {
                 "SELECT COUNT(*) FROM photo WHERE id = \(photoID) AND claimed_at IS NOT NULL;") == 1
         }
 
-        /// Fetches every queued card on its own connection, after a pause —
-        /// the agent's fetcher, standing in.
-        func fetchInBackground(after delay: Duration) -> Task<Void, Never> {
-            let path = TestLibrary.path(in: directory)
-            let root = directory.appending(path: "cache")
-            let bytes = bytes
-            return Task.detached {
-                try? await Task.sleep(for: delay)
-                guard let database = try? Database(path: path) else { return }
-                let cache = PhotoCache(
-                    database: database, root: root,
-                    sources: SourceStore(database: database, bytes: bytes), store: bytes)
-                try? await cache.fetchAllQueued()
+        /// Fetches every queued card on its own connection — the agent's
+        /// fetcher, standing in — once serving says it is waiting.
+        ///
+        /// **Started by the request's own `waiting` line, not after a pause.**
+        /// Until 2026-09-16 this slept 200 or 300 ms and then fetched, racing
+        /// the request. In a full parallel run the request could reach the head
+        /// after the fetch had finished, find nothing to wait for, and fail
+        /// `waited() == 1` — twice that day, and reproduced by fetching before
+        /// serving. Syd: "we fixed flaky timing tests at Indeed by using await
+        /// Task {}.run." So the fetch follows the event it is for, and the test
+        /// awaits the fetch rather than a clock.
+        mutating func fetchWhenServingWaits() -> BackgroundFetch {
+            let fetch = BackgroundFetch(
+                path: TestLibrary.path(in: directory), root: directory.appending(path: "cache"),
+                bytes: bytes)
+            let heard = heard
+            cache.log = { event in
+                heard.log(event)
+                if case .waiting = event { fetch.start() }
             }
+            return fetch
         }
 
         func waited() -> Int { heard.count { if case .waiting = $0 { true } else { false } } }
@@ -128,20 +171,20 @@ struct ServeWaitTests {
     @Test("A cold head card is waited for, and served when its bytes land")
     func waitsAndServes() async throws {
         // The bound is thirty seconds and the assertion is fifteen, so the
-        // assertion still says something: the bytes land at 300 ms, and a
-        // request that took longer than fifteen seconds to notice did not
-        // notice, it waited the bound out. Fifteen rather than five since
-        // 2026-09-07, when a full parallel run starved this to six seconds
-        // and failed it for nothing.
-        let fixture = try await Fixture(photos: ["a.png"], wait: .seconds(30))
+        // assertion still says something: the bytes land as soon as the
+        // request says it is waiting, and a request that took longer than
+        // fifteen seconds to notice did not notice, it waited the bound out.
+        // Fifteen rather than five since 2026-09-07, when a full parallel run
+        // starved this to six seconds and failed it for nothing.
+        var fixture = try await Fixture(photos: ["a.png"], wait: .seconds(30))
         defer { fixture.cleanUp() }
         try fixture.dealAll()
 
         let clock = ContinuousClock()
         let started = clock.now
-        let fetching = fixture.fetchInBackground(after: .milliseconds(300))
+        let fetching = fixture.fetchWhenServingWaits()
         let served = try #require(try await fixture.cache.serve())
-        await fetching.value
+        await fetching.finished()
 
         #expect(served.card.externalID == "a.png")
         #expect(fixture.waited() == 1, "the request did not say it was waiting")
@@ -296,25 +339,29 @@ struct ServeWaitTests {
 
     @Test("A card whose fetch fails during the wait is passed over for the new head")
     func fetchFailingMidWaitMovesOn() async throws {
-        let fixture = try await Fixture(photos: ["a.png", "b.png"], wait: .seconds(10))
+        var fixture = try await Fixture(photos: ["a.png", "b.png"], wait: .seconds(10))
         defer { fixture.cleanUp() }
         try fixture.dealAll()
         // The head's file is gone before anything fetches it: the fetch fails,
         // the source confirms it absent, and the row and card go together.
         let head = try #require(fixture.head)
         fixture.folder.remove(head.externalID)
+        // The other is held already, so the request's one wait is the head's.
+        // Left to the background fetch, whether it had landed by the time the
+        // request reached it was that fetch's timing, not this test's.
+        let other = try #require(try fixture.library.database.scalarInt(
+            "SELECT id FROM photo WHERE id != \(head.id);"))
+        #expect(try await fixture.cache.cache(photoID: Int64(other)))
 
-        let fetching = fixture.fetchInBackground(after: .milliseconds(200))
+        let fetching = fixture.fetchWhenServingWaits()
         let served = try #require(try await fixture.cache.serve())
-        await fetching.value
+        await fetching.finished()
 
-        #expect(served.card.id != head.id)
+        #expect(served.card.id == Int64(other))
         #expect(fixture.pooled == 1, "the deleted photograph should have left the library")
         #expect(fixture.waited() == 1)
         #expect(fixture.dropped().isEmpty, "the fetcher removed it; serving should not have dropped anything")
-        // Only the first is certain: whether `b.png` had landed by the time the
-        // request reached it is the background fetch's timing, not this test's.
-        #expect(fixture.looked.all.first == .miss(.leftDuringWait))
+        #expect(fixture.looked.all == [.miss(.leftDuringWait), .hit])
     }
 
     @Test("A wait of zero never waits, and drops every cold card it meets")

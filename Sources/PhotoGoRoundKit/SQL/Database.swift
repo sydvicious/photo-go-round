@@ -67,6 +67,15 @@ public final class Database {
     public struct LongLock: Sendable, Equatable {
         /// From `BEGIN` succeeding to `COMMIT` returning.
         public let held: Duration
+        /// The part of `held` that was `COMMIT` itself.
+        ///
+        /// **Added 2026-09-16** to tell a slow statement from a slow commit.
+        /// Serving's one-row writes — `register`, `markShown`, `claim` — had
+        /// held the writer 0.5 to 2.2 s, which no single-row update explains.
+        /// Under WAL with `synchronous = NORMAL` a commit does not sync, but
+        /// the automatic checkpoint runs inside whichever commit takes the log
+        /// past its threshold, and that one does. A guess until this says so.
+        public let committing: Duration
         /// From the first attempt to the one that got the lock. A long wait
         /// beside a short hold is somebody else's long lock.
         public let waited: Duration
@@ -76,7 +85,7 @@ public final class Database {
         public let fileID: String
         public let line: Int
 
-        /// `LOCK: held 812ms · waited 3ms · 2 attempts · upsert(_:to:at:isolation:onAdded:) (PhotoPool.swift:96)`
+        /// `LOCK: held 812ms · commit 790ms · waited 3ms · 2 attempts · upsert(_:to:at:isolation:onAdded:) (PhotoPool.swift:96)`
         ///
         /// Filter on the prefix:
         ///
@@ -85,6 +94,7 @@ public final class Database {
             let file = fileID.split(separator: "/").last.map(String.init) ?? fileID
             return [
                 "LOCK: held \(StageTimes.milliseconds(held))",
+                "commit \(StageTimes.milliseconds(committing))",
                 "waited \(StageTimes.milliseconds(waited))",
                 attempts == 1 ? "1 attempt" : "\(attempts) attempts",
                 "\(function) (\(file):\(line))",
@@ -359,16 +369,19 @@ public final class Database {
             transactionDepth = 1
             do {
                 let result = try body()
+                let committing = ContinuousClock.now
                 try execute("COMMIT;")
+                let committed = ContinuousClock.now
                 transactionDepth = 0
                 // Only a transaction that took the write lock at `BEGIN`. A
                 // deferred one may never take it at all, and its length is a
                 // reader's, which blocks nobody under WAL.
-                let held = ContinuousClock.now - locked
+                let held = committed - locked
                 if kind == .immediate, held >= Self.longLockThreshold {
                     reportLongLock(
                         LongLock(
-                            held: held, waited: locked - firstAttempt, attempts: attempt,
+                            held: held, committing: committed - committing,
+                            waited: locked - firstAttempt, attempts: attempt,
                             function: caller.function, fileID: caller.fileID, line: caller.line))
                 }
                 return result

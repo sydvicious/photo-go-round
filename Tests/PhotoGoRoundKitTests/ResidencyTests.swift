@@ -122,21 +122,15 @@ struct ResidencyTests {
 
     @Test("eviction releases the originals it took")
     func evictionReleases() async throws {
-        // A ceiling that only one original fits under, so the rest go.
+        // A ceiling that only one original fits under, so the rest go — each
+        // as the fetch after it writes, since eviction follows every file
+        // written to the cache (2026-09-16).
         let fixture = try await Fixture(
             photos: ["a.jpg", "b.jpg", "c.jpg", "d.jpg"],
             settings: CacheSettings(byteCeiling: 150))
         for id in try fixture.photoIDs() { _ = try await fixture.cache.cache(photoID: id) }
 
-        // Fetching re-queues, and a queued photograph is protected from
-        // eviction whatever its age — so with everything cached *and* queued,
-        // eviction can free nothing at all. That is the unreachable-ceiling
-        // hole phase 6 removes; here it is only in the way, so the queue is
-        // emptied to leave eviction something it is allowed to take.
-        try fixture.library.database.run("DELETE FROM queue;")
-
-        let eviction = try fixture.cache.evictIfNeeded()
-        #expect(eviction.evicted > 0)
+        #expect(fixture.held.count < 4, "the fetches evicted nothing")
         #expect(try fixture.recorded() == fixture.held)
     }
 

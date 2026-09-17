@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 
@@ -15,7 +16,7 @@ import UniformTypeIdentifiers
 /// the dashboard counts is only produced where they meet: a picture reaching a
 /// consumer is a fact of the picture endpoint, and reading it back is a fact of
 /// this one.
-@Suite("Dashboard endpoint")
+@Suite("Dashboard endpoint", .timeLimit(.minutes(2)))
 struct DashboardEndpointTests {
 
     /// A migrated library, a folder of real photographs, and both endpoints
@@ -59,12 +60,14 @@ struct DashboardEndpointTests {
             let collector = served
             var pictures = PictureEndpoint(
                 databasePath: path, cacheRoot: cacheRoot, preferences: preferences,
-                store: store, queueRanShort: {}, log: { collector.record($0) })
+                store: store, queueRanShort: {}, log: { collector.record($0) }
+            ).awaitingResizes()
             pictures.tally = tally
             self.pictures = pictures
             dashboard = DashboardEndpoint(
                 databasePath: path, cacheRoot: cacheRoot, preferences: preferences,
-                store: store, tally: tally, errors: errors, changes: changes)
+                store: store, tally: tally, errors: errors, changes: changes
+            ).awaitingResizes()
         }
 
         deinit { try? FileManager.default.removeItem(at: directory) }
@@ -545,6 +548,81 @@ struct DashboardEndpointTests {
         #expect(library.served.all.isEmpty)
     }
 
+    /// Syd, 2026-09-16, of the resize cache: "yes, same cache".
+    @Test("A thumbnail asked for twice is resized once")
+    func thumbnailIsKept() async throws {
+        let library = try Library(photographs: 1)
+        try await library.fill()
+        let photo = try #require(try library.cache.queue.peek().first).id
+        let resizes = Mutex(0)
+        var dashboard = library.dashboard
+        dashboard.resizer = Resizer()
+        dashboard.resize = { original, side in
+            resizes.withLock { $0 += 1 }
+            return try PhotoRenderer.render(contentsOf: original, fitting: side, by: side, as: .jpeg)
+        }
+
+        for _ in 0..<2 {
+            let response = await dashboard.route(
+                try get("\(DashboardEndpoint.thumbnailPath)?photo=\(photo)"))
+            #expect(response.status == 200)
+            #expect(response.headers["Content-Type"] == "image/jpeg")
+        }
+        #expect(resizes.withLock { $0 } == 1)
+    }
+
+    /// Syd, 2026-09-16: "So, after you write any file to the cache, run
+    /// evict()."
+    @Test("A picture's resized copy that takes the cache over its ceiling evicts, and says so")
+    func aKeptPictureCopyEvicts() async throws {
+        let library = try Library(photographs: 2)
+        try await library.fill(materialized: true)
+        _ = try await library.cache.fillCompletely()
+        // The originals fit exactly; any copy goes over.
+        let ceiling = try library.cache.bytesOnDisk()
+        library.defaults.set(ceiling, forKey: Preferences.Key.cacheByteCeiling.rawValue)
+        let evictions = Mutex<[PhotoCache.EvictionResult]>([])
+        var pictures = library.pictures
+        pictures.resizer = Resizer()
+        pictures.evicted = { result in evictions.withLock { $0.append(result) } }
+
+        let response = await pictures.route(
+            try #require(HTTPListener.parse("GET /v1/next?w=200&h=200 HTTP/1.1")))
+
+        #expect(response.status == 200)
+        // One pass, which took something. How much depends on the sizes: a
+        // copy bigger than the oldest original takes itself too.
+        let passes = evictions.withLock { $0 }
+        #expect(passes.count == 1)
+        #expect(passes.allSatisfy { $0.evicted > 0 })
+        #expect(try library.cache.bytesOnDisk() <= ceiling)
+    }
+
+    @Test("A dashboard thumbnail that takes the cache over its ceiling evicts, and says so")
+    func aKeptThumbnailEvicts() async throws {
+        let library = try Library(photographs: 2)
+        try await library.fill(materialized: true)
+        _ = try await library.cache.fillCompletely()
+        let photo = try #require(try library.cache.queue.peek().first).id
+        let ceiling = try library.cache.bytesOnDisk()
+        library.defaults.set(ceiling, forKey: Preferences.Key.cacheByteCeiling.rawValue)
+        let evictions = Mutex<[PhotoCache.EvictionResult]>([])
+        var dashboard = library.dashboard
+        dashboard.resizer = Resizer()
+        dashboard.evicted = { result in evictions.withLock { $0.append(result) } }
+
+        let response = await dashboard.route(
+            try get("\(DashboardEndpoint.thumbnailPath)?photo=\(photo)"))
+
+        #expect(response.status == 200)
+        // One pass, which took something. How much depends on the sizes: a
+        // copy bigger than the oldest original takes itself too.
+        let passes = evictions.withLock { $0 }
+        #expect(passes.count == 1)
+        #expect(passes.allSatisfy { $0.evicted > 0 })
+        #expect(try library.cache.bytesOnDisk() <= ceiling)
+    }
+
     /// **A stalled resizer is "not yet", not "never".** Measured 2026-09-16: a
     /// thumbnail waited 38.9 s behind the picture requests' resizes, and the
     /// page's image fell further behind its filename with every picture. Syd
@@ -559,6 +637,8 @@ struct DashboardEndpointTests {
         let gate = DispatchSemaphore(value: 0)
         var dashboard = library.dashboard
         dashboard.resizer = Resizer()
+        // The budget is this test's subject, so the production one.
+        dashboard.resizeBudget = ServiceTiming.resizeBudget
         dashboard.resize = { _, _ in
             _ = gate.wait(timeout: .now() + 60)
             throw PhotoRenderer.Failure.decodeFailed

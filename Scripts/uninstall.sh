@@ -18,7 +18,13 @@
 set -euo pipefail
 
 AGENT_LABEL="com.sydpolk.photogoround.server"
-EXTENSION_ID="com.sydpolk.photogoround.wallpaper.extension"
+# Release, Syd's Debug builds and Claude's builds each register under their own.
+# `Wallpaper Plan.md`, *Debug builds under their own identity*.
+EXTENSION_IDS=(
+    "com.sydpolk.photogoround.wallpaper.extension"
+    "com.sydpolk.photogoround.wallpaper.debug.extension"
+    "com.sydpolk.photogoround.wallpaper.claude.extension"
+)
 EXTENSION_PROCESS="Photo-Go-Round Wallpaper"
 SAVER="$HOME/Library/Screen Savers/Photo-Go-Round Screensaver.saver"
 
@@ -38,9 +44,10 @@ USAGE
 WHAT EACH ONE REMOVES
   --agent       Boots out the LaunchAgent and deletes its plist from
                 ~/Library/LaunchAgents. The built bundle stays where it is.
-  --wallpaper   Unregisters every copy of the wallpaper extension and stops the
-                extension process. If it is the chosen wallpaper, macOS falls
-                back to a default picture.
+  --wallpaper   Unregisters every copy of the wallpaper extension — release,
+                Debug and Claude's builds — and stops the extension processes.
+                If it is the chosen wallpaper, macOS falls back to a default
+                picture.
   --saver       Deletes ~/Library/Screen Savers/Photo-Go-Round Screensaver.saver
                 and stops the hosts holding it.
 
@@ -95,14 +102,17 @@ fi
 if [[ "$WALLPAPER" -eq 1 ]]; then
     echo "wallpaper extension:"
     found=0
-    while IFS= read -r path; do
-        [[ -n "$path" ]] || continue
-        found=1
-        pluginkit -r "$path" 2>/dev/null || true
-        echo "  unregistered $path"
-    done < <(pluginkit -m -D -v -p com.apple.wallpaper 2>/dev/null \
-        | grep -F "$EXTENSION_ID(" \
-        | sed -n 's|^[^/]*\(/.*\)$|\1|p')
+    for id in "${EXTENSION_IDS[@]}"; do
+        while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            found=1
+            pluginkit -r "$path" 2>/dev/null || true
+            echo "  unregistered $id"
+            echo "    $path"
+        done < <(pluginkit -m -D -v -p com.apple.wallpaper 2>/dev/null \
+            | grep -F "$id(" \
+            | sed -n 's|^[^/]*\(/.*\)$|\1|p')
+    done
     [[ "$found" -eq 0 ]] && echo "  nothing was registered"
     killall "$EXTENSION_PROCESS" 2>/dev/null && echo "  stopped the extension process" || true
     # Unregistering a *selected* extension leaves WallpaperAgent failing every

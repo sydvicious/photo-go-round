@@ -28,7 +28,7 @@ final class Tally: @unchecked Sendable {
     var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
 
-@Suite("When a deal is asked for")
+@Suite("When a deal is asked for", .timeLimit(.minutes(2)))
 struct DealPacingTests {
 
     private final class Library {
@@ -85,7 +85,8 @@ struct DealPacingTests {
                 store: store,
                 queueRanShort: { counter.bump(); onServed?() },
                 deckCameUpEmpty: { [emptied] in emptied.bump(); onEmpty?() },
-                log: { _ in })
+                log: { _ in }
+            ).awaitingResizes()
         }
 
         deinit { try? FileManager.default.removeItem(at: directory) }

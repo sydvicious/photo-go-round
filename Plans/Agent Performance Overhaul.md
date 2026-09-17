@@ -11,7 +11,7 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
 - **Phase 1 — Reproduce it.** A failing test that fills the pool the way the sample did, before anything is fixed. **Built 2026-09-16; it failed as intended, and passes since the `Resizer`.**
   - `PictureEndpoint.resize` is a hook, so a test can make a resize hang the way the system decoder did.
   - `ServingUnderLoadTests`: more hanging resizes than the machine has cores, then a request with no size and `GET /v1/sources`, each of which must answer inside `ServiceTiming.pictureReadLimit`. Both took 6.05 s — they never ran until the resizes were let go.
-  - A `LOCK:` log line for every transaction that holds the write lock too long, so the baseline is on record before anything changes. Built, with `LongLockTests`.
+  - A `LOCK:` log line for every transaction that holds the write lock too long, so the baseline is on record before anything changes. Built, with `LongLockTests`. *Since late 2026-09-16 it also says how much of the hold was the commit; see* The commit, split out.
 - **Phase 2 — The `Resizer`.** Every resize the agent does runs on one serial actor with its own dispatch queue, off the shared pool. **Built 2026-09-16.**
   - `/v1/next`'s resizes and the dashboard's thumbnail both go through `Resizer.shared`.
   - `TIMING:` splits `resize wait` from `render`.
@@ -22,16 +22,25 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
   - A `RESIZE:` log line and a `TIMING:` stage say when it happened.
   - `Shuffle` decodes to its box with EXIF orientation applied, as the wallpaper already does.
   - Serving the original is not a render failure.
-- **Phase 2b — The resize cache comes back.** Keep what the `Resizer` makes, so a picture already resized for a box is not resized again. Not designed yet. Syd, 2026-09-16: "We will pretty much resize each picture once if there is a small number of pics in the sources and everything fits in the cache, and save the expensive HEIC resizer resource."
+- **Phase 2b — The resize cache comes back.** Keep what the `Resizer` makes, so a picture already resized for a box is not resized again. **Designed 2026-09-16, question by question; built the same day.** Syd, 2026-09-16: "We will pretty much resize each picture once if there is a small number of pics in the sources and everything fits in the cache, and save the expensive HEIC resizer resource."
   - Evicted oldest first, by each file's creation date or the same date kept in the database.
   - A resized copy stays when its original is evicted.
+  - One file for each photograph, box asked for and format — so several per photograph — in a `resized/` folder of the cache, with a row for each in the database. *Agreed 2026-09-16. Built as `.resized/`, with a dot, so the walk that indexes originals by source never takes it for one.*
+  - A hit is streamed before the `Resizer` is asked; a miss is resized, written, then served. *Agreed 2026-09-16.*
+  - Copies count against the same `cacheByteCeiling` as originals. *Decided 2026-09-16, against the proposal of a ceiling of their own.*
+  - Eviction takes the oldest file first, original or copy, by when the file was made. *Decided 2026-09-16; replaces the originals' last-shown rank.*
+  - A deleted photograph's copies are deleted straight away, files and rows — only when it is actually deleted, never because its source is offline. *Decided 2026-09-16, replacing the proposed launch sweep.*
+  - The dashboard's thumbnail uses the same cache. *Decided 2026-09-16.*
+  - Eviction runs after every file written to the cache — an original a fetch brings in, or a copy kept — and at no other time; the maintenance timer is gone. *Decided and built 2026-09-16, late; recorded in `TODO.md`, item 10 of* Passed over on 2026-09-16*, and* Eviction *in `PLAN.md`.*
 - **Phase 3 — One actor per request.** Each HTTP request runs on an actor whose executor is a serial dispatch queue of its own, and opens its database connection there.
   - Every route, not only `/v1/next`.
   - The async functions on the request path stay on that thread instead of hopping to the shared pool.
-- **Phase 4 — The refresh locks only to write.** The walk stages what it found in temporary tables with no lock held, then applies additions and removals under the lock, 100 at a time.
-  - Removing a source deletes its photographs 100 at a time too, before the source row goes.
+- **Phase 4 — The refresh locks only to write.** The walk stages what it found in temporary tables with no lock held, then applies additions and removals under the lock, 100 at a time. **Built 2026-09-16,** after a probe measured where the lock's time went, and installed the same night: 173 of 190 pages took no lock, and no transaction held the writer 50 ms. See *Built*, under *The refresh locks only to write*.
+  - Each page of 100 is read with no lock, and locks only if it has something to write, as the walk goes. *Decided 2026-09-16: "as the walk goes, 100 at a time".*
+  - Removing a source deletes its photographs 100 at a time too, before the source row goes. *Decided 2026-09-16: "pages of 100, accept the count".*
 - **Phase 5 — Refresh and downloads on their own actors.** Each gets its own executor and database connection, with no `NSLock`.
 - **After each phase,** Syd installs the agent and reads the `TIMING:` lines during a refresh.
+- **Still open from this plan:** Phases 3 and 5; serving's own one-row writes that held the lock 0.5–2.2 s before Phase 4 (`TODO.md`, with the commit probe waiting on a new `LOCK:` line); and `Deadline`'s timer depending on the shared pool.
 
 # Design Decisions
 
@@ -44,6 +53,8 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
 - **Refresh and downloads run on separate actors, not behind `NSLock`.** Syd, 2026-09-16: "the agent should run the refresh and downloads in separate actors (not using NSLock). It should only lock the database when adding or removing entries, so as not to lock the database for a long period of time."
 - **A failing test comes before each fix.** The first test written for this, which sent one request at a time and resized nothing, did not reproduce the stall; the sample is what showed why.
 - **The `TIMING:` lines stay.** They are how each phase is judged on the real machine.
+- **Eviction follows every write to the cache, and nothing else starts it.** Syd, 2026-09-16: "you should evict when you know the total size is too big, and not any other time", "ditch the timer", "So, after you write any file to the cache, run evict()", and "you might temporarily exceed the space, but that's fine".
+- **Measure where a lock's time goes before redesigning it.** Syd, 2026-09-16: "yes, add the timing probe first". The `REFRESH:` line came before Phase 4, and confirmed the lookups were the cost.
 - **A transaction that holds the write lock too long says so, on a `LOCK:` line.** Syd, 2026-09-16: "yes, add the LOCK: line." It catches a long lock coming back in daily use, which no test run will. *Claude's threshold: 50 ms, `Database.incidentalWait` — the patience SQLite gives a statement outside a transaction, so a lock held longer than that is one that makes those statements fail.*
 - **A request runs to completion even if its client has hung up.** Syd, 2026-09-16: "we are not doing that. we don't do that at Indeed, and we serve billions of requests/month." No watching the connection and no cancelling the work.
 - ~~**A picture the client cannot decode is discarded, and the client asks for another card at once.**~~ *Moot since 2026-09-16: clients keep receiving resized pictures the agent has already decoded.* Syd, 2026-09-16: "the client reports it or ignore the error and immediately requests another card", then "the client discards it. And what would the agent be doing anway? Client requests -> agent fetches and returns the bits -> client attempts to decode and fails. The agent has already moved on at that point." Nothing is reported. The agent's own render-failure retirement stays for the resizes it still does; Syd, 2026-09-16: "yes, keep the retirement".
@@ -57,7 +68,7 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
 # Background
 
 - Already in place on 2026-09-16, and uncommitted: serving's source check has a one-second budget (`ServiceTiming.serveCheckBudget`), `/v1/next` writes a `TIMING:` line per request, and the agent's install waits for launchd to finish removing the old job.
-- The refresh already writes in batches of 500 per transaction, and already records what a walk saw in a `TEMP` table (`walk_seen`).
+- The refresh already writes in batches of 500 per transaction, and already records what a walk saw in a `TEMP` table (`walk_seen`). *Pages of 100, read before the lock, since Phase 4.*
 - `HTTPListener.dispatch` runs every request as a plain `Task` on the shared pool, and `PictureEndpoint` opens a `Database` per request on whatever thread that task lands on.
 - `ConfinedDatabase` (the dealer's connection) and `SystemPhotoLibrary.Album` are the two places the agent already keeps blocking work off the pool.
 - `Deadline.swift` carries a TODO listing every `NSLock` in the project.
@@ -152,6 +163,114 @@ Measured 2026-09-16 at 16:45, eleven minutes after a restart, on Syd's MacBook P
 That is what reversed *Clients stop asking for a size*, below: the complication of resizing in every client buys nothing once the agent resizes serially and off the pool.
 
 **With the `Resizer` built,** `ServingUnderLoadTests` passes: 1 of 14 hanging resizes runs at a time, and the request with no size and `GET /v1/sources` answered in 4 ms and 2 ms.
+
+## The resize cache, proposed
+
+**Written as Claude's proposal, then settled with Syd one question at a time on 2026-09-16.** Each subsection says what was decided and, where the decision went against the proposal, keeps the proposal beneath it as a record.
+
+**As decided:**
+
+- One file for each combination of photograph, box asked for, and format, in `resized/`, with a row per copy in the database. **A photograph can have several copies at once** — Syd, 2026-09-16: "you can store mulitple sizes per photograph, and if the dashboard is showing while something else is also showing, you will have that happen." The app's 1280×768 HEIC, the screensaver's 2560×1440 HEIC and the dashboard's 480×480 JPEG of one photograph are three copies and three rows.
+- A hit is served before the `Resizer` is asked; a miss is resized, saved and served; a resize that finishes after its request gave up still saves its copy.
+- Originals and copies share `cacheByteCeiling`, and eviction takes the oldest file first by when it was made — a copy's creation, an original's `cached_at` — replacing the originals' last-shown rank.
+- No walk at launch. Files with no row are cleared at the first eviction after launch; a row whose file is gone is deleted when a request finds it missing.
+- A photograph actually deleted takes its copies with it straight away; an offline source keeps them.
+- The dashboard's thumbnail uses the same cache.
+- The 1 GB default is to be reexamined later.
+
+### What was measured first
+
+The cache removed on 2026-09-06 died of drift: its key was the client's box in pixels, a window moved two pixels made a second full set, and the hit rate was near zero. So before proposing a key, the boxes asked for since the Mac restarted at 16:29, from the agent's console log, which spans every install since:
+
+| Consumer | Display | Box | Requests |
+|---|---|---|---|
+| app | 83015B0E… | 1280×768 | 490 |
+| app | 83015B0E… | 1280×673 | 267 |
+| screensaver | 83015B0E… | 2560×1440 | 58 |
+| system-wallpaper | 83015B0E… | 2560×1440 | 11 |
+| app | 37D8832A… | 2560×1536 | 6 |
+| app | 37D8832A… | 1800×1066 | 2 |
+| system-wallpaper | 37D8832A… | 3600×2338 | 1 |
+
+Seven boxes in two and a half hours, and Syd counts five in use now. The screensaver and the wallpaper ask for their display's size and never drift. **Only the app's window drifts, and only while somebody resizes it.** Two boxes for one window, as above, is the cost of that — not the unbounded churn the old cache had, because eviction here is by age within a ceiling, not by rank in a pool.
+
+Resized pictures served before Phase 2a, from the `served` lines, were 170–370 KB each at 1280 and 2560 wide. At about 250 KB a copy, 1 GB holds about four thousand.
+
+### The key, and the file
+
+- **One file per photograph, box and format:** `resized/<photo uuid>_<box w>x<box h>_<pixels w>x<pixels h>.<heic|jpg>`. The box is what was asked for, so a lookup needs nothing but the request; the pixels are what was produced, so a hit can send `X-PGR-Pixels` without opening the file.
+- **Keyed by the box, not by the fitted size. Agreed 2026-09-16;** asked which, Syd: "asked for". Two boxes can fit a photograph to the same pixels — a portrait picture in 2560×1440 and in 2600×1440 — and keying by output would share them. It would also need the original's dimensions read before every lookup, which is a file open on every request to save a few copies. Not worth it at five boxes.
+
+### ~~No database~~ A row per copy
+
+**Decided 2026-09-16, against the proposal.** Syd: "rows in the database. writing one row should not lock for very long, and saves the big directory walk at launch." The row holds the copy's key, its size in bytes and when it was made — "an equivalent semantic in the database" to the file's creation date. How full the cache is comes from the rows, so nothing walks the folder to find out.
+
+**No launch walk; files with no row are cleared when eviction runs.** A file can have no row if the agent dies between writing a copy and inserting its row, or if something else puts a file in `resized/`. Syd, 2026-09-16: "accept the rare uncounted file; clear out unaccounted for files when eviction happens." A row whose file has gone needs no walk: the request that finds it missing deletes the row and treats it as a miss. **The walk is at the first eviction after launch**, not every one: once full, eviction follows nearly every write, and a file with no row comes from a crash, which means a relaunch. Syd, 2026-09-16: "first eviction after launch".
+
+The proposal as it was:
+
+- **The creation date is the file's.** `URLResourceKey.creationDateKey` gives it without anything written anywhere else, which is the *strictly based on creation date of the file* half of Syd's rule.
+- **An index in memory**, built at launch by listing `resized/`, holding each file's key, size and creation date. Writing a copy adds to it; evicting removes from it.
+- **Why not the database.** Every copy would be a write taking the lock, from the resizer's thread, beside the refresh and the downloads. "Long locks in the database are death"; no lock at all is better still.
+
+### Hit, miss, and a resize nobody waited for
+
+1. **Hit:** the request streams the copy with its `Content-Type` and `X-PGR-Pixels`. The `Resizer` is not asked, so a hit never waits behind a stalled resize. **Agreed 2026-09-16.** Syd: "hits should be service before the Resizer is asked. That's the entire point of caching the resized images"
+2. **Miss:** the resize runs on the `Resizer` as now, writes its copy there — a temporary name, then a rename — and the request serves the bytes it got back.
+3. **A resize whose request gave up after its second still writes its copy.** Nobody gets it this time; the next request for that picture at that box is a hit. That is what turns a stall into one slow picture rather than a slow picture every time it is dealt. **Agreed 2026-09-16.** Syd: "save the copy of the file that did not finish resizing in 1 second. Maybe it will be asked for again." Said alongside: "resizer is a scarce resource prone to stalls".
+
+### The ceiling
+
+**Decided 2026-09-16: one ceiling for originals and copies together.** Asked whether copies should have a limit of their own, Syd: "no, combined limit." So `cacheByteCeiling` bounds both. **Eviction takes the oldest file first, whichever kind it is.** Syd, 2026-09-16: "oldest file first, whether or not is an original." **"Oldest" is when the file was made** — a copy's creation, an original's `cached_at`. Asked whether originals should keep counting a recent showing as new, Syd: "when the file was made." This replaces the originals' present rank, the latest of `last_shown_at`, `cached_at` and `added_at` (`PhotoCache.evictionOrder`), so an original fetched a month ago and shown a minute ago is among the first to go. **The 1 GB default is to be reexamined later.** Syd, 2026-09-16: "1 GB is almost certainly way too big, but we will reexamine that later."
+
+The proposal as it was:
+
+- **`resizedCacheBytes`, 1 GB by default,** a preference like `cacheByteCeiling` and separate from it. Originals and copies are evicted by different rules — originals by the database's rank, copies by age — and sharing one number would make each rule's outcome depend on the other's.
+- **Checked after every write:** oldest copies go until the total is under the ceiling.
+- **1 GB is a guess**: about four thousand copies at 250 KB, which covers a few hundred photographs at every box in use. `TIMING:` gains `resized copy` and `resize` stages, and the dashboard could count hits and misses, so the number can be judged.
+
+### Deleted photographs
+
+**Decided 2026-09-16: straight away.** Asked whether a deleted photograph's copies should go when it does or be left to the first-eviction sweep, Syd: "delete them straight away." So wherever a photograph's row is removed and its cached original deleted — a source removed, a photograph found absent — its copies' files and rows go with it. **Only for a real deletion.** Syd, the same day: "but only if they are actually deleted. if the source is offline, don't." A source that is offline or unavailable keeps its rows and its cached originals today, and its copies stay with them. The launch sweep proposed below is not built.
+
+The proposal as it was:
+
+- **A copy is only ever served for a card that was dealt and passed the *is it still there?* check**, so a copy of a deleted photograph is never shown, and the deleted-photo guarantee holds without the cache doing anything.
+- **At launch, copies of photographs the database no longer holds are removed.** That is not eviction — Syd's "don't bother with removing resized images if the original is evicted" is about the original's bytes going, and those rows stay. A photograph the user deleted leaves no picture of itself on the disk longer than one launch.
+
+### The dashboard
+
+The thumbnail is 480×480 JPEG. It goes in the same cache, keyed the same way, so the page asking about a picture it showed a minute ago costs nothing. **Decided 2026-09-16.** Syd: "yes, same cache"
+
+### Tests
+
+- A second request for the same picture at the same box is served without the resizer being asked, even while a resize hangs.
+- A different box is a miss.
+- A resize that outlived its request's budget leaves a copy that the next request hits.
+- Past the ceiling, the oldest file goes first by when it was made, whether an original or a copy — including an original shown a moment ago.
+- A photograph found absent, or a source removed, takes its copies' files and rows with it; a source gone offline keeps them.
+- A file in `resized/` with no row is gone after the first eviction following launch, and not before.
+- A row whose file has vanished is deleted by the request that finds it, which then resizes.
+- The dashboard's thumbnail is a hit the second time it is asked for.
+
+### Built
+
+- **`SchemaV13`**, migration 13: the `resized` table — photograph, box asked for, format, pixels produced, bytes, file, `created_at` — unique on photograph, box and format, its rows cascading with the photograph's.
+- **`ResizedCopies`** in the kit: `find` (a row whose file is gone is dropped and is a miss), `save` (file first under a temporary name, then the row; a photograph deleted meanwhile leaves no copy), the byte count, the files of a photograph's or a source's copies, and the once-per-launch sweep of files with no row.
+- **`PhotoStore.discard(_:)`, the one owner of a deleted photograph's bytes.** Syd, while this was being built: "refactoring photo deletion is a good idea". A photograph found absent (`PhotoCache.remove`), one a refresh no longer finds (`SourceStore.applyRefresh`) and a removed source (`SourceStore.remove`) all end there, originals and copies together. `PhotoPool.Removal` names the copies' files, read before the rows cascade. Nothing about an offline source calls it.
+- **Eviction** reads originals by `cached_at` and copies by `created_at` into one order, takes from it until originals and copies together are under `cacheByteCeiling`, never takes the last original, and deletes evicted copies' rows a hundred to a transaction. The first eviction after launch first clears files in `.resized/` that no row names.
+- **`PhotoStore`'s launch walk skips `.resized/`**, which would otherwise have been taken for a source and emptied.
+- **`/v1/next`** looks for a copy before asking the resizer and streams it with `X-PGR-Pixels`; `TIMING:` shows `resized copy`. On a miss the resize is saved as a copy on the resizer's thread, whether or not its request has already given up.
+- **The dashboard's thumbnail** does the same at 480×480 JPEG, and is served from a copy even if the original has been evicted.
+- **`cacheBytes` and `pgr_ctl cache status`** count copies with originals.
+- **Tests:** `ResizedCopiesTests` (11) and four endpoint tests — a hit while the resizer hangs, a late resize keeping its copy, the same box resized once, the dashboard's thumbnail resized once. `EndpointCacheTests` "The same size asked for twice renders twice and keeps nothing on disk" was the reversed contract and is replaced. Each was checked by breaking the code it covers; the eviction-order test did not catch copies being ranked after every original until it was given a third photograph, and now does.
+- **Docs:** `Documentation/photogoroundd.md`, *Resized copies are kept* and the `cacheByteCeiling` row; `Documentation/pgr_ctl.md`, `cache status`, `cache evict` and `cache clear`; `PLAN.md`, *Eviction*, *The resize cache is removed*, the cache decision, and Phase 3.
+
+**Where the build went beyond what was decided — for Syd to confirm or reverse:**
+
+- **`pgr_ctl cache clear` clears copies too**, in every scope. Clearing asks for the cache's bytes back, and copies are the cache's bytes. **Confirmed.** Syd: "pgr_ctl cache clear nukes everything. Why wouldn't it?"
+- ~~**Eviction runs on the agent's maintenance interval, as before**, not after every copy written as the proposal said. Between ticks the cache can sit over its ceiling by the copies written since.~~ *Reversed and built 2026-09-16. Syd: "since you are keeping track of the cache in the database, you should evict when you know the total size is too big, and not any other time", "ditch the timer", and "So, after you write any file to the cache, run evict()". Eviction now follows every original a fetch writes and every resized copy kept, at no other time; the maintenance heartbeat and `maintenanceIntervalSeconds` are gone. Recorded in `TODO.md`, item 10 of* Passed over on 2026-09-16.
+- ~~**A copy is served only for a card whose original is still held.**~~ **Fixed the same day.** Syd: "You can serve the copy if the original has been evicted." `PhotoCache.serve` takes `fitting:` again — the box and format — and a card is ready if its original is held **or** it has a copy for that box; `ServedPhoto.copy` carries it, and `/v1/next` streams it. A request with no box still needs the original. `ResizedCopiesTests` "A card whose original was evicted is served from its copy, without waiting or being dropped" waited out a five-second serve wait and returned nothing before, and passes; `EndpointCacheTests` "A sized request is served from its copy after the original has been evicted" was checked by passing no box to `serve`, and caught it.
 
 ## When the resizer stalls
 
@@ -288,6 +407,10 @@ Both `transaction` forms go through `attemptTransaction`, which is the one place
 
 **Not covered:** a write outside any transaction, like `PhotoCache.attemptCache`'s bare `UPDATE`. SQLite takes and releases the lock inside that one `sqlite3_step`. Phase 5 moves that statement into a transaction, which brings it under the line; any other bare write found on the way should follow it.
 
+### The commit, split out
+
+**Added 2026-09-16, late.** `LOCK: held 812ms · commit 790ms · waited 3ms · …`: how much of the hold was `COMMIT` itself. Serving's one-row writes had held the writer 0.5–2.2 s, which no single-row statement explains; the automatic WAL checkpoint, which syncs inside whichever commit crosses its threshold, is the guess this is here to test. `TODO.md`, *Serving's own writes held the lock too long*.
+
 ### The threshold
 
 50 ms, and it is not arbitrary. `Database.incidentalWait` is how long SQLite's own busy handler waits for a statement that has no retry — every bare write in the agent, and every `BEGIN` before `transaction` starts backing off. A lock held longer than that is one that turns other writers' statements into `database is locked` errors, which is exactly what happened to two downloads at 13:30:52. How long a page of 100 rows actually holds has not been measured; the Phase 1 baseline is where that number comes from, and if pages routinely pass 50 ms the threshold or the page size is revisited then.
@@ -326,7 +449,30 @@ Dispatch brings up a thread when a queue has work and none is free, and that is 
 
 For each batch of 500 found photographs, `applyRefresh` takes `BEGIN IMMEDIATE`, runs `INSERT OR IGNORE` and an update per photograph, commits, and then records each one in `walk_seen`. Removals are found afterwards by one query against `walk_seen`, deleted in batches of 500, each under its own lock. The lock lasts one batch. But each batch does 500 index lookups inside it, and on a cold cache those are disk reads with the lock held.
 
+### The probe, before designing further
+
+**Added 2026-09-16, not yet read.** That the time is index lookups under the lock is a guess; nothing measured it. If it is the commit, the sync or a checkpoint, staging would not help. Syd: "yes, add the timing probe first." Each refresh batch now logs a `REFRESH:` line, category `sources`, at info:
+
+- `REFRESH: upsert 500 into source 5 · waited · held · inserts · updates · callbacks · commit · N added · N changed` — `callbacks` is the per-photograph `onChange` the refresh makes inside the lock today.
+- `REFRESH: remove 500 · waited · held · lookups · deletes · commit` — `lookups` is the two reads before each delete.
+- `REFRESH: walk_seen 500 for source 5 · took` — the temporary-table bookkeeping after each batch, outside the lock.
+- `REFRESH: departed query for source 5 · took · N found` — the unlocked read for what left.
+
+`RefreshBatchTiming`; tested in `RefreshBatchTimingTests`, whose report test fails with the report removed. What it shows decides the rest of this section.
+
+**Read 2026-09-16, 22:10–22:11**, two refreshes of every source after Syd installed the agent and ran `pgr_ctl refresh`, 44 upsert batches:
+
+- **The lock is the statements, not the commit.** Commit was 0–5 ms in every batch; callbacks 0 ms. `held` is inserts plus updates, to the millisecond.
+- **Almost none of those statements wrote anything.** Every batch added 0 photographs and changed 0 to 2. So the held time is the `INSERT OR IGNORE`'s conflict check and the `UPDATE`'s `WHERE` — index lookups — for rows that are already there and do not change. The plan's guess stands, now measured.
+- **How long:** 500-row batches of Favorites (source 5) held 31 ms to 1,114 ms, most 100–400 ms, in the first refresh; 58–218 ms in the second, 30 seconds later with the pages warm. One batch: inserts 996 ms, updates 110 ms, commit 5 ms, 1 changed. The 4.8 s and 5.8 s holds at 22:03–22:04 were the agent before the install, which logged at `PhotoPool.swift:96`.
+- **Outside the lock:** `walk_seen` took up to 342 ms a batch, and the departed query 0–12 ms, finding nothing.
+- **Not refresh, seen in the same lines:** `markShown` held the writer 1,641 ms, `register` 802 ms and `claim` 658 ms, all before the install. Serving's own writes can be long too; not looked into.
+
+*Claude's reading: staging does what this section says. An unchanged refresh would do all its lookups unlocked and take no write lock at all.*
+
 ### Staging
+
+**Decided 2026-09-16: additions are applied as the walk goes, 100 at a time.** Asked whether a page should wait for the end of the walk — which would leave a first walk of a large album or a slow share showing none of its photographs for minutes — Syd: "as the walk goes, 100 at a time". So steps 1–3 below run per page of 100 found, not once per walk; removals are still found and applied after the walk ends, since only the whole walk knows what is gone. *Claude's, following from it:* a page's diff also finds rows whose storage or size changed, and writes only those; the locked write keeps `INSERT OR IGNORE` and the update's `WHERE`, so a row another writer added or changed between the unlocked diff and the lock is still handled; recording the page in `walk_seen` moves into the unlocked step; and a removal page reads each photograph's identity and copies before taking the lock, then deletes by id under it — a copy saved in the moment between is left as a file with no row, which the first eviction after the next launch clears.
 
 1. **Walk with no lock.** Every photograph the provider produces goes into a `TEMP` table (`walk_found`, holding external ID and the fields an insert needs). `TEMP` tables live in the connection's own temporary database, so writing them never takes the main file's lock.
 2. **Diff with no lock.** Under WAL a reader never blocks the writer. `SELECT … FROM walk_found WHERE NOT EXISTS (… photo …)` gives the additions, and the reverse gives the removals; both go into their own `TEMP` tables. All the index reading happens here, unlocked.
@@ -336,9 +482,11 @@ A refresh of Favorites with nothing added or removed, as on 2026-09-16, takes no
 
 ### Pages of 100, or one merge
 
-Syd offered both. One `INSERT INTO photo SELECT … FROM walk_additions` is the fewest locks, and for a refresh with a handful of changes it is milliseconds. For a first walk of a hundred-thousand-photograph library it is one lock covering a hundred thousand inserts, which is the long lock this overhaul exists to remove. Pages bound the worst case; the cost is more commits. **Decided 2026-09-16: pages of 100.** Syd: "pages of 100".
+Syd offered both. One `INSERT INTO photo SELECT … FROM walk_additions` is the fewest locks, and for a refresh with a handful of changes it is milliseconds. For a first walk of a hundred-thousand-photograph library it is one lock covering a hundred thousand inserts, which is the long lock this overhaul exists to remove. Pages bound the worst case; the cost is more commits. **Decided 2026-09-16: pages of 100.** Syd: "pages of 100". And later the same night, on why: "I don't mind building large lists in memory, doing a lock, and doing a large SQL command; however, doing this 100 at a time saves ram and keeps the database locks short".
 
 ### Removing a source
+
+**Decided 2026-09-16: pages of 100, and the count may fall short.** Syd: "pages of 100, accept the count".
 
 The same rule reaches past the refresh. `SourceStore.remove(id:)` deletes the source row inside one `BEGIN IMMEDIATE`, and the foreign key cascades to every photograph and queue entry it had. For Favorites that is one lock covering 8,547 photograph deletes and their index updates, taken while every surface is asking for pictures. So removal deletes the source's photographs in pages of 100 first, then the row with nothing left to cascade. The count it reports is read before the first page, as it is now read before the delete.
 
@@ -350,6 +498,24 @@ A refresh landing a page for that source between removal's pages is the case the
 - The "enumerated to nothing but was not empty" guard reads the count from `walk_found` before anything is removed.
 - The removal of cached bytes for photographs that went (`bytes?.remove(photoUUID:)`) follows each removal page.
 - A source removed mid-walk is still the foreign-key failure that `refresh` handles today; with staging it surfaces at apply time rather than during the walk.
+
+### Built
+
+*2026-09-16, at Syd's "yes, build Phase 4".*
+
+- **`PhotoPool.batchSize` is 100**, for the refresh's pages, its removals and removing a source.
+- **An upsert page is read, then written.** `planUpsert` looks up each photograph with no lock — this source's row and its storage and size, or failing that whether another source holds the identity — and the lock is taken only if that found an addition or a change. `applyUpsert` writes just those, with `INSERT OR IGNORE` and the update's `WHERE` kept as guards. `onAdded` fires after the commit.
+- **A removal page is read, then deleted.** `planRemoval` reads each row's identity, source and copies with no lock; `applyRemoval` deletes by id and answers only the rows it deleted, so a row another writer took first is not counted.
+- **Removing a source** deletes its photographs in pages through `PhotoPool.remove(_:countingChanges: false)`, then deletes the row in one short transaction that names any late arrivals' copies first. The count is read before the first page.
+- **Different from *Staging* above, as built:** no `walk_found` or additions tables. A page of 100 is already in memory when the walk hands it over, so its lookups are made row by row from there; `walk_seen` stays as it was, for the removals query after the walk. And "takes no write lock at all" is true of the photographs only: `markAvailable` still writes the source's `scanned_at` once per refresh, one row.
+- **The `REFRESH:` line** gained `lookups` and `no lock`: `REFRESH: upsert 100 into source 5 · lookups 9ms · no lock · 0 added · 0 changed`.
+- **Tests:** `RefreshLockingTests`, seven — pages of 100 as the walk goes; an unchanged refresh takes no lock; a page locks only when it has something to write; removals in pages after the walk; removing a source in pages, counted once; a removal page counts what it deleted; and a page that finds nothing takes no lock. Locking every page, pages of 500, and counting a removed source twice each fail at least one. `RefreshBatchTimingTests` updated for the new wording. The full suite passed twice.
+- ~~**To read after installing:** the `REFRESH:` lines during a refresh of Favorites, where an unchanged page should say `no lock`, and the `LOCK:` lines, where `upsert` should be gone.~~ **Read 2026-09-16, 22:24–22:25**, two refreshes of every source after Syd installed the agent and ran `pgr_ctl refresh`:
+  - **190 upsert pages; 173 took no lock.** The other 17 each changed one or two rows, and held the writer 0–4 ms. The night's probe, before the change, had 500-row batches holding it 31–1,114 ms.
+  - **No `LOCK:` line at all** from 22:24 on, from anything — no transaction reached 50 ms. The last `upsert` lines, 51–137 ms at 22:21, were the agent before the install.
+  - **Lookups, now unlocked:** median 5 ms a page, most 225 ms.
+  - **The departed queries** found nothing, in 0–10 ms, so no removal page ran.
+  - *Seen, not looked into:* the same 17 or so pages changed a row in both refreshes, 20 seconds apart. Something's storage or size reads differently each walk — in `TODO.md`.
 
 ## Refresh and downloads on their own actors
 
