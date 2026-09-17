@@ -2,6 +2,20 @@
 
 import PackageDescription
 
+/// What every target in this package is built with.
+///
+/// **`NonisolatedNonsendingByDefault`, since 2026-09-17.** A `nonisolated async`
+/// function otherwise hops to the shared cooperative pool, whoever called it —
+/// and the agent's request path is made of them, so a request on a thread of
+/// its own would leave that thread at the first hop and run its SQLite on the
+/// pool. Syd, asked whether to set it here or to add an isolation parameter to
+/// each function on that path: "the package-wide setting". `Agent Performance
+/// Overhaul.md`, *Staying on the request's thread*.
+let everyTarget: [SwiftSetting] = [
+    .swiftLanguageMode(.v6),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+]
+
 let package = Package(
     name: "PhotoGoRound",
     platforms: [
@@ -43,18 +57,18 @@ let package = Package(
     targets: [
         .target(
             name: "PhotoGoRoundAgentAPI",
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
         .target(
             name: "PhotoGoRoundKit",
             dependencies: ["PhotoGoRoundAgentAPI"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
         .target(
             name: "PhotoGoRoundDisplay",
             // The client, not the kit: all it wants is the published port.
             dependencies: ["PhotoGoRoundAgentAPI"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
         // Terminal output, shared by the two executables and by nothing else.
         // It is deliberately outside the kit: unified logging is the shipping
@@ -62,7 +76,7 @@ let package = Package(
         // while this is for a person with a terminal open.
         .target(
             name: "Console",
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
         .executableTarget(
             name: "photogoroundd",
@@ -71,7 +85,7 @@ let package = Package(
             // resources: the Xcode target copies them into the app bundle, and
             // `DashboardPage` reads them from here when there is no bundle.
             exclude: ["js"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
         // The rig. A separate binary because the service has exactly one job
         // and answering questions is not it.
@@ -83,7 +97,7 @@ let package = Package(
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit", "PhotoGoRoundDisplay", "Console"],
             // Consumed by the linker below, not copied into a bundle.
             exclude: ["Info.plist"],
-            swiftSettings: [.swiftLanguageMode(.v6)],
+            swiftSettings: everyTarget,
             // A bare Mach-O has no Info.plist, and TCC denies a Photos request
             // from a process that carries no usage string — instantly, with no
             // prompt, which reads exactly like a refusal the user typed. The
@@ -101,22 +115,22 @@ let package = Package(
         .testTarget(
             name: "PhotoGoRoundKitTests",
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
         .testTarget(
             name: "PhotoGoRoundDisplayTests",
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundDisplay"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
         .testTarget(
             name: "photogorounddTests",
             dependencies: ["PhotoGoRoundAgentAPI", "photogoroundd"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
         .testTarget(
             name: "pgr_ctlTests",
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundDisplay", "pgr_ctl"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: everyTarget
         ),
     ]
 )

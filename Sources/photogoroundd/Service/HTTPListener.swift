@@ -273,9 +273,14 @@ final class HTTPListener: @unchecked Sendable {
         }
     }
 
+    /// **One lane per request**, so everything a request does between
+    /// suspensions runs on a thread of its own. Until 2026-09-17 this was a
+    /// bare `Task`, which put every request on the shared pool — see
+    /// `RequestLane` and `Agent Performance Overhaul.md`, Phase 3.
     private func dispatch(_ request: Request, on connection: NWConnection) {
+        let lane = RequestLane()
         Task { [route] in
-            let response = await route(request)
+            let response = await lane.run { await route(request) }
             self.write(response, to: connection)
         }
     }

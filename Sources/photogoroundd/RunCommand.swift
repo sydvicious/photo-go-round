@@ -31,7 +31,23 @@ struct RunCommand {
     private let filler = FillerBox()
 
     func run() async throws {
+        // **Loud when the build is wrong.** A `nonisolated async` function runs
+        // on its caller's executor only with this on, and the request path is
+        // made of them — so without it every request leaves its lane at the
+        // first hop and runs its SQLite on the shared pool, which is what
+        // `RequestLane` exists to prevent. `Package.swift` sets it for the
+        // package and the Xcode project for its own targets; this says so if
+        // whichever built this agent did not.
+        #if !hasFeature(NonisolatedNonsendingByDefault)
+            Console.alert(
+                "built without NonisolatedNonsendingByDefault: requests will run on the shared pool",
+                recording: .kind("launch.requests-on-the-pool"))
+        #endif
+
+        // Where a launch's time goes, step by step. See `StartupTimes`.
+        var startup = StartupTimes()
         try environment.prepare()
+        startup.lap("storage")
 
         // **Errors are recorded from here on, and in this process only.** Every
         // red line and every error logged with a kind goes into the record the
@@ -45,7 +61,9 @@ struct RunCommand {
         LibraryChanges.shared.startRecording()
 
         let database = try Database(path: environment.databaseURL.path(percentEncoded: false))
+        startup.lap("open")
         try Migrator.migrate(database)
+        startup.lap("migrate")
 
         var preferences = environment.preferences
 
@@ -67,6 +85,7 @@ struct RunCommand {
             store: store
         )
         let reclaimed = try cache.prepare()
+        startup.lap("cache index")
         // Only when there was something to reclaim, so a clean launch stays
         // quiet and a launch that took 33 directories off the disk does not.
         // Temporary, and goes with the sweep that produces it — see
@@ -306,7 +325,12 @@ struct RunCommand {
         // would publish a port that only a signal withdraws, so `--once` would
         // leave a stale address behind — or overwrite a running agent's, since
         // both write the same preference domain.
-        if !once { try listener.start() }
+        if !once {
+            startup.lap("wiring")
+            try listener.start()
+            startup.lap("listen")
+            startup.report(as: "listening")
+        }
         defer {
             listener.stop()
             // The unwind for a thrown error, which no signal covers. Withdraw
@@ -390,6 +414,8 @@ struct RunCommand {
         // Preferences are the truth; the source table is a projection of them.
         // A database that was deleted rebuilds itself here.
         let reconciled = try sources.reconcile(with: preferences)
+        startup.lap("sources")
+        startup.report(as: "ready")
         if !reconciled.isEmpty {
             Console.event(
                 "sources reconciled with preferences: +\(reconciled.added) -\(reconciled.removed) ~\(reconciled.changed)")

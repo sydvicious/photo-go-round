@@ -32,14 +32,16 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
   - A deleted photograph's copies are deleted straight away, files and rows — only when it is actually deleted, never because its source is offline. *Decided 2026-09-16, replacing the proposed launch sweep.*
   - The dashboard's thumbnail uses the same cache. *Decided 2026-09-16.*
   - Eviction runs after every file written to the cache — an original a fetch brings in, or a copy kept — and at no other time; the maintenance timer is gone. *Decided and built 2026-09-16, late; recorded in `TODO.md`, item 10 of* Passed over on 2026-09-16*, and* Eviction *in `PLAN.md`.*
-- **Phase 3 — One actor per request.** Each HTTP request runs on an actor whose executor is a serial dispatch queue of its own, and opens its database connection there.
+- **Phase 3 — One actor per request.** Each HTTP request runs on an actor whose executor is a serial dispatch queue of its own, and opens its database connection there. **Built and installed 2026-09-17.** The agent says so on a red line if it is ever built without the package setting the phase depends on. See *Built* under *One actor per request*.
   - Every route, not only `/v1/next`.
   - The async functions on the request path stay on that thread instead of hopping to the shared pool.
 - **Phase 4 — The refresh locks only to write.** The walk stages what it found in temporary tables with no lock held, then applies additions and removals under the lock, 100 at a time. **Built 2026-09-16,** after a probe measured where the lock's time went, and installed the same night: 173 of 190 pages took no lock, and no transaction held the writer 50 ms. See *Built*, under *The refresh locks only to write*.
   - Each page of 100 is read with no lock, and locks only if it has something to write, as the walk goes. *Decided 2026-09-16: "as the walk goes, 100 at a time".*
   - Removing a source deletes its photographs 100 at a time too, before the source row goes. *Decided 2026-09-16: "pages of 100, accept the count".*
 - **Phase 5 — Refresh and downloads on their own actors.** Each gets its own executor and database connection, with no `NSLock`.
+- **Phase 6 — The cache index comes from the database at launch**, so the port opens in milliseconds rather than after a walk of the cache. *Proposed 2026-09-17; waits for Phase 3, which is built. Still worth it after the `Adaptive` change: the walk is 8.9 s after a restart against 137 ms warm. See the section of that name.*
 - **After each phase,** Syd installs the agent and reads the `TIMING:` lines during a refresh.
+- **Not a phase, and the largest single win:** the LaunchAgent's `ProcessType` was `Background`, which throttles disk I/O. `Adaptive` since 2026-09-17; see *Most of the restart was an I/O throttle, not the walk*.
 - **Still open from this plan:** Phases 3 and 5; serving's own one-row writes that held the lock 0.5–2.2 s before Phase 4 (`TODO.md`, with the commit probe waiting on a new `LOCK:` line); and `Deadline`'s timer depending on the shared pool.
 
 # Design Decisions
@@ -430,6 +432,23 @@ The measuring takes an injected clock and log sink, as `StageTimes` and `Picture
 - The request's `Database` is opened on that actor and never leaves it, which is exactly the one-connection-per-isolation-domain rule `Database` already asks for.
 - **The actor alone does not keep the work on its thread.** `PhotoCache.serve`, `PhotoQueue.remove` and `Deck.markShown` are plain `nonisolated async` functions, and this package does not enable `NonisolatedNonsendingByDefault` — so each of them hops off the caller's actor onto the shared pool, and runs its synchronous SQLite there. `Database.transaction`'s async form and `PhotoPool.upsert` already take `isolated (any Actor)? = #isolation` and stay put. The rest of the request path needs the same, or the upcoming feature turned on for the package; which of the two is a Phase 3 decision, and the Phase 1 test is what shows whether it worked.
 
+### Staying on the request's thread
+
+**Decided 2026-09-17: the package-wide setting.** Asked whether to enable `NonisolatedNonsendingByDefault` for the package or to keep adding `isolation: isolated (any Actor)? = #isolation` to each function on the request path, Syd: "the package-wide setting". So every `nonisolated async` function runs on its caller's executor, and a request that hops through `PhotoCache.serve`, `PhotoQueue.remove` and `Deck.markShown` stays on its own queue's thread instead of landing on the shared pool. The five functions that already take the parameter keep it; it says the same thing.
+
+*What it costs:* the change is not the request path's alone — the refresh, the fetcher and the dealer all run `nonisolated async` functions too, and each will now run on whatever executor called it. The tests are the check.
+
+### Built
+
+*2026-09-17, at Syd's "yes, build Phase 3".*
+
+- **`RequestLane`**, an actor whose `unownedExecutor` is a `DispatchSerialQueue` of its own. `HTTPListener.dispatch` makes one per request and runs the route on it, in place of the bare `Task` that put every request on the shared pool.
+- **`NonisolatedNonsendingByDefault` is on** for every package target (`Package.swift`, `everyTarget`) and for the Xcode project's own targets (`SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT`).
+- **The agent says so if it is ever built without it**, as a red line with the kind `launch.requests-on-the-pool` — the mistake would otherwise be invisible and undo the phase.
+- **Tests:** `RequestLaneTests` — the setting is on (`#if hasFeature`, which fails with the setting removed); a lane's work stays on its thread; two lanes run at once on threads of their own; a blocked lane holds up nobody. *The thread test is weaker than it looks: it passes with the setting off too, because a callee that never suspends can finish on the caller's thread. `theSettingIsOn` is what guards the setting.*
+- **Not done here:** the endpoints still open their `Database` inside the route, which is now on the lane's thread anyway; Phase 5 is what moves the refresh and the fetcher off the pool.
+- **A build note:** the first incremental Xcode build after the setting failed to link; a clean build fixed it. `Build Plan.md`, *An incremental build after a concurrency-feature change does not link*.
+
 ### Why an actor with its own queue, and not the alternatives
 
 - **A `Task` on the pool** is today's arrangement and the thing the sample shows failing.
@@ -516,6 +535,58 @@ A refresh landing a page for that source between removal's pages is the case the
   - **Lookups, now unlocked:** median 5 ms a page, most 225 ms.
   - **The departed queries** found nothing, in 0–10 ms, so no removal page ran.
   - *Seen, not looked into:* the same 17 or so pages changed a row in both refreshes, 20 seconds apart. Something's storage or size reads differently each walk — in `TODO.md`.
+
+## The cache index comes from the database at launch
+
+**Proposed 2026-09-17; not built.** Syd, after the restart measurements: "the agent can ask the database what the cache was the last time it was alive, and can just try to get things out of the cache and return it", and "while the cache walk is going on".
+
+### What the restart measured
+
+Rebooted 13:57, logged in about 13:58, the agent serving at 14:05:22 — **8m22s**. Of that:
+
+- **5m47s before the process was started at all.** `launchd` deferred it; `backgroundtaskmanagementd` was still registering the launch item at 14:02:43.
+- **1m49s between the process starting and our first line of code** — dyld and the launch-constraint check, against a disk everything else on the machine was also reading.
+- **44.5 s of ours:** `storage 960ms · open 3656ms · migrate 424ms · cache index 39355ms · wiring 28ms · listen 51ms`, then `sources 610ms`.
+
+**The cache walk is 39 s after a boot and 137 ms warm** — the same 300 files and 938 MB, stat for stat. The walk is not slow; the disk is, while the machine boots. And the listener opens only after it. `TODO.md`, *The agent takes about two minutes from launch to listening after a restart*, holds both restarts' numbers.
+
+### Why not simply listen first
+
+Considered and refused, 2026-09-17. Syd: "nothing the clients can do about it, so, no?" An agent that answers with an empty index has no pictures to give, so the client is no better off — and worse, it would believe nothing is cached and fetch again what is already on disk.
+
+### The shape
+
+- **At launch the index is what the database says it was.** `photo.cached_at` records every original the agent adopted, with its `byte_size`, and `resized` records every copy. That is a row per file and one query, against a database the agent has just opened anyway.
+- **The listener opens on that**, before anything touches the cache directory.
+- **Serving tries the file and treats its absence as a miss.** Syd: "just try to get things out of the cache and return it." A photograph whose file has gone is already an ordinary miss — the queue fetches it again.
+- **The walk still runs, at every launch and periodically.** Syd, 2026-09-17: "you still need to do the cache walk periodically, especially at startup, to make sure that the agent's idea of the filesystem matches what is actually on disk", and "while the cache walk is going on" — so it runs in the background, not before the port opens. It corrects the index: files the database did not know about, files the database claims and the disk does not have, the leftover-directory sweep, and the first eviction's clearing of copies with no row.
+- **Eviction waits for the walk**, since a total the walk has not finished is not a total worth evicting against.
+
+### Most of the restart was an I/O throttle, not the walk
+
+**Measured 2026-09-17, after four restarts.** The agent's LaunchAgent declared `ProcessType` `Background`, and macOS throttles a background job's disk I/O. Syd: "yes, change it to Adaptive". With `Adaptive`, on the next restart:
+
+| | `Background` | `Adaptive` |
+|---|---|---|
+| Between the process starting and our first line | 1m49s – 2m34s | **17 s** |
+| The cache index walk | 16.1 s – 39.4 s | **8.9 s** |
+| Process start to listening | 20 s – 44 s | **9.9 s** |
+| `LOCK:` lines in the twenty minutes after | constant, up to 70 s held | **none** |
+
+So the one-row writes that held the writer for hundreds of milliseconds — `markShown`, `register`, `claim` — were the throttle as well. `Scripts/install-agent.sh` carries the setting and the reasoning.
+
+**This does not retire Phase 6.** The walk is still 8.9 s against 137 ms warm, and it is still what the port waits for.
+
+### It waits for Phase 3
+
+Syd, 2026-09-17: "this ties into 'each request is run on its own actor'", then "yes, Phase 3 first". Today the walk runs before anything serves, so it starves nothing. Behind the listener it becomes a long run of `stat` calls in the background, which must not sit on the shared pool — the starvation Phase 3 is for. So Phase 3 comes first, and the walk gets a queue of its own, as the `Resizer` has.
+
+### Open questions
+
+- What the store's totals say while the walk is running, given the dashboard and `pgr_ctl cache status` read them.
+- Whether a request that arrives before the walk finishes should be told anything — today a miss is a miss, and that may be enough.
+- How often the periodic walk runs, and what starts it — a heartbeat of its own, or the first eviction after an interval. *That it runs at launch and periodically is decided.*
+- What this leaves of *the filesystem is the index*, which `PhotoStore`'s header states as the design. The database becomes the record and the disk the check.
 
 ## Refresh and downloads on their own actors
 

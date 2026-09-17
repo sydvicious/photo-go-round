@@ -75,6 +75,16 @@ if launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
     exit 1
 fi
 
+# **`ProcessType` is `Adaptive`, not `Background`, since 2026-09-17.** macOS
+# throttles a Background job's disk I/O, and this agent reads the disk to answer
+# a person waiting on a picture. Measured over four restarts with `Background`:
+# about two minutes between the process starting and its first line of code,
+# then a cache walk of 16 to 39 seconds that takes 137 ms on a quiet machine,
+# and one-row writes holding the database's write lock for hundreds of
+# milliseconds — all of it disk, none of it the agent's own work. Adaptive lets
+# the system lift the throttle when the process is doing user-visible work.
+# `TODO.md`, *The agent takes about two minutes from launch to listening after a
+# restart*.
 cat > "$PLIST" <<PLIST_END
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -94,7 +104,7 @@ cat > "$PLIST" <<PLIST_END
         <false/>
     </dict>
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Adaptive</string>
     <key>StandardOutPath</key>
     <string>/tmp/$LABEL.log</string>
     <key>StandardErrorPath</key>

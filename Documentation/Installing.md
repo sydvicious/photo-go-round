@@ -66,6 +66,12 @@ grep "▸" /tmp/com.sydpolk.photogoround.server.log | tail -10
 
 Build the same target again. Each script replaces its own product and nothing else: the agent's plist is rewritten, the extension's dead registrations — those whose bundle no longer exists, or now holds a different identifier — are removed and the new copy registered, the saver's old bundle is replaced. Selections in System Settings survive.
 
+## After a Clean Build Folder
+
+⇧⌘K deletes the built products, and the wallpaper extension's registration goes with them: `pkd` drops a registration whose bundle is gone, so at the next login `WallpaperAgent` cannot build our wallpaper and falls back to one of Apple's — Golden Gate. Measured 2026-09-17.
+
+Rebuild and reinstall all three, in the order above, and choose the wallpaper again in System Settings.
+
 ## Removing
 
 ```bash

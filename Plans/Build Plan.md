@@ -26,6 +26,10 @@ The products are built four different ways today: the app and the wallpaper exte
   - It builds; it installs nothing unless asked.
   - Its exit status is the build's, so a red CI run means a broken build and nothing else.
 
+# Build hygiene lives in `CLAUDE.md`
+
+Written 2026-09-17, at Syd's "I guess I need to put build hygene into this project's CLAUDE.md", after an agent built the `Install Screen Saver` scheme "to check it compiles" and its script replaced Syd's installed saver. `CLAUDE.md` at the top of the repo holds the rules any builder follows on his machine: build into `~/.claude/build/photo-go-round`, never build an `Install …` scheme or run `Scripts/install-*.sh`, pass the `.claude` identity to wallpaper builds and unregister afterwards, and check warnings on a clean build. This plan stays the *why*; that file is the *don't*.
+
 # Design Decisions
 
 - **One target, one scheme, one script per product.** Anything buildable is buildable alone, from Xcode and from a terminal, with the same result.
@@ -69,6 +73,10 @@ Four things, all on Syd's MacBook Pro, and all of them shape the decisions above
 - **A Run Script phase cannot see its own target's signature.** The build log order is: script phase, then `CodeSign`. An install phase on the host target therefore registered an unsigned bundle every time, which `pkd` rejected with "plug-ins outside containing apps must be protected by SIP" — the same message a bare appex gets, which made it look like the host had not been built at all.
 - **`lsregister -f` did not visibly register the extension** in the same colliding-identifier conditions. Whether it would with a free identifier was not tested, because `pluginkit -a` answered the question.
 - **Building the extension's scheme alone still produces a host app.** `Photo-Go-Round Wallpaper.appex` came out inside `Photo-Go-Round.app`, since the appex is embedded by the app target. Building the extension alone therefore yields something registrable, which is what an install phase needs.
+
+## An incremental build after a concurrency-feature change does not link
+
+**Measured 2026-09-17**, turning on `NonisolatedNonsendingByDefault` for the package and the project. An incremental `xcodebuild` of `Photo-Go-Round Server` failed with "symbol(s) not found": `Deadline.run` and the other `nonisolated async` functions mangle differently once the feature is on, and the agent's own sources had been rebuilt against a package module that had not. `xcodebuild clean build` succeeded. Worth knowing for any later change of this kind; nothing to fix.
 
 ## What Apple does, and why we cannot
 
