@@ -39,7 +39,7 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
   - Each page of 100 is read with no lock, and locks only if it has something to write, as the walk goes. *Decided 2026-09-16: "as the walk goes, 100 at a time".*
   - Removing a source deletes its photographs 100 at a time too, before the source row goes. *Decided 2026-09-16: "pages of 100, accept the count".*
 - **Phase 5 — Refresh and downloads on their own actors.** Each gets its own executor and database connection, with no `NSLock`.
-- **Phase 6 — The cache index comes from the database at launch**, so the port opens in milliseconds rather than after a walk of the cache. *Proposed 2026-09-17; waits for Phase 3, which is built. Still worth it after the `Adaptive` change: the walk is 8.9 s after a restart against 137 ms warm. See the section of that name.*
+- **Phase 6 — The cache index comes from the database at launch**, so the port opens in milliseconds rather than after a walk of the cache. **Built 2026-09-17; not yet installed.** See *Built*, under the section of that name.
 - **After each phase,** Syd installs the agent and reads the `TIMING:` lines during a refresh.
 - **Not a phase, and the largest single win:** the LaunchAgent's `ProcessType` was `Background`, which throttles disk I/O. `Adaptive` since 2026-09-17; see *Most of the restart was an I/O throttle, not the walk*.
 - **Still open from this plan:** Phases 3 and 5; serving's own one-row writes that held the lock 0.5–2.2 s before Phase 4 (`TODO.md`, with the commit probe waiting on a new `LOCK:` line); and `Deadline`'s timer depending on the shared pool.
@@ -581,11 +581,24 @@ So the one-row writes that held the writer for hundreds of milliseconds — `mar
 
 Syd, 2026-09-17: "this ties into 'each request is run on its own actor'", then "yes, Phase 3 first". Today the walk runs before anything serves, so it starves nothing. Behind the listener it becomes a long run of `stat` calls in the background, which must not sit on the shared pool — the starvation Phase 3 is for. So Phase 3 comes first, and the walk gets a queue of its own, as the `Resizer` has.
 
+### Built
+
+*2026-09-17, at Syd's "let's do phase 6".*
+
+- **`PhotoCache.prepareFromDatabase()`** reads one query — every `photo` row with `cached_at`, joined to its source — and hands `PhotoStore.believe` the file each one should be at. The agent opens on that, and `STARTUP:` calls it `index`.
+- **`PhotoCache.walkCache()`** is the old walk, and marks the store walked when it finishes.
+- **`CacheWalk`**, an actor with its own serial queue at `utility`, runs it: once as soon as the listener is up, then every `cacheWalkIntervalSeconds` — 3600 by default, `60...86400`. Each walk logs `CACHE WALK: N held · bytes · N discarded · Nms`.
+- **Eviction waits for the first walk**, and says so in the log if asked earlier.
+- **A missing file needs nothing new:** `PhotoStore.url(forPhoto:)` already stats the file and forgets it if it has gone, so a believed photograph that is not there is the miss it always was.
+- **Tests:** `LaunchIndexTests`, five — the index comes from the database; a believed file serves; a lost file is a miss and leaves the index; the walk corrects the index and the `cached_at` rows behind it; eviction takes nothing until the walk has run. Dropping `store.walked()` or believing nothing each fails one.
+- **Not changed:** `prepare()` still walks, which is what `pgr_ctl` and the tests use.
+- **Measured after a restart, 2026-09-17 16:08.** Process at 16:08:43 (19 s after the reboot), first line of our code at 16:09:02 (19 s of pre-main), `STARTUP: listening after storage 0ms · open 155ms · migrate 0ms · index 1728ms · wiring 15ms · listen 23ms · total 1924ms`, port accepting at 16:09:10 — **about 70 s from the reboot**, against 2m27s with the walk in front of it and 3m52s–8m22s before `Adaptive`. The walk ran behind the open port and finished at 16:09:22: `CACHE WALK: 225 held · 931.8 MB · 0 discarded · 17149ms`. An hourly walk had also run at 16:07:28 in 7.2 s.
+
 ### Open questions
 
 - What the store's totals say while the walk is running, given the dashboard and `pgr_ctl cache status` read them.
 - Whether a request that arrives before the walk finishes should be told anything — today a miss is a miss, and that may be enough.
-- How often the periodic walk runs, and what starts it — a heartbeat of its own, or the first eviction after an interval. *That it runs at launch and periodically is decided.*
+- ~~How often the periodic walk runs, and what starts it.~~ **Decided 2026-09-17: a clock of its own, an hour by default, and always at launch.** Syd: "its own interval, default an hour", then "but definitly at launch". The refresh's clock was the alternative; a cache walk answers to a different pressure.
 - What this leaves of *the filesystem is the index*, which `PhotoStore`'s header states as the design. The database becomes the record and the disk the check.
 
 ## Refresh and downloads on their own actors

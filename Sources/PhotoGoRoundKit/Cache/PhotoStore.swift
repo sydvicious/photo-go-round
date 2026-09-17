@@ -426,6 +426,51 @@ public final class PhotoStore: @unchecked Sendable {
         }
     }
 
+    /// What the database said this cache held, believed without looking.
+    ///
+    /// **The index at launch, since 2026-09-17.** Syd: "the agent can ask the
+    /// database what the cache was the last time it was alive, and can just try
+    /// to get things out of the cache and return it." Every read still stats
+    /// the file — `url(forPhoto:)` forgets one that is gone — so believing the
+    /// database costs at worst a miss, where walking the disk first cost the
+    /// port 8.9 to 39 seconds after a restart.
+    public func believe(_ held: [Believed]) {
+        lock.lock()
+        for photograph in held {
+            entries[photograph.uuid] = Entry(url: photograph.url, byteCount: photograph.byteCount)
+            sourceOfPhoto[photograph.uuid] = photograph.sourceUUID
+        }
+        lock.unlock()
+    }
+
+    public struct Believed: Sendable, Equatable {
+        public let uuid: String
+        public let sourceUUID: String
+        public let url: URL
+        public let byteCount: Int64
+
+        public init(uuid: String, sourceUUID: String, url: URL, byteCount: Int64) {
+            self.uuid = uuid
+            self.sourceUUID = sourceUUID
+            self.url = url
+            self.byteCount = byteCount
+        }
+    }
+
+    /// Whether the disk has been walked in this process yet.
+    ///
+    /// **Eviction waits for it.** A total nobody has checked against the disk is
+    /// not a total worth deleting photographs over: the database's byte sizes
+    /// are what a fetch recorded, and a file changed or lost behind the agent's
+    /// back is only found by the walk.
+    public private(set) var hasWalked = false
+
+    func walked() {
+        lock.lock()
+        hasWalked = true
+        lock.unlock()
+    }
+
     /// Claims the one eviction this process runs at a time. False when another
     /// holds it; `endEviction()` gives it back.
     ///

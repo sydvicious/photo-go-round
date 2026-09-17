@@ -19,7 +19,7 @@ Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't r
 - **A test that asks the real Photos library: `SourceEndpointTests` "An album identifier that names nothing is refused at the door".** It posts a `photos_collection` source through the endpoint's default providers, which ask PhotoKit on whatever Mac runs the tests, under a time bound. It failed in two full runs while `ServingUnderLoadTests` froze the pool.
 - ~~**The black screensaver, reported about 12:41.**~~ *Dropped — Syd: "don't worry about black screensaver."* "the screensaver is now service black". The log showed the saver put up a picture at 12:40:49 and its window closing 24 s later; nothing after. Never diagnosed.
 - **Photos albums stay "not responding" for up to five minutes after the agent starts.** *Syd: "is worrying", then "diagnoising startup slowness requires its own sessions, so let's do those items later".* Left open, for its own session. At the 17:46 install both were marked unavailable at 17:46:14; Photos answered in 71 ms by 17:50; the label waits for the next scheduled refresh.
-- **The agent takes about two minutes from launch to listening after a restart.** *Syd: "is worrying", then "diagnoising startup slowness requires its own sessions, so let's do those items later".* Left open, for its own session. 12:37:56 → 12:39:58 and 16:31:12 → 16:34:34, each step logging tens of seconds apart. Not measured beyond that.
+- ~~**The agent takes about two minutes from launch to listening after a restart.**~~ *Answered 2026-09-17: `ProcessType Adaptive` and Phase 6's launch index took the reboot-to-serving path from 3m52s–8m22s to about 70 s, of which ours is 1.9 s. What is left is launchd's own delay before starting the process, and about 19 s of macOS loading it.* *Syd: "is worrying", then "diagnoising startup slowness requires its own sessions, so let's do those items later".* Left open, for its own session. 12:37:56 → 12:39:58 and 16:31:12 → 16:34:34, each step logging tens of seconds apart. Not measured beyond that.
   - **Measured across a restart, 2026-09-17**, at Syd's "yes, restarting now". Rebooted 13:46, logged in about 13:47.
     - **13:49:52 the agent's process starts** — nearly four minutes after the reboot, over two after login. Before that, `launchd` answered "Could not find job with label com.sydpolk.photogoround.server" (13:47:35) and the app showed *Waiting for Photos*. The plist is in `~/Library/LaunchAgents` with `RunAtLoad`, and `ProcessType` is `Background`, which launchd is free to defer.
     - **13:50:28 the cache index is rebuilt**, 304 entries, 937 MB — about 33 of the 39 seconds between the process starting and the port opening. 100 ms a file is not a walk; the volume was probably still busy from the boot. Unmeasured either way.
@@ -49,6 +49,22 @@ Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't r
   - **Syd, 2026-09-16: "you might temporarily exceed the space, but that's fine".** The cache may sit over its ceiling between a write and the eviction after it, and over the free-space floor until the next write.
   - **Built 2026-09-16, at Syd's "yes, build it".** `PhotoCache.evictAfterWriting()` runs after a fetch adopts an original and from `PhotoCache.keep`, which both endpoints now keep copies through (`CopyPlace` carries what they need onto the resizer's thread). An eviction that finds another running in the process is skipped, not waited for (`PhotoStore.claimEviction`). The agent's reporter — dashboard tally, console line, `cacheChanged` — moved from the maintenance pass to a `PhotoCache.evicted` hook. Gone: the `.maintenance` heartbeat, `runMaintenance`, `maintenanceIntervalSeconds`. Docs: `photogoroundd.md` (the ceiling paragraph, `evictions`, the preference row) and `pgr_ctl.md` (`cache evict`; and `sources remove`, which still said a source's bytes waited for a maintenance sweep — stale since removal began deleting them at once). Tests: four new in `ResizedCopiesTests`, two in `DashboardEndpointTests`, each caught its own mutation; `ResidencyTests` "eviction releases the originals it took" rewritten, since its fetches now evict before its own call could. *`Agent Performance Overhaul.md`'s bullet marked reversed.*
   - ~~**Still saying "maintenance" in `PLAN.md`, not changed — Syd's to decide:** the dashboard section and the preferences table.~~ *Syd: "yes, update PLAN.md". Done 2026-09-16: *Eviction* gained a "When it runs" paragraph; the dashboard's *Evictions*, its ceiling paragraph, the connection-per-request paragraph, the preferences table and the wedged-Photos TODO's refresh-walk bullet now say eviction follows each write, with the maintenance wording dated.*
+
+## Track RAM usage
+
+Syd, 2026-09-17: "I also want a task setup every this you ask me to reboot the agent where you record how much ram it is using first. Basically I want a running tally to make sure that there are no leaks from the agent, the screensaver agent, or the wallpaper extension."
+
+- **Planned in `Plans/Track RAM Usage.md`**, drafted the same day. How it is recorded is not decided — Syd: "We will brainstorm on how later."
+- **The rule as given:** before asking Syd to reinstall or reboot anything, sample each process's memory first, and keep the numbers where a trend can be read.
+- **First samples, 2026-09-17 16:18:** the agent 113 MB after 9 minutes; the wallpaper extension 53 MB after 9 minutes. The screensaver was not running.
+
+## A fixed service port
+
+Syd, 2026-09-17: "Perhaps we had better actually pick a port and hardcode it. this dynamic port stuff is causing problems."
+
+- **Planned in `Plans/Service Port Plan.md`**, drafted the same day. Nothing decided; the number, the multi-user answer and what gets deleted are all open.
+- **What prompted it:** across five reboots the agent took a different port each time (56333, 58192, …), and the app showed *waiting for the agent* until it re-read the published value.
+- **Also noticed in the same window, not acted on:** for about a minute after a restart every request logged `RESIZE: gave up after 1000ms`, so the app was served originals while the HEIC encoder was cold. That is Phase 2a working as designed; worth knowing it lasts a minute.
 
 ## `pgr_ctl` in Xcode
 

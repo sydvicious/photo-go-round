@@ -457,6 +457,14 @@ keyed by the `consumer` each request named, including `cli` and `anonymous`.
 `libraryChanges`, `served`, `serveLookups`, `fetchLookups`, and `evictions`
 start empty at launch and are not kept.
 
+**The cache index at launch is what the database recorded**, not a walk of the
+cache directory: the agent opens its port in milliseconds and checks the disk
+afterwards. A photograph whose file has gone since is an ordinary miss, fetched
+again. The walk runs once at launch and every `cacheWalkIntervalSeconds`, on a
+thread of its own, and logs `CACHE WALK: … held · … · … discarded · …ms`.
+Nothing is evicted until the first walk has finished, since a total nothing has
+checked is not one to delete photographs over.
+
 **Preferences are read on every request**, so a changed `cacheByteCeiling` or
 `queueSize` is in the next reading once the agent has re-read its preferences —
 at once after `pgr_ctl` or the app writes one, within thirty seconds after a
@@ -523,6 +531,7 @@ without restarting it and without any cooperation:
 | `cacheByteCeiling` | bytes of cached originals and resized copies to keep | 1 GB |
 | `cacheMinimumFreeBytes` | stop fetching below this much free space | 5 GB |
 | `cacheCriticalFreeBytes` | evict ahead of the ceiling below this much | 2 GB |
+| `cacheWalkIntervalSeconds` | how often to check the cache index against the disk | 3600 |
 
 Every read is a parse with a default and a clamp, because `defaults write` accepts
 anything. An out-of-range value is logged and clamped rather than honoured.

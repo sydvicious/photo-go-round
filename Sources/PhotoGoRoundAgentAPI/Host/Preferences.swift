@@ -73,6 +73,7 @@ public struct Preferences: @unchecked Sendable {
 
         public static let repeatWindowFraction = Key("repeatWindowFraction")
         public static let cacheByteCeiling = Key("cacheByteCeiling")
+        public static let cacheWalkIntervalSeconds = Key("cacheWalkIntervalSeconds")
         public static let cacheMinimumFreeBytes = Key("cacheMinimumFreeBytes")
         public static let cacheCriticalFreeBytes = Key("cacheCriticalFreeBytes")
         public static let scanIntervalSeconds = Key("scanIntervalSeconds")
@@ -173,6 +174,17 @@ public struct Preferences: @unchecked Sendable {
     /// on it yet.
     public var scanInterval: Duration {
         .seconds(number(.scanIntervalSeconds, default: 300, in: 1...86_400))
+    }
+
+    /// How often the agent walks the cache directory to check its index
+    /// against the disk.
+    ///
+    /// **An hour, and always once at launch.** Syd, 2026-09-17: "its own
+    /// interval, default an hour", then "but definitly at launch". The index
+    /// itself comes from the database now, and this is the check against
+    /// reality; `Agent Performance Overhaul.md`, Phase 6.
+    public var cacheWalkInterval: Duration {
+        .seconds(number(.cacheWalkIntervalSeconds, default: 3600, in: 60...86_400))
     }
 
     /// How many fetches run at once, across every source.
@@ -542,6 +554,7 @@ public struct Preferences: @unchecked Sendable {
         switch key {
         case .repeatWindowFraction: String(deckSettings.repeatWindowFraction)
         case .cacheByteCeiling: String(cacheSettings.byteCeiling)
+        case .cacheWalkIntervalSeconds: String(Int(cacheWalkInterval.totalSeconds))
         case .cacheMinimumFreeBytes: String(cacheSettings.minimumFreeBytes)
         case .cacheCriticalFreeBytes: String(cacheSettings.criticalFreeBytes)
         case .scanIntervalSeconds: String(Int(scanInterval.totalSeconds))
@@ -567,7 +580,7 @@ public struct Preferences: @unchecked Sendable {
 
     public static let allKeys: [Key] = [
         .repeatWindowFraction, .cacheByteCeiling,
-        .cacheMinimumFreeBytes, .cacheCriticalFreeBytes,
+        .cacheMinimumFreeBytes, .cacheCriticalFreeBytes, .cacheWalkIntervalSeconds,
         .scanIntervalSeconds, .downloadConcurrency, .queueSize,
         .queueRefreshIntervalSeconds, .serveWaitSeconds,
     ]

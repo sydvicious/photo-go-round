@@ -84,22 +84,16 @@ struct RunCommand {
             queueSize: preferences.queueSize,
             store: store
         )
-        let reclaimed = try cache.prepare()
-        startup.lap("cache index")
-        // Only when there was something to reclaim, so a clean launch stays
-        // quiet and a launch that took 33 directories off the disk does not.
-        // Temporary, and goes with the sweep that produces it — see
-        // `PhotoStore.IndexResult.reclaimedDirectories`.
-        if reclaimed.reclaimedDirectories > 0 {
-            Console.note(
-                "reclaimed \(reclaimed.reclaimedDirectories) leftover resize directories"
-                    + ", \(RunCommand.bytes(reclaimed.reclaimedBytes))")
-        }
-        if reclaimed.discarded > 0 || reclaimed.emptied > 0 {
-            Console.event(
-                "reclaimed \(reclaimed.discarded) cached files nothing claimed"
-                    + ", \(reclaimed.emptied) empty source directories")
-        }
+        // **The index is what the database claimed, and the walk follows.**
+        // Walking the cache first cost the port 8.9 to 39 seconds after a
+        // restart; `Agent Performance Overhaul.md`, Phase 6. Syd: "the agent
+        // can ask the database what the cache was the last time it was alive,
+        // and can just try to get things out of the cache and return it",
+        // "while the cache walk is going on".
+        let held = try cache.prepareFromDatabase()
+        startup.lap("index")
+        Console.note(
+            "cache index from the database: \(held.photos) photographs, \(RunCommand.bytes(held.bytes))")
 
         // The service is the interface: clients ask for a picture and are handed
         // the bytes, and never open the database or the cache themselves.
@@ -330,6 +324,22 @@ struct RunCommand {
             try listener.start()
             startup.lap("listen")
             startup.report(as: "listening")
+            // **The walk, behind the open port.** At launch and every
+            // `cacheWalkInterval` after it — Syd, 2026-09-17: "its own
+            // interval, default an hour", "but definitly at launch". On its own
+            // thread, since it is thousands of `stat` calls; see `CacheWalk`.
+            let walker = CacheWalk()
+            let walkRoot = environment.cacheRoot
+            Task {
+                while !Task.isCancelled {
+                    await walker.run {
+                        Self.walkCache(
+                            databasePath: databasePath, root: walkRoot,
+                            settings: environment.preferences.cacheSettings, store: store)
+                    }
+                    try? await Task.sleep(for: environment.preferences.cacheWalkInterval)
+                }
+            }
         }
         defer {
             listener.stop()
@@ -765,6 +775,33 @@ struct RunCommand {
         // A one-pass run waits for its fetches; a serving agent lets them run.
         if round.produced > 0 {
             if once { await fetcher.kick() } else { Task { await fetcher.kick() } }
+        }
+    }
+
+    /// One walk of the cache directory, checking the index against the disk.
+    ///
+    /// Its own connection: it runs on `CacheWalk`'s thread, and a `Database`
+    /// belongs to one isolation domain. Anything it discards is a file the
+    /// database does not claim; anything it misses, the next walk finds.
+    private static func walkCache(
+        databasePath: String, root: URL, settings: CacheSettings, store: PhotoStore
+    ) {
+        let started = ContinuousClock.now
+        do {
+            let database = try Database(path: databasePath)
+            var cache = PhotoCache(
+                database: database, root: root, settings: settings,
+                sources: SourceStore(database: database, bytes: store), store: store)
+            cache.log = Self.speak
+            let result = try cache.walkCache()
+            let line =
+                "CACHE WALK: \(result.kept) held · \(bytes(result.bytes)) · "
+                + "\(result.discarded) discarded · \(StageTimes.milliseconds(ContinuousClock.now - started))"
+            Console.note(line)
+            Log.cache.notice("\(line, privacy: .public)")
+        } catch {
+            Console.alert(
+                "the cache walk failed: \(error)", recording: .kind("cache.walk-failed"))
         }
     }
 

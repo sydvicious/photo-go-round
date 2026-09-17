@@ -62,24 +62,26 @@ struct RequestLaneTests {
 
     @Test("Two requests run at the same time, on threads of their own")
     func lanesAreIndependent() async {
-        // Each lane blocks until both have arrived, so passing means they really
-        // ran together: one thread could not satisfy both.
-        let bothArrived = DispatchSemaphore(value: 0)
+        // Each lane waits for the *other* to arrive, so passing means they
+        // really ran together: one thread could not satisfy both. One semaphore
+        // for the pair does not do this — a lane consumes its own signal and
+        // walks straight through, which it did on 2026-09-17.
+        let firstArrived = DispatchSemaphore(value: 0)
+        let secondArrived = DispatchSemaphore(value: 0)
         let threads = Mutex<[UInt64]>([])
 
-        func arrive(on lane: RequestLane) async {
+        func arrive(on lane: RequestLane, saying mine: DispatchSemaphore, awaiting theirs: DispatchSemaphore) async {
             await lane.run {
-                let mine = Self.thread()
-                threads.withLock { $0.append(mine) }
-                bothArrived.signal()
-                Self.block(on: bothArrived)
+                threads.withLock { $0.append(Self.thread()) }
+                mine.signal()
+                Self.block(on: theirs)
             }
         }
 
         let first = RequestLane()
         let second = RequestLane()
-        async let one: Void = arrive(on: first)
-        async let two: Void = arrive(on: second)
+        async let one: Void = arrive(on: first, saying: firstArrived, awaiting: secondArrived)
+        async let two: Void = arrive(on: second, saying: secondArrived, awaiting: firstArrived)
         _ = await [one, two]
 
         let seen = threads.withLock { $0 }

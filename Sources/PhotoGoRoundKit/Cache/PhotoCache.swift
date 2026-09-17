@@ -97,7 +97,74 @@ public struct PhotoCache {
         // the right outcome by luck rather than by design, so it is still taken
         // here explicitly and stays correct when that sweep is deleted.
         try? FileManager.default.removeItem(at: root.appending(path: Self.stagingDirectory))
-        return try indexCache()
+        let result = try indexCache()
+        store.walked()
+        return result
+    }
+
+    /// What the database says this cache held, as the index to open on.
+    ///
+    /// **Phase 6 of `Agent Performance Overhaul.md`.** The walk that used to
+    /// build the index took 8.9 s after a restart against 137 ms warm, and the
+    /// listener opened only after it. This is one query, and the walk follows
+    /// in the background — `walkCache()`.
+    ///
+    /// A photograph is believed when its row says `cached_at`; the file's name
+    /// is the photograph's uuid and its source's, with the extension the
+    /// external id carries, which is what `adopt` wrote.
+    @discardableResult
+    public func prepareFromDatabase() throws -> Held {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableRoot = root
+        try? mutableRoot.setResourceValues(values)
+        try? FileManager.default.removeItem(at: root.appending(path: Self.stagingDirectory))
+
+        var believed: [PhotoStore.Believed] = []
+        var bytes: Int64 = 0
+        try database.query(
+            """
+            SELECT p.uuid AS photo_uuid, s.uuid AS source_uuid, p.external_id AS external_id,
+                   COALESCE(p.byte_size, 0) AS byte_size
+              FROM photo p JOIN source s ON s.id = p.source_id
+             WHERE p.cached_at IS NOT NULL;
+            """
+        ) { row in
+            let photoUUID = try row.string("photo_uuid")
+            let sourceUUID = try row.string("source_uuid")
+            let byteCount = try row.int64("byte_size")
+            let url = store.url(
+                forPhoto: photoUUID, sourceUUID: sourceUUID,
+                pathExtension: (try row.string("external_id") as NSString).pathExtension)
+            believed.append(
+                PhotoStore.Believed(
+                    uuid: photoUUID, sourceUUID: sourceUUID, url: url, byteCount: byteCount))
+            bytes += byteCount
+        }
+        store.believe(believed)
+        return Held(photos: believed.count, bytes: bytes)
+    }
+
+    /// What the database claimed at launch.
+    public struct Held: Sendable, Equatable {
+        public let photos: Int
+        public let bytes: Int64
+    }
+
+    /// The walk, for a caller that has already opened on the database's index.
+    ///
+    /// **At launch and every `cacheWalkInterval` after it**, in the background.
+    /// Syd, 2026-09-17: "you still need to do the cache walk periodically,
+    /// especially at startup, to make sure that the agent's idea of the
+    /// filesystem matches what is actually on disk", and "its own interval,
+    /// default an hour". It is the same walk `prepare()` does, and it is what
+    /// lets eviction run.
+    @discardableResult
+    public func walkCache() throws -> PhotoStore.IndexResult {
+        let result = try indexCache()
+        store.walked()
+        return result
     }
 
     /// Where a fetch writes before adopting into the store. Beside the source
@@ -1219,6 +1286,13 @@ public struct PhotoCache {
     /// the point at which this wants measuring rather than reasoning about.
     @discardableResult
     public func evictIfNeeded() throws -> EvictionResult {
+        // **Nothing is evicted before the disk has been walked.** At launch the
+        // index is what the database claimed (`prepareFromDatabase`), and a
+        // total nobody has checked is not one to delete photographs over.
+        guard store.hasWalked else {
+            Log.cache.info("eviction waits for the first cache walk")
+            return EvictionResult(evicted: 0, bytesFreed: 0, ceilingHalved: false)
+        }
         guard store.claimEviction() else {
             Log.cache.info("an eviction is already running; this one is skipped")
             return EvictionResult(evicted: 0, bytesFreed: 0, ceilingHalved: false)
