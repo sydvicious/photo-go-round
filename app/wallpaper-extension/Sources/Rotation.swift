@@ -55,22 +55,41 @@ enum Rotation {
     /// within ten seconds if the picture is already older than the new
     /// interval; lengthening it leaves the picture up for the new interval,
     /// counted from when it appeared.
-    static func run(_ body: @escaping @Sendable () -> Void) -> Task<Void, Never> {
+    /// **The body says whether a picture arrived**, because the answer decides
+    /// when to ask again. Measured 2026-09-18 across two reboots: the extension
+    /// woke 5 and 51 seconds before the agent was listening, was refused, and
+    /// then waited its whole interval — ten minutes of a stale desktop, or half
+    /// a day at `twelveHours`. A refusal now costs ten seconds; see
+    /// `RetryAfterSilence`.
+    ///
+    /// **The first ask is due at once**, which is why `lastAsk` starts an
+    /// interval in the past. It used to be made separately by the caller, where
+    /// nothing could see whether it worked — the one ask that fails most often.
+    static func run(_ body: @escaping @Sendable () async -> Bool) -> Task<Void, Never> {
         Task.detached(priority: .utility) {
             let clock = ContinuousClock()
-            var lastAsk = clock.now
             var lastInterval = interval
+            var lastAsk = clock.now - clamped(lastInterval.duration)
+            var retry = RetryAfterSilence()
             while !Task.isCancelled {
                 let current = interval
                 if current != lastInterval {
                     wallpaperLog("interval now \(current.rawValue), was \(lastInterval.rawValue)")
                     lastInterval = current
                 }
-                let due = lastAsk + clamped(current.duration)
+                let rotation = clamped(current.duration)
+                let due = lastAsk + retry.wait(interval: rotation)
                 let remaining = clock.now.duration(to: due)
                 if remaining <= .zero {
-                    body()
+                    let answered = await body()
                     lastAsk = clock.now
+                    if answered {
+                        if retry.answered() { wallpaperLog("the agent is answering again") }
+                    } else if retry.wentQuiet(cap: rotation) {
+                        wallpaperLog(
+                            "no agent; asking again in \(retry.wait(interval: rotation)) "
+                                + "rather than waiting out the \(current.rawValue) rotation")
+                    }
                     continue
                 }
                 do {

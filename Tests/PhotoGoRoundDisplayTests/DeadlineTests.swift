@@ -1,3 +1,4 @@
+import Dispatch
 import Foundation
 import Synchronization
 import Testing
@@ -104,5 +105,25 @@ struct DeadlineTests {
         // moment to observe it.
         try await Task.sleep(for: .milliseconds(200))
         #expect(noticed.withLock { $0 })
+    }
+}
+
+/// The two digits the deadline spells for itself, since `StageTimes` lives in a
+/// module above this one.
+@Suite("The deadline's own arithmetic")
+struct DeadlineArithmeticTests {
+
+    @Test("Seconds come out as a Double")
+    func secondsConvert() {
+        #expect(Deadline.seconds(of: .seconds(1)) == 1.0)
+        #expect(Deadline.seconds(of: .milliseconds(250)) == 0.25)
+        #expect(Deadline.seconds(of: .zero) == 0)
+    }
+
+    @Test("Milliseconds are rounded whole, as every other line here spells them")
+    func millisecondsRead() {
+        #expect(Deadline.milliseconds(.seconds(1)) == "1000ms")
+        #expect(Deadline.milliseconds(.milliseconds(5472)) == "5472ms")
+        #expect(Deadline.milliseconds(.microseconds(1500)) == "2ms")
     }
 }

@@ -72,21 +72,61 @@ struct SilentLibraryTests {
             consent: SourceStore.validationLimit * 4)
     }
 
+    /// **Two seconds, not fifty milliseconds.** The bound has to be long enough
+    /// that a library which answers instantly is never mistaken for one that
+    /// does not — and what stands between the two is the cooperative pool
+    /// finding a thread for the work, which in a full parallel run of this
+    /// suite takes tens of milliseconds and in the agent has taken seconds.
+    ///
+    /// Fifty passed until 2026-09-18 only because the deadline's own timer was
+    /// a `Task.sleep` on that same pool: work and clock were starved together,
+    /// so they raced fairly. With the clock on a Dispatch queue the timer is
+    /// honest, and a bound that was always a bet on scheduling started losing
+    /// it. `Deadline`, *Where the clock runs*.
+    ///
+    /// The tests that want a bound to fire hang for ever, so they cost this two
+    /// seconds once and nothing else.
     private static func bounded(_ library: any PhotoLibrary) -> BoundedPhotoLibrary {
         BoundedPhotoLibrary(
-            library, metadata: .milliseconds(50), fetch: .milliseconds(50),
-            consent: .milliseconds(50))
+            library, metadata: .seconds(10), fetch: .seconds(10), consent: .seconds(10))
+    }
+
+    /// For the tests whose subject *is* the bound firing. Their libraries never
+    /// answer at all, so a tenth of a second costs the suite nothing and the
+    /// question of scheduling does not arise.
+    ///
+    /// **Not for a library that delivers anything first.** `StallsPartWay` hands
+    /// over three assets before it stops, and those three have to be scheduled:
+    /// see `partWay`.
+    private static func impatient(_ library: any PhotoLibrary) -> BoundedPhotoLibrary {
+        BoundedPhotoLibrary(
+            library, metadata: .milliseconds(100), fetch: .milliseconds(100),
+            consent: .milliseconds(100))
+    }
+
+    /// For a library that delivers and *then* stalls: long enough that what it
+    /// delivers is not cut off by the cooperative pool taking its time, short
+    /// enough that the suite does not wait on it.
+    ///
+    /// **Five seconds is a measurement, not a guess.** With the deadline's timer
+    /// made punctual on 2026-09-18, a hundred milliseconds cut these two off
+    /// mid-delivery in every full parallel run, and two seconds did as well. The
+    /// stall after the third asset is infinite, so the bound fires whatever it
+    /// is; the only thing the number buys is that the three arrive first.
+    private static func partWay(_ library: any PhotoLibrary) -> BoundedPhotoLibrary {
+        BoundedPhotoLibrary(
+            library, metadata: .seconds(5), fetch: .seconds(5), consent: .seconds(5))
     }
 
     private static func silentProvider() -> PhotosCollectionSourceProvider {
-        PhotosCollectionSourceProvider(library: bounded(Hanging()))
+        PhotosCollectionSourceProvider(library: impatient(Hanging()))
     }
 
     // MARK: - The bound itself
 
     @Test("A call that never answers throws noAnswer rather than waiting")
     func theBoundFires() async {
-        let library = Self.bounded(Hanging())
+        let library = Self.impatient(Hanging())
         await #expect(throws: PhotoLibraryError.self) { try await library.title(ofCollection: "A") }
     }
 
@@ -95,7 +135,7 @@ struct SilentLibraryTests {
     @Test("The failure says which question went unanswered")
     func theFailureNamesItsCall() async {
         do {
-            _ = try await Self.bounded(Hanging()).collections()
+            _ = try await Self.impatient(Hanging()).collections()
             Issue.record("expected a failure")
         } catch let error as PhotoLibraryError {
             guard case .noAnswer(let what, _) = error else {
@@ -259,7 +299,7 @@ struct SilentLibraryTests {
     /// is not.
     @Test("A walk that stalls part way is bounded, and keeps what it received")
     func aStalledWalkIsBounded() async throws {
-        let library = Self.bounded(StallsPartWay(deliver: 3))
+        let library = Self.partWay(StallsPartWay(deliver: 3))
 
         var seen: [String] = []
         await #expect(throws: PhotoLibraryError.self) {
@@ -276,7 +316,7 @@ struct SilentLibraryTests {
     @Test("A stalled walk leaves the source unavailable, not emptied")
     func aStalledWalkDoesNotEmptyTheSource() async throws {
         let provider = PhotosCollectionSourceProvider(
-            library: Self.bounded(StallsPartWay(deliver: 3)))
+            library: Self.partWay(StallsPartWay(deliver: 3)))
 
         var received = 0
         let reachability = try await provider
@@ -305,7 +345,7 @@ struct SilentLibraryTests {
         #expect(counted.counted == 2)
 
         // The library stops answering, and the picker asks again.
-        let silent = PhotosCollectionCatalog(library: Self.bounded(Hanging()))
+        let silent = PhotosCollectionCatalog(library: Self.impatient(Hanging()))
         await #expect(throws: PhotoLibraryError.self) { try await silent.sections() }
 
         // The one that had answers still has them.

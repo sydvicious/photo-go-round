@@ -110,10 +110,26 @@ struct DashboardEndpoint {
         /// The errors standing now and those reported in the last minute, one
         /// per kind, most recently seen first. See `AgentErrors`.
         var errors: [AgentErrors.Entry]
+        /// What the agent is holding now, and the most it has held since
+        /// launch. **The agent's own only** — the wallpaper extension and the
+        /// screensaver are separate processes and log their own; nothing here
+        /// reports another process's memory.
+        var memory: Memory
         /// When the agent launched, which is when `served` began counting.
         var since: Date
         /// When this was taken.
         var at: Date
+
+        /// **Footprint first, resident second.** Measured 2026-09-18 after
+        /// seven hours: `ps` said 531 MB and `footprint` said 299 MB, of which
+        /// 181 MB was reclaimable. Resident size is kept beside it because
+        /// every sample taken by hand before that date was one.
+        struct Memory: Codable, Equatable {
+            var footprintBytes: Int64
+            var residentBytes: Int64
+            /// The largest footprint since launch, from every reading taken.
+            var peakBytes: Int64
+        }
 
         struct Last: Codable, Equatable {
             /// The photograph's row id, which is what the thumbnail route takes.
@@ -256,9 +272,20 @@ struct DashboardEndpoint {
                     source: $0.sourceName, name: $0.name, externalID: $0.externalID)
             },
             errors: await errors.entries(at: now),
+            memory: Self.memory(),
             since: tally.since,
             at: now
         )
+    }
+
+    /// One reading, taken once: asking twice would report two moments and
+    /// invite a panel where the numbers disagree.
+    private static func memory() -> Snapshot.Memory {
+        let reading = Footprint.now()
+        return Snapshot.Memory(
+            footprintBytes: reading?.footprint ?? 0,
+            residentBytes: reading?.resident ?? 0,
+            peakBytes: Footprint.peak)
     }
 
     private func makeCache(database: Database, deck: Deck) -> PhotoCache {

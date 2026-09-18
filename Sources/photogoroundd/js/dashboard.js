@@ -172,6 +172,15 @@ function draw(s) {
     ? "free space on the volume unknown"
     : bytes(s.freeBytes) + " free on the volume; fetching stops below " + bytes(s.freeFloorBytes);
 
+  // **Footprint, not resident size.** Measured 2026-09-18 after seven hours:
+  // `ps` said 531 MB and `footprint` said 299 MB, of which 181 MB was
+  // reclaimable — pages the allocator had not handed back. The resident figure
+  // is underneath because every sample taken by hand before that date was one.
+  const memory = s.memory || {};
+  $("memoryFootprint").textContent = bytes(memory.footprintBytes || 0);
+  $("memoryPeak").textContent = "peak " + bytes(memory.peakBytes || 0) + " since launch";
+  $("memoryResident").textContent = bytes(memory.residentBytes || 0) + " resident";
+
   // **Only the tags actually found.** Syd, 2026-09-17: "you should only show
   // tags you actually find; we will never have raw `wallpaper` again" — the
   // extension calls itself `system-wallpaper`, so a fixed list of three left a

@@ -169,6 +169,10 @@ public final class PGRScreenSaverView: ScreenSaverView {
 
     public override func startAnimation() {
         super.startAnimation()
+        // Once per `legacyScreenSaver` process, however many views start; see
+        // `Footprint`. The host carries other savers too, so this number is not
+        // ours alone — which is why it is worth having rather than guessing.
+        Footprint.startLogging { Self.log.notice("\($0, privacy: .public)") }
 
         // **The preview never serves.** Serving pops the queue, so a thumbnail
         // that asked would spend photographs nobody sees — and with one shared

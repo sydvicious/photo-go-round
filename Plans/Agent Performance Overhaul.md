@@ -42,7 +42,12 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
 - **Phase 6 — The cache index comes from the database at launch**, so the port opens in milliseconds rather than after a walk of the cache. **Built and installed 2026-09-17.** See *Built*, under the section of that name.
 - **After each phase,** Syd installs the agent and reads the `TIMING:` lines during a refresh.
 - **Not a phase, and the largest single win:** the LaunchAgent's `ProcessType` was `Background`, which throttles disk I/O. `Adaptive` since 2026-09-17; see *Most of the restart was an I/O throttle, not the walk*.
-- **Still open from this plan:** `Deadline`'s timer depending on the shared pool, and the `NSLock`s outside the agent — the test doubles, and the wallpaper extension's `PaneHandler`. Serving's own one-row writes are no longer the story: since `ProcessType Adaptive` and the evictor, every long hold measured has been its own `COMMIT` with nothing waiting.
+- **`Deadline`'s timer no longer depends on the shared pool.** **Built 2026-09-18** after the app spent a morning blank; see *The deadline's own clock*. What it left behind is Phase 7.
+- **Phase 7 — Nothing that blocks runs on the cooperative pool.** A task can wait seconds for a thread on it, which is why a resize loses its turn and why a request can miss the client's bound. The work that blocks gets threads of its own, as the resizer, the evictor and the request lanes already have.
+  - Measure first: how long a task waits to *start*, in the agent and under a full test run.
+  - `QueueFetcher`'s lanes are `@concurrent nonisolated`, so a download waiting on PhotoKit holds a pool thread for as long as it waits.
+  - Then look for what else blocks there, rather than assuming the fetcher is all of it.
+- **Still open from this plan:** Phase 7, and the `NSLock`s outside the agent, which are the test doubles and the wallpaper extension's `PaneHandler`. Serving's own one-row writes are no longer the story: since `ProcessType Adaptive` and the evictor, every long hold measured has been its own `COMMIT` with nothing waiting.
 
 # Design Decisions
 
@@ -658,6 +663,72 @@ Syd, 2026-09-17: "this ties into 'each request is run on its own actor'", then "
   - `SystemPhotoLibrary`'s `ChunkSink`, `RequestHandle` and `ResumeOnce` are `Mutex`es. PhotoKit calls their handlers synchronously on a dispatch queue of its own, and the comment beside them records what happened when Swift inferred actor isolation into them: `dispatch_assert_queue` trips and the process goes down on the first chunk. An actor would also mean a `Task` per chunk, which would queue in memory the megabytes `ChunkSink` exists not to accumulate, and could reorder the writes.
 - **The `TODO` in `Deadline.swift` is gone**, replaced by a record of those four exceptions, so the question is not re-opened from scratch.
 - **What is left is not the agent:** `NSLock`s in the test doubles, and one in the wallpaper extension's `PaneHandler`.
+
+## The deadline's own clock
+
+*2026-09-18, at Syd's "ok, now, fix the deadline", after a morning of "app still not showing pictures".*
+
+### What was measured
+
+The agent was serving the app perfectly — thirty requests, every one a `200`. The app was discarding them, because `ServiceTiming.pictureReadLimit` is five seconds and the responses were arriving later than that:
+
+```
+total 10574ms · 9950 · 9243 · 8900 · 7420 · 7126 · 6324 · 5916
+```
+
+Twenty of those thirty gave up on their resize, and the giving up is where the time went — against a budget of **one second**:
+
+```
+resize gave up 5472ms · 3722ms · 3061ms · 2470ms · 1959ms · 1735ms
+```
+
+`Deadline.run` raced the work against `Task.sleep`, and `Task.sleep` waits on the cooperative pool. So the busier the agent became, the later its own timeouts fired, which is exactly backwards for a mechanism whose whole job is to bound something.
+
+### What was built
+
+- **A `DispatchSourceTimer` on a queue of its own.** Dispatch gives it a thread; nothing the agent is doing can delay it.
+- **`FirstAnswer` is a `Mutex`, not an actor.** One of the two callers is now a timer handler, which cannot `await` its turn, and reaching an actor from it would have put the wait back where it was. The same reasoning as `SystemPhotoLibrary`'s three; see `Deadline.swift`.
+- **The deadline reports itself when it overruns**, by half again or more: `DEADLINE: 5472ms for a 1000ms limit — the clock was late`. Because the diagnosis above is inference, not proof — see below.
+
+### What could not be proved
+
+**The failure was not reproduced in a test, and the test that claimed to was deleted.** It saturated the pool and asserted the limit held; it passed with the old implementation too — 0.207 s against 0.211 s for a 200 ms limit. A test that cannot tell the fix from the bug is worse than no test, and this is the third time this week that a test has been caught claiming coverage it did not have.
+
+So the fix rests on the field measurement and on the principle — a timeout must not depend on the thing it is bounding — and the `DEADLINE:` line is what will settle it. If the lap was measuring something wider than this call, the line will never appear and the give-ups will still be long.
+
+### What it exposed, which matters more
+
+With the timer made punctual, six tests in `SilentLibraryTests` began failing in full parallel runs while passing alone: fake libraries that answer instantly, reported as silent. Their bounds were 50 ms, and they had only ever passed because the clock was starved alongside the work. **Two seconds was not enough either.**
+
+The bounds are now 10 s for a library that answers, 100 ms where the subject *is* the bound firing, and 5 s where a library delivers three assets before it stalls. That is not a tidy-up; it is the measurement. **A task can wait seconds for a thread on the cooperative pool**, in a test process and in the agent, and that is the same starvation that makes a resize lose its turn.
+
+`QueueFetcher`'s lanes are `@concurrent nonisolated` and do blocking work — a download that waits on PhotoKit holds a pool thread for as long as it waits. That is the first place to look, and it is now the open item at the top of this plan.
+
+## Phase 7 — nothing that blocks runs on the cooperative pool
+
+*Nothing here is decided. The evidence is in* The deadline's own clock, *under* What it exposed.
+
+### What is known
+
+- **A task can wait seconds to start.** Measured 2026-09-18: with the deadline's clock made punctual, fake libraries that answer in microseconds were reported silent on a 50 ms bound, and on a 2-second bound, in full parallel test runs — while passing alone. Earlier, 2026-09-16: a 10 ms `Task.sleep` in `RequestBodyTests` resumed 1.2 to 1.96 s late for the same reason.
+- **It is why a resize loses its turn.** The budget is a second; the resize has to be scheduled inside it. When the pool is starved the resize never starts, the original goes out instead, and the resize cache stays empty so the next request pays again.
+- **It is not the resizer's doing.** `Resizer` has had its own serial queue since Phase 2, `Evictor` since Phase 5, the request lanes since Phase 3, and `ConfinedDatabase` its own thread. Those are not on the pool.
+
+### What runs there now
+
+- **`QueueFetcher`'s lanes**, deliberately: they are `@concurrent nonisolated` precisely so that several downloads run at once. A download that waits on PhotoKit or iCloud holds its thread for the whole wait, and `BlockingWork` was introduced earlier exactly because a blocked `copyItem` on a cooperative thread stopped the runtime — eleven of them did.
+- **The work side of `Deadline.run`**, which is a `Task`, and everything else the agent starts with a bare `Task { }`.
+- **`URLSession` completions and any `@Sendable` closure** that hops back through an `await`.
+
+### What might be done, none of it decided
+
+- **A lane per fetch**, as the refresh already has one per source. Bounded by how many lanes exist rather than by the pool's width, and a blocked fetch then costs one Dispatch thread rather than one of the runtime's few.
+- **A bounded executor for fetching** — one serial queue with N lanes — so the concurrency is a number this project chose rather than the core count.
+- **Leave it, and make the deadline the answer.** A punctual clock already means a starved resize is abandoned on time and the original goes out; the cost is the resize cache staying cold. That is the cheapest option and it is not obviously wrong.
+
+### How to measure it
+
+A probe that records how long a `Task` takes to begin running — `Task { start.duration(to: .now) }` sampled on a timer — logged with the other diagnostics as `POOL: waited Nms to start`. That number, on the agent doing real work, is what decides between the three above; the test-suite evidence says it is seconds, but a test process is not the agent.
 
 ## What this leaves stale elsewhere
 

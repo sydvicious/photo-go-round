@@ -9,6 +9,7 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
+import PhotoGoRoundAgentAPI
 import IOSurface
 import ObjectiveC
 import QuartzCore
@@ -169,6 +170,8 @@ final class PaneHandler: NSObject, WallpaperExtensionXPC {
     init(caller: Int32) {
         self.caller = caller
         super.init()
+        // Once per process, however many panes ask; see `Footprint`.
+        Footprint.startLogging { wallpaperLog($0) }
     }
 
     private func heard(_ call: String, _ arguments: Any?...) {
@@ -596,18 +599,28 @@ enum Surfaces {
         lock.unlock()
         guard let entry else { return }
 
-        let ask = { @Sendable in
-            AgentPicture.fetch(display: display, pixels: pixels, slot: slot) { answer in
-                guard let answer else { return }
-                // Kept before it is drawn, so a surface acquired after this
-                // process dies still has a photograph to show.
-                LastPicture.remember(answer.image, card: answer.card, for: slot)
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { show(answer.image, on: display, slot: slot) }
+        // **Answers whether a picture arrived**, because `Rotation` decides when
+        // to ask again from that: a refusal is worth ten seconds, not a whole
+        // rotation. The first ask is the loop's too — it used to be made here,
+        // where nothing could see whether it worked, and it is the ask that
+        // fails most often because the agent is not listening yet after a boot.
+        let ask: @Sendable () async -> Bool = {
+            await withCheckedContinuation { continuation in
+                AgentPicture.fetch(display: display, pixels: pixels, slot: slot) { answer in
+                    guard let answer else {
+                        continuation.resume(returning: false)
+                        return
+                    }
+                    // Kept before it is drawn, so a surface acquired after this
+                    // process dies still has a photograph to show.
+                    LastPicture.remember(answer.image, card: answer.card, for: slot)
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { show(answer.image, on: display, slot: slot) }
+                    }
+                    continuation.resume(returning: true)
                 }
             }
         }
-        ask()
         entry.surface.rotation = Rotation.run(ask)
         wallpaperLog(
             "the \(slot.name) on display \(display.map { String($0) } ?? "unknown") will ask again every \(Rotation.interval.rawValue)"

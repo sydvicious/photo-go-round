@@ -1,4 +1,6 @@
+import Dispatch
 import Foundation
+import Synchronization
 
 /// A bound on how long a client will wait for an answer.
 ///
@@ -76,6 +78,20 @@ public enum Deadline {
         public var description: String { "no answer within \(limit.spokenSeconds)" }
     }
 
+    /// Where the clock runs: a queue of its own, so the deadline does not
+    /// depend on the thing it is bounding.
+    ///
+    /// **Measured 2026-09-18.** The resize budget is one second. The agent's
+    /// own `TIMING:` lines had `resize gave up 5472ms`, `3722ms`, `3061ms` —
+    /// the deadline firing up to five and a half times late — and with the
+    /// response past `pictureReadLimit` the app showed nothing while the agent
+    /// logged a `200`. The timer had been `Task.sleep`, which waits on the
+    /// cooperative pool; the busier the agent got, the later its own timeouts
+    /// fired, which is exactly backwards. A `DispatchSourceTimer` gets a thread
+    /// from Dispatch and fires on time regardless.
+    private static let clock = DispatchQueue(
+        label: "com.sydpolk.photogoround.deadline", qos: .userInitiated)
+
     /// Runs `work` and throws `Expired` if `limit` passes first.
     public static func run<T: Sendable>(
         within limit: Duration,
@@ -84,53 +100,99 @@ public enum Deadline {
         let first = FirstAnswer<T>()
         let running = Task {
             do {
-                await first.finish(.success(try await work()))
+                first.finish(.success(try await work()))
             } catch {
-                await first.finish(.failure(error))
+                first.finish(.failure(error))
             }
         }
-        let timer = Task {
-            try? await Task.sleep(for: limit)
-            await first.finish(.failure(Expired(limit: limit)))
-        }
+        let timer = DispatchSource.makeTimerSource(queue: clock)
+        timer.schedule(deadline: .now() + seconds(of: limit), leeway: .milliseconds(10))
+        // Synchronous, from the timer's own thread: a hop back onto the pool to
+        // deliver the expiry would put the wait back where it was.
+        timer.setEventHandler { first.finish(.failure(Expired(limit: limit))) }
+        timer.resume()
         // Asked to stop, never awaited. On the winning path both of these are
         // already finished and the calls do nothing.
         defer {
             timer.cancel()
             running.cancel()
         }
+        let started = ContinuousClock.now
+        defer { report(limit: limit, took: started.duration(to: ContinuousClock.now)) }
         return try await first.outcome().result.get()
+    }
+
+    /// **Says when the clock itself was late**, because a deadline nobody can
+    /// check is a number in a comment.
+    ///
+    /// The field measurement this exists for, 2026-09-18: `resize gave up
+    /// 5472ms` against a one-second budget, in a `TIMING:` lap that covers this
+    /// call and little else. Whether the timer fired late or the lap was
+    /// measuring something wider could not be told apart from the outside — so
+    /// now the deadline reports its own elapsed time when it overruns, and the
+    /// next occurrence says which.
+    ///
+    /// Only when it overruns by half again, so an ordinary expiry is silent and
+    /// a `grep DEADLINE:` is all signal.
+    private static func report(limit: Duration, took: Duration) {
+        guard took > limit + limit / 2 else { return }
+        let line =
+            "DEADLINE: \(milliseconds(took)) for a \(milliseconds(limit)) limit — the clock was late"
+        Log.deck.error(kind: "deadline.late", line)
     }
 
     /// Whichever of the two settles first, once.
     ///
-    /// **An actor rather than a lock**, so there is no lock/unlock pair for
-    /// anybody to get wrong and no `@unchecked Sendable` claiming a safety the
-    /// compiler cannot see. `finish` is called from two tasks and the actor is
-    /// what makes them take turns.
-    ///
-    /// Storing the continuation needs no guard of its own: the body of
-    /// `withCheckedContinuation` runs synchronously on the actor's executor
-    /// before the caller suspends, so `finish` cannot interleave between
-    /// finding no answer and being in a position to receive one.
-    private actor FirstAnswer<T: Sendable> {
-        private var pending: CheckedContinuation<Void, Never>?
-        private var settled: Outcome<T>?
+    /// **A `Mutex` rather than an actor**, and that is the point of it: one of
+    /// the two callers is a `DispatchSourceTimer` handler, which cannot `await`
+    /// its turn. It was an actor until 2026-09-18, and reaching it cost a hop
+    /// onto the cooperative pool — the same pool whose saturation made the
+    /// deadline late in the first place. The same reasoning as
+    /// `SystemPhotoLibrary`'s `ResumeOnce`; see `PhotoGoRoundKit`.
+    private final class FirstAnswer<T: Sendable>: Sendable {
+        private struct State {
+            var pending: CheckedContinuation<Void, Never>?
+            var settled: Outcome<T>?
+        }
+
+        private let state = Mutex(State())
 
         func outcome() async -> Outcome<T> {
-            if settled == nil {
-                await withCheckedContinuation { pending = $0 }
+            await withCheckedContinuation { continuation in
+                // Resumed outside the lock, always: resuming inside it would
+                // run the waiting task while this thread still holds it.
+                let alreadySettled = state.withLock { state -> Bool in
+                    guard state.settled == nil else { return true }
+                    state.pending = continuation
+                    return false
+                }
+                if alreadySettled { continuation.resume() }
             }
             // Set by whichever side won before this resumed, and never cleared.
-            return settled!
+            return state.withLock { $0.settled! }
         }
 
         func finish(_ outcome: Outcome<T>) {
-            guard settled == nil else { return }
-            settled = outcome
-            pending?.resume()
-            pending = nil
+            let waiting = state.withLock { state -> CheckedContinuation<Void, Never>? in
+                guard state.settled == nil else { return nil }
+                state.settled = outcome
+                defer { state.pending = nil }
+                return state.pending
+            }
+            waiting?.resume()
         }
+    }
+
+    /// `StageTimes` lives in the kit, which this module is below, so the two
+    /// digits are spelled here rather than reached for.
+    static func milliseconds(_ duration: Duration) -> String {
+        "\(Int((seconds(of: duration) * 1000).rounded()))ms"
+    }
+
+    /// `Duration` as seconds, for Dispatch, which does not take one.
+    static func seconds(of limit: Duration) -> Double {
+        let parts = limit.components
+        return Double(parts.seconds) + Double(parts.attoseconds) / 1e18
     }
 
     /// Success or the error that came instead.

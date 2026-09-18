@@ -351,6 +351,14 @@ struct RunCommand {
         // leave a stale address behind — or overwrite a running agent's, since
         // both write the same preference domain.
         if !once {
+            // **Every five minutes, for as long as it runs.** Syd, 2026-09-18:
+            // "what we should be doing is logging the RAM usage every five
+            // minutes", and "for all three of the permanent services".
+            // `Plans/Track RAM Usage.md`, Phase 3.
+            Footprint.startLogging { line in
+                Console.note(line)
+                Log.deck.notice("\(line, privacy: .public)")
+            }
             startup.lap("wiring")
             try listener.start()
             startup.lap("listen")

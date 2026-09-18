@@ -50,6 +50,22 @@ Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't r
   - **Built 2026-09-16, at Syd's "yes, build it".** `PhotoCache.evictAfterWriting()` runs after a fetch adopts an original and from `PhotoCache.keep`, which both endpoints now keep copies through (`CopyPlace` carries what they need onto the resizer's thread). An eviction that finds another running in the process is skipped, not waited for (`PhotoStore.claimEviction`). The agent's reporter — dashboard tally, console line, `cacheChanged` — moved from the maintenance pass to a `PhotoCache.evicted` hook. Gone: the `.maintenance` heartbeat, `runMaintenance`, `maintenanceIntervalSeconds`. Docs: `photogoroundd.md` (the ceiling paragraph, `evictions`, the preference row) and `pgr_ctl.md` (`cache evict`; and `sources remove`, which still said a source's bytes waited for a maintenance sweep — stale since removal began deleting them at once). Tests: four new in `ResizedCopiesTests`, two in `DashboardEndpointTests`, each caught its own mutation; `ResidencyTests` "eviction releases the originals it took" rewritten, since its fetches now evict before its own call could. *`Agent Performance Overhaul.md`'s bullet marked reversed.*
   - ~~**Still saying "maintenance" in `PLAN.md`, not changed — Syd's to decide:** the dashboard section and the preferences table.~~ *Syd: "yes, update PLAN.md". Done 2026-09-16: *Eviction* gained a "When it runs" paragraph; the dashboard's *Evictions*, its ceiling paragraph, the connection-per-request paragraph, the preferences table and the wedged-Photos TODO's refresh-walk bullet now say eviction follows each write, with the maintenance wording dated.*
 
+## What starves the cooperative pool
+
+Measured 2026-09-18, while fixing the deadline: with the timer made punctual, six tests in
+`SilentLibraryTests` began failing in full parallel runs while passing alone — fake libraries that
+answer instantly, reported as silent on a 50 ms bound, and on a 2-second one. **A task can wait
+seconds for a thread on that pool.**
+
+- **The same starvation is why a resize loses its turn** in the agent, and why the app saw responses
+  past `pictureReadLimit` on the morning of 2026-09-18.
+- **First place to look:** `QueueFetcher`'s lanes are `@concurrent nonisolated`, so they run on the
+  shared pool, and a download waiting on PhotoKit holds a thread for as long as it waits. `Resizer`
+  and `Evictor` already have threads of their own; the fetch lanes do not.
+- **Phase 7 of `Plans/Agent Performance Overhaul.md`**, where the evidence, the candidates and the
+  measurement that would decide between them are written down. The evidence itself is under
+  *The deadline's own clock*, *What it exposed*.
+
 ## Two in five sized requests give up on their resize
 
 Measured 2026-09-17, over three hours of ordinary use with the app and the wallpaper running: of 640 pictures served, **245 gave up after the one-second budget and sent the original**, and 394 were resized in time. That is steady state, not the cold minute after a restart.
@@ -57,15 +73,27 @@ Measured 2026-09-17, over three hours of ordinary use with the app and the wallp
 - **What it costs:** a wasted second per request, an unresized picture at the client, and no copy in the resize cache — so the same photographs pay it again.
 - **Not yet known:** whether the HEIC encode is genuinely that slow per picture, whether resizes are queueing behind each other on the one `Resizer`, or whether a one-second budget is simply too tight for a 3,000-pixel original. `ServiceTiming.resizeBudget` is the number; `Agent Performance Overhaul.md`, *When the resizer stalls*, is why it exists.
 - **A `TIMING:` line already separates `resize wait` from `render`**, so the queueing question can be answered from the log rather than by guessing.
+- **2026-09-18: the budget was not being honoured.** The stage read `resize gave up 5472ms` against a one-second limit, because `Deadline`'s timer was a `Task.sleep` on the saturated cooperative pool. Fixed the same day; `Plans/Agent Performance Overhaul.md`, *The deadline's own clock*. The give-up *rate* is a separate question and still open — and with a punctual clock the rate may go up, because a resize that used to sneak in late now loses its turn on time.
 - **Not the cause, checked:** `IOSurface creation failed: e00002c2` (`kIOReturnBadArgument`) from Apple's HEVC encoder — 77 bursts in the same three hours, only 26 of them within two seconds of a give-up. Noise from the encoder's own setup; nothing of ours calls it, and pictures come out either way.
 
 ## Track RAM usage
 
-Syd, 2026-09-17: "I also want a task setup every this you ask me to reboot the agent where you record how much ram it is using first. Basically I want a running tally to make sure that there are no leaks from the agent, the screensaver agent, or the wallpaper extension."
+Syd, 2026-09-17: "I want a running tally to make sure that there are no leaks from the agent,
+the screensaver agent, or the wallpaper extension."
 
-- **Planned in `Plans/Track RAM Usage.md`**, drafted the same day. How it is recorded is not decided — Syd: "We will brainstorm on how later."
-- **The rule as given:** before asking Syd to reinstall or reboot anything, sample each process's memory first, and keep the numbers where a trend can be read.
-- **First samples, 2026-09-17 16:18:** the agent 113 MB after 9 minutes; the wallpaper extension 53 MB after 9 minutes. The screensaver was not running.
+- **Built 2026-09-18:** all three services log `MEMORY: footprint … · resident … · up …`
+  every five minutes, and the agent's dashboard has a panel for its own.
+  `Plans/Track RAM Usage.md`, Phase 3.
+- **`rss` was the wrong number.** Measured the same day: `ps` said 531 MB where `footprint`
+  said 299 MB, 181 MB of it reclaimable. Every sample taken before then overstates.
+- **Still open:** Phase 4 — what counts as growth worth reporting, and where that is said.
+- **The agent reads the other two out of the log.** Syd, 2026-09-18: the agent should read the
+  logs for the wallpaper extension and the screensaver and report their RAM in the dashboard.
+  The panel is the agent's own today, because a process cannot ask another one what it holds —
+  but all three now write `MEMORY:` lines to the same subsystem, so the agent can read theirs.
+  Open: whether it reads the store directly or shells out to `/usr/bin/log`, what a reading
+  means when the extension or the saver has not run for hours, and how often it looks.
+  `Plans/Track RAM Usage.md`, *The agent reads the other two*.
 
 ## A fixed service port
 
