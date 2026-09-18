@@ -28,28 +28,37 @@ import Foundation
 /// the transport does answer cancellation, and nobody cares about a reply that
 /// arrives after the client stopped listening. The kit is also a module the app
 /// does not link, on purpose, which settles where this had to live.
-// TODO: replace every `NSLock` in this project with actors and tasks.
+// **No `NSLock` is left in the agent or the kit**, as of 2026-09-17. Syd: "I
+// flatout don't want NSLocks", and, asked whether that held even where it makes
+// synchronous code async, "I don't mind everything being async; I prefer it".
+// Phase 5 of `Plans/Agent Performance Overhaul.md` is the whole of it.
 //
-// Eleven locks across seven files, as of 2026-09-17: `SourceBench`,
-// `LibraryChanges`, `AgentErrors`, `LaunchTally` and `DarwinNotification` one
-// apiece, `RunCommand` three, and `SystemPhotoLibrary` three — `ChunkSink`,
-// `RequestHandle`, `ResumeOnce`. Most are mechanical: state guarded by a lock
-// and touched from one place, which is an actor with the lock deleted.
+// Most were mechanical — state guarded by a lock and touched from one place,
+// which is an actor with the lock deleted. Three kinds were not:
 //
-// Gone in Phase 5: `FetchDeadline`, `QueueFiller`, `QueueFetcher`, `PhotoStore`
-// and `SourceStore+Editing` — the last through an `EditingGate`, since an actor
-// alone is re-entrant and would have let a second editor in.
+// - **`AgentErrors`, `LaunchTally`, `LibraryChanges`** take their reports
+//   through an `AsyncStream`, because every writer is a synchronous `@Sendable`
+//   closure on whatever thread reached it — `Console.alert`'s recorder, the
+//   endpoints' reporters, a refresh page — and none can `await`. `yield` is
+//   safe from any thread, never suspends, and keeps the order; `settle()` is
+//   how a reader waits for what was reported before it.
+// - **`DarwinNotification.Observation`** is an `Atomic`: its job is cancelling
+//   a token exactly once, usually from `deinit`, which cannot `await`.
+// - **`SystemPhotoLibrary`'s `ChunkSink`, `RequestHandle` and `ResumeOnce`** are
+//   `Mutex`es. PhotoKit calls their handlers synchronously on a dispatch queue
+//   of its own, and this file records what happened when Swift inferred actor
+//   isolation into them. A `Task` per chunk would also queue up the megabytes
+//   `ChunkSink` exists not to accumulate.
+//
+// The remaining `NSLock`s are in test doubles and in the wallpaper extension's
+// `PaneHandler`, none of which is the agent.
 //
 // `FirstAnswer` below is the worked example, and `FetchDeadline` is the same
 // shape — a continuation raced against a timer, where the loser is deliberately
 // never awaited. That letting-go is the mechanism rather than an oversight: a
 // structured child is awaited at scope exit by design, which is the wait these
-// exist to escape. It converts to an actor all the same, as this one did.
-//
-// The three in `SystemPhotoLibrary` have their own constraint: PhotoKit calls
-// its handlers back on a dispatch queue of its own, and the comment there
-// records what happened when Swift inferred actor isolation into them. Those
-// are the ones to leave for last.
+// exist to escape.
+
 public enum Deadline {
 
     /// The limit passed and nothing had answered.

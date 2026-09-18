@@ -10,7 +10,7 @@ import PhotoGoRoundKit
 /// launch", and a count that survived a restart would answer a different
 /// question. `photo.times_delivered` is the durable per-photograph record; this
 /// is the per-surface one, and nothing reads it but the dashboard.
-final class LaunchTally: @unchecked Sendable {
+actor LaunchTally {
 
     /// The serve side of the cache's hit rate, by how each lookup ended. See
     /// `CacheLookup`. Almost always hits.
@@ -83,7 +83,27 @@ final class LaunchTally: @unchecked Sendable {
         var at: Date
     }
 
-    private let lock = NSLock()
+    /// What a reporter hands over, and what the drain applies.
+    ///
+    /// **An `AsyncStream`, not a lock and not an `await`.** Syd, 2026-09-17:
+    /// "AsyncStream for both". Every writer is a synchronous `@Sendable`
+    /// closure the endpoints call — `evicted`, `lookedUp`, `dealLookedUp`, the
+    /// fetch reporter — on whatever thread reached it, and none can `await`.
+    /// `Continuation.yield` is safe from any thread, never suspends, and keeps
+    /// the order the reports were made in.
+    private enum Report: Sendable {
+        case served(consumer: String, card: DeckCard?, source: Source?, at: Date)
+        case serveLookup(CacheLookup)
+        case dealLookup(DealLookup)
+        case fetch(FetchOutcome)
+        case eviction(PhotoCache.EvictionResult, at: Date)
+        /// A caller waiting for everything ahead of it to have been applied.
+        case barrier(CheckedContinuation<Void, Never>)
+    }
+
+    private nonisolated let inbox: AsyncStream<Report>
+    private nonisolated let post: AsyncStream<Report>.Continuation
+
     private var servedCounts: [String: Int] = [:]
     private var last: LastServed?
     private var serveCounts = ServeLookups()
@@ -94,6 +114,31 @@ final class LaunchTally: @unchecked Sendable {
 
     init(since: Date = Date()) {
         self.since = since
+        (inbox, post) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
+        Task { await self.drain() }
+    }
+
+    private func drain() async {
+        for await report in inbox {
+            switch report {
+            case .served(let consumer, let card, let source, let at):
+                keepServed(consumer: consumer, card: card, source: source, at: at)
+            case .serveLookup(let lookup): keep(lookup)
+            case .dealLookup(let lookup): keep(lookup)
+            case .fetch(let outcome): keep(fetch: outcome)
+            case .eviction(let eviction, let now): keep(eviction, at: now)
+            case .barrier(let continuation): continuation.resume()
+            }
+        }
+    }
+
+    /// Waits until everything reported before this call has been counted.
+    ///
+    /// The reports go through a queue, so a caller that records and then reads
+    /// would otherwise be racing the drain. This puts itself in the same queue
+    /// and waits its turn.
+    nonisolated func settle() async {
+        await withCheckedContinuation { continuation in post.yield(.barrier(continuation)) }
     }
 
     /// Keyed on the `consumer` the request named rather than on
@@ -102,11 +147,13 @@ final class LaunchTally: @unchecked Sendable {
     /// that then disagrees with the console.
     ///
     /// Only a `200` is recorded. A `204` is a request that reached nobody.
-    func recordServed(
+    nonisolated func recordServed(
         consumer: String, card: DeckCard? = nil, source: Source? = nil, at: Date = Date()
     ) {
-        lock.lock()
-        defer { lock.unlock() }
+        post.yield(.served(consumer: consumer, card: card, source: source, at: at))
+    }
+
+    private func keepServed(consumer: String, card: DeckCard?, source: Source?, at: Date) {
         servedCounts[consumer, default: 0] += 1
         if let card {
             last = LastServed(
@@ -118,9 +165,9 @@ final class LaunchTally: @unchecked Sendable {
     }
 
     /// One serve-side lookup.
-    func record(_ lookup: CacheLookup) {
-        lock.lock()
-        defer { lock.unlock() }
+    nonisolated func record(_ lookup: CacheLookup) { post.yield(.serveLookup(lookup)) }
+
+    private func keep(_ lookup: CacheLookup) {
         switch lookup {
         case .hit: serveCounts.hits += 1
         case .miss(.landed): serveCounts.landed += 1
@@ -131,9 +178,9 @@ final class LaunchTally: @unchecked Sendable {
     }
 
     /// One fetch-side lookup, as a card is dealt.
-    func record(_ lookup: DealLookup) {
-        lock.lock()
-        defer { lock.unlock() }
+    nonisolated func record(_ lookup: DealLookup) { post.yield(.dealLookup(lookup)) }
+
+    private func keep(_ lookup: DealLookup) {
         switch lookup {
         case .hit: fetchCounts.hits += 1
         case .miss: fetchCounts.misses += 1
@@ -141,9 +188,9 @@ final class LaunchTally: @unchecked Sendable {
     }
 
     /// What became of one fetch.
-    func record(fetch outcome: FetchOutcome) {
-        lock.lock()
-        defer { lock.unlock() }
+    nonisolated func record(fetch outcome: FetchOutcome) { post.yield(.fetch(outcome)) }
+
+    private func keep(fetch outcome: FetchOutcome) {
         switch outcome {
         case .fetched: fetchCounts.fetched += 1
         case .failed: fetchCounts.failed += 1
@@ -152,10 +199,12 @@ final class LaunchTally: @unchecked Sendable {
     }
 
     /// One eviction pass. A pass that evicted nothing is not counted.
-    func record(_ eviction: PhotoCache.EvictionResult, at now: Date = Date()) {
+    nonisolated func record(_ eviction: PhotoCache.EvictionResult, at now: Date = Date()) {
+        post.yield(.eviction(eviction, at: now))
+    }
+
+    private func keep(_ eviction: PhotoCache.EvictionResult, at now: Date) {
         guard eviction.evicted > 0 else { return }
-        lock.lock()
-        defer { lock.unlock() }
         evictionCounts.photos += eviction.evicted
         evictionCounts.bytesFreed += eviction.bytesFreed
         evictionCounts.passes += 1
@@ -164,32 +213,22 @@ final class LaunchTally: @unchecked Sendable {
     }
 
     var evictions: Evictions {
-        lock.lock()
-        defer { lock.unlock() }
-        return evictionCounts
+        evictionCounts
     }
 
     var served: [String: Int] {
-        lock.lock()
-        defer { lock.unlock() }
-        return servedCounts
+        servedCounts
     }
 
     var lastServed: LastServed? {
-        lock.lock()
-        defer { lock.unlock() }
-        return last
+        last
     }
 
     var serveLookups: ServeLookups {
-        lock.lock()
-        defer { lock.unlock() }
-        return serveCounts
+        serveCounts
     }
 
     var fetchLookups: FetchLookups {
-        lock.lock()
-        defer { lock.unlock() }
-        return fetchCounts
+        fetchCounts
     }
 }

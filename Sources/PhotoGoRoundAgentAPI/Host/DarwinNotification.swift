@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import notify
 
 /// The doorbell.
@@ -102,18 +103,20 @@ public enum DarwinNotification {
 
     /// Owns a registration. Cancelling is what stops the callback firing, and
     /// letting this go out of scope does it for you.
-    public final class Observation: @unchecked Sendable {
-        private var token: Int32
-        private let lock = NSLock()
+    /// **An `Atomic`, not an actor.** The one thing to get right is that the
+    /// token is cancelled exactly once, and `deinit` is where that usually
+    /// happens — a `deinit` cannot `await`, so an actor cannot do this job.
+    /// `exchange` claims the token and hands back what was there, which is the
+    /// whole of the mutual exclusion the `NSLock` was providing.
+    public final class Observation: Sendable {
+        private let token: Atomic<Int32>
 
-        init(token: Int32) { self.token = token }
+        init(token: Int32) { self.token = Atomic(token) }
 
         public func cancel() {
-            lock.lock()
-            defer { lock.unlock() }
-            guard token != NOTIFY_TOKEN_INVALID else { return }
-            notify_cancel(token)
-            token = NOTIFY_TOKEN_INVALID
+            let claimed = token.exchange(NOTIFY_TOKEN_INVALID, ordering: .acquiringAndReleasing)
+            guard claimed != NOTIFY_TOKEN_INVALID else { return }
+            notify_cancel(claimed)
         }
 
         deinit { cancel() }

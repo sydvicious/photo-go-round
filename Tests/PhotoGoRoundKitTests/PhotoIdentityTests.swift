@@ -86,15 +86,15 @@ struct PhotoIdentityTests {
     // MARK: - What intake does with it
 
     @Test("One asset in two collections is one row, and it stays with the collection that found it")
-    func sameAssetInTwoCollections() throws {
+    func sameAssetInTwoCollections() async throws {
         let library = try TestLibrary()
         let pool = PhotoPool(database: library.database)
         let favorites = try Self.source(.photosCollection, at: "COLLECTION-FAVORITES", in: library)
         let live = try Self.source(.photosCollection, at: "COLLECTION-LIVE", in: library)
         let asset = "A1B2C3D4-1111-2222-3333-444455556666/L0/001"
 
-        let first = try pool.upsert([Self.found(asset)], to: favorites)
-        let second = try pool.upsert([Self.found(asset)], to: live)
+        let first = try await pool.upsert([Self.found(asset)], to: favorites)
+        let second = try await pool.upsert([Self.found(asset)], to: live)
 
         #expect(first.added == 1)
         #expect(second.added == 0)
@@ -109,28 +109,28 @@ struct PhotoIdentityTests {
     /// different relative paths, so `UNIQUE (source_id, external_id)` never
     /// saw a conflict.
     @Test("A file reached through two overlapping folders is one row")
-    func overlappingFolders() throws {
+    func overlappingFolders() async throws {
         let library = try TestLibrary()
         let pool = PhotoPool(database: library.database)
         let parent = try Self.source(.folder, at: "/pictures/", in: library)
         let child = try Self.source(.folder, at: "/pictures/2024/", in: library)
 
-        try pool.upsert([Self.found("2024/trip.heic")], to: parent)
-        let second = try pool.upsert([Self.found("trip.heic")], to: child)
+        try await pool.upsert([Self.found("2024/trip.heic")], to: parent)
+        let second = try await pool.upsert([Self.found("trip.heic")], to: child)
 
         #expect(second.added == 0)
         #expect(try Self.photoCount(in: library) == 1)
     }
 
     @Test("A file added on its own and again inside a folder is one row")
-    func fileAlsoInsideAFolder() throws {
+    func fileAlsoInsideAFolder() async throws {
         let library = try TestLibrary()
         let pool = PhotoPool(database: library.database)
         let alone = try Self.source(.file, at: "/pictures/2024/trip.heic", in: library)
         let folder = try Self.source(.folder, at: "/pictures/", in: library)
 
-        try pool.upsert([Self.found("trip.heic")], to: alone)
-        let second = try pool.upsert([Self.found("2024/trip.heic")], to: folder)
+        try await pool.upsert([Self.found("trip.heic")], to: alone)
+        let second = try await pool.upsert([Self.found("2024/trip.heic")], to: folder)
 
         #expect(second.added == 0)
         #expect(try Self.photoCount(in: library) == 1)
@@ -139,12 +139,12 @@ struct PhotoIdentityTests {
     /// The guard against over-dedup. A constraint that collapsed everything
     /// would pass every test above.
     @Test("Different photographs from one source all land")
-    func differentPhotosAllLand() throws {
+    func differentPhotosAllLand() async throws {
         let library = try TestLibrary()
         let pool = PhotoPool(database: library.database)
         let folder = try Self.source(.folder, at: "/pictures/", in: library)
 
-        let counts = try pool.upsert(
+        let counts = try await pool.upsert(
             [Self.found("a.heic"), Self.found("b.heic"), Self.found("c.heic")], to: folder)
 
         #expect(counts.added == 3)
@@ -152,13 +152,13 @@ struct PhotoIdentityTests {
     }
 
     @Test("Rescanning the same source adds nothing the second time")
-    func rescanningAddsNothing() throws {
+    func rescanningAddsNothing() async throws {
         let library = try TestLibrary()
         let pool = PhotoPool(database: library.database)
         let folder = try Self.source(.folder, at: "/pictures/", in: library)
 
-        try pool.upsert([Self.found("a.heic")], to: folder)
-        let again = try pool.upsert([Self.found("a.heic")], to: folder)
+        try await pool.upsert([Self.found("a.heic")], to: folder)
+        let again = try await pool.upsert([Self.found("a.heic")], to: folder)
 
         #expect(again.added == 0)
         #expect(try Self.photoCount(in: library) == 1)
@@ -350,7 +350,7 @@ struct PhotoIdentityMigrationTests {
     /// After the migration the index is what stops it happening again, so the
     /// same pair that needed collapsing cannot be re-inserted.
     @Test("A duplicate cannot be inserted again once the index exists")
-    func theIndexHoldsAfterwards() throws {
+    func theIndexHoldsAfterwards() async throws {
         let database = try Self.databaseAtVersionEight()
         let favorites = try Self.addSource(.photosCollection, at: "COLLECTION-FAV", to: database)
         let live = try Self.addSource(.photosCollection, at: "COLLECTION-LIVE", to: database)
@@ -360,7 +360,7 @@ struct PhotoIdentityMigrationTests {
         try Migrator.migrate(database)
 
         let pool = PhotoPool(database: database)
-        let counts = try pool.upsert(
+        let counts = try await pool.upsert(
             [DiscoveredPhoto(
                 externalID: asset, mediaType: .image, storage: .materialized, byteSize: 1)],
             to: live)

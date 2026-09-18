@@ -12,7 +12,7 @@ import PhotoGoRoundAgentAPI
 /// ceiling. **The ceiling matters**: doubling without one reaches "not in this
 /// lifetime" after about a dozen rounds, and a network share that came back
 /// would never be noticed.
-public final class SourceBench: @unchecked Sendable {
+public actor SourceBench {
 
     /// Timeouts in a row before a source is left alone for a while.
     ///
@@ -40,7 +40,6 @@ public final class SourceBench: @unchecked Sendable {
     /// the recovery latency, which was weighed and accepted.
     public static let longestPause = Duration.seconds(3600)
 
-    private let lock = NSLock()
     /// How far each source is into the bench. A bucket: `failed` fills it,
     /// `succeeded` drains it one at a time, and it never goes below empty.
     private var failures: [Int64: Int] = [:]
@@ -56,8 +55,6 @@ public final class SourceBench: @unchecked Sendable {
 
     /// Whether this source is resting right now.
     public func isBenched(_ source: Int64, now: ContinuousClock.Instant = .now) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
         guard let until = benchedUntil[source] else { return false }
         guard now < until else {
             // The bench is over. `benchLength` is deliberately kept, so a
@@ -73,8 +70,6 @@ public final class SourceBench: @unchecked Sendable {
     /// it earned, if this was the one that tipped it over.
     @discardableResult
     public func failed(_ source: Int64, now: ContinuousClock.Instant = .now) -> Duration? {
-        lock.lock()
-        defer { lock.unlock() }
         let count = (failures[source] ?? 0) + 1
         failures[source] = count
         guard count >= pauseAfter else { return nil }
@@ -108,9 +103,7 @@ public final class SourceBench: @unchecked Sendable {
     /// a source that has been fine all day from banking a thousand successes
     /// against the moment it goes wrong.
     public func succeeded(_ source: Int64) {
-        lock.lock()
         failures[source] = max(0, (failures[source] ?? 0) - 1)
         benchLength[source] = nil
-        lock.unlock()
     }
 }

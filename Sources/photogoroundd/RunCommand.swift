@@ -109,7 +109,7 @@ struct RunCommand {
         // rather than stacking with it, so calling this on every served picture
         // cannot outrun what the providers are willing to do.
         let databasePath = environment.databaseURL.path(percentEncoded: false)
-        filler.configure(
+        await filler.configure(
             databasePath: databasePath, cacheRoot: environment.cacheRoot, store: store)
         let filler = self.filler
 
@@ -201,7 +201,7 @@ struct RunCommand {
                         // Whatever happened, the claim must not outlive the
                         // work: a photograph left claimed is sidelined for the
                         // whole timeout for no reason.
-                        worker.finishFetch(card, landed: answer.didLand)
+                        await worker.finishFetch(card, landed: answer.didLand)
                     },
                     whenAbandoned: {
                         Log.cache.notice(
@@ -215,7 +215,7 @@ struct RunCommand {
                     // goes back into the deck's contention. Should the abandoned
                     // work land later, the bytes are kept and the next deal of
                     // this photograph finds them here.
-                    cache.fetchTimedOut(card, after: limit)
+                    await cache.fetchTimedOut(card, after: limit)
                     cache.dropUnfetched(card, because: "its fetch did not answer in \(limit)")
                     tally.record(fetch: .timedOut)
                     return .timedOut
@@ -224,7 +224,7 @@ struct RunCommand {
                     // **Told to the bench, the same as a timeout is.** Which of
                     // the two bounds noticed says nothing about the source; a
                     // fetch that produced no bytes is what the bench counts.
-                    cache.fetchFailed(card)
+                    await cache.fetchFailed(card)
                     cache.dropUnfetched(card, because: "its fetch failed")
                     tally.record(fetch: .failed)
                     Self.recordFetchFailure(
@@ -249,10 +249,10 @@ struct RunCommand {
             }
         }
 
-        filler.reporting(to: Self.speak)
+        await filler.reporting(to: Self.speak)
         // The fetch side of the dashboard's cache lookups, counted as cards are
         // dealt. Before any fill: the filler is built once and keeps its hook.
-        filler.countingDealLookups { tally.record($0) }
+        await filler.countingDealLookups { tally.record($0) }
 
         let endpoint = PictureEndpoint(
             databasePath: databasePath,
@@ -1015,35 +1015,24 @@ private func describeSources(_ sources: [Source], pool: PhotoPool) {
 /// `run()` has resolved them, and because the *same* filler has to survive every
 /// call — the guard that drops overlapping rounds is on the instance, and a fast
 /// consumer starts rounds faster than they finish.
-final class FillerBox: @unchecked Sendable {
-    private let lock = NSLock()
+actor FillerBox {
     private var databasePath = ""
     private var cacheRoot = URL(filePath: "/")
     private var filler: QueueFiller?
+    private var store: PhotoStore?
 
     func configure(databasePath: String, cacheRoot: URL, store: PhotoStore) {
-        lock.lock()
-        defer { lock.unlock() }
         self.databasePath = databasePath
         self.cacheRoot = cacheRoot
         self.store = store
     }
 
-    private var store: PhotoStore?
-
-    /// Read in a synchronous method for the same reason `paths()` is: `NSLock`
-    /// is unavailable from an async context, and holding one across a suspension
-    /// is exactly the bug that restriction exists to prevent.
     private func storeAndLog() -> (PhotoStore?, @Sendable (QueueEvent) -> Void) {
-        lock.lock()
-        defer { lock.unlock() }
-        return (store, log)
+        (store, log)
     }
 
     private func paths() -> (database: String, cache: URL) {
-        lock.lock()
-        defer { lock.unlock() }
-        return (databasePath, cacheRoot)
+        (databasePath, cacheRoot)
     }
 
     /// One connection for the gauge, serialised, because `needsTopUp` is a COUNT
@@ -1056,14 +1045,9 @@ final class FillerBox: @unchecked Sendable {
     /// nothing to be slow about. Bytes are fetched by the queue of pictures to
     /// cache, which serving fills as it discovers what it does not hold.
     private func makeFiller() -> QueueFiller {
-        lock.lock()
-        if let filler {
-            lock.unlock()
-            return filler
-        }
+        if let filler { return filler }
         let path = databasePath
         let root = cacheRoot
-        lock.unlock()
 
         let gauge = Gauge(databasePath: path)
         let sizes = Sizes()
@@ -1076,13 +1060,11 @@ final class FillerBox: @unchecked Sendable {
             Log.deck.error(kind: "deal.no-connection", "could not open the dealing connection at \(path)")
             return QueueFiller(isShort: { false }, produce: { false })
         }
-        lock.lock()
         let bytes = store
         let report = self.log
         let lookup = self.dealLookup
-        lock.unlock()
         let built = QueueFiller(
-            isShort: { gauge.isShort(nominalSize: sizes.queueSize) },
+            isShort: { await gauge.isShort(nominalSize: await sizes.queueSize) },
             produce: { [dealing] in
                 // **On the dealing connection's own thread, and errors travel.**
                 //
@@ -1095,18 +1077,16 @@ final class FillerBox: @unchecked Sendable {
                 // with nothing left in it and stops the round.
                 try await dealing.run { database in
                     let store = SourceStore(database: database)
-                    var dealer = PhotoCache(
+                    var dealer = await PhotoCache(
                         database: database, root: root, settings: sizes.cacheSettings,
                         sources: store, queueSize: sizes.queueSize, store: bytes)
                     dealer.log = report
                     dealer.dealLookedUp = lookup
-                    return try await dealer.deal(settings: sizes.deckSettings)
+                    return try await dealer.deal(settings: await sizes.deckSettings)
                 }
             })
-        lock.lock()
         filler = built
         self.sizes = sizes
-        lock.unlock()
         return built
     }
 
@@ -1115,9 +1095,7 @@ final class FillerBox: @unchecked Sendable {
     private var log: @Sendable (QueueEvent) -> Void = { $0.report() }
 
     func reporting(to log: @escaping @Sendable (QueueEvent) -> Void) {
-        lock.lock()
         self.log = log
-        lock.unlock()
     }
 
     /// Where dealing says whether each materialized card's original was
@@ -1127,36 +1105,29 @@ final class FillerBox: @unchecked Sendable {
     private var dealLookup: @Sendable (DealLookup) -> Void = { _ in }
 
     func countingDealLookups(_ lookup: @escaping @Sendable (DealLookup) -> Void) {
-        lock.lock()
         dealLookup = lookup
-        lock.unlock()
     }
 
     private var sizes: Sizes?
 
     /// The current preference values, re-read per round so a change takes effect
     /// at the next fill rather than at the next launch.
-    final class Sizes: @unchecked Sendable {
-        private let lock = NSLock()
-        private var _queueSize = 1000
-        private var _cacheSettings = CacheSettings.default
-        private var _deckSettings = DeckSettings.default
-
-        var queueSize: Int { lock.lock(); defer { lock.unlock() }; return _queueSize }
-        var cacheSettings: CacheSettings { lock.lock(); defer { lock.unlock() }; return _cacheSettings }
-        var deckSettings: DeckSettings { lock.lock(); defer { lock.unlock() }; return _deckSettings }
+    actor Sizes {
+        private(set) var queueSize = 1000
+        private(set) var cacheSettings = CacheSettings.default
+        private(set) var deckSettings = DeckSettings.default
 
         func update(_ preferences: Preferences) {
-            lock.lock()
-            _queueSize = preferences.queueSize
-            _cacheSettings = preferences.cacheSettings
-            _deckSettings = preferences.deckSettings
-            lock.unlock()
+            queueSize = preferences.queueSize
+            cacheSettings = preferences.cacheSettings
+            deckSettings = preferences.deckSettings
         }
     }
 
-    final class Gauge: @unchecked Sendable {
-        private let lock = NSLock()
+    /// **An actor with a connection of its own**, which is the whole reason it
+    /// is a type: a `Database` belongs to one isolation domain, and this one is
+    /// asked once per iteration from wherever the loop is running.
+    actor Gauge {
         private let database: Database?
 
         init(databasePath: String) {
@@ -1171,8 +1142,6 @@ final class FillerBox: @unchecked Sendable {
         /// to be fetched any more: a card is dealt because its bytes are
         /// already here.
         func isShort(nominalSize: Int) -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
             guard let database else { return false }
             let depth = (try? PhotoQueue(database: database, nominalSize: nominalSize).size()) ?? 0
             return depth < nominalSize
@@ -1197,7 +1166,7 @@ final class FillerBox: @unchecked Sendable {
     @discardableResult
     func servedOne(preferences: Preferences) async -> QueueFiller.Round {
         let filler = makeFiller()
-        sizes?.update(preferences)
+        await sizes?.update(preferences)
         return await filler.fill()
     }
 
@@ -1220,7 +1189,7 @@ final class FillerBox: @unchecked Sendable {
     @discardableResult
     func topUpIfShort(preferences: Preferences) async -> QueueFiller.Round {
         let filler = makeFiller()
-        sizes?.update(preferences)
+        await sizes?.update(preferences)
 
         let (path, _) = paths()
         guard let database = try? Database(path: path),

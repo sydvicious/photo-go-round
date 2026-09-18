@@ -87,21 +87,21 @@ struct ErrorRecordingTests {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
     @Test("A paused source stands until its pause ends, and a timeout is an event")
-    func pausedStandsUntilItEnds() {
+    func pausedStandsUntilItEnds() async {
         let ledger = AgentErrors(recording: true)
         RunCommand.record(.sourcePaused(source: 6, until: .seconds(120)), into: ledger, at: start)
         RunCommand.record(
             .cacheTimedOut(photo: "a.jpg", source: 6, after: .seconds(60)), into: ledger, at: start)
 
-        let later = ledger.entries(at: start.addingTimeInterval(119))
+        let later = await ledger.settled(at: start.addingTimeInterval(119))
         #expect(later.compactMap(\.kind) == ["source.paused.source-6"])
         #expect(later.first?.standing == true)
         #expect(later.first?.until == start.addingTimeInterval(120))
-        #expect(ledger.entries(at: start.addingTimeInterval(120)).isEmpty)
+        #expect(await ledger.settled(at: start.addingTimeInterval(120)).isEmpty)
     }
 
     @Test("A failed fetch is recorded under its source, in the words the fetch gave")
-    func fetchFailureIsRecorded() throws {
+    func fetchFailureIsRecorded() async throws {
         let ledger = AgentErrors(recording: true)
         let card = DeckCard(
             id: 7, uuid: "u", sourceID: 9, sourceUUID: "s", externalID: "C3D4/L0/001",
@@ -112,7 +112,7 @@ struct ErrorRecordingTests {
             card, because: "the network connection was lost", into: ledger,
             at: start.addingTimeInterval(1))
 
-        let entries = ledger.entries(at: start.addingTimeInterval(1))
+        let entries = await ledger.settled(at: start.addingTimeInterval(1))
         let entry = try #require(entries.first)
         #expect(entries.count == 1)
         #expect(entry.kind == "cache.fetch-failed.source-9")
@@ -136,25 +136,25 @@ struct ErrorRecordingTests {
     /// Recorded on every refresh rather than on the transition, so a source that
     /// was already unavailable when the agent launched still appears.
     @Test("An unavailable source stands on every refresh that finds it so, and clears when one does not")
-    func unavailableStands() {
+    func unavailableStands() async {
         let ledger = AgentErrors(recording: true)
         let reporter = Reporter(errors: ledger)
 
         reporter.finish(scan(unavailable: true), wasAvailable: false)
         reporter.finish(scan(unavailable: true), wasAvailable: false)
-        let entries = ledger.entries
+        let entries = await ledger.settled
         #expect(entries.compactMap(\.kind) == ["source.unavailable.source-13"])
         #expect(entries.first?.standing == true)
         #expect(entries.first?.count == 2)
 
         reporter.finish(scan(unchanged: 4), wasAvailable: false)
-        #expect(ledger.entries.isEmpty)
+        #expect(await ledger.settled.isEmpty)
     }
 
     /// Disabled by `pgr_ctl`, which reconciles in its own process, so the agent
     /// never sees the change happen — only a source it no longer refreshes.
     @Test("A refresh pass clears the standing conditions of the sources it skips as disabled")
-    func disabledSourcesAreCleared() {
+    func disabledSourcesAreCleared() async {
         let ledger = AgentErrors(recording: true)
         let reporter = Reporter(errors: ledger)
         reporter.finish(scan(unavailable: true), wasAvailable: true)
@@ -165,23 +165,23 @@ struct ErrorRecordingTests {
             description: nil, addedAt: Date(timeIntervalSince1970: 0))
         reporter.skipped([disabled])
 
-        #expect(ledger.entries.compactMap(\.kind) == ["source.empty.source-14"])
+        #expect(await ledger.settled.compactMap(\.kind) == ["source.empty.source-14"])
     }
 
     @Test("An empty source stands until a scan finds photographs, or cannot look")
-    func emptyStands() {
+    func emptyStands() async {
         let ledger = AgentErrors(recording: true)
         let reporter = Reporter(errors: ledger)
 
         reporter.finish(scan(), wasAvailable: true)
-        #expect(ledger.entries.compactMap(\.kind) == ["source.empty.source-13"])
-        #expect(ledger.entries.first?.standing == true)
+        #expect(await ledger.settled.compactMap(\.kind) == ["source.empty.source-13"])
+        #expect(await ledger.settled.first?.standing == true)
 
         reporter.finish(scan(unchanged: 1), wasAvailable: true)
-        #expect(ledger.entries.isEmpty)
+        #expect(await ledger.settled.isEmpty)
 
         reporter.finish(scan(), wasAvailable: true)
         reporter.finish(scan(unavailable: true), wasAvailable: true)
-        #expect(ledger.entries.compactMap(\.kind) == ["source.unavailable.source-13"])
+        #expect(await ledger.settled.compactMap(\.kind) == ["source.unavailable.source-13"])
     }
 }

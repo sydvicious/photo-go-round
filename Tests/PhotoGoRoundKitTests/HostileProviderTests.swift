@@ -66,19 +66,19 @@ struct HostileProviderTests {
     // MARK: - The bench
 
     @Test("A source is left alone after enough timeouts in a row")
-    func repeatedTimeoutsBenchASource() {
+    func repeatedTimeoutsBenchASource() async {
         let bench = SourceBench(pauseAfter: 4, firstPause: .seconds(60))
 
-        #expect(!bench.isBenched(7))
-        for _ in 0..<3 { #expect(bench.failed(7) == nil) }
-        #expect(!bench.isBenched(7), "benched before it had earned it")
+        #expect(await !bench.isBenched(7))
+        for _ in 0..<3 { #expect(await bench.failed(7) == nil) }
+        #expect(await !bench.isBenched(7), "benched before it had earned it")
 
-        #expect(bench.failed(7) == .seconds(60))
-        #expect(bench.isBenched(7))
+        #expect(await bench.failed(7) == .seconds(60))
+        #expect(await bench.isBenched(7))
     }
 
     @Test("An occasional timeout on a working source is weather")
-    func successIsWeatherProof() {
+    func successIsWeatherProof() async {
         // Still the rule, and still what the bench is for — but a success pays
         // off one failure now rather than the whole account. **Zeroing made the
         // bench unreachable for a half-downloaded Photos album**, where the
@@ -89,26 +89,26 @@ struct HostileProviderTests {
         // A source failing once between runs of successes never accumulates.
         let bench = SourceBench(pauseAfter: 4, firstPause: .seconds(60))
         for _ in 0..<20 {
-            #expect(bench.failed(7) == nil)
-            bench.succeeded(7)
+            #expect(await bench.failed(7) == nil)
+            await bench.succeeded(7)
         }
-        #expect(!bench.isBenched(7))
+        #expect(await !bench.isBenched(7))
     }
 
     @Test("Each bench is longer than the last")
-    func benchesDouble() {
+    func benchesDouble() async {
         let bench = SourceBench(pauseAfter: 1, firstPause: .seconds(60))
         let start = ContinuousClock.now
 
-        #expect(bench.failed(7, now: start) == .seconds(60))
+        #expect(await bench.failed(7, now: start) == .seconds(60))
         // Past the first bench, and straight back to failing: it waits longer
         // this time rather than starting again from a minute.
-        #expect(bench.failed(7, now: start + .seconds(61)) == .seconds(120))
-        #expect(bench.failed(7, now: start + .seconds(200)) == .seconds(240))
+        #expect(await bench.failed(7, now: start + .seconds(61)) == .seconds(120))
+        #expect(await bench.failed(7, now: start + .seconds(200)) == .seconds(240))
     }
 
     @Test("The bench has a ceiling, so a source that is gone is still retried")
-    func benchesAreCapped() {
+    func benchesAreCapped() async {
         // **Doubling without a ceiling reaches "not in this lifetime" after
         // about a dozen rounds**, and a network share that came back would
         // never be noticed.
@@ -116,7 +116,7 @@ struct HostileProviderTests {
         var now = ContinuousClock.now
         var last: Duration = .zero
         for _ in 0..<20 {
-            last = try! #require(bench.failed(7, now: now))
+            last = try! #require(await bench.failed(7, now: now))
             now = now + last + .seconds(1)
         }
 
@@ -125,15 +125,15 @@ struct HostileProviderTests {
     }
 
     @Test("Benching is per source, so one bad share does not stop the others")
-    func benchingIsPerSource() {
+    func benchingIsPerSource() async {
         // The fault this exists to prevent: a source that is 98% of the library
         // gets 98% of the draws, and without a bench it takes every lane.
         let bench = SourceBench(pauseAfter: 2, firstPause: .seconds(60))
-        _ = bench.failed(1)
-        _ = bench.failed(1)
+        _ = await bench.failed(1)
+        _ = await bench.failed(1)
 
-        #expect(bench.isBenched(1))
-        #expect(!bench.isBenched(2), "a healthy source was benched with the sick one")
+        #expect(await bench.isBenched(1))
+        #expect(await !bench.isBenched(2), "a healthy source was benched with the sick one")
     }
 
     /// A one-bit cross-thread signal.

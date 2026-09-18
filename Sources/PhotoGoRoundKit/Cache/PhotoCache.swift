@@ -627,7 +627,7 @@ public struct PhotoCache {
             // **A benched source is not asked at all.** Its card stays where it
             // is and is looked at again on the next kick; the lane moves past
             // it so the healthy sources behind it are fetched.
-            if bench?.isBenched(card.sourceID) == true { return .benched(rank: found.rank) }
+            if await bench?.isBenched(card.sourceID) == true { return .benched(rank: found.rank) }
 
             // A source row gone from under its card is a race with removal —
             // the cascade will take the card too. Walk on.
@@ -681,13 +681,13 @@ public struct PhotoCache {
     /// already have given up on: reporting the failure here as well would count
     /// an abandoned fetch twice, once when its lane wrote it off and once more
     /// when it finally came back.
-    public func finishFetch(_ card: DeckCard, landed: Bool) {
+    public func finishFetch(_ card: DeckCard, landed: Bool) async {
         try? deck.releaseClaim(photoID: card.id)
         if landed {
             // One fetch that produced bytes pays off one failure. An occasional
             // timeout on a working source is weather; see `SourceBench`, where
             // the bucket and the reason it is not a reset are written down.
-            bench?.succeeded(card.sourceID)
+            await bench?.succeeded(card.sourceID)
         }
     }
 
@@ -735,7 +735,7 @@ public struct PhotoCache {
         case .card(let card, let rank, let limit):
             log(.caching(photo: card.spokenName, source: card.sourceID, within: limit))
             let landed = await fetch(card, now: now).didLand
-            finishFetch(card, landed: landed)
+            await finishFetch(card, landed: landed)
             if !landed { dropUnfetched(card, because: "its fetch failed") }
             return landed ? .fetched(rank: rank) : .failed(rank: rank)
         }
@@ -743,8 +743,8 @@ public struct PhotoCache {
 
     /// A fetch that ran out of time. Answers the bench it earned, if any.
     @discardableResult
-    public func fetchTimedOut(_ card: DeckCard, after limit: Duration) -> Duration? {
-        let benched = bench?.failed(card.sourceID)
+    public func fetchTimedOut(_ card: DeckCard, after limit: Duration) async -> Duration? {
+        let benched = await bench?.failed(card.sourceID)
         log(
             .cacheTimedOut(photo: card.spokenName, source: card.sourceID, after: limit))
         if let benched {
@@ -768,8 +768,8 @@ public struct PhotoCache {
     /// A fetch that produced no bytes is a fetch that produced no bytes,
     /// whichever bound noticed. Both say so now.
     @discardableResult
-    public func fetchFailed(_ card: DeckCard) -> Duration? {
-        let benched = bench?.failed(card.sourceID)
+    public func fetchFailed(_ card: DeckCard) async -> Duration? {
+        let benched = await bench?.failed(card.sourceID)
         if let benched {
             log(.sourcePaused(source: card.sourceID, until: benched))
         }
@@ -974,7 +974,7 @@ public struct PhotoCache {
                 // A benched source is not being fetched from and will not be
                 // for at least a minute. Waiting on its card is a minute spent
                 // learning what the bench already knows.
-                if bench?.isBenched(card.sourceID) == true {
+                if await bench?.isBenched(card.sourceID) == true {
                     skipped += 1
                     lookedUp(.miss(.droppedWithoutWaiting))
                     dropCold(card, because: "its source is not answering")

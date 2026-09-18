@@ -96,6 +96,11 @@ struct DashboardEndpointTests {
         }
 
         func snapshot() async throws -> DashboardEndpoint.Snapshot {
+            // **The ledgers take their reports through a queue**, so a test that
+            // records and then reads is ahead of the drain unless it says so.
+            // A barrier through the same queue, not a wait on a clock.
+            await tally.settle()
+            await errors.settle()
             let response = await dashboard.route(try get(DashboardEndpoint.path))
             #expect(response.status == 200)
             guard case .data(let bytes) = response.body else {
@@ -457,6 +462,8 @@ struct DashboardEndpointTests {
             kind: "cache.timed-out.source-6", "CACHE: b.jpg did not answer in 60s",
             at: start.addingTimeInterval(10))
 
+        // The reports go through a queue; drain it before reading.
+        await library.errors.settle()
         let errors = try await library.dashboard.snapshot(now: start.addingTimeInterval(10)).errors
         #expect(errors.compactMap(\.kind) == ["cache.timed-out.source-6", "source.empty.source-2"])
         #expect(errors.map(\.count) == [2, 1])
@@ -474,6 +481,8 @@ struct DashboardEndpointTests {
             kind: "source.unavailable.source-2", "source 2 unavailable: not mounted",
             lasting: .standing, at: start)
 
+        // The reports go through a queue; drain it before reading.
+        await library.errors.settle()
         let errors = try await library.dashboard.snapshot(now: start.addingTimeInterval(61)).errors
         #expect(errors.compactMap(\.kind) == ["source.unavailable.source-2"])
         #expect(errors.first?.standing == true)

@@ -38,16 +38,16 @@ struct LibraryChangesTests {
     func refreshIsCounted() async throws {
         let fixture = try Fixture(photos: ["a.png", "b.png", "c.png"])
         let source = try await fixture.addFolder()
-        #expect(fixture.changes.bySource == [source.id: .init(added: 3)])
+        #expect(await fixture.changes.settledBySource == [source.id: .init(added: 3)])
 
         fixture.folder.remove("b.png")
         fixture.folder.write("d.png", bytes: 2048)
         _ = await fixture.store.refresh(source)
-        #expect(fixture.changes.bySource == [source.id: .init(added: 4, removed: 1)])
+        #expect(await fixture.changes.settledBySource == [source.id: .init(added: 4, removed: 1)])
 
         // Finding the same photographs again is not a change.
         _ = await fixture.store.refresh(source)
-        #expect(fixture.changes.bySource == [source.id: .init(added: 4, removed: 1)])
+        #expect(await fixture.changes.settledBySource == [source.id: .init(added: 4, removed: 1)])
     }
 
     @Test("Removing a source counts its photographs as removed, and keeps what it was called")
@@ -57,8 +57,8 @@ struct LibraryChangesTests {
 
         try await fixture.store.remove(id: source.id)
 
-        #expect(fixture.changes.bySource == [source.id: .init(added: 2, removed: 2)])
-        #expect(fixture.changes.nameOfRemovedSource(source.id) == source.spokenName)
+        #expect(await fixture.changes.settledBySource == [source.id: .init(added: 2, removed: 2)])
+        #expect(await fixture.changes.settledNameOfRemovedSource(source.id) == source.spokenName)
     }
 
     @Test("A photograph its source confirms gone when fetched is counted as removed")
@@ -76,19 +76,19 @@ struct LibraryChangesTests {
         fixture.folder.remove("a.png")
         #expect(try await cache.cache(photoID: photo) == false)
 
-        #expect(fixture.changes.bySource == [source.id: .init(added: 1, removed: 1)])
+        #expect(await fixture.changes.settledBySource == [source.id: .init(added: 1, removed: 1)])
     }
 
     @Test("Nothing is counted until recording starts")
     func silentUntilStarted() async throws {
         let fixture = try Fixture(photos: ["a.png"], recording: false)
         let source = try await fixture.addFolder()
-        #expect(fixture.changes.bySource.isEmpty)
+        #expect(await fixture.changes.settledBySource.isEmpty)
 
         fixture.changes.startRecording()
         fixture.folder.write("b.png", bytes: 2048)
         _ = await fixture.store.refresh(source)
-        #expect(fixture.changes.bySource == [source.id: .init(added: 1)])
+        #expect(await fixture.changes.settledBySource == [source.id: .init(added: 1)])
     }
 
     /// Nothing will report a removed source available again, or not empty, so
@@ -105,7 +105,7 @@ struct LibraryChangesTests {
 
         try await fixture.store.remove(id: source.id)
 
-        #expect(fixture.errors.entries.compactMap(\.kind) == [other])
+        #expect(await fixture.errors.settled.compactMap(\.kind) == [other])
     }
 
     /// Kept here beside removal, which is the same rule: a source nothing will
@@ -120,9 +120,9 @@ struct LibraryChangesTests {
         fixture.errors.record(kind: other, "empty", lasting: .standing)
 
         try fixture.store.setEnabled(true, for: source.id)
-        #expect(Set(fixture.errors.entries.compactMap(\.kind)) == [unavailable, other])
+        #expect(Set(await fixture.errors.settled.compactMap(\.kind)) == [unavailable, other])
 
         try fixture.store.setEnabled(false, for: source.id)
-        #expect(fixture.errors.entries.compactMap(\.kind) == [other])
+        #expect(await fixture.errors.settled.compactMap(\.kind) == [other])
     }
 }

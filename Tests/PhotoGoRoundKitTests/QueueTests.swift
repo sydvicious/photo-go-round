@@ -221,13 +221,13 @@ struct QueueTests {
     }
 
     @Test("Removing a photo from the pool takes it out of the queue")
-    func poolRemovalClearsTheQueue() throws {
+    func poolRemovalClearsTheQueue() async throws {
         let (library, ids, source) = try library(photos: 3)
         let queue = PhotoQueue(
             database: library.database, nominalSize: 10, placement: PhotoQueue.tail)
         for id in ids { try queue.append(photoID: id, sourceID: source) }
 
-        try PhotoPool(database: library.database).remove(ids[1])
+        try await PhotoPool(database: library.database).remove(ids[1])
         #expect(try queue.size() == 2)
         #expect(try queue.peek(10).map(\.id) == [ids[0], ids[2]])
     }

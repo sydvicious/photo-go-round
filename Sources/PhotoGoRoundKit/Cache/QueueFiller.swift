@@ -28,14 +28,14 @@ import PhotoGoRoundAgentAPI
 /// is pure policy, which is what makes every rule above assertable with two mocks
 /// and no disk.
 public actor QueueFiller {
-    private let isShort: @Sendable () -> Bool
+    private let isShort: @Sendable () async -> Bool
     private let produce: @Sendable () async throws -> Bool
     /// **An actor, not a lock.** Syd, 2026-09-17: "I flatout don't want
     /// NSLocks". `Agent Performance Overhaul.md`, Phase 5.
     private var running = false
 
     public init(
-        isShort: @escaping @Sendable () -> Bool,
+        isShort: @escaping @Sendable () async -> Bool,
         produce: @escaping @Sendable () async throws -> Bool
     ) {
         self.isShort = isShort
@@ -86,7 +86,7 @@ public actor QueueFiller {
         defer { endRound() }
 
         var produced = 0
-        while isShort() {
+        while await isShort() {
             do {
                 guard try await produce() else {
                     return Round(produced: produced, exhausted: true, skipped: false)

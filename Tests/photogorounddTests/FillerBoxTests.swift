@@ -70,9 +70,9 @@ struct FillerBoxTests {
 
         deinit { try? FileManager.default.removeItem(at: directory) }
 
-        func box() -> FillerBox {
+        func box() async -> FillerBox {
             let filler = FillerBox()
-            filler.configure(
+            await filler.configure(
                 databasePath: databasePath,
                 cacheRoot: directory.appending(path: "cache"),
                 store: PhotoStore(root: directory.appending(path: "cache"))
@@ -103,7 +103,7 @@ struct FillerBoxTests {
         // as long as nobody is looking, and the first picture after idle waits
         // on a cold fetch. Dealing has to happen whether or not anybody asked.
         let fixture = try Fixture(photos: 5)
-        let box = fixture.box()
+        let box = await fixture.box()
         let preferences = Self.preferences()
 
         // Fewer photos than the nominal 20, so "full" means "everything there
@@ -144,9 +144,9 @@ struct FillerBoxTests {
     @Test("Dealing through the box reports the fetch side to its hook")
     func dealLookupsReachTheHook() async throws {
         let fixture = try Fixture(photos: 3, servable: false)
-        let box = fixture.box()
+        let box = await fixture.box()
         let dealt = Dealt()
-        box.countingDealLookups { dealt.record($0) }
+        await box.countingDealLookups { dealt.record($0) }
 
         _ = await box.topUpIfShort(preferences: Self.preferences())
 
@@ -162,7 +162,7 @@ struct FillerBoxTests {
         // nobody is going to see, which is the churn the earlier design was
         // right to avoid.
         let fixture = try Fixture(photos: 5)
-        let box = fixture.box()
+        let box = await fixture.box()
         let preferences = Self.preferences()
 
         _ = await box.topUpIfShort(preferences: preferences)
@@ -193,7 +193,7 @@ struct FillerBoxTests {
         // Referenced photographs need no fetch, so every one is servable
         // without the cache holding anything.
         try fixture.database.run("UPDATE photo SET storage = 'referenced';")
-        let box = fixture.box()
+        let box = await fixture.box()
         let preferences = Self.preferences()
 
         let round = await box.topUpIfShort(preferences: preferences)
@@ -208,7 +208,7 @@ struct FillerBoxTests {
         // than the queue wants, it deals what there is and returns.
         let fixture = try Fixture(photos: 5)
         try fixture.database.run("UPDATE photo SET storage = 'referenced';")
-        let box = fixture.box()
+        let box = await fixture.box()
 
         let round = await box.topUpIfShort(preferences: Self.preferences())
 
@@ -223,7 +223,7 @@ struct FillerBoxTests {
         // the deck deals every available photograph and the queue fetches what
         // it holds, so a cold library fills the queue like any other.
         let fixture = try Fixture(photos: 5, servable: false)
-        let box = fixture.box()
+        let box = await fixture.box()
 
         let round = await box.topUpIfShort(preferences: Self.preferences())
 
@@ -235,7 +235,7 @@ struct FillerBoxTests {
     @Test("A served picture deals the queue back toward its target")
     func servedOneTopsBackUp() async throws {
         let fixture = try Fixture(photos: 5)
-        let box = fixture.box()
+        let box = await fixture.box()
         let preferences = Self.preferences()
 
         _ = await box.topUpIfShort(preferences: preferences)
@@ -248,7 +248,7 @@ struct FillerBoxTests {
     }
 
     @Test("The gauge is the depth against the target, and nothing else")
-    func gaugeIsJustTheDepth() throws {
+    func gaugeIsJustTheDepth() async throws {
         let fixture = try Fixture(photos: 3)
         let rows = try fixture.database.all("SELECT id, source_id FROM photo;") { row in
             (id: try row.int64("id"), source: try row.int64("source_id"))
@@ -265,9 +265,9 @@ struct FillerBoxTests {
         // happen now: a card being fetched stays on the queue while its bytes
         // come, so the depth is the depth, and the exception that had to be
         // written into this method for an empty queue goes with the rest of it.
-        #expect(gauge.isShort(nominalSize: 5))
-        #expect(gauge.isShort(nominalSize: 4))
-        #expect(!gauge.isShort(nominalSize: 3))
-        #expect(!gauge.isShort(nominalSize: 2))
+        #expect(await gauge.isShort(nominalSize: 5))
+        #expect(await gauge.isShort(nominalSize: 4))
+        #expect(await !gauge.isShort(nominalSize: 3))
+        #expect(await !gauge.isShort(nominalSize: 2))
     }
 }

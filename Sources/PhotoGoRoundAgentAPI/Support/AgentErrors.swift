@@ -27,7 +27,7 @@ import Foundation
 /// screensaver, none of which has a dashboard to show them on.
 ///
 /// In memory and gone at exit.
-public final class AgentErrors: @unchecked Sendable {
+public actor AgentErrors {
 
     /// One kind of trouble, as it has stood so far.
     public struct Entry: Sendable, Equatable, Codable {
@@ -68,31 +68,82 @@ public final class AgentErrors: @unchecked Sendable {
     /// How long an event stays after it last happened, in seconds.
     public static let transientLifetime: TimeInterval = 60
 
-    private let lock = NSLock()
     private let capacity: Int
     private var recording: Bool
     private var rows: [String: Entry] = [:]
 
+    /// What a reporter hands over, and what the drain applies.
+    ///
+    /// **An `AsyncStream`, not a lock and not an `await`.** Syd, 2026-09-17:
+    /// "AsyncStream for both". Every writer here is a synchronous `@Sendable`
+    /// closure called from whatever thread was passing — `Console.alert`'s
+    /// recorder, `Logger.error(kind:)` — and none of them can `await`.
+    /// `Continuation.yield` is safe from any thread, never suspends, and keeps
+    /// the order the reports were made in, which a `Task` per report would not.
+    private enum Report: Sendable {
+        case started
+        case recorded(kind: String?, message: String, lifetime: Lifetime, now: Date)
+        case cleared(kind: String)
+        case clearedStanding(source: Int64)
+        /// A caller waiting for everything ahead of it to have been applied.
+        case barrier(CheckedContinuation<Void, Never>)
+    }
+
+    private nonisolated let inbox: AsyncStream<Report>
+    private nonisolated let post: AsyncStream<Report>.Continuation
+    private var draining: Task<Void, Never>?
+
     public init(capacity: Int = AgentErrors.defaultCapacity, recording: Bool = false) {
         self.capacity = max(1, capacity)
         self.recording = recording
+        (inbox, post) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
+        Task { await self.drain() }
     }
 
-    public func startRecording() {
-        lock.lock()
-        recording = true
-        lock.unlock()
+    private func drain() async {
+        for await report in inbox {
+            switch report {
+            case .started: recording = true
+            case .recorded(let kind, let message, let lifetime, let now):
+                keep(kind: kind, message, lasting: lifetime, at: now)
+            case .cleared(let kind): rows.removeValue(forKey: kind)
+            case .clearedStanding(let source):
+                let suffix = ".source-\(source)"
+                rows = rows.filter {
+                    !($0.value.standing && ($0.value.kind?.hasSuffix(suffix) ?? false))
+                }
+            case .barrier(let continuation): continuation.resume()
+            }
+        }
+    }
+
+    /// Waits until everything reported before this call has been applied.
+    ///
+    /// The reports go through a queue, so a caller that records and then reads
+    /// would otherwise be racing the drain. This puts itself in the same queue
+    /// and waits its turn.
+    public nonisolated func settle() async {
+        await withCheckedContinuation { continuation in post.yield(.barrier(continuation)) }
+    }
+
+    public nonisolated func startRecording() {
+        post.yield(.started)
     }
 
     /// `kind` nil groups the report by its exact text. A kind reported again
     /// takes the lifetime of the latest report, so a pause that is extended
     /// ends at the new time.
-    public func record(
+    public nonisolated func record(
         kind: String?, _ message: String, lasting lifetime: Lifetime = .transient,
         at now: Date = Date()
     ) {
-        lock.lock()
-        defer { lock.unlock() }
+        post.yield(.recorded(kind: kind, message: message, lifetime: lifetime, now: now))
+    }
+
+    /// The report applied, on the actor, in the order it was made.
+    private func keep(
+        kind: String?, _ message: String, lasting lifetime: Lifetime, at now: Date
+    ) {
         guard recording else { return }
         prune(at: now)
 
@@ -126,20 +177,15 @@ public final class AgentErrors: @unchecked Sendable {
     }
 
     /// A condition that is over. Nothing happens for a kind with no row.
-    public func clear(kind: String) {
-        lock.lock()
-        rows.removeValue(forKey: kind)
-        lock.unlock()
+    public nonisolated func clear(kind: String) {
+        post.yield(.cleared(kind: kind))
     }
 
     /// Every standing condition about one source, for a source that has been
     /// removed: nothing will ever report it available, or not empty, again.
     /// Its events are left to leave on their own.
-    public func clearStanding(source: Int64) {
-        let suffix = ".source-\(source)"
-        lock.lock()
-        rows = rows.filter { !($0.value.standing && ($0.value.kind?.hasSuffix(suffix) ?? false)) }
-        lock.unlock()
+    public nonisolated func clearStanding(source: Int64) {
+        post.yield(.clearedStanding(source: source))
     }
 
     /// Most recently seen first.
@@ -147,15 +193,13 @@ public final class AgentErrors: @unchecked Sendable {
 
     /// Most recently seen first, as they stand at `now`.
     public func entries(at now: Date) -> [Entry] {
-        lock.lock()
-        defer { lock.unlock() }
         prune(at: now)
         return rows.values.sorted {
             $0.lastSeen != $1.lastSeen ? $0.lastSeen > $1.lastSeen : ($0.kind ?? $0.message) < ($1.kind ?? $1.message)
         }
     }
 
-    /// Drops what has run its course. Called with the lock held.
+    /// Drops what has run its course.
     private func prune(at now: Date) {
         rows = rows.filter { _, entry in
             if let until = entry.until { return now < until }

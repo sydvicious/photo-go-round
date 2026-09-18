@@ -410,7 +410,7 @@ struct SourceTests {
                 try $0.int64("id")
             }
         )
-        try store.pool.remove(doomed)
+        try await store.pool.remove(doomed)
 
         // No separate step, and no window in which the queue holds a picture
         // the pool no longer has.

@@ -218,13 +218,24 @@ struct DashboardEndpoint {
         // somewhere this process did not see.
         let current = Dictionary(
             uniqueKeysWithValues: try SourceStore(database: database).all().map { ($0.id, $0) })
-        let libraryChanges = changes.bySource.map { id, count in
-            Snapshot.LibraryChange(
-                source: current[id]?.spokenName ?? changes.nameOfRemovedSource(id) ?? "source \(id)",
-                sourceRemoved: current[id] == nil, added: count.added, removed: count.removed)
-        }.sorted { $0.source.localizedStandardCompare($1.source) == .orderedAscending }
+        // **Names first, then the map.** `map` takes a synchronous closure, and
+        // a source that has been removed has no row to read its name from — so
+        // the one `await` per change is hoisted out rather than made part of
+        // the transform.
+        var changed: [Snapshot.LibraryChange] = []
+        for (id, count) in await changes.bySource {
+            let removedName = current[id] == nil ? await changes.nameOfRemovedSource(id) : nil
+            changed.append(
+                Snapshot.LibraryChange(
+                    source: current[id]?.spokenName ?? removedName ?? "source \(id)",
+                    sourceRemoved: current[id] == nil, added: count.added,
+                    removed: count.removed))
+        }
+        let libraryChanges = changed.sorted {
+            $0.source.localizedStandardCompare($1.source) == .orderedAscending
+        }
 
-        return Snapshot(
+        return await Snapshot(
             photos: photos,
             libraryChanges: libraryChanges,
             cached: status.residentCount,
@@ -244,7 +255,7 @@ struct DashboardEndpoint {
                     photo: $0.photo, consumer: $0.consumer, at: $0.at,
                     source: $0.sourceName, name: $0.name, externalID: $0.externalID)
             },
-            errors: errors.entries(at: now),
+            errors: await errors.entries(at: now),
             since: tally.since,
             at: now
         )

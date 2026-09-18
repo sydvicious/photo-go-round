@@ -318,7 +318,7 @@ struct ServeWaitTests {
         let bench = SourceBench(pauseAfter: 1)
         fixture.cache.bench = bench
         try await fixture.dealAll()
-        bench.failed(fixture.source.id)
+        await bench.failed(fixture.source.id)
 
         let clock = ContinuousClock()
         let started = clock.now

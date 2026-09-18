@@ -20,55 +20,55 @@ import Testing
 struct SourceBenchTests {
 
     @Test("A run of failures is not wiped by the successes between them")
-    func successesDoNotWipeTheAccount() {
+    func successesDoNotWipeTheAccount() async {
         let bench = SourceBench(pauseAfter: 4)
 
         // The shape a half-downloaded album makes while the network is off:
         // mostly failures, with a local photograph answering now and again.
         // Three failures, one success, and the account stands at two.
-        for _ in 0..<3 { #expect(bench.failed(1) == nil) }
-        bench.succeeded(1)
-        #expect(bench.failed(1) == nil, "the fourth failure benched a source at two")
+        for _ in 0..<3 { #expect(await bench.failed(1) == nil) }
+        await bench.succeeded(1)
+        #expect(await bench.failed(1) == nil, "the fourth failure benched a source at two")
 
         // Which the next one tips over.
-        #expect(bench.failed(1) != nil, "a success wiped three failures instead of one")
+        #expect(await bench.failed(1) != nil, "a success wiped three failures instead of one")
     }
 
     @Test("A source that mostly answers is never benched")
-    func healthySourcesAreLeftAlone() {
+    func healthySourcesAreLeftAlone() async {
         let bench = SourceBench(pauseAfter: 4)
 
         // Ninety per cent healthy, which is what Favorites measured at. An
         // occasional timeout on a working source is weather, and the bucket
         // drains faster than it fills.
         for _ in 0..<50 {
-            #expect(bench.failed(1) == nil)
-            for _ in 0..<9 { bench.succeeded(1) }
+            #expect(await bench.failed(1) == nil)
+            for _ in 0..<9 { await bench.succeeded(1) }
         }
-        #expect(bench.isBenched(1) == false)
+        #expect(await bench.isBenched(1) == false)
     }
 
     @Test("Nothing but failures benches at the threshold, and the account starts again")
-    func failuresAloneBench() {
+    func failuresAloneBench() async {
         let bench = SourceBench(pauseAfter: 4, firstPause: .seconds(60))
-        for _ in 0..<3 { #expect(bench.failed(2) == nil) }
-        #expect(bench.failed(2) == .seconds(60))
-        #expect(bench.isBenched(2))
+        for _ in 0..<3 { #expect(await bench.failed(2) == nil) }
+        #expect(await bench.failed(2) == .seconds(60))
+        #expect(await bench.isBenched(2))
 
         // The count is reset by the bench itself, so the next one is earned
         // afresh rather than on the next failure.
-        #expect(bench.failed(2) == nil)
+        #expect(await bench.failed(2) == nil)
     }
 
     @Test("The account cannot go negative, so a quiet source does not bank credit")
-    func successesDoNotBankCredit() {
+    func successesDoNotBankCredit() async {
         let bench = SourceBench(pauseAfter: 4)
 
         // A thousand successes must not buy a thousand free failures — the
         // source that has been fine all day is exactly the one whose going
         // wrong should be noticed promptly.
-        for _ in 0..<1000 { bench.succeeded(3) }
-        for _ in 0..<3 { #expect(bench.failed(3) == nil) }
-        #expect(bench.failed(3) != nil, "banked successes swallowed a real run of failures")
+        for _ in 0..<1000 { await bench.succeeded(3) }
+        for _ in 0..<3 { #expect(await bench.failed(3) == nil) }
+        #expect(await bench.failed(3) != nil, "banked successes swallowed a real run of failures")
     }
 }

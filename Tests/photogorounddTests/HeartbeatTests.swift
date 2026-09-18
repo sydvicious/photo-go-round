@@ -154,7 +154,7 @@ struct ColdStartSeedTests {
 
         let box = FillerBox()
         let cacheRoot = directory.appending(path: "cache")
-        box.configure(
+        await box.configure(
             databasePath: path, cacheRoot: cacheRoot, store: PhotoStore(root: cacheRoot))
         let preferences = Preferences(defaults: scratchSuite("coldstart"))
         let round = await box.topUpIfShort(preferences: preferences)

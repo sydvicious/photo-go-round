@@ -118,7 +118,7 @@ struct RefreshLockingTests {
         #expect(result.removed == 230)
         #expect(fixture.photos == 20)
         #expect(fixture.timings(.remove).map(\.rows) == [100, 100, 30])
-        #expect(fixture.changes.bySource[source.id]?.removed == 230)
+        #expect(await fixture.changes.settledBySource[source.id]?.removed == 230)
     }
 
     // MARK: - Removing a source
@@ -136,7 +136,7 @@ struct RefreshLockingTests {
         #expect(fixture.photos == 0)
         #expect(try fixture.store.source(id: source.id) == nil)
         #expect(fixture.timings(.remove).map(\.rows) == [100, 100, 50])
-        #expect(fixture.changes.bySource[source.id]?.removed == 250, "counted per page and again for the source")
+        #expect(await fixture.changes.settledBySource[source.id]?.removed == 250, "counted per page and again for the source")
     }
 
     // MARK: - A removal page

@@ -23,7 +23,7 @@ struct SourceRemovedMidScanTests {
     /// not a conflict to be resolved, and goes straight to the caller however
     /// forgivingly the insert was written.
     @Test("A photo written for a source that is gone throws rather than being ignored")
-    func foreignKeysAreNotIgnored() throws {
+    func foreignKeysAreNotIgnored() async throws {
         let library = try TestLibrary()
         let pool = PhotoPool(database: library.database)
         let ghost = Source(
@@ -31,7 +31,7 @@ struct SourceRemovedMidScanTests {
             addedAt: Date(timeIntervalSince1970: 0))
 
         do {
-            try pool.upsert([Self.found("a.heic")], to: ghost)
+            try await pool.upsert([Self.found("a.heic")], to: ghost)
             Issue.record("expected the insert to be refused")
         } catch let error as SQLiteError {
             #expect(error.isForeignKeyViolation)

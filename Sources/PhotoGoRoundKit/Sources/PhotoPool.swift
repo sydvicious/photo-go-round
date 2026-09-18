@@ -113,7 +113,7 @@ public struct PhotoPool {
                 timing.commit = ContinuousClock.now - bodyEnded
                 timing.held += timing.commit
             }
-            finishUpsert(written, to: source, timing: &timing, onAdded: onAdded)
+            await finishUpsert(written, to: source, timing: &timing, onAdded: onAdded)
             added += written.added.count
             updated += written.updated
         }
@@ -150,7 +150,7 @@ public struct PhotoPool {
                 timing.held += timing.commit
             }
             reportBatch(timing)
-            finishRemoval(deleted, into: &removal, countingChanges: countingChanges)
+            await finishRemoval(deleted, into: &removal, countingChanges: countingChanges)
         }
         if removal.count > 0 {
             Log.sources.notice("removed \(removal.count, privacy: .public) entries from the pool")
@@ -216,7 +216,7 @@ public struct PhotoPool {
         to source: Source,
         at now: Date = Date(),
         onAdded: ((DiscoveredPhoto) -> Void)? = nil
-    ) throws -> (added: Int, updated: Int) {
+    ) async throws -> (added: Int, updated: Int) {
         var added = 0
         var updated = 0
         for page in photos.chunked(into: Self.batchSize) {
@@ -227,7 +227,7 @@ public struct PhotoPool {
                 timing.locked = true
                 let asked = ContinuousClock.now
                 var bodyEnded = asked
-                written = try database.transaction(.immediate) {
+                written = try await database.transaction(.immediate) {
                     timing.waited = ContinuousClock.now - asked
                     let holding = ContinuousClock.now
                     defer {
@@ -239,7 +239,7 @@ public struct PhotoPool {
                 timing.commit = ContinuousClock.now - bodyEnded
                 timing.held += timing.commit
             }
-            finishUpsert(written, to: source, timing: &timing, onAdded: onAdded)
+            await finishUpsert(written, to: source, timing: &timing, onAdded: onAdded)
             added += written.added.count
             updated += written.updated
         }
@@ -361,7 +361,7 @@ public struct PhotoPool {
     private func finishUpsert(
         _ written: UpsertWrite, to source: Source, timing: inout RefreshBatchTiming,
         onAdded: ((DiscoveredPhoto) -> Void)?
-    ) {
+    ) async {
         let calling = ContinuousClock.now
         if let onAdded { for photo in written.added { onAdded(photo) } }
         timing.callbacks = ContinuousClock.now - calling
@@ -399,7 +399,7 @@ public struct PhotoPool {
     /// `countingChanges` is false for a whole source going, which is counted
     /// once as the source's (`LibraryChanges.sourceRemoved`).
     @discardableResult
-    public func remove(_ photoIDs: [Int64], countingChanges: Bool = true) throws -> Removal {
+    public func remove(_ photoIDs: [Int64], countingChanges: Bool = true) async throws -> Removal {
         guard !photoIDs.isEmpty else { return .none }
         var removal = Removal.none
         for page in photoIDs.chunked(into: Self.batchSize) {
@@ -410,7 +410,7 @@ public struct PhotoPool {
                 timing.locked = true
                 let asked = ContinuousClock.now
                 var bodyEnded = asked
-                deleted = try database.transaction(.immediate) {
+                deleted = try await database.transaction(.immediate) {
                     timing.waited = ContinuousClock.now - asked
                     let holding = ContinuousClock.now
                     defer {
@@ -423,7 +423,7 @@ public struct PhotoPool {
                 timing.held += timing.commit
             }
             reportBatch(timing)
-            finishRemoval(deleted, into: &removal, countingChanges: countingChanges)
+            await finishRemoval(deleted, into: &removal, countingChanges: countingChanges)
         }
         if removal.count > 0 {
             Log.sources.notice("removed \(removal.count, privacy: .public) entries from the pool")
@@ -484,7 +484,7 @@ public struct PhotoPool {
     /// After a page's lock: what went, added to the removal so far.
     private func finishRemoval(
         _ deleted: [RemovalRow], into removal: inout Removal, countingChanges: Bool
-    ) {
+    ) async {
         removal.count += deleted.count
         removal.orphaned += deleted.map(\.uuid)
         removal.orphanedCopies += deleted.flatMap(\.copies)
@@ -495,8 +495,8 @@ public struct PhotoPool {
     }
 
     @discardableResult
-    public func remove(_ photoID: Int64) throws -> Removal {
-        try remove([photoID])
+    public func remove(_ photoID: Int64) async throws -> Removal {
+        try await remove([photoID])
     }
 
     /// Updates what we know about an entry without disturbing its place in the

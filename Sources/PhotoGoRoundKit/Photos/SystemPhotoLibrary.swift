@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import PhotoGoRoundAgentAPI
 import Photos
 
@@ -446,48 +447,64 @@ public struct SystemPhotoLibrary: PhotoLibrary {
 }
 
 /// Writes each chunk as it arrives, so nothing accumulates.
-private final class ChunkSink: @unchecked Sendable {
-    private let lock = NSLock()
-    private let handle: FileHandle
-    private var count: Int64 = 0
+///
+/// **A `Mutex`, and not an actor.** These three types are the exception the
+/// TODO in `Deadline.swift` always named. PhotoKit calls `dataReceivedHandler`
+/// synchronously on a dispatch queue of its own — see the comment on the
+/// handlers above, and what happened when Swift inferred actor isolation into
+/// them — so there is nothing here that can `await`. An actor would mean a
+/// `Task` per chunk: the megabytes this exists *not* to accumulate would queue
+/// up in tasks instead, and the writes could land out of order. So the state
+/// stays synchronous, and only the lock changes.
+private final class ChunkSink: Sendable {
+    private struct Writing: ~Copyable {
+        let handle: FileHandle
+        var count: Int64 = 0
+    }
 
-    init(handle: FileHandle) { self.handle = handle }
+    private let writing: Mutex<Writing>
+
+    init(handle: FileHandle) { writing = Mutex(Writing(handle: handle)) }
 
     func append(_ data: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-        try? handle.write(contentsOf: data)
-        count += Int64(data.count)
+        writing.withLock { writing in
+            try? writing.handle.write(contentsOf: data)
+            writing.count += Int64(data.count)
+        }
     }
 
-    var written: Int64 {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
-    }
+    var written: Int64 { writing.withLock { $0.count } }
 }
 
 /// Holds a request id so a deadline can cancel it. The id is returned only
 /// after the handlers may already have fired, so the cancel is issued by
 /// whichever of the two arrives second.
-private final class RequestHandle: @unchecked Sendable {
-    private let lock = NSLock()
-    private var id: PHAssetResourceDataRequestID = PHInvalidAssetResourceDataRequestID
-    private var wanted = false
+///
+/// A `Mutex` for the same reason as `ChunkSink`: `cancel` is called from a
+/// detached deadline and `track` from inside PhotoKit's own call, and the
+/// cancel has to be issued by whichever arrives second — synchronously, in both
+/// cases.
+private final class RequestHandle: Sendable {
+    private struct State {
+        var id: PHAssetResourceDataRequestID = PHInvalidAssetResourceDataRequestID
+        var wanted = false
+    }
+
+    private let state = Mutex(State())
 
     func track(_ requestID: PHAssetResourceDataRequestID) {
-        lock.lock()
-        id = requestID
-        let now = wanted
-        lock.unlock()
-        if now { PHAssetResourceManager.default().cancelDataRequest(requestID) }
+        let alreadyWanted = state.withLock { state -> Bool in
+            state.id = requestID
+            return state.wanted
+        }
+        if alreadyWanted { PHAssetResourceManager.default().cancelDataRequest(requestID) }
     }
 
     func cancel() {
-        lock.lock()
-        wanted = true
-        let requestID = id
-        lock.unlock()
+        let requestID = state.withLock { state -> PHAssetResourceDataRequestID in
+            state.wanted = true
+            return state.id
+        }
         if requestID != PHInvalidAssetResourceDataRequestID {
             PHAssetResourceManager.default().cancelDataRequest(requestID)
         }
@@ -496,18 +513,24 @@ private final class RequestHandle: @unchecked Sendable {
 
 /// A continuation that cannot be resumed twice. The completion may race the
 /// deadline, and resuming twice is a crash rather than a wrong answer.
-private final class ResumeOnce: @unchecked Sendable {
-    private let lock = NSLock()
-    private var pending: CheckedContinuation<Void, any Error>?
+///
+/// A `Mutex` for the same reason again: `finish` is called from PhotoKit's
+/// completion handler and from the deadline, and resuming a continuation is not
+/// something that can wait its turn on an actor.
+private final class ResumeOnce: Sendable {
+    private let pending: Mutex<CheckedContinuation<Void, any Error>?>
 
-    init(_ continuation: CheckedContinuation<Void, any Error>) { pending = continuation }
+    init(_ continuation: CheckedContinuation<Void, any Error>) {
+        pending = Mutex(continuation)
+    }
 
     func finish(_ error: (any Error)?) {
-        lock.lock()
-        let continuation = pending
-        pending = nil
-        lock.unlock()
-        guard let continuation else { return }
-        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+        let claimed = pending.withLock { held -> CheckedContinuation<Void, any Error>? in
+            let taken = held
+            held = nil
+            return taken
+        }
+        guard let claimed else { return }
+        if let error { claimed.resume(throwing: error) } else { claimed.resume() }
     }
 }

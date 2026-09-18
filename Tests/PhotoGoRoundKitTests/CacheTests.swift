@@ -186,7 +186,7 @@ struct CacheTests {
         while try await cache.deal() {}
 
         // One timeout benches the source outright.
-        bench.failed(fixture.source.id)
+        await bench.failed(fixture.source.id)
 
         let step = await cache.fetchQueuedOnce()
         guard case .benched(let position) = step else { Issue.record("\(step)"); return }
@@ -215,7 +215,7 @@ struct CacheTests {
 
         let answer = await fixture.cache.fetch(card)
         #expect(answer == .landed)
-        fixture.cache.finishFetch(card, landed: answer.didLand)
+        await fixture.cache.finishFetch(card, landed: answer.didLand)
         #expect(try fixture.deck.claim(photoID: card.id) == true)
     }
 
