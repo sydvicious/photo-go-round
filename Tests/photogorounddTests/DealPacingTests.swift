@@ -92,7 +92,7 @@ struct DealPacingTests {
         deinit { try? FileManager.default.removeItem(at: directory) }
 
         func fill() async throws {
-            try cache.prepare()
+            try await cache.prepare()
             let folder = directory.appending(path: "photos").path(percentEncoded: false)
             let source = try sources.add(kind: .folder, locator: folder)
             _ = await sources.refresh(source)

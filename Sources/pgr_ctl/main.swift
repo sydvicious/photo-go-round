@@ -34,7 +34,7 @@ do {
         print(Options.usage)
 
     case .status:
-        try InspectCommands.status(environment: hostEnvironment(options))
+        try await InspectCommands.status(environment: hostEnvironment(options))
 
     case .source(let action):
         try await SourceCommands.run(action, environment: hostEnvironment(options))
@@ -43,10 +43,10 @@ do {
         try await SourceCommands.refresh(sourceID: sourceID, environment: hostEnvironment(options))
 
     case .poolStats:
-        try InspectCommands.poolStats(environment: hostEnvironment(options))
+        try await InspectCommands.poolStats(environment: hostEnvironment(options))
 
     case .queuePeek:
-        try InspectCommands.queuePeek(
+        try await InspectCommands.queuePeek(
             count: options.count, all: !options.countWasGiven,
             environment: hostEnvironment(options))
 
@@ -55,16 +55,16 @@ do {
             rounds: options.count, environment: hostEnvironment(options))
 
     case .deckStats:
-        try InspectCommands.deckStats(environment: hostEnvironment(options))
+        try await InspectCommands.deckStats(environment: hostEnvironment(options))
 
     case .cache(.status):
-        try InspectCommands.cacheStatus(environment: hostEnvironment(options))
+        try await InspectCommands.cacheStatus(environment: hostEnvironment(options))
 
     case .cache(.evict):
-        try InspectCommands.cacheEvict(environment: hostEnvironment(options))
+        try await InspectCommands.cacheEvict(environment: hostEnvironment(options))
 
     case .cache(.clear(let scope, let confirmed)):
-        try InspectCommands.cacheClear(
+        try await InspectCommands.cacheClear(
             scope: scope, confirmed: confirmed, environment: hostEnvironment(options))
 
     case .shuffleTest:
@@ -78,12 +78,12 @@ do {
             album: options.albumIdentifier, listing: options.listAlbums)
 
     case .getPreferences(let key):
-        try PreferenceCommands.get(
+        try await PreferenceCommands.get(
             key: key, showDefaults: !options.noDefaultValues,
             environment: hostEnvironment(options))
 
     case .setPreference(let key, let value):
-        try PreferenceCommands.set(key: key, value: value, environment: hostEnvironment(options))
+        try await PreferenceCommands.set(key: key, value: value, environment: hostEnvironment(options))
 
     case .wallpaper(.get(let key)):
         try WallpaperCommands.get(key: key, domain: WallpaperPreferences(deployment: options.deployment).domain)
@@ -96,7 +96,7 @@ do {
         try NotifyCommand.run(topic: topic, environment: hostEnvironment(options))
 
     case .log:
-        try LogCommand.run(follow: options.follow, last: options.lastInterval)
+        try await LogCommand.run(follow: options.follow, last: options.lastInterval)
 
     case .service(let action):
         try ServiceCommand(action: action).run()

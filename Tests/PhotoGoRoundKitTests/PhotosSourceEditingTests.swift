@@ -127,7 +127,7 @@ struct PhotosSourceEditingTests {
         ])
         let store = store(try TestLibrary().database, library: renamed)
 
-        try store.reconcile(with: scratch.preferences)
+        try await store.reconcile(with: scratch.preferences)
         let seeded = try #require(try store.all().first)
         #expect(seeded.description?.title == "Kids 2019", "the row is seeded from the preference")
 
@@ -168,7 +168,7 @@ struct PhotosSourceEditingTests {
         preferences.setSources([
             SourceSpec(kind: .photosCollection, locator: album, description: Self.kids)
         ])
-        try store.reconcile(with: preferences)
+        try await store.reconcile(with: preferences)
         let source = try #require(try store.all().first)
         await store.refresh(source)
         return try #require(try store.source(id: source.id))
@@ -193,7 +193,7 @@ struct PhotosSourceEditingTests {
 
         // The two agree, so reconciling adds and removes nothing — which is
         // the whole reason they were written under one lock.
-        let reconciled = try store.reconcile(with: scratch.preferences)
+        let reconciled = try await store.reconcile(with: scratch.preferences)
         #expect(reconciled.isEmpty)
         #expect(try store.all().map(\.uuid) == [before.uuid])
     }
@@ -359,8 +359,14 @@ struct PhotosSourceEditingTests {
 
         #expect(added.added.count == 8)
         // Comfortably under eight waits, and above none — the point is that it
-        // does not scale with the number of albums.
-        #expect(spent < SourceStore.validationLimit * 3)
+        // does not scale with the number of albums. **Five waits, not three.**
+        // One wait is what this costs: 5.45 s measured alone on 2026-09-17. In
+        // a full parallel run the same day it passed fifteen seconds once, on a
+        // cooperative pool the rest of the suite was holding — ten seconds of
+        // scheduling on top of one wait. Eight waits would be forty, so the
+        // claim survives the wider bound; the machine's load does not get to
+        // decide it.
+        #expect(spent < SourceStore.validationLimit * 5)
     }
 
     /// The other half, and the reason the two are told apart: a library that

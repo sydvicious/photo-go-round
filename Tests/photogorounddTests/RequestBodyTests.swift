@@ -20,15 +20,19 @@ import Testing
 @Suite("Request bodies", .timeLimit(.minutes(1)))
 struct RequestBodyTests {
 
-    /// Every reply wait in this file is bounded by one of these, and none of
-    /// them is generous — a listener that has decided not to answer will never
-    /// change its mind, so waiting longer only turns a failure into a wedged
-    /// suite with nothing to read.
+    /// Every reply wait in this file is bounded by one of these. A listener
+    /// that has decided not to answer will never change its mind, so the
+    /// bound exists to turn a wedge into a named failure — not to assert how
+    /// fast loopback is. The suite's own `.timeLimit(.minutes(1))` is the
+    /// outer bound either way.
     private enum Deadline {
-        /// The whole exchange is loopback and the pauses this file inserts
-        /// between writes are milliseconds, so a reply that has not begun by now
-        /// is not coming.
-        static let reply = Duration.seconds(2)
+        /// **Ten seconds, not two.** The exchange is loopback and takes
+        /// milliseconds, but the wait is on a cooperative pool other suites are
+        /// holding: measured 2026-09-16, a 10 ms sleep in this file resumed 1.2
+        /// to 1.96 s late in a full parallel run, and two seconds sat on that
+        /// edge — `anEnormousHeadIsRefused` timed out once on 2026-09-17 with
+        /// the server answering perfectly. Nothing here is a latency assertion.
+        static let reply = Duration.seconds(10)
     }
 
     /// The port a listener bound, awaited from its `onReady` rather than polled.
@@ -142,9 +146,9 @@ struct RequestBodyTests {
                 completion: .contentProcessed { _ in })
         }
 
-        let timedOut = Flag()
+        let timedOut = Mutex(false)
         let watchdog = DispatchWorkItem {
-            timedOut.raise()
+            timedOut.withLock { $0 = true }
             connection.forceCancel()
         }
         queue.asyncAfter(
@@ -165,7 +169,7 @@ struct RequestBodyTests {
         }
         // The watchdog fires on a stalled *and* on a slow-but-alive exchange, so
         // what makes this a failure is that it fired, not that nothing arrived.
-        guard !timedOut.lower() else {
+        guard !timedOut.withLock({ $0 }) else {
             throw TimedOut(waitingFor: "a reply after sending \(pieces.count) piece(s)")
         }
         return String(decoding: received, as: UTF8.self)

@@ -77,7 +77,7 @@ struct DashboardEndpointTests {
         /// directory is on the boot volume, so it is referenced unless told
         /// otherwise.
         func fill(materialized: Bool = false) async throws {
-            try cache.prepare()
+            try await cache.prepare()
             let folder = directory.appending(path: "photos").path(percentEncoded: false)
             let source = try sources.add(kind: .folder, locator: folder)
             _ = await sources.refresh(source)
@@ -105,6 +105,17 @@ struct DashboardEndpointTests {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             return try decoder.decode(DashboardEndpoint.Snapshot.self, from: bytes)
+        }
+
+        /// How many resized copies are on disk and in the database.
+        ///
+        /// **Waited for, not assumed.** Keeping a copy became `async` when
+        /// `PhotoStore` became an actor, so the endpoint hands the write to a
+        /// task of its own: the response goes out before the row exists, and a
+        /// page that asks again immediately would sometimes miss the copy and
+        /// resize twice.
+        var copies: Int {
+            (try? sources.database.scalarInt("SELECT COUNT(*) FROM resized;")) ?? 0
         }
 
         static func write(to url: URL) throws {
@@ -288,7 +299,7 @@ struct DashboardEndpointTests {
         let library = try Library(photographs: 3)
         try await library.fill()
         let snapshot = try await library.snapshot()
-        let status = try library.cache.status()
+        let status = try await library.cache.status()
 
         #expect(snapshot.photos == 3)
         #expect(snapshot.cached == status.residentCount)
@@ -305,7 +316,7 @@ struct DashboardEndpointTests {
             try await library.snapshot().libraryChanges
                 == [.init(source: source.spokenName, sourceRemoved: false, added: 3, removed: 0)])
 
-        try library.sources.remove(id: source.id)
+        try await library.sources.remove(id: source.id)
 
         #expect(
             try await library.snapshot().libraryChanges
@@ -445,7 +456,7 @@ struct DashboardEndpointTests {
     /// Read at a fixed moment, because a row's life is measured from when it
     /// was reported.
     @Test("The errors recorded are in the reading, one per kind, most recent first")
-    func errorsAreReported() throws {
+    func errorsAreReported() async throws {
         let library = try Library()
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         library.errors.record(
@@ -456,7 +467,7 @@ struct DashboardEndpointTests {
             kind: "cache.timed-out.source-6", "CACHE: b.jpg did not answer in 60s",
             at: start.addingTimeInterval(10))
 
-        let errors = try library.dashboard.snapshot(now: start.addingTimeInterval(10)).errors
+        let errors = try await library.dashboard.snapshot(now: start.addingTimeInterval(10)).errors
         #expect(errors.compactMap(\.kind) == ["cache.timed-out.source-6", "source.empty.source-2"])
         #expect(errors.map(\.count) == [2, 1])
         #expect(errors.first?.message == "CACHE: b.jpg did not answer in 60s")
@@ -464,7 +475,7 @@ struct DashboardEndpointTests {
     }
 
     @Test("An error not seen for a minute is gone from the reading, and a standing condition is not")
-    func errorsClear() throws {
+    func errorsClear() async throws {
         let library = try Library()
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         library.errors.record(
@@ -473,7 +484,7 @@ struct DashboardEndpointTests {
             kind: "source.unavailable.source-2", "source 2 unavailable: not mounted",
             lasting: .standing, at: start)
 
-        let errors = try library.dashboard.snapshot(now: start.addingTimeInterval(61)).errors
+        let errors = try await library.dashboard.snapshot(now: start.addingTimeInterval(61)).errors
         #expect(errors.compactMap(\.kind) == ["source.unavailable.source-2"])
         #expect(errors.first?.standing == true)
     }
@@ -562,11 +573,12 @@ struct DashboardEndpointTests {
             return try PhotoRenderer.render(contentsOf: original, fitting: side, by: side, as: .jpeg)
         }
 
-        for _ in 0..<2 {
+        for pass in 0..<2 {
             let response = await dashboard.route(
                 try get("\(DashboardEndpoint.thumbnailPath)?photo=\(photo)"))
             #expect(response.status == 200)
             #expect(response.headers["Content-Type"] == "image/jpeg")
+            if pass == 0 { await until({ library.copies >= 1 }, "the thumbnail's copy was written") }
         }
         #expect(resizes.withLock { $0 } == 1)
     }
@@ -579,7 +591,7 @@ struct DashboardEndpointTests {
         try await library.fill(materialized: true)
         _ = try await library.cache.fillCompletely()
         // The originals fit exactly; any copy goes over.
-        let ceiling = try library.cache.bytesOnDisk()
+        let ceiling = try await library.cache.bytesOnDisk()
         library.defaults.set(ceiling, forKey: Preferences.Key.cacheByteCeiling.rawValue)
         let evictions = Mutex<[PhotoCache.EvictionResult]>([])
         var pictures = library.pictures
@@ -592,10 +604,11 @@ struct DashboardEndpointTests {
         #expect(response.status == 200)
         // One pass, which took something. How much depends on the sizes: a
         // copy bigger than the oldest original takes itself too.
+        await until({ evictions.withLock { !$0.isEmpty } }, "the copy was kept and evicted")
         let passes = evictions.withLock { $0 }
         #expect(passes.count == 1)
         #expect(passes.allSatisfy { $0.evicted > 0 })
-        #expect(try library.cache.bytesOnDisk() <= ceiling)
+        await #expect(try library.cache.bytesOnDisk() <= ceiling)
     }
 
     @Test("A dashboard thumbnail that takes the cache over its ceiling evicts, and says so")
@@ -604,7 +617,7 @@ struct DashboardEndpointTests {
         try await library.fill(materialized: true)
         _ = try await library.cache.fillCompletely()
         let photo = try #require(try library.cache.queue.peek().first).id
-        let ceiling = try library.cache.bytesOnDisk()
+        let ceiling = try await library.cache.bytesOnDisk()
         library.defaults.set(ceiling, forKey: Preferences.Key.cacheByteCeiling.rawValue)
         let evictions = Mutex<[PhotoCache.EvictionResult]>([])
         var dashboard = library.dashboard
@@ -617,10 +630,11 @@ struct DashboardEndpointTests {
         #expect(response.status == 200)
         // One pass, which took something. How much depends on the sizes: a
         // copy bigger than the oldest original takes itself too.
+        await until({ evictions.withLock { !$0.isEmpty } }, "the copy was kept and evicted")
         let passes = evictions.withLock { $0 }
         #expect(passes.count == 1)
         #expect(passes.allSatisfy { $0.evicted > 0 })
-        #expect(try library.cache.bytesOnDisk() <= ceiling)
+        await #expect(try library.cache.bytesOnDisk() <= ceiling)
     }
 
     /// **A stalled resizer is "not yet", not "never".** Measured 2026-09-16: a
@@ -669,7 +683,7 @@ struct DashboardEndpointTests {
 
         // Evicted, however the fill left it: the bytes go, and the record with them.
         let head = try #require(try library.cache.queue.peek().first)
-        library.store.remove(photoUUID: head.uuid)
+        await library.store.remove(photoUUID: head.uuid)
         try library.cache.releaseResidency(ofPhotos: [head.uuid])
         #expect(await library.dashboard.route(try get("\(path)?photo=\(head.id)")).status == 404)
     }
@@ -725,7 +739,7 @@ struct DashboardEndpointTests {
         library.defaults.set(0, forKey: Preferences.Key.serveWaitSeconds.rawValue)
         // Cold, however the fill left it: the bytes go, and the record with them.
         let head = try #require(try library.cache.queue.peek().first)
-        library.store.remove(photoUUID: head.uuid)
+        await library.store.remove(photoUUID: head.uuid)
         try library.cache.releaseResidency(ofPhotos: [head.uuid])
 
         #expect(

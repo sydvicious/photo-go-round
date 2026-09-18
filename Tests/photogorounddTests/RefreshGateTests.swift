@@ -14,12 +14,12 @@ import Testing
 struct RefreshGateTests {
 
     @Test("A source being walked turns away a second ask for it")
-    func secondAskForTheSameSourceIsDropped() {
+    func secondAskForTheSameSourceIsDropped() async {
         let gate = RefreshGate()
-        #expect(gate.tryEnter(source: 7))
-        #expect(!gate.tryEnter(source: 7))
-        gate.leave(source: 7)
-        #expect(gate.tryEnter(source: 7))
+        #expect(await gate.tryEnter(source: 7))
+        #expect(await !gate.tryEnter(source: 7))
+        await gate.leave(source: 7)
+        #expect(await gate.tryEnter(source: 7))
     }
 
     /// **The reason it is per source and not per pass.**
@@ -28,24 +28,24 @@ struct RefreshGateTests {
     /// A pass-wide gate would do exactly that, which is the opposite of why the
     /// walks run concurrently at all.
     @Test("A slow source does not gate any other source")
-    func oneSourceDoesNotBlockAnother() {
+    func oneSourceDoesNotBlockAnother() async {
         let gate = RefreshGate()
-        #expect(gate.tryEnter(source: 1))
-        #expect(gate.tryEnter(source: 2))
-        #expect(gate.tryEnter(source: 3))
-        #expect(gate.count == 3)
+        #expect(await gate.tryEnter(source: 1))
+        #expect(await gate.tryEnter(source: 2))
+        #expect(await gate.tryEnter(source: 3))
+        #expect(await gate.count == 3)
         // The slow one is still walking; the others finish and are askable again.
-        gate.leave(source: 2)
-        #expect(gate.tryEnter(source: 2))
-        #expect(gate.isWalking(source: 1))
+        await gate.leave(source: 2)
+        #expect(await gate.tryEnter(source: 2))
+        #expect(await gate.isWalking(source: 1))
     }
 
     @Test("Leaving a source that was never entered is harmless")
-    func leavingWithoutEnteringIsHarmless() {
+    func leavingWithoutEnteringIsHarmless() async {
         let gate = RefreshGate()
-        gate.leave(source: 42)
-        #expect(gate.count == 0)
-        #expect(gate.tryEnter(source: 42))
+        await gate.leave(source: 42)
+        #expect(await gate.count == 0)
+        #expect(await gate.tryEnter(source: 42))
     }
 
     /// Concurrent asks for one source admit exactly one of them.
@@ -56,7 +56,7 @@ struct RefreshGateTests {
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<64 {
                 group.addTask {
-                    if gate.tryEnter(source: 9) { admitted.withLock { $0 += 1 } }
+                    if await gate.tryEnter(source: 9) { admitted.withLock { $0 += 1 } }
                 }
             }
         }

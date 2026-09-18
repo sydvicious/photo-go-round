@@ -257,7 +257,7 @@ struct SourceEndpoint {
         case ("PATCH", .some(let uuid)):
             return await change(request, uuid: uuid, store: store, version: version)
         case ("DELETE", .some(let uuid)):
-            return remove(request, uuid: uuid, store: store)
+            return await remove(request, uuid: uuid, store: store)
         default:
             return answer(
                 request,
@@ -437,7 +437,7 @@ struct SourceEndpoint {
 
         do {
             guard let source = try store.source(uuid: uuid) else { return missing(request, uuid) }
-            let updated = try store.setRecursive(recursive, for: source, in: preferences)
+            let updated = try await store.setRecursive(recursive, for: source, in: preferences)
             return answer(
                 request, json(await wire(updated, store: store, version: version)),
                 detail: "\(source.locator) recursive=\(recursive)")
@@ -498,10 +498,10 @@ struct SourceEndpoint {
 
     private func remove(
         _ request: HTTPListener.Request, uuid: String, store: SourceStore
-    ) -> HTTPListener.Response {
+    ) async -> HTTPListener.Response {
         do {
             guard let source = try store.source(uuid: uuid) else { return missing(request, uuid) }
-            try store.remove(source, from: preferences)
+            try await store.remove(source, from: preferences)
             return answer(request, .noContent(), detail: "removed \(source.locator)")
         } catch {
             return answer(request, failed(error), detail: "could not remove the source")

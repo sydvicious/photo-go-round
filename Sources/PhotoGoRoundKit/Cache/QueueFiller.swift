@@ -27,10 +27,11 @@ import PhotoGoRoundAgentAPI
 /// needs are injected as closures the host implements with its own. What is left
 /// is pure policy, which is what makes every rule above assertable with two mocks
 /// and no disk.
-public final class QueueFiller: @unchecked Sendable {
+public actor QueueFiller {
     private let isShort: @Sendable () -> Bool
     private let produce: @Sendable () async throws -> Bool
-    private let lock = NSLock()
+    /// **An actor, not a lock.** Syd, 2026-09-17: "I flatout don't want
+    /// NSLocks". `Agent Performance Overhaul.md`, Phase 5.
     private var running = false
 
     public init(
@@ -106,20 +107,13 @@ public final class QueueFiller: @unchecked Sendable {
         return Round(produced: produced, exhausted: false, skipped: false)
     }
 
-    /// Claiming the round, in a non-async method because `NSLock` is unavailable
-    /// from an async context — holding one across a suspension is exactly the bug
-    /// that restriction exists to prevent.
     private func beginRound() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
         guard !running else { return false }
         running = true
         return true
     }
 
     private func endRound() {
-        lock.lock()
         running = false
-        lock.unlock()
     }
 }

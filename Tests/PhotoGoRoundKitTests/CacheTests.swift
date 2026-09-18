@@ -38,7 +38,7 @@ struct CacheTests {
                 sources: store,
                 queueSize: queueSize
             )
-            try cache.prepare()
+            try await cache.prepare()
 
             source = try store.add(kind: .folder, locator: folder.path, recursive: true)
             await store.refresh(source)
@@ -73,7 +73,7 @@ struct CacheTests {
     }
 
     @Test("The cache directory is kept out of backups")
-    func cacheIsExcludedFromBackup() throws {
+    func cacheIsExcludedFromBackup() async throws {
         let root = TemporaryFolder(name: "pgr-cache-backup")
         let library = try TestLibrary()
         let cache = PhotoCache(
@@ -81,7 +81,7 @@ struct CacheTests {
             root: root.url.appending(path: "cache"),
             sources: SourceStore(database: library.database)
         )
-        try cache.prepare()
+        try await cache.prepare()
         let values = try cache.root.resourceValues(forKeys: [.isExcludedFromBackupKey])
         #expect(values.isExcludedFromBackup == true)
     }
@@ -91,15 +91,15 @@ struct CacheTests {
     @Test("Dealing queues a card and fetches nothing")
     func dealingDoesNotFetch() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
-        #expect(try fixture.cache.status().residentCount == 0)
+        await #expect(try fixture.cache.status().residentCount == 0)
 
-        #expect(try fixture.cache.deal())
+        await #expect(try fixture.cache.deal())
 
         // Dealing reads a row and writes a row. The bytes are the queue's
         // business, fetched after the card is on it — see the fetch tests
         // below.
         #expect(try fixture.cache.queue.size() == 1)
-        #expect(try fixture.cache.status().residentCount == 0)
+        await #expect(try fixture.cache.status().residentCount == 0)
     }
 
     // MARK: - The queue fetching its own cards
@@ -107,7 +107,7 @@ struct CacheTests {
     @Test("A dealt card is fetched, and the queue is walked head first")
     func queuedCardsAreFetchedHeadFirst() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png", "c.png"])
-        while try fixture.cache.deal() {}
+        while try await fixture.cache.deal() {}
         let order = try fixture.cache.queue.peek(3).map(\.id)
         #expect(order.count == 3)
 
@@ -123,7 +123,7 @@ struct CacheTests {
 
         // Three originals held, in the order the cards will be shown. The
         // cards kept their places: nothing rejoined, nothing was reordered.
-        #expect(try fixture.cache.status().residentCount == 3)
+        await #expect(try fixture.cache.status().residentCount == 3)
         #expect(try fixture.cache.queue.peek(3).map(\.id) == order)
     }
 
@@ -131,7 +131,7 @@ struct CacheTests {
     func heldCardsAreWalkedPast() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         try await fixture.produceAll()
-        #expect(try fixture.cache.status().residentCount == 2)
+        await #expect(try fixture.cache.status().residentCount == 2)
 
         // Everything queued has bytes: nothing to do, at once.
         #expect(await fixture.cache.fetchQueuedOnce() == .drained)
@@ -140,7 +140,7 @@ struct CacheTests {
     @Test("A card whose fetch fails leaves the queue and keeps its row")
     func failedFetchDropsTheCard() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        while try fixture.cache.deal() {}
+        while try await fixture.cache.deal() {}
         #expect(try fixture.cache.queue.size() == 2)
 
         // The drive goes away before anything is fetched. The provider cannot
@@ -158,13 +158,13 @@ struct CacheTests {
         #expect(try fixture.cache.queue.size() == 1)
         #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 2)
         #expect(try fixture.deck.poolSize() == 2)
-        #expect(try fixture.cache.status().residentCount == 0)
+        await #expect(try fixture.cache.status().residentCount == 0)
     }
 
     @Test("A card whose file is gone from a present source is dropped from the library")
     func absentFileIsRemovedByItsFetch() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        while try fixture.cache.deal() {}
+        while try await fixture.cache.deal() {}
         let head = try #require(try fixture.cache.queue.peek().first)
         fixture.folder.remove(head.externalID)
 
@@ -183,7 +183,7 @@ struct CacheTests {
         var cache = fixture.cache
         let bench = SourceBench(pauseAfter: 1)
         cache.bench = bench
-        while try cache.deal() {}
+        while try await cache.deal() {}
 
         // One timeout benches the source outright.
         bench.failed(fixture.source.id)
@@ -197,19 +197,19 @@ struct CacheTests {
 
         // Nothing fetched, nothing dropped: the cards wait for the bench to end.
         #expect(try cache.queue.size() == 2)
-        #expect(try cache.status().residentCount == 0)
+        await #expect(try cache.status().residentCount == 0)
     }
 
     @Test("Fetching a queued card takes the claim, and finishing releases it")
     func fetchingClaimsAndReleases() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        while try fixture.cache.deal() {}
+        while try await fixture.cache.deal() {}
 
-        let step = fixture.cache.nextQueuedToFetch()
+        let step = await fixture.cache.nextQueuedToFetch()
         guard case .card(let card, _, _) = step else { Issue.record("\(step)"); return }
         // Claimed: a second lane asking for the head gets nothing.
         #expect(try fixture.deck.claim(photoID: card.id) == false)
-        guard case .drained = fixture.cache.nextQueuedToFetch() else {
+        guard case .drained = await fixture.cache.nextQueuedToFetch() else {
             Issue.record("a claimed card was handed to a second lane"); return
         }
 
@@ -224,7 +224,7 @@ struct CacheTests {
         let fixture = try await Fixture(
             photos: ["a.png"],
             settings: CacheSettings(minimumFreeBytes: .max, criticalFreeBytes: .max))
-        while try fixture.cache.deal() {}
+        while try await fixture.cache.deal() {}
         let card = try #require(try fixture.cache.queue.peek().first)
 
         let answer = await fixture.cache.fetch(card)
@@ -243,7 +243,7 @@ struct CacheTests {
         #expect(Set(try fixture.cache.queue.peek(10).map(\.id)).count == 3)
 
         // Everything it has is queued, so there is nothing left to deal.
-        #expect(try fixture.cache.deal() == false)
+        await #expect(try fixture.cache.deal() == false)
     }
 
     @Test("A volume at its floor stops the cache, and dealing is unaffected")
@@ -259,9 +259,9 @@ struct CacheTests {
         // The deck deals every available photograph now, so a card is dealt
         // whatever the disk is doing; what the floor stops is the fetch behind
         // it, before any credit arithmetic and before the queue is looked at.
-        #expect(try fixture.cache.deal() == true)
+        await #expect(try fixture.cache.deal() == true)
         #expect(await fixture.cache.fetchQueuedOnce() == .blocked)
-        #expect(try fixture.cache.status().residentCount == 0)
+        await #expect(try fixture.cache.status().residentCount == 0)
         #expect(try fixture.cache.queue.size() == 1, "a blocked fetch is not a failed one")
     }
 
@@ -269,7 +269,7 @@ struct CacheTests {
     func disabledSourcesAreNotDealt() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         try fixture.store.setEnabled(false, for: fixture.source.id)
-        #expect(try fixture.cache.deal() == false)
+        await #expect(try fixture.cache.deal() == false)
     }
 
     @Test("A file that vanished before its download leaves the pool")
@@ -329,7 +329,7 @@ struct CacheTests {
         }
         #expect(served == ["keep.png"])
         #expect(try fixture.deck.poolSize() == 1)
-        #expect(try fixture.cache.indexCache().discarded == 0)
+        await #expect(try fixture.cache.indexCache().discarded == 0)
     }
 
     @Test("Existence is three-valued, and offline is not deletion")
@@ -367,7 +367,7 @@ struct CacheTests {
         // of reachability, and reachability is not part of the deal at all.
         #expect(try await fixture.cache.serve() != nil)
         #expect(try fixture.deck.poolSize() == 3)
-        #expect(try fixture.cache.status().residentCount == 3)
+        await #expect(try fixture.cache.status().residentCount == 3)
     }
 
     // MARK: - Eviction
@@ -426,13 +426,14 @@ struct CacheTests {
             settings: CacheSettings(byteCeiling: 400), sources: fixture.store,
             store: fixture.cache.store
         )
-        let result = try tight.evictIfNeeded()
+        let result = try await tight.evictIfNeeded()
         #expect(result.evicted == 6)
 
         // The four most recently seen survive. **Nothing is queued-protected**:
         // every one of these is on the deck, and the ceiling is reached anyway.
-        let held = uuids.filter {
-            fixture.cache.store.url(forPhoto: $0) != nil
+        var held: [String] = []
+        for uuid in uuids where await fixture.cache.store.url(forPhoto: uuid) != nil {
+            held.append(uuid)
         }
         #expect(held == Array(uuids.suffix(4)))
     }
@@ -469,10 +470,10 @@ struct CacheTests {
             settings: CacheSettings(byteCeiling: 200), sources: fixture.store,
             store: fixture.cache.store
         )
-        #expect(try tight.evictIfNeeded().evicted > 0)
+        await #expect(try tight.evictIfNeeded().evicted > 0)
 
         #expect(
-            fixture.cache.store.url(forPhoto: fresh) != nil,
+            await fixture.cache.store.url(forPhoto: fresh) != nil,
             "the cache evicted the photograph it had just paid for")
     }
 
@@ -519,10 +520,10 @@ struct CacheTests {
             settings: CacheSettings(byteCeiling: 200), sources: fixture.store,
             store: fixture.cache.store
         )
-        #expect(try tight.evictIfNeeded().evicted > 0)
+        await #expect(try tight.evictIfNeeded().evicted > 0)
 
         #expect(
-            fixture.cache.store.url(forPhoto: justFetched) != nil,
+            await fixture.cache.store.url(forPhoto: justFetched) != nil,
             "evicted the photograph it had just paid to download, before showing it once")
     }
 
@@ -545,10 +546,10 @@ struct CacheTests {
             settings: CacheSettings(byteCeiling: 300), sources: fixture.store,
             store: fixture.cache.store
         )
-        let result = try tighter.evictIfNeeded()
+        let result = try await tighter.evictIfNeeded()
 
         #expect(result.evicted > 0)
-        #expect(fixture.cache.store.totals.byteCount <= 300)
+        #expect(await fixture.cache.store.totals.byteCount <= 300)
     }
 
     @Test("The byte ceiling evicts early even when the count is fine")
@@ -559,15 +560,15 @@ struct CacheTests {
         )
         try await fixture.produceAll()
         try fixture.library.database.run("DELETE FROM queue;")
-        #expect(try fixture.cache.status().bytesOnDisk == 1000)
+        await #expect(try fixture.cache.status().bytesOnDisk == 1000)
 
         let capped = PhotoCache(
             database: fixture.library.database, root: fixture.cache.root,
             settings: CacheSettings(byteCeiling: 450), sources: fixture.store,
             store: fixture.cache.store
         )
-        #expect(try capped.evictIfNeeded().evicted > 0)
-        #expect(try capped.status().bytesOnDisk <= 450)
+        await #expect(try capped.evictIfNeeded().evicted > 0)
+        await #expect(try capped.status().bytesOnDisk <= 450)
     }
 
     // MARK: - Orphaned bytes
@@ -586,13 +587,13 @@ struct CacheTests {
                 "SELECT uuid FROM photo WHERE id = :id;", ["id": .int(doomed)]
             ) { try $0.string("uuid") }
         )
-        let held = try #require(fixture.cache.store.url(forPhoto: uuid))
+        let held = try #require(await fixture.cache.store.url(forPhoto: uuid))
 
-        #expect(try fixture.cache.remove(doomed).count == 1)
+        await #expect(try fixture.cache.remove(doomed).count == 1)
         #expect(!FileManager.default.fileExists(atPath: held.path(percentEncoded: false)))
         // And it left the queue by cascade.
         #expect(try fixture.cache.queue.size() == 1)
-        #expect(try fixture.cache.indexCache().discarded == 0)
+        await #expect(try fixture.cache.indexCache().discarded == 0)
     }
 
     @Test("A crashed download's staging leftovers are reclaimed at the next launch")
@@ -608,7 +609,7 @@ struct CacheTests {
         let leftover = staging.appending(path: "\(UUID().uuidString.lowercased()).jpg")
         try Data(repeating: 0xFF, count: 64).write(to: leftover)
 
-        try fixture.cache.prepare()  // the next launch
+        try await fixture.cache.prepare()  // the next launch
         #expect(!FileManager.default.fileExists(atPath: leftover.path(percentEncoded: false)))
     }
 
@@ -625,10 +626,10 @@ struct CacheTests {
             .appending(path: "\(UUID().uuidString).png")
         try Data(count: 250).write(to: stray)
 
-        let result = try fixture.cache.indexCache()
+        let result = try await fixture.cache.indexCache()
         #expect(result.discarded == 1)
         #expect(!FileManager.default.fileExists(atPath: stray.path(percentEncoded: false)))
-        #expect(try fixture.cache.status().residentCount == 2)
+        await #expect(try fixture.cache.status().residentCount == 2)
     }
 
     @Test("Bytes that vanished are noticed at the next rebuild, not served")
@@ -641,14 +642,14 @@ struct CacheTests {
                 try $0.string("uuid")
             }
         )
-        let held = try #require(fixture.cache.store.url(forPhoto: uuid))
+        let held = try #require(await fixture.cache.store.url(forPhoto: uuid))
         try FileManager.default.removeItem(at: held)
 
         // The index is built *from* the disk, so it cannot claim what is not
         // there. The queue keeps both cards: one whose bytes went missing is a
         // card to fetch again, not a card to throw away.
-        try fixture.cache.indexCache()
-        #expect(try fixture.cache.status().residentCount == 1)
+        try await fixture.cache.indexCache()
+        await #expect(try fixture.cache.status().residentCount == 1)
         #expect(try fixture.cache.queue.size() == 2)
     }
 
@@ -663,7 +664,7 @@ struct CacheTests {
         try await fixture.produceAll()
         let dealt = try fixture.cache.queue.size()
         #expect(dealt == 2)
-        #expect(try fixture.cache.status().residentCount == 2)
+        await #expect(try fixture.cache.status().residentCount == 2)
 
         // A restart rebuilds the byte index from the disk, and must leave the
         // queue alone. Dropping every card whose bytes are absent discards
@@ -671,7 +672,7 @@ struct CacheTests {
         // the cache queue never gets a turn — it is emptied out of the deck at
         // every launch and refilled with the referenced cards that never needed
         // bytes in the first place.
-        try fixture.cache.indexCache()
+        try await fixture.cache.indexCache()
         #expect(try fixture.cache.queue.size() == dealt)
     }
 
@@ -682,7 +683,7 @@ struct CacheTests {
         let fixture = try await Fixture(photos: ["a.png", "b.png"], materialized: false)
         try await fixture.produceAll()
 
-        let status = try fixture.cache.status()
+        let status = try await fixture.cache.status()
         #expect(status.referencedCount == 2)
         #expect(status.residentCount == 0)
         #expect(status.bytesOnDisk == 0)
@@ -690,7 +691,7 @@ struct CacheTests {
         // the path to, the cache entry is the pointer.
         #expect(try fixture.cache.queue.size() == 2)
         #expect(try await fixture.cache.serve() != nil)
-        #expect(try fixture.cache.evictIfNeeded().evicted == 0)
+        await #expect(try fixture.cache.evictIfNeeded().evicted == 0)
     }
 
     // MARK: - Clearing
@@ -702,9 +703,9 @@ struct CacheTests {
         _ = try await fixture.cache.serve()
 
         let seqBefore = try fixture.deck.currentDealSeq()
-        let result = try fixture.cache.clear(.everything)
+        let result = try await fixture.cache.clear(.everything)
         #expect(result.cleared == 3)
-        #expect(try fixture.cache.status().residentCount == 0)
+        await #expect(try fixture.cache.status().residentCount == 0)
         #expect(try fixture.deck.currentDealSeq() == seqBefore)
 
         // **The rows are all still there, and so is the pool.** Clearing is a
@@ -728,14 +729,14 @@ struct CacheTests {
         await fixture.store.refresh(other)
         try fixture.library.database.run("UPDATE photo SET storage = 'materialized';")
         try await fixture.produceAll()
-        #expect(try fixture.cache.status().residentCount == 5)
+        await #expect(try fixture.cache.status().residentCount == 5)
 
         // One directory removal rather than thousands of unlinks, which is the
         // whole reason the cache layout has a per-source level.
-        let result = try fixture.cache.clear(.source(fixture.source.id))
+        let result = try await fixture.cache.clear(.source(fixture.source.id))
         #expect(result.cleared == 2)
         #expect(result.bytesFreed == 200)
-        #expect(try fixture.cache.status().residentCount == 3, "the other source lost bytes too")
+        await #expect(try fixture.cache.status().residentCount == 3, "the other source lost bytes too")
 
         // Rows and shuffle history are untouched: clearing is a storage
         // operation, never a shuffle operation, and since 2026-09-05 the pool
@@ -759,11 +760,11 @@ struct CacheTests {
 
         // The variant to reach for first: photographs whose source is gone can
         // never be re-fetched, so this frees space at zero future cost.
-        let cost = try fixture.cache.costOfClearing(.unavailableSources)
+        let cost = try await fixture.cache.costOfClearing(.unavailableSources)
         #expect(cost.costsNothingToRefetch)
         #expect(cost.bytesFreed == 200)
 
-        let result = try fixture.cache.clear(.unavailableSources)
+        let result = try await fixture.cache.clear(.unavailableSources)
         #expect(result.cleared == 2)
         #expect(result.bytesFreed == 200)
         // The reachable source keeps everything. The cleared ones kept their
@@ -771,7 +772,7 @@ struct CacheTests {
         // They do leave the pool, though — since 2026-09-07 an unavailable
         // source deals only what is held, and nothing of it is held now. They
         // come back the moment the source does. See `Missing Albums Plan.md`.
-        #expect(try fixture.cache.status().residentCount == 2)
+        await #expect(try fixture.cache.status().residentCount == 2)
         #expect(try fixture.library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 4)
         #expect(try fixture.deck.poolSize() == 2)
     }
@@ -783,7 +784,7 @@ struct CacheTests {
 
         // For materialized photographs the price is a re-download apiece; the
         // command and the UI both say so before confirming.
-        let cost = try fixture.cache.costOfClearing(.everything)
+        let cost = try await fixture.cache.costOfClearing(.everything)
         #expect(cost.needingRefetch == 3)
         #expect(cost.bytesFreed == 300)
         #expect(cost.referencedAndFree == 0)
@@ -797,7 +798,7 @@ struct CacheTests {
         let fixture = try await Fixture(photos: ["a.png", "b.png"], materialized: false)
         try await fixture.produceAll()
 
-        let cost = try fixture.cache.costOfClearing(.everything)
+        let cost = try await fixture.cache.costOfClearing(.everything)
         #expect(cost.referencedAndFree == 2)
         #expect(cost.needingRefetch == 0)
         #expect(cost.bytesFreed == 0)
@@ -814,7 +815,7 @@ struct CacheTests {
         let fixture = try await Fixture(photos: (0..<10).map { "photo-\($0).png" })
         try await fixture.produceAll()
         try fixture.library.database.run("DELETE FROM queue;")
-        #expect(try fixture.cache.status().bytesOnDisk == 1000)
+        await #expect(try fixture.cache.status().bytesOnDisk == 1000)
 
         // The ceiling sits above what is held, so nothing would go on the
         // ordinary path — and `criticalFreeBytes: .max` makes every volume
@@ -829,10 +830,10 @@ struct CacheTests {
         // Halved: running out of disk degrades into a smaller cache rather
         // than a full volume, which on macOS is a bad day for everything else
         // running.
-        let result = try starved.evictIfNeeded()
+        let result = try await starved.evictIfNeeded()
         #expect(result.evicted > 0)
         #expect(result.ceilingHalved, "the pass did not say it was aiming at half the ceiling")
-        #expect(try starved.status().bytesOnDisk <= 750)
+        await #expect(try starved.status().bytesOnDisk <= 750)
     }
 
     @Test("With free space in hand, the ceiling is the whole policy")
@@ -849,9 +850,9 @@ struct CacheTests {
                 byteCeiling: 1500, minimumFreeBytes: 0, criticalFreeBytes: 0),
             sources: fixture.store, store: fixture.cache.store
         )
-        let result = try healthy.evictIfNeeded()
+        let result = try await healthy.evictIfNeeded()
         #expect(result.evicted == 0)
         #expect(!result.ceilingHalved)
-        #expect(try healthy.status().bytesOnDisk == 1000)
+        await #expect(try healthy.status().bytesOnDisk == 1000)
     }
 }

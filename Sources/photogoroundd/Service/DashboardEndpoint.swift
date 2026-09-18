@@ -148,7 +148,7 @@ struct DashboardEndpoint {
         case Self.pagePath + "/" + DashboardPage.Asset.js.rawValue:
             return asset(.js)
         case Self.path:
-            return answer()
+            return await answer()
         case Self.thumbnailPath:
             return await thumbnail(request)
         default:
@@ -173,10 +173,10 @@ struct DashboardEndpoint {
             body: .data(data))
     }
 
-    private func answer() -> HTTPListener.Response {
+    private func answer() async -> HTTPListener.Response {
         let taken: Snapshot
         do {
-            taken = try snapshot()
+            taken = try await snapshot()
         } catch {
             Log.deck.error(
                 kind: "dashboard.library-unavailable", "dashboard could not read the library: \(error)")
@@ -203,11 +203,11 @@ struct DashboardEndpoint {
     /// of its own, so a changed ceiling or queue size is in the next reading.
     /// How soon after the write depends on `cfprefsd`, which the agent's loop
     /// makes re-read on the doorbell and every thirty seconds regardless.
-    func snapshot(now: Date = Date()) throws -> Snapshot {
+    func snapshot(now: Date = Date()) async throws -> Snapshot {
         let database = try Database(path: databasePath)
         try Migrator.migrate(database)
         let deck = Deck(database: database)
-        let status = try makeCache(database: database, deck: deck).status()
+        let status = try await makeCache(database: database, deck: deck).status()
         let photos = try deck.stats(settings: preferences.deckSettings).totalPhotos
         // Named as the source is called now; a source no longer in the table
         // by what it was called when it went, or by its row id when it went
@@ -284,7 +284,7 @@ struct DashboardEndpoint {
                 format: .jpeg, root: cacheRoot, database: database)
             uuid = try database.first(
                 "SELECT uuid FROM photo WHERE id = :id;", ["id": .int(photo)], { try $0.string("uuid") })
-            url = try makeCache(database: database, deck: Deck(database: database))
+            url = try await makeCache(database: database, deck: Deck(database: database))
                 .residentURL(forPhoto: photo)
         } catch {
             Log.deck.error(
@@ -322,15 +322,22 @@ struct DashboardEndpoint {
                 outcome = try await Deadline.run(within: resizeBudget) {
                     try await resizer.run(ticket) {
                         let rendered = try resize(url, Self.thumbnailSize)
-                        // Kept on the resizer's thread, like a picture request's.
-                        do {
-                            try place.open().keep(
-                                rendered, photoID: photo, photoUUID: uuid,
-                                boxWidth: Self.thumbnailSize, boxHeight: Self.thumbnailSize)
-                        } catch {
-                            Log.cache.error(
-                                kind: "cache.resized-copy-not-kept",
-                                "dashboard thumbnail of photo \(photo) was not kept: \(error)")
+                        // **Handed on rather than written here.** Keeping a copy
+                        // became `async` when `PhotoStore` became an actor, and
+                        // the resizer's work is synchronous by design — one
+                        // resize at a time. A task of its own keeps the copy,
+                        // which also holds for a resize nobody is waiting for
+                        // any more: it still earns its copy.
+                        Task {
+                            do {
+                                try await place.open().keep(
+                                    rendered, photoID: photo, photoUUID: uuid,
+                                    boxWidth: Self.thumbnailSize, boxHeight: Self.thumbnailSize)
+                            } catch {
+                                Log.cache.error(
+                                    kind: "cache.resized-copy-not-kept",
+                                    "dashboard thumbnail of photo \(photo) was not kept: \(error)")
+                            }
                         }
                         return rendered
                     }

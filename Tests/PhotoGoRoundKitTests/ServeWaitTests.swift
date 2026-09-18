@@ -104,7 +104,7 @@ struct ServeWaitTests {
             cache = PhotoCache(
                 database: library.database, root: directory.appending(path: "cache"),
                 sources: store, store: bytes)
-            try cache.prepare()
+            try await cache.prepare()
 
             source = try store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
@@ -120,9 +120,9 @@ struct ServeWaitTests {
         func cleanUp() { try? FileManager.default.removeItem(at: directory) }
 
         @discardableResult
-        func dealAll() throws -> Int {
+        func dealAll() async throws -> Int {
             var dealt = 0
-            while try cache.deal() { dealt += 1 }
+            while try await cache.deal() { dealt += 1 }
             return dealt
         }
 
@@ -178,7 +178,7 @@ struct ServeWaitTests {
         // starved this to six seconds and failed it for nothing.
         var fixture = try await Fixture(photos: ["a.png"], wait: .seconds(30))
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         let clock = ContinuousClock()
         let started = clock.now
@@ -198,12 +198,12 @@ struct ServeWaitTests {
     func timeoutDropsTheHeadAndTakesAWarmCard() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"], wait: .milliseconds(300))
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
         try await fixture.cache.fetchAllQueued()
 
         // Make the head cold again: its bytes go, and the record with them.
         let head = try #require(fixture.head)
-        fixture.bytes.remove(photoUUID: head.uuid)
+        await fixture.bytes.remove(photoUUID: head.uuid)
         try fixture.cache.releaseResidency(ofPhotos: [head.uuid])
 
         let clock = ContinuousClock()
@@ -226,7 +226,7 @@ struct ServeWaitTests {
     func timeoutWithNothingWarm() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"], wait: .milliseconds(200))
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         #expect(try await fixture.cache.serve() == nil)
 
@@ -251,7 +251,7 @@ struct ServeWaitTests {
         let cold = (1...6).map { "cold\($0).png" }
         let fixture = try await Fixture(photos: cold + ["warm.png"], wait: .milliseconds(200))
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         // Bytes go to whichever card the deck put *last*, so that every other
         // card stands between the request and it. Which photograph that is is
@@ -285,7 +285,7 @@ struct ServeWaitTests {
     func droppingAColdCardLeavesTheClaimAlone() async throws {
         let fixture = try await Fixture(photos: ["a.png"], wait: .milliseconds(200))
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         // The claim a lane takes before it fetches. Serving is about to drop
         // the card out from under that fetch.
@@ -310,7 +310,7 @@ struct ServeWaitTests {
         defer { fixture.cleanUp() }
         let bench = SourceBench(pauseAfter: 1)
         fixture.cache.bench = bench
-        try fixture.dealAll()
+        try await fixture.dealAll()
         bench.failed(fixture.source.id)
 
         let clock = ContinuousClock()
@@ -330,7 +330,7 @@ struct ServeWaitTests {
         defer { fixture.cleanUp() }
         let kicks = Mutex(0)
         fixture.cache.ensureFetching = { kicks.withLock { $0 += 1 } }
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         _ = try await fixture.cache.serve()
 
@@ -341,7 +341,7 @@ struct ServeWaitTests {
     func fetchFailingMidWaitMovesOn() async throws {
         var fixture = try await Fixture(photos: ["a.png", "b.png"], wait: .seconds(10))
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
         // The head's file is gone before anything fetches it: the fetch fails,
         // the source confirms it absent, and the row and card go together.
         let head = try #require(fixture.head)
@@ -368,7 +368,7 @@ struct ServeWaitTests {
     func zeroWaitNeverWaits() async throws {
         let fixture = try await Fixture(photos: ["a.png"], wait: .zero)
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         #expect(try await fixture.cache.serve() == nil)
 
@@ -388,7 +388,7 @@ struct ServeWaitTests {
     func warmHeadDoesNotWait() async throws {
         let fixture = try await Fixture(photos: ["a.png"], wait: .seconds(10))
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
         try await fixture.cache.fetchAllQueued()
 
         let clock = ContinuousClock()
@@ -428,13 +428,13 @@ struct ServeWaitTests {
         let dealt = Dealt()
         fixture.cache.dealLookedUp = { dealt.record($0) }
 
-        #expect(try fixture.dealAll() == 2)
+        await #expect(try fixture.dealAll() == 2)
         #expect(dealt.all == [.miss, .miss])
 
         // Fetched, then dealt again: both originals are here now.
         try await fixture.cache.fetchAllQueued()
         try fixture.library.database.run("DELETE FROM queue;")
-        #expect(try fixture.dealAll() == 2)
+        await #expect(try fixture.dealAll() == 2)
         #expect(dealt.all == [.miss, .miss, .hit, .hit])
     }
 
@@ -445,7 +445,7 @@ struct ServeWaitTests {
         let dealt = Dealt()
         fixture.cache.dealLookedUp = { dealt.record($0) }
 
-        #expect(try fixture.dealAll() == 1)
+        await #expect(try fixture.dealAll() == 1)
         #expect(dealt.all.isEmpty)
     }
 
@@ -456,7 +456,7 @@ struct ServeWaitTests {
     func referencedIsNotALookup() async throws {
         let fixture = try await Fixture(photos: ["a.png"], wait: .seconds(10), materialized: false)
         defer { fixture.cleanUp() }
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         let served = try #require(try await fixture.cache.serve())
 

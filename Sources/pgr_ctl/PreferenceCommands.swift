@@ -26,7 +26,7 @@ enum PreferenceCommands {
     /// why this is a flag rather than a formatting choice.
     static func get(
         key: String?, showDefaults: Bool, environment: MacHostEnvironment
-    ) throws {
+    ) async throws {
         let preferences = environment.preferences
         let stored = preferences.all()
 
@@ -66,7 +66,7 @@ enum PreferenceCommands {
         return preferences.effectiveValue(for: key) ?? stored[key.rawValue] ?? ""
     }
 
-    static func set(key: String, value: String, environment: MacHostEnvironment) throws {
+    static func set(key: String, value: String, environment: MacHostEnvironment) async throws {
         guard let match = Preferences.allKeys.first(where: { $0.rawValue == key }) else {
             Console.failure("unknown preference \(key). `pgr_ctl get` lists them.")
             throw ExitCode(1)
@@ -130,7 +130,7 @@ enum LogCommand {
             : ["show", "--predicate", predicate, "--last", last, "--info", "--style", "compact"]
     }
 
-    static func run(follow: Bool, last: String) throws {
+    static func run(follow: Bool, last: String) async throws {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/log")
         process.arguments = arguments(follow: follow, last: last)

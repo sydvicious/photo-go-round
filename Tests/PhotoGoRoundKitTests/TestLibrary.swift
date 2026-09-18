@@ -235,7 +235,7 @@ extension PhotoCache {
     @discardableResult
     func fillCompletely(limit: Int = 500) async throws -> Int {
         var dealt = 0
-        while dealt < limit, try deal() { dealt += 1 }
+        while dealt < limit, try await deal() { dealt += 1 }
         try await fetchAllQueued(limit: limit)
         return try queue.size()
     }

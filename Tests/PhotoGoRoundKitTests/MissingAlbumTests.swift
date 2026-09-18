@@ -57,7 +57,7 @@ struct MissingAlbumTests {
             cache = PhotoCache(
                 database: library.database, root: cacheRoot.url.appending(path: "cache"),
                 sources: store, store: bytes)
-            try cache.prepare()
+            try await cache.prepare()
 
             source = try store.add(kind: .photosCollection, locator: album)
             _ = await store.refresh(source)
@@ -68,7 +68,7 @@ struct MissingAlbumTests {
         /// Deals both cards and fetches exactly one, so the queue holds one
         /// warm card and one cold — the state a running agent is always in.
         func dealAndHoldOne() async throws -> Int64 {
-            while try cache.deal() {}
+            while try await cache.deal() {}
             guard case .fetched = await cache.fetchQueuedOnce() else {
                 throw Failure("the head card was not fetched")
             }

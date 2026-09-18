@@ -51,7 +51,7 @@ struct SourceStateTests {
             // itself is `ServeWaitTests`' subject.
             built.serveWait = .milliseconds(200)
             cache = built
-            try cache.prepare()
+            try await cache.prepare()
 
             source = try store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
@@ -78,7 +78,7 @@ struct SourceStateTests {
             try FileManager.default.removeItem(at: folder.url)
         }
 
-        func reread() throws -> Source {
+        func reread() async throws -> Source {
             try #require(try store.source(id: source.id))
         }
 
@@ -89,7 +89,9 @@ struct SourceStateTests {
         var pooled: Int {
             (try? library.database.scalarInt("SELECT COUNT(*) FROM photo;")) ?? 0
         }
-        var held: Int64 { (try? cache.status())?.bytesOnDisk ?? 0 }
+        var held: Int64 {
+            get async { (try? await cache.status())?.bytesOnDisk ?? 0 }
+        }
 
         /// Everything the queue will give up, in order.
         func serveEverything() async throws -> [String] {
@@ -104,7 +106,7 @@ struct SourceStateTests {
     @Test("A folder that is there is available")
     func availableIsAvailable() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        let source = try fixture.reread()
+        let source = try await fixture.reread()
         #expect(await FolderSourceProvider().availability(of: source) == .available)
     }
 
@@ -112,7 +114,7 @@ struct SourceStateTests {
     func unmountedIsOffline() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
         try fixture.goOffline()
-        let source = try fixture.reread()
+        let source = try await fixture.reread()
         #expect(
             await FolderSourceProvider().availability(of: source)
                 == .offline(reason: "volume not mounted"))
@@ -122,7 +124,7 @@ struct SourceStateTests {
     func deletedIsGone() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
         try fixture.goAway()
-        let source = try fixture.reread()
+        let source = try await fixture.reread()
         #expect(
             await FolderSourceProvider().availability(of: source)
                 == .gone(reason: "no longer at this path"))
@@ -158,7 +160,7 @@ struct SourceStateTests {
         let fixture = try await Fixture(photos: ["a.png"])
         // The bytes are evicted while the rows stay, which is the ordinary
         // outcome of the cache being at its ceiling.
-        _ = fixture.bytes.removeAll()
+        _ = await fixture.bytes.removeAll()
 
         #expect(try await fixture.serveEverything().isEmpty)
         // Nothing was deleted: the source is right there and can produce it
@@ -173,18 +175,18 @@ struct SourceStateTests {
     @Test("Offline, and holding a copy: it is served, because that copy is all we have")
     func offlineWithACopyIsServed() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        #expect(fixture.held > 0)
+        #expect(await fixture.held > 0)
         try fixture.goOffline()
 
         #expect(try await fixture.serveEverything().count == 2)
         #expect(fixture.pooled == 2)
-        #expect(fixture.held > 0, "an undock must not cost the bytes we are holding")
+        #expect(await fixture.held > 0, "an undock must not cost the bytes we are holding")
     }
 
     @Test("Offline, holding nothing: skipped, and nothing is deleted")
     func offlineWithNoCopyIsSkipped() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        _ = fixture.bytes.removeAll()
+        _ = await fixture.bytes.removeAll()
         try fixture.goOffline()
 
         #expect(try await fixture.serveEverything().isEmpty)
@@ -199,14 +201,14 @@ struct SourceStateTests {
     @Test("Gone: the rows and the cached bytes are removed, and nothing is served")
     func goneRemovesRowsAndBytes() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
-        #expect(fixture.held > 0)
+        #expect(await fixture.held > 0)
         #expect(fixture.pooled == 2)
 
         try fixture.goAway()
 
         #expect(try await fixture.serveEverything().isEmpty)
         #expect(fixture.pooled == 0, "a source that is gone leaves nothing behind")
-        #expect(fixture.held == 0, "and holding its bytes helps nobody")
+        #expect(await fixture.held == 0, "and holding its bytes helps nobody")
         // The *source* stays. It is in preferences, which is the durable list,
         // and it repopulates if the folder ever comes back.
         #expect(try fixture.store.all().count == 1)

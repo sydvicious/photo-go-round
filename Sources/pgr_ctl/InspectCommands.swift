@@ -14,11 +14,11 @@ enum InspectCommands {
 
     /// The one command to run when something is wrong and you do not yet know
     /// what.
-    static func status(environment: MacHostEnvironment) throws {
-        let context = try Library.context(environment)
+    static func status(environment: MacHostEnvironment) async throws {
+        let context = try await Library.context(environment)
         let preferences = context.preferences
         let stats = try context.deck.stats(settings: preferences.deckSettings)
-        let cache = try context.cache.status()
+        let cache = try await context.cache.status()
         let sources = try context.sources.all()
 
         Console.banner(
@@ -88,8 +88,8 @@ enum InspectCommands {
 
     /// Rows per source, and the two splits that explain everything else: what
     /// is dealable, and what has bytes.
-    static func poolStats(environment: MacHostEnvironment) throws {
-        let context = try Library.context(environment)
+    static func poolStats(environment: MacHostEnvironment) async throws {
+        let context = try await Library.context(environment)
         let sources = try context.sources.all()
         guard !sources.isEmpty else {
             Console.note("no sources, so no pool")
@@ -126,8 +126,8 @@ enum InspectCommands {
     /// is where an id becomes a path, and it is the only place that job belongs.
     static func queuePeek(
         count: Int, all: Bool = false, environment: MacHostEnvironment
-    ) throws {
-        let context = try Library.context(environment)
+    ) async throws {
+        let context = try await Library.context(environment)
         // The whole deck unless a number was asked for. It is twenty cards, so
         // the lot is what somebody looking at it wants; `-n` is for when it is
         // not.
@@ -155,15 +155,15 @@ enum InspectCommands {
     /// done in one thread so you can watch it happen — and it is the only way to
     /// fill a queue with no agent running.
     static func queueFill(rounds: Int, environment: MacHostEnvironment) async throws {
-        let context = try Library.context(environment)
-        try context.cache.prepare()
+        let context = try await Library.context(environment)
+        try await context.cache.prepare()
 
         // Dealing only: a round is a row read and a row written and no bytes
         // move. In the agent every deal kicks the fetcher, which downloads what
         // the queue holds; there is nothing here to stand in for that.
         for round in 1...max(1, rounds) {
             var dealt = 0
-            while try context.cache.deal(settings: context.preferences.deckSettings) {
+            while try await context.cache.deal(settings: context.preferences.deckSettings) {
                 dealt += 1
                 if dealt >= context.preferences.queueSize { break }
             }
@@ -191,7 +191,7 @@ enum InspectCommands {
     /// Read from `cached_at` rather than derived from the pool, because the pool
     /// stopped meaning *held* on 2026-09-05: the deck deals every available
     /// photograph, and how many of those have bytes is a separate fact.
-    private static func heldCount(_ context: Library.Context) -> Int {
+    private static func heldCount(_ context: Library.Context) async -> Int {
         (try? context.database.scalarInt(
             """
             SELECT COUNT(*) FROM photo p
@@ -201,8 +201,8 @@ enum InspectCommands {
             .flatMap { $0 } ?? 0
     }
 
-    static func deckStats(environment: MacHostEnvironment) throws {
-        let context = try Library.context(environment)
+    static func deckStats(environment: MacHostEnvironment) async throws {
+        let context = try await Library.context(environment)
         let stats = try context.deck.stats(settings: context.preferences.deckSettings)
 
         // **The pool is every available photograph**: enabled source, still
@@ -211,7 +211,7 @@ enum InspectCommands {
         // The cache line beneath is the separate fact of how many have bytes.
         Console.note("pool          \(stats.dealablePhotos) dealable of \(stats.totalPhotos)")
         let waiting = (try? context.deck.unheldRemoteCount()) ?? 0
-        Console.note("cache         \(heldCount(context)) held, "
+        Console.note("cache         \(await heldCount(context)) held, "
             + "\(waiting) remote still waiting to be fetched")
         Console.note("window        \(stats.repeatWindow) cards "
             + "(fraction \(context.preferences.deckSettings.repeatWindowFraction))")
@@ -248,9 +248,9 @@ enum InspectCommands {
 
     // MARK: - Cache
 
-    static func cacheStatus(environment: MacHostEnvironment) throws {
-        let context = try Library.context(environment)
-        let status = try context.cache.status()
+    static func cacheStatus(environment: MacHostEnvironment) async throws {
+        let context = try await Library.context(environment)
+        let status = try await context.cache.status()
         Console.note("originals    \(status.residentCount) materialized photographs held")
         Console.note("referenced   \(status.referencedCount) photos, never copied, no budget")
         Console.note("pending      \(status.pendingCount) materialized photos with no bytes yet")
@@ -261,9 +261,9 @@ enum InspectCommands {
         Console.note("root         \(environment.cacheRoot.path(percentEncoded: false))")
     }
 
-    static func cacheEvict(environment: MacHostEnvironment) throws {
-        let context = try Library.context(environment)
-        let result = try context.cache.evictIfNeeded()
+    static func cacheEvict(environment: MacHostEnvironment) async throws {
+        let context = try await Library.context(environment)
+        let result = try await context.cache.evictIfNeeded()
         guard result.evicted > 0 else {
             Console.note("nothing to evict — the cache is inside its cap and its ceiling")
             return
@@ -281,8 +281,8 @@ enum InspectCommands {
     /// that may be metered. So it states its price before charging it.
     static func cacheClear(
         scope: Options.ClearScope, confirmed: Bool, environment: MacHostEnvironment
-    ) throws {
-        let context = try Library.context(environment)
+    ) async throws {
+        let context = try await Library.context(environment)
         let kitScope: PhotoCache.ClearScope =
             switch scope {
             case .everything: .everything
@@ -290,7 +290,7 @@ enum InspectCommands {
             case .unavailable: .unavailableSources
             }
 
-        let cost = try context.cache.costOfClearing(kitScope)
+        let cost = try await context.cache.costOfClearing(kitScope)
         guard cost.needingRefetch > 0 || cost.referencedAndFree > 0 else {
             Console.note("nothing cached in that scope")
             return
@@ -311,7 +311,7 @@ enum InspectCommands {
             }
         }
 
-        let result = try context.cache.clear(kitScope)
+        let result = try await context.cache.clear(kitScope)
         Console.recovered(
             "cleared \(result.cleared) photos, freed \(Library.bytes(result.bytesFreed))"
                 + (result.queueCleared > 0 ? ", emptied \(result.queueCleared) queue entries" : ""))

@@ -66,7 +66,7 @@ struct RefreshWhileServingTests {
             database: setup.database, root: root, sources: setupSources, queueSize: Self.held,
             store: bytes)
         setupCache.log = { _ in }
-        try setupCache.prepare()
+        try await setupCache.prepare()
         let source = try setupSources.add(kind: .photosCollection, locator: album)
         let clock = ContinuousClock()
         var started = clock.now

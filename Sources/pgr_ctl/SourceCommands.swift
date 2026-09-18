@@ -19,13 +19,13 @@ enum SourceCommands {
         case .add(let sources):
             try await add(sources, environment: environment)
         case .list:
-            try list(environment: environment)
+            try await list(environment: environment)
         case .remove(let id):
-            try remove(id: id, environment: environment)
+            try await remove(id: id, environment: environment)
         case .enable(let id):
-            try setEnabled(true, id: id, environment: environment)
+            try await setEnabled(true, id: id, environment: environment)
         case .disable(let id):
-            try setEnabled(false, id: id, environment: environment)
+            try await setEnabled(false, id: id, environment: environment)
         }
     }
 
@@ -41,7 +41,7 @@ enum SourceCommands {
     ) async throws {
         // The database may not exist yet — this may be the first thing anyone
         // has ever done — so the sources are created rather than merely projected.
-        let context = try Library.contextCreatingIfNeeded(environment)
+        let context = try await Library.contextCreatingIfNeeded(environment)
 
         // Resolving, refusing the batch, the single preferences write, and the
         // reconcile are all `SourceStore.add`. The service calls the same one
@@ -104,8 +104,8 @@ enum SourceCommands {
 
     // MARK: - Listing
 
-    private static func list(environment: MacHostEnvironment) throws {
-        let context = try Library.context(environment)
+    private static func list(environment: MacHostEnvironment) async throws {
+        let context = try await Library.context(environment)
         let sources = try context.sources.all()
         guard !sources.isEmpty else {
             Console.note("no sources. add one with:  pgr_ctl sources add --folder <path>")
@@ -126,23 +126,22 @@ enum SourceCommands {
 
     // MARK: - Removing and switching off
 
-    private static func remove(id: Int64, environment: MacHostEnvironment) throws {
-        let context = try Library.context(environment)
+    private static func remove(id: Int64, environment: MacHostEnvironment) async throws {
+        let context = try await Library.context(environment)
         guard let source = try context.sources.source(id: id) else {
             Console.failure("no source #\(id)")
             throw ExitCode(1)
         }
-        let freed = try context.sources.remove(source, from: environment.preferences)
-        Console.recovered(
-            "removed source #\(id): \(source.locator)"
-                + (freed > 0 ? "  (freed \(Library.bytes(freed)))" : ""))
+        let freed = try await context.sources.remove(source, from: environment.preferences)
+        let freedText = freed > 0 ? "  (freed \(Library.bytes(freed)))" : ""
+        Console.recovered("removed source #\(id): \(source.locator)" + freedText)
         environment.announce(.sourcesChanged)
     }
 
     private static func setEnabled(
         _ enabled: Bool, id: Int64, environment: MacHostEnvironment
-    ) throws {
-        let context = try Library.context(environment)
+    ) async throws {
+        let context = try await Library.context(environment)
         guard let source = try context.sources.source(id: id) else {
             Console.failure("no source #\(id)")
             throw ExitCode(1)
@@ -154,7 +153,7 @@ enum SourceCommands {
             Console.failure("#\(id) is in the database but not in preferences; remove and re-add it")
             throw ExitCode(1)
         }
-        try context.sources.reconcile(with: environment.preferences)
+        try await context.sources.reconcile(with: environment.preferences)
         Console.recovered("source #\(id) \(enabled ? "enabled" : "disabled")")
         environment.announce(.sourcesChanged)
     }

@@ -257,7 +257,7 @@ public struct SourceStore {
     /// also zero when no byte index was handed to this store. Nothing on the
     /// *source* is touched: removal is not deletion.
     @discardableResult
-    public func remove(id: Int64) throws -> Int64 {
+    public func remove(id: Int64) async throws -> Int64 {
         // **Its photographs in pages of 100, then the row.** Until 2026-09-16
         // this was one transaction around the source's `DELETE`, whose cascade
         // took every photograph with it: for Favorites, 8,547 deletes under one
@@ -278,7 +278,7 @@ public struct SourceStore {
             ) { try $0.int64("id") }
             guard !page.isEmpty else { break }
             // Counted once, below, as the whole source's.
-            let removal = try pool.remove(page, countingChanges: false)
+            let removal = try await pool.remove(page, countingChanges: false)
             copies += removal.orphanedCopies
             // Rows found and not deleted were taken by another writer first;
             // stopping here leaves them to the row's cascade rather than
@@ -287,12 +287,13 @@ public struct SourceStore {
         }
         // The row, and whatever arrived after the last page, which cascades.
         // Those photographs' copies are named first.
-        copies += try database.transaction(.immediate) {
+        copies += try await database.transaction(.immediate) {
             let late = try ResizedCopies.files(ofSource: id, in: database)
             try database.run("DELETE FROM source WHERE id = :id;", ["id": .int(id)])
             return late
         }
-        let freed = gone.map { bytes?.removeSource($0.uuid, copies: copies) ?? 0 } ?? 0
+        var freed: Int64 = 0
+        if let gone, let bytes { freed = await bytes.removeSource(gone.uuid, copies: copies) }
         if let gone {
             pool.changes.sourceRemoved(gone, photos: photos)
             errors.clearStanding(source: id)
@@ -306,13 +307,15 @@ public struct SourceStore {
 
     /// Held across a preferences write and the reconcile that projects it.
     ///
-    /// Recursive because the editing calls take it and then reconcile, which
-    /// takes it again. Static because the two writers that matter are in one
-    /// process — the agent's loop and the endpoint answering a client — and a
-    /// `SourceStore` is per connection rather than per library.
-
-    /// What reconciling changed.
-    static let editing = NSRecursiveLock()
+    /// Static because the two writers that matter are in one process — the
+    /// agent's loop and the endpoint answering a client — and a `SourceStore`
+    /// is per connection rather than per library.
+    ///
+    /// **An `EditingGate` since 2026-09-17**, where an `NSRecursiveLock` was.
+    /// It was recursive because the editing calls took it and then reconciled,
+    /// which took it again; the unguarded projection below is what replaces
+    /// that nesting.
+    static let editing = EditingGate()
 
     public struct Reconciliation: Sendable, Equatable {
         public let added: Int
@@ -354,12 +357,26 @@ public struct SourceStore {
     /// its photographs and starts being shown again. Nobody can hold a stale
     /// copy of something they never receive.
     @discardableResult
-    public func reconcile(with preferences: Preferences, now: Date = Date()) throws
+    public func reconcile(with preferences: Preferences, now: Date = Date()) async throws
         -> Reconciliation
     {
-        Self.editing.lock()
-        defer { Self.editing.unlock() }
-        return try reconcile(specs: preferences.sources, now: now)
+        try await editing { try await reconcile(specs: preferences.sources, now: now) }
+    }
+
+    /// Runs `work` with `editing` held, and hands the turn on whatever happens.
+    ///
+    /// Here rather than on the gate because the work captures this store, which
+    /// is not `Sendable`: handing the closure to an actor would be sending it.
+    func editing<T>(_ work: () async throws -> T) async rethrows -> T {
+        await Self.editing.acquire()
+        do {
+            let result = try await work()
+            await Self.editing.release()
+            return result
+        } catch {
+            await Self.editing.release()
+            throw error
+        }
     }
 
     /// The projection itself, against an explicit list.
@@ -367,10 +384,10 @@ public struct SourceStore {
     /// Internal, and deliberately not public: an explicit list is exactly the
     /// thing that goes stale. Tests that want to assert the projection rules
     /// with a list they wrote are the reason it exists at all.
+    /// **Unguarded**: the caller holds `editing`, which is what makes a write
+    /// and the projection of it one act.
     @discardableResult
-    func reconcile(specs: [SourceSpec], now: Date = Date()) throws -> Reconciliation {
-        Self.editing.lock()
-        defer { Self.editing.unlock() }
+    func reconcile(specs: [SourceSpec], now: Date = Date()) async throws -> Reconciliation {
 
         let existing = try all()
         var added = 0
@@ -422,7 +439,7 @@ public struct SourceStore {
             // reconcile tries it again — which is what makes continuing safe
             // rather than merely tidier.
             do {
-                freed += try remove(id: source.id)
+                freed += try await remove(id: source.id)
                 removed += 1
             } catch {
                 let reason = String(describing: error)
@@ -733,7 +750,7 @@ public struct SourceStore {
             // nested in one that is no longer recursive — is not coming back,
             // and the cached original and its renderings were the only things
             // still holding that space.
-            freed += bytes?.discard(removal) ?? 0
+            freed += await bytes?.discard(removal) ?? 0
         }
 
         // Done with, and dropped rather than left for the connection's lifetime:

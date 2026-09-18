@@ -30,16 +30,20 @@ import Foundation
 /// does not link, on purpose, which settles where this had to live.
 // TODO: replace every `NSLock` in this project with actors and tasks.
 //
-// Ten files still hold one: `FetchDeadline`, `QueueFiller`, `QueueFetcher`,
-// `PhotoStore`, `SourceBench`, `SourceStore+Editing`, `SystemPhotoLibrary`
-// (three of them — `ChunkSink`, `RequestHandle`, `ResumeOnce`),
-// `DarwinNotification`, `RunCommand`, and `PhotosSpike`. Most are mechanical:
-// state guarded by a lock and touched from one place, which is an actor with
-// the lock deleted.
+// Seven files still hold one, as of 2026-09-17: `SourceBench`,
+// `LibraryChanges`, `AgentErrors`, `LaunchTally`, `DarwinNotification`,
+// `RunCommand` (three of them) and `SystemPhotoLibrary` (three — `ChunkSink`,
+// `RequestHandle`, `ResumeOnce`). `PhotosSpike` holds five that go when the
+// spike does. Most are mechanical: state guarded by a lock and touched from one
+// place, which is an actor with the lock deleted.
 //
-// `Race` below is the worked example, and `FetchDeadline` is the same shape —
-// a continuation raced against a timer, where the loser is deliberately never
-// awaited. That letting-go is the mechanism rather than an oversight: a
+// Gone in Phase 5: `FetchDeadline`, `QueueFiller`, `QueueFetcher`, `PhotoStore`
+// and `SourceStore+Editing` — the last through an `EditingGate`, since an actor
+// alone is re-entrant and would have let a second editor in.
+//
+// `FirstAnswer` below is the worked example, and `FetchDeadline` is the same
+// shape — a continuation raced against a timer, where the loser is deliberately
+// never awaited. That letting-go is the mechanism rather than an oversight: a
 // structured child is awaited at scope exit by design, which is the wait these
 // exist to escape. It converts to an actor all the same, as this one did.
 //
@@ -69,17 +73,17 @@ public enum Deadline {
         within limit: Duration,
         _ work: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        let race = Race<T>()
+        let first = FirstAnswer<T>()
         let running = Task {
             do {
-                await race.finish(.success(try await work()))
+                await first.finish(.success(try await work()))
             } catch {
-                await race.finish(.failure(error))
+                await first.finish(.failure(error))
             }
         }
         let timer = Task {
             try? await Task.sleep(for: limit)
-            await race.finish(.failure(Expired(limit: limit)))
+            await first.finish(.failure(Expired(limit: limit)))
         }
         // Asked to stop, never awaited. On the winning path both of these are
         // already finished and the calls do nothing.
@@ -87,7 +91,7 @@ public enum Deadline {
             timer.cancel()
             running.cancel()
         }
-        return try await race.outcome().result.get()
+        return try await first.outcome().result.get()
     }
 
     /// Whichever of the two settles first, once.
@@ -101,7 +105,7 @@ public enum Deadline {
     /// `withCheckedContinuation` runs synchronously on the actor's executor
     /// before the caller suspends, so `finish` cannot interleave between
     /// finding no answer and being in a position to receive one.
-    private actor Race<T: Sendable> {
+    private actor FirstAnswer<T: Sendable> {
         private var pending: CheckedContinuation<Void, Never>?
         private var settled: Outcome<T>?
 

@@ -24,7 +24,7 @@ struct CacheIndexTests {
         let store: SourceStore
         let cache: PhotoCache
 
-        init() throws {
+        init() async throws {
             folder = TemporaryFolder(name: "pgr-cycle-src")
             cacheRoot = TemporaryFolder(name: "pgr-cycle-dst")
             library = try TestLibrary()
@@ -33,7 +33,7 @@ struct CacheIndexTests {
             cache = PhotoCache(
                 database: library.database, root: cacheRoot.url.appending(path: "cache"),
                 sources: store, store: bytes)
-            try cache.prepare()
+            try await cache.prepare()
         }
 
         /// Rows only — no provider, no files.
@@ -51,7 +51,7 @@ struct CacheIndexTests {
         /// Puts real bytes in the cache for `count` of a source's photographs,
         /// oldest first, and answers which ones.
         @discardableResult
-        func hold(_ count: Int, ofSource sourceID: Int64) throws -> Set<String> {
+        func hold(_ count: Int, ofSource sourceID: Int64) async throws -> Set<String> {
             let sourceUUID = try #require(
                 try library.database.scalarString(
                     "SELECT uuid FROM source WHERE id = :id;", ["id": .int(sourceID)]))
@@ -61,7 +61,7 @@ struct CacheIndexTests {
             ) { try $0.string("uuid") }
 
             for uuid in uuids {
-                _ = try bytes.store(
+                _ = try await bytes.store(
                     Data(repeating: 0xAB, count: 64), forPhoto: uuid,
                     sourceUUID: sourceUUID, pathExtension: "heic")
             }
@@ -76,32 +76,32 @@ struct CacheIndexTests {
     /// fresh empty one and reported nought held — while the cache directory had
     /// a hundred and forty-eight megabytes in it.
     @Test("A fresh index reports nothing until it has read the disk, and everything after")
-    func aFreshIndexMustBeRead() throws {
-        let fixture = try Fixture()
+    func aFreshIndexMustBeRead() async throws {
+        let fixture = try await Fixture()
         let source = try fixture.source(photos: 3, name: "local")
-        try fixture.hold(3, ofSource: source)
+        try await fixture.hold(3, ofSource: source)
 
-        #expect(try fixture.cache.status().residentCount == 3)
+        await #expect(try fixture.cache.status().residentCount == 3)
 
         // A second process over the same directory: same files, empty index.
         let cold = PhotoStore(root: fixture.cache.root)
         let coldCache = PhotoCache(
             database: fixture.library.database, root: fixture.cache.root,
             sources: fixture.store, store: cold)
-        #expect(
+        await #expect(
             try coldCache.status().residentCount == 0,
             "an index nobody read should know nothing — otherwise this test proves nothing")
 
-        cold.index(photos: try Self.owners(fixture.library.database))
-        #expect(try coldCache.status().residentCount == 3)
-        #expect(try coldCache.status().bytesOnDisk > 0)
+        await cold.index(photos: try Self.owners(fixture.library.database))
+        await #expect(try coldCache.status().residentCount == 3)
+        await #expect(try coldCache.status().bytesOnDisk > 0)
     }
 
     @Test("Reading the index read-only leaves files that nothing claims alone")
-    func indexingDoesNotDelete() throws {
-        let fixture = try Fixture()
+    func indexingDoesNotDelete() async throws {
+        let fixture = try await Fixture()
         let source = try fixture.source(photos: 1, name: "local")
-        try fixture.hold(1, ofSource: source)
+        try await fixture.hold(1, ofSource: source)
 
         // A file belonging to a photograph this database has never heard of —
         // which is exactly what a status command run against another library's
@@ -113,7 +113,7 @@ struct CacheIndexTests {
 
         let owners = try Self.owners(fixture.library.database)
         let cold = PhotoStore(root: fixture.cache.root)
-        let read = cold.index(photos: owners)
+        let read = await cold.index(photos: owners)
 
         #expect(read.discarded == 0)
         #expect(FileManager.default.fileExists(atPath: stray.path(percentEncoded: false)))
@@ -121,7 +121,7 @@ struct CacheIndexTests {
         // Rebuilding is the owning form, and it *does* take it — that is the
         // launch-time sweep, and the difference between the two is the point.
         let owning = PhotoStore(root: fixture.cache.root)
-        #expect(owning.rebuild(photos: owners).discarded == 1)
+        #expect(await owning.rebuild(photos: owners).discarded == 1)
         #expect(!FileManager.default.fileExists(atPath: stray.path(percentEncoded: false)))
     }
 

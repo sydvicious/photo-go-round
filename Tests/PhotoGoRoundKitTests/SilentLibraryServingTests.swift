@@ -107,11 +107,11 @@ struct SilentLibraryServingTests {
             providers: [PhotosCollectionSourceProvider(library: BoundedPhotoLibrary(photos))],
             bytes: bytes)
         let cache = PhotoCache(database: library.database, root: root, sources: sources, store: bytes)
-        try cache.prepare()
+        try await cache.prepare()
 
         let source = try sources.add(kind: .photosCollection, locator: album)
         _ = await sources.refresh(source)
-        #expect(try cache.deal())
+        await #expect(try cache.deal())
         let card = try #require(try cache.queue.peek().first)
         #expect(try await cache.cache(photoID: card.id), "the picture is held before Photos goes quiet")
 
@@ -150,11 +150,11 @@ struct SilentLibraryServingTests {
         var cache = PhotoCache(database: library.database, root: root, sources: sources, store: bytes)
         let heard = ServeWalkTests.Heard()
         cache.log = heard.log
-        try cache.prepare()
+        try await cache.prepare()
 
         let source = try sources.add(kind: .photosCollection, locator: album)
         _ = await sources.refresh(source)
-        #expect(try cache.deal())
+        await #expect(try cache.deal())
         let card = try #require(try cache.queue.peek().first)
         #expect(try await cache.cache(photoID: card.id))
 
@@ -162,7 +162,7 @@ struct SilentLibraryServingTests {
         _ = try await cache.serve()
 
         #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 1)
-        #expect(try cache.residentURL(forPhoto: card.id) != nil, "the cached bytes are still held")
+        await #expect(try cache.residentURL(forPhoto: card.id) != nil, "the cached bytes are still held")
         #expect(
             heard.lines.contains { $0.contains("unconfirmed (\(PhotoCache.checkUnanswered))") },
             "the SERVE: line did not say why: \(heard.lines)")

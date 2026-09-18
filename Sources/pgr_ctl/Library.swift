@@ -18,7 +18,7 @@ enum Library {
     /// *pointing at a different container from the agent*, which looks exactly
     /// like an empty library and is the single most common way to waste twenty
     /// minutes here.
-    static func open(_ environment: MacHostEnvironment) throws -> Database {
+    static func open(_ environment: MacHostEnvironment) async throws -> Database {
         let path = environment.databaseURL.path(percentEncoded: false)
         guard FileManager.default.fileExists(atPath: path) else {
             Console.failure(
@@ -41,8 +41,8 @@ enum Library {
     /// The database, the source store, and a cache configured from preferences
     /// — which is what most subcommands need and all of them assemble the same
     /// way.
-    static func context(_ environment: MacHostEnvironment) throws -> Context {
-        let database = try open(environment)
+    static func context(_ environment: MacHostEnvironment) async throws -> Context {
+        let database = try await open(environment)
         let preferences = environment.preferences
         // One index, shared by the cache and the source store: removing a source
         // has to remove its bytes, and two indexes over one directory would
@@ -54,7 +54,7 @@ enum Library {
         // printed was nought regardless of what was on disk. Read-only, because
         // a status command must not delete a file over a disagreement about what
         // some other process claims.
-        bytes.index(photos: try Self.cachedPhotoOwners(database))
+        await bytes.index(photos: try Self.cachedPhotoOwners(database))
         let sources = SourceStore(database: database, bytes: bytes)
         return Context(
             environment: environment,
@@ -81,7 +81,7 @@ enum Library {
     /// can configure it" is a chicken-and-egg nobody should have to solve. Every
     /// other command refuses, because an empty library is almost always the
     /// wrong container rather than a fresh install.
-    static func contextCreatingIfNeeded(_ environment: MacHostEnvironment) throws -> Context {
+    static func contextCreatingIfNeeded(_ environment: MacHostEnvironment) async throws -> Context {
         try environment.prepare()
         let database = try Database(path: environment.databaseURL.path(percentEncoded: false))
         try Migrator.migrate(database)
@@ -93,7 +93,7 @@ enum Library {
         // printed was nought regardless of what was on disk. Read-only, because
         // a status command must not delete a file over a disagreement about what
         // some other process claims.
-        bytes.index(photos: try Self.cachedPhotoOwners(database))
+        await bytes.index(photos: try Self.cachedPhotoOwners(database))
         let sources = SourceStore(database: database, bytes: bytes)
         return Context(
             environment: environment,
@@ -114,7 +114,7 @@ enum Library {
 
     /// Every photograph's uuid against its source's, which is what the byte
     /// index is keyed by.
-    static func cachedPhotoOwners(_ database: Database) throws -> [String: String] {
+    static func cachedPhotoOwners(_ database: Database) async throws -> [String: String] {
         var owners: [String: String] = [:]
         try database.query(
             "SELECT p.uuid AS photo_uuid, s.uuid AS source_uuid"

@@ -39,56 +39,53 @@ public enum FetchDeadline {
         work: @escaping @Sendable () async -> Void,
         whenAbandoned: @escaping @Sendable () -> Void = {}
     ) async -> Bool {
-        let race = Race()
+        let first = FirstAnswer()
         let running = Task.detached {
             await work()
             // Nobody may be waiting any more — that is what abandonment means
             // — so this reports whether it won or was let go of.
-            if !race.finish(true) { whenAbandoned() }
+            if await !first.finish(true) { whenAbandoned() }
         }
         let timer = Task.detached {
             try? await Task.sleep(for: limit)
-            _ = race.finish(false)
+            _ = await first.finish(false)
         }
-        let answered = await race.outcome()
+        let answered = await first.outcome()
         timer.cancel()
         // `running` is deliberately not cancelled: see above. Naming it says so.
         _ = running
         return answered
     }
 
-    /// Whichever of the two finishes first, once.
-    private final class Race: @unchecked Sendable {
-        private let lock = NSLock()
+    /// The first answer of the two, kept once.
+    ///
+    /// **An actor, not a lock.** Syd, 2026-09-17: "I flatout don't want
+    /// NSLocks". Both callers are already inside a `Task`, so awaiting it costs
+    /// nothing; the continuation is resumed from the actor, which is where the
+    /// lock used to be dropped first.
+    private actor FirstAnswer {
         private var pending: CheckedContinuation<Bool, Never>?
         private var settled: Bool?
 
         func outcome() async -> Bool {
             await withCheckedContinuation { continuation in
-                lock.lock()
                 if let settled {
-                    lock.unlock()
                     continuation.resume(returning: settled)
                 } else {
                     pending = continuation
-                    lock.unlock()
                 }
             }
         }
 
-        /// True if this call settled the race, false if it had already been
-        /// lost — which is how an abandoned fetch learns that it was abandoned.
+        /// True if this call was the first answer, false if one had already
+        /// arrived — which is how an abandoned fetch learns that it was
+        /// abandoned.
         @discardableResult
         func finish(_ answered: Bool) -> Bool {
-            lock.lock()
-            guard settled == nil else {
-                lock.unlock()
-                return false
-            }
+            guard settled == nil else { return false }
             settled = answered
             let continuation = pending
             pending = nil
-            lock.unlock()
             continuation?.resume(returning: answered)
             return true
         }

@@ -31,7 +31,7 @@ import PhotoGoRoundAgentAPI
 /// needs — what to fetch next, and fetch it — arrive as closures the host
 /// implements with its own. What is left is pure policy, which is what makes
 /// every rule above assertable with two mocks and no disk.
-public final class QueueFetcher: @unchecked Sendable {
+public actor QueueFetcher {
 
     /// What the host found when asked for the next card to fetch.
     public enum Next: Sendable {
@@ -87,7 +87,7 @@ public final class QueueFetcher: @unchecked Sendable {
     private let concurrency: Int
     /// The next card to fetch after this rank in the queue, or nil for the head.
     /// **It must claim the card it answers with**, or two lanes will fetch it.
-    private let next: @Sendable (Int64?) -> Next
+    private let next: @Sendable (Int64?) async -> Next
     /// One fetch, against the deadline given. **It must always return**: a lane
     /// that never comes back holds the round open for ever, and the guard that
     /// drops overlapping rounds then drops every round after it. The agent
@@ -95,13 +95,18 @@ public final class QueueFetcher: @unchecked Sendable {
     private let fetch: @Sendable (DeckCard, Duration) async -> Outcome
     private let log: @Sendable (String) -> Void
 
-    private let lock = NSLock()
+    /// **An actor, not a lock.** Syd, 2026-09-17: "I flatout don't want
+    /// NSLocks", and, asked whether that held even where it makes synchronous
+    /// code async: "I don't mind everything being async; I prefer it."
+    /// `Agent Performance Overhaul.md`, Phase 5.
     private var running = false
     private var kickedWhileRunning = false
+    /// This round's counters, which the lanes report into.
+    private var tally = Tally()
 
     public init(
         concurrency: Int = CacheSettings.defaultConcurrency,
-        next: @escaping @Sendable (Int64?) -> Next,
+        next: @escaping @Sendable (Int64?) async -> Next,
         fetch: @escaping @Sendable (DeckCard, Duration) async -> Outcome,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
@@ -123,36 +128,43 @@ public final class QueueFetcher: @unchecked Sendable {
         guard claimRound() else { return .alreadyRunning }
         defer { releaseRound() }
 
-        let tally = Tally()
+        tally = Tally()
         repeat {
             await withTaskGroup(of: Void.self) { group in
                 for _ in 0..<concurrency {
-                    group.addTask { await self.lane(tally) }
+                    group.addTask { await self.lane() }
                 }
             }
-        } while !tally.isBlocked && takePendingKick()
-        return tally.round()
+        } while !tally.blocked && takePendingKick()
+        return tally.round
     }
 
     /// One lane: walk the queue from the head, fetching what is cold and
     /// stepping past what is benched, until nothing is left or the disk says
     /// stop.
-    private func lane(_ tally: Tally) async {
+    /// **`@concurrent`, so the lanes are lanes.** A `nonisolated async`
+    /// function runs on its caller's executor under
+    /// `NonisolatedNonsendingByDefault`, and the caller here is this actor — so
+    /// without it every lane would queue behind the last and `concurrency`
+    /// would mean one. The fetching happens off the actor; what the lanes
+    /// *count* goes back through it.
+    @concurrent
+    nonisolated private func lane() async {
         var after: Int64? = nil
-        while !tally.isBlocked {
-            switch next(after) {
+        while await !isBlocked {
+            switch await next(after) {
             case .card(let card, let rank, let limit):
                 after = rank
                 switch await fetch(card, limit) {
-                case .fetched: tally.fetched()
-                case .failed, .timedOut: tally.failed()
+                case .fetched: await record(.fetched)
+                case .failed, .timedOut: await record(.failed)
                 }
             case .benched(let rank):
                 after = rank
-                tally.skipped()
+                await record(.skipped)
             case .blocked:
                 log("fetching stopped: the disk says so")
-                tally.block()
+                await record(.blocked)
                 return
             case .drained:
                 return
@@ -160,43 +172,39 @@ public final class QueueFetcher: @unchecked Sendable {
         }
     }
 
-    /// What the lanes did between them, and why they stopped. A class rather
-    /// than counters on the stack, because the lanes share it.
-    private final class Tally: @unchecked Sendable {
-        private let lock = NSLock()
-        private var fetchedCount = 0
-        private var failedCount = 0
-        private var skippedCount = 0
-        private var blocked = false
+    /// What the lanes did between them, and why they stopped. Plain state on
+    /// the actor now: the lanes report into it rather than sharing a lock.
+    private struct Tally {
+        var fetchedCount = 0
+        var failedCount = 0
+        var skippedCount = 0
+        var blocked = false
 
-        func fetched() { lock.lock(); fetchedCount += 1; lock.unlock() }
-        func failed() { lock.lock(); failedCount += 1; lock.unlock() }
-        func skipped() { lock.lock(); skippedCount += 1; lock.unlock() }
-        func block() { lock.lock(); blocked = true; lock.unlock() }
-
-        var isBlocked: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return blocked
-        }
-
-        func round() -> Round {
-            lock.lock()
-            defer { lock.unlock() }
-            return Round(
+        var round: Round {
+            Round(
                 fetched: fetchedCount, failed: failedCount, skipped: skippedCount,
                 stopped: blocked ? .blocked : .drained)
         }
     }
 
+    private enum LaneOutcome { case fetched, failed, skipped, blocked }
+
+    /// One lane's result, added to this round's.
+    private func record(_ outcome: LaneOutcome) {
+        switch outcome {
+        case .fetched: tally.fetchedCount += 1
+        case .failed: tally.failedCount += 1
+        case .skipped: tally.skippedCount += 1
+        case .blocked: tally.blocked = true
+        }
+    }
+
+    /// Whether a lane has said the disk is full, which stops the others.
+    private var isBlocked: Bool { tally.blocked }
+
     // MARK: - The round guard
 
-    /// In non-async methods because `NSLock` is unavailable from an async
-    /// context — holding one across a suspension is exactly the bug that
-    /// restriction exists to prevent.
     private func claimRound() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
         guard !running else {
             kickedWhileRunning = true
             return false
@@ -206,16 +214,12 @@ public final class QueueFetcher: @unchecked Sendable {
     }
 
     private func releaseRound() {
-        lock.lock()
         running = false
         kickedWhileRunning = false
-        lock.unlock()
     }
 
     /// Whether a kick landed while the round ran, cleared in the same breath.
     private func takePendingKick() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
         let pending = kickedWhileRunning
         kickedWhileRunning = false
         return pending

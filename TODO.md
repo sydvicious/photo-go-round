@@ -50,6 +50,15 @@ Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't r
   - **Built 2026-09-16, at Syd's "yes, build it".** `PhotoCache.evictAfterWriting()` runs after a fetch adopts an original and from `PhotoCache.keep`, which both endpoints now keep copies through (`CopyPlace` carries what they need onto the resizer's thread). An eviction that finds another running in the process is skipped, not waited for (`PhotoStore.claimEviction`). The agent's reporter — dashboard tally, console line, `cacheChanged` — moved from the maintenance pass to a `PhotoCache.evicted` hook. Gone: the `.maintenance` heartbeat, `runMaintenance`, `maintenanceIntervalSeconds`. Docs: `photogoroundd.md` (the ceiling paragraph, `evictions`, the preference row) and `pgr_ctl.md` (`cache evict`; and `sources remove`, which still said a source's bytes waited for a maintenance sweep — stale since removal began deleting them at once). Tests: four new in `ResizedCopiesTests`, two in `DashboardEndpointTests`, each caught its own mutation; `ResidencyTests` "eviction releases the originals it took" rewritten, since its fetches now evict before its own call could. *`Agent Performance Overhaul.md`'s bullet marked reversed.*
   - ~~**Still saying "maintenance" in `PLAN.md`, not changed — Syd's to decide:** the dashboard section and the preferences table.~~ *Syd: "yes, update PLAN.md". Done 2026-09-16: *Eviction* gained a "When it runs" paragraph; the dashboard's *Evictions*, its ceiling paragraph, the connection-per-request paragraph, the preferences table and the wedged-Photos TODO's refresh-walk bullet now say eviction follows each write, with the maintenance wording dated.*
 
+## Two in five sized requests give up on their resize
+
+Measured 2026-09-17, over three hours of ordinary use with the app and the wallpaper running: of 640 pictures served, **245 gave up after the one-second budget and sent the original**, and 394 were resized in time. That is steady state, not the cold minute after a restart.
+
+- **What it costs:** a wasted second per request, an unresized picture at the client, and no copy in the resize cache — so the same photographs pay it again.
+- **Not yet known:** whether the HEIC encode is genuinely that slow per picture, whether resizes are queueing behind each other on the one `Resizer`, or whether a one-second budget is simply too tight for a 3,000-pixel original. `ServiceTiming.resizeBudget` is the number; `Agent Performance Overhaul.md`, *When the resizer stalls*, is why it exists.
+- **A `TIMING:` line already separates `resize wait` from `render`**, so the queueing question can be answered from the log rather than by guessing.
+- **Not the cause, checked:** `IOSurface creation failed: e00002c2` (`kIOReturnBadArgument`) from Apple's HEVC encoder — 77 bursts in the same three hours, only 26 of them within two seconds of a give-up. Noise from the encoder's own setup; nothing of ours calls it, and pictures come out either way.
+
 ## Track RAM usage
 
 Syd, 2026-09-17: "I also want a task setup every this you ask me to reboot the agent where you record how much ram it is using first. Basically I want a running tally to make sure that there are no leaks from the agent, the screensaver agent, or the wallpaper extension."
@@ -106,6 +115,15 @@ Syd, 2026-09-16: "put statistics about the cached resized picture where appropri
   - **The dashboard's cache panel** and `/v1/dashboard`: the same, and copy hits against resizes since launch — the number that says whether the resize cache is saving the resizer anything.
   - **Evictions**: copies and originals taken, separately.
 - Anything added to the dashboard or `pgr_ctl` is documented in `Documentation/photogoroundd.md` or `pgr_ctl.md`, and tested.
+
+## The dashboard's "Served since launch" list
+
+Syd, 2026-09-17: "why is `system-wallpaper` gray? And you should only show tags you actually find; we will never have raw `wallpaper` again."
+
+- **Why it is gray.** `dashboard.js` keeps `const named = ["wallpaper", "screensaver", "app"]`. Those three are always drawn, at zero if nothing asked; every other tag found in the answer is appended with class `minor`, and `dashboard.css` has `tr.minor td { color: var(--muted) }`. So the grey means "a tag I was not expecting", which is a distinction nobody asked for.
+- **`wallpaper` is dead.** The extension identifies itself as `system-wallpaper`; nothing sends the bare tag any more, so the row is a permanent zero.
+- **What to do**: draw the tags actually present, and drop the `named` list and the `minor` styling with it. Whether the order stays fixed or becomes the count is Syd's.
+- Wherever the consumer tags are written down — `Documentation/photogoroundd.md` — says the same set.
 
 ## An Options button for the screensaver
 

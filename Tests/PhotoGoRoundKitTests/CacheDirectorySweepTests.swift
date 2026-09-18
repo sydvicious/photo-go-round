@@ -22,18 +22,18 @@ struct CacheDirectorySweepTests {
     // MARK: - The sweep
 
     @Test("Rebuilding removes a source directory whose files it has just discarded")
-    func emptiedDirectoriesGoToo() throws {
+    func emptiedDirectoriesGoToo() async throws {
         let folder = TemporaryFolder(name: "pgr-sweep")
         let root = folder.url.appending(path: "cache")
         let store = PhotoStore(root: root, byteCeiling: 1_000_000)
 
-        try store.store(
+        try await store.store(
             Data(count: 100), forPhoto: "PHOTO", sourceUUID: "SOURCE",
             pathExtension: "heic")
         #expect(Self.exists(root.appending(path: "SOURCE")))
 
         // Nothing claims it any more — the source was removed.
-        let result = store.rebuild(photos: [:])
+        let result = await store.rebuild(photos: [:])
 
         #expect(result.discarded == 1)
         #expect(!Self.exists(root.appending(path: "SOURCE")))
@@ -41,16 +41,16 @@ struct CacheDirectorySweepTests {
 
     /// The guard against a sweep that tidies away a live cache.
     @Test("A directory whose files are still claimed is left alone")
-    func claimedDirectoriesStay() throws {
+    func claimedDirectoriesStay() async throws {
         let folder = TemporaryFolder(name: "pgr-sweep-keep")
         let root = folder.url.appending(path: "cache")
         let store = PhotoStore(root: root, byteCeiling: 1_000_000)
 
-        try store.store(
+        try await store.store(
             Data(count: 100), forPhoto: "PHOTO", sourceUUID: "SOURCE",
             pathExtension: "heic")
 
-        let result = store.rebuild(photos: ["PHOTO": "SOURCE"])
+        let result = await store.rebuild(photos: ["PHOTO": "SOURCE"])
 
         #expect(result.discarded == 0)
         #expect(Self.exists(root.appending(path: "SOURCE")))
@@ -60,27 +60,27 @@ struct CacheDirectorySweepTests {
     /// agent is using, and a read-only question must not delete anything
     /// because this process disagrees about what is claimed.
     @Test("Indexing without discarding removes no directory either")
-    func readingChangesNothing() throws {
+    func readingChangesNothing() async throws {
         let folder = TemporaryFolder(name: "pgr-sweep-readonly")
         let root = folder.url.appending(path: "cache")
         let store = PhotoStore(root: root, byteCeiling: 1_000_000)
 
-        try store.store(
+        try await store.store(
             Data(count: 100), forPhoto: "PHOTO", sourceUUID: "SOURCE",
             pathExtension: "heic")
 
-        _ = store.index(photos: [:])
+        _ = await store.index(photos: [:])
 
         #expect(Self.exists(root.appending(path: "SOURCE")))
     }
 
     @Test("A cache root with nothing in it survives being swept")
-    func anEmptyRootIsFine() throws {
+    func anEmptyRootIsFine() async throws {
         let folder = TemporaryFolder(name: "pgr-sweep-empty")
         let root = folder.url.appending(path: "cache")
         let store = PhotoStore(root: root, byteCeiling: 1_000_000)
 
-        let result = store.rebuild(photos: [:])
+        let result = await store.rebuild(photos: [:])
 
         #expect(result.discarded == 0)
         #expect(result.kept == 0)
@@ -100,7 +100,7 @@ struct CacheDirectorySweepTests {
     /// scan still walking one of them throws part way through. Nothing else in
     /// a test can make one `DELETE` fail and leave the others able to succeed.
     @Test("A source that refuses to be removed does not strand the ones after it")
-    func oneFailureDoesNotStrandTheRest() throws {
+    func oneFailureDoesNotStrandTheRest() async throws {
         let scratch = Scratch()
         let library = try TestLibrary()
         let store = SourceStore(database: library.database, providers: [])
@@ -117,7 +117,7 @@ struct CacheDirectorySweepTests {
             """)
 
         // Preferences list nothing, so all three should go.
-        let result = try store.reconcile(with: scratch.preferences)
+        let result = try await store.reconcile(with: scratch.preferences)
 
         // The one that refused is still here; the two either side of it are
         // not. Before this, `/last/` went down with `/refuses/`.
@@ -127,7 +127,7 @@ struct CacheDirectorySweepTests {
     }
 
     @Test("The stranded source is retried, and goes as soon as it can")
-    func theRefuserIsTriedAgain() throws {
+    func theRefuserIsTriedAgain() async throws {
         let scratch = Scratch()
         let library = try TestLibrary()
         let store = SourceStore(database: library.database, providers: [])
@@ -140,12 +140,12 @@ struct CacheDirectorySweepTests {
             WHEN OLD.locator = '/refuses/'
             BEGIN SELECT RAISE(ABORT, 'this source is busy'); END;
             """)
-        _ = try store.reconcile(with: scratch.preferences)
+        _ = try await store.reconcile(with: scratch.preferences)
         #expect(try store.all().map(\.locator) == ["/refuses/"])
 
         // Whatever was holding it lets go.
         try library.database.execute("DROP TRIGGER refuse_one;")
-        let second = try store.reconcile(with: scratch.preferences)
+        let second = try await store.reconcile(with: scratch.preferences)
 
         #expect(second.removed == 1)
         #expect(try store.all().isEmpty)

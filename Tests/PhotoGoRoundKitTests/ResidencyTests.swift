@@ -35,7 +35,7 @@ struct ResidencyTests {
                 settings: settings,
                 sources: sources
             )
-            try cache.prepare()
+            try await cache.prepare()
 
             source = try sources.add(kind: .folder, locator: folder.path, recursive: true)
             await sources.refresh(source)
@@ -51,7 +51,9 @@ struct ResidencyTests {
         }
 
         /// What the disk actually holds.
-        var held: Set<String> { cache.store.residentPhotoUUIDs }
+        var held: Set<String> {
+            get async { await cache.store.residentPhotoUUIDs }
+        }
 
         func photoIDs() throws -> [Int64] {
             try library.database.all("SELECT id FROM photo ORDER BY id;") { try $0.int64("id") }
@@ -62,7 +64,7 @@ struct ResidencyTests {
     func startsEmpty() async throws {
         let fixture = try await Fixture(photos: ["a.jpg", "b.jpg", "c.jpg"])
         #expect(try fixture.recorded().isEmpty)
-        #expect(fixture.held.isEmpty)
+        #expect(await fixture.held.isEmpty)
     }
 
     @Test("fetching a photograph records it, and only it")
@@ -72,7 +74,7 @@ struct ResidencyTests {
 
         #expect(try await fixture.cache.cache(photoID: first))
 
-        #expect(try fixture.recorded() == fixture.held)
+        #expect(try await fixture.recorded() == fixture.held)
         #expect(try fixture.recorded().count == 1)
     }
 
@@ -81,7 +83,7 @@ struct ResidencyTests {
         let fixture = try await Fixture(photos: ["a.jpg", "b.jpg", "c.jpg", "d.jpg"])
         for id in try fixture.photoIDs() {
             _ = try await fixture.cache.cache(photoID: id)
-            #expect(try fixture.recorded() == fixture.held)
+            #expect(try await fixture.recorded() == fixture.held)
         }
         #expect(try fixture.recorded().count == 4)
     }
@@ -97,11 +99,11 @@ struct ResidencyTests {
         try FileManager.default.removeItem(at: fixture.cache.root)
         #expect(try fixture.recorded().count == 2)
 
-        try fixture.cache.prepare()
+        try await fixture.cache.prepare()
 
-        #expect(fixture.held.isEmpty)
+        #expect(await fixture.held.isEmpty)
         #expect(try fixture.recorded().isEmpty)
-        #expect(try fixture.recorded() == fixture.held)
+        #expect(try await fixture.recorded() == fixture.held)
     }
 
     @Test("an upgraded database with the column empty is filled by the walk")
@@ -113,11 +115,11 @@ struct ResidencyTests {
         // NULL for every row.
         try fixture.library.database.run("UPDATE photo SET cached_at = NULL;")
         #expect(try fixture.recorded().isEmpty)
-        #expect(fixture.held.count == 2)
+        #expect(await fixture.held.count == 2)
 
-        try fixture.cache.prepare()
+        try await fixture.cache.prepare()
 
-        #expect(try fixture.recorded() == fixture.held)
+        #expect(try await fixture.recorded() == fixture.held)
     }
 
     @Test("eviction releases the originals it took")
@@ -130,8 +132,8 @@ struct ResidencyTests {
             settings: CacheSettings(byteCeiling: 150))
         for id in try fixture.photoIDs() { _ = try await fixture.cache.cache(photoID: id) }
 
-        #expect(fixture.held.count < 4, "the fetches evicted nothing")
-        #expect(try fixture.recorded() == fixture.held)
+        #expect(await fixture.held.count < 4, "the fetches evicted nothing")
+        #expect(try await fixture.recorded() == fixture.held)
     }
 
     @Test("clearing everything releases everything")
@@ -140,9 +142,9 @@ struct ResidencyTests {
         for id in try fixture.photoIDs() { _ = try await fixture.cache.cache(photoID: id) }
         #expect(try fixture.recorded().count == 3)
 
-        _ = try fixture.cache.clear(.everything)
+        _ = try await fixture.cache.clear(.everything)
 
-        #expect(fixture.held.isEmpty)
+        #expect(await fixture.held.isEmpty)
         #expect(try fixture.recorded().isEmpty)
     }
 
@@ -152,9 +154,9 @@ struct ResidencyTests {
         let ids = try fixture.photoIDs()
         for id in ids { _ = try await fixture.cache.cache(photoID: id) }
 
-        _ = try fixture.cache.remove(ids[0])
+        _ = try await fixture.cache.remove(ids[0])
 
-        #expect(try fixture.recorded() == fixture.held)
+        #expect(try await fixture.recorded() == fixture.held)
         #expect(try fixture.recorded().count == 1)
     }
 }

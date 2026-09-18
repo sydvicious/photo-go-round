@@ -47,7 +47,7 @@ struct ResizedCopiesTests {
             cache.copySweep = ResizedCopies.Sweep()
             let evictions = evictions
             cache.evicted = { evictions.record($0) }
-            try cache.prepare()
+            try await cache.prepare()
             self.cache = cache
             source = try store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
@@ -154,7 +154,7 @@ struct ResizedCopiesTests {
         let fixture = try await Fixture(photographs: 1)
         let copy = try fixture.save(try #require(fixture.photos.first))
 
-        try fixture.cache.prepare()
+        try await fixture.cache.prepare()
 
         #expect(Self.exists(copy.url))
     }
@@ -192,14 +192,14 @@ struct ResizedCopiesTests {
 
         // 3 × 2,048 + 1,000 held; under 5,000 needs two to go: the old original
         // and then the copy, not the middle original, which was made after it.
-        let result = try fixture.cache(ceiling: 5000).evictIfNeeded()
+        let result = try await fixture.cache(ceiling: 5000).evictIfNeeded()
 
         #expect(result.evicted == 2)
-        #expect(fixture.bytes.url(forPhoto: old.uuid) == nil, "the oldest file, though just shown")
+        #expect(await fixture.bytes.url(forPhoto: old.uuid) == nil, "the oldest file, though just shown")
         #expect(!Self.exists(copy.url), "the copy, made before the middle original")
         #expect(try fixture.rows() == 0, "the evicted copy's row went with its file")
-        #expect(fixture.bytes.url(forPhoto: middle.uuid) != nil)
-        #expect(fixture.bytes.url(forPhoto: newest.uuid) != nil)
+        #expect(await fixture.bytes.url(forPhoto: middle.uuid) != nil)
+        #expect(await fixture.bytes.url(forPhoto: newest.uuid) != nil)
     }
 
     /// One limit for both. Syd, 2026-09-16: "no, combined limit."
@@ -210,11 +210,11 @@ struct ResizedCopiesTests {
         try fixture.save(photo, bytes: 1000)
 
         // The original alone fits under 2,500; with the copy it does not.
-        #expect(try fixture.cache.bytesOnDisk() == 3048)
-        let result = try fixture.cache(ceiling: 2500).evictIfNeeded()
+        await #expect(try fixture.cache.bytesOnDisk() == 3048)
+        let result = try await fixture.cache(ceiling: 2500).evictIfNeeded()
         #expect(result.evicted == 1)
         #expect(try fixture.rows() == 0, "the copy was the only thing that could go")
-        #expect(fixture.bytes.url(forPhoto: photo.uuid) != nil, "the last original is kept")
+        #expect(await fixture.bytes.url(forPhoto: photo.uuid) != nil, "the last original is kept")
     }
 
     /// Syd, 2026-09-16: "clear out unaccounted for files when eviction happens",
@@ -228,18 +228,18 @@ struct ResizedCopiesTests {
         try Data([1]).write(to: stray)
 
         // Under the ceiling: no eviction, no sweep.
-        #expect(try fixture.cache.evictIfNeeded().evicted == 0)
+        await #expect(try fixture.cache.evictIfNeeded().evicted == 0)
         #expect(Self.exists(stray))
 
         // The first eviction clears it.
-        _ = try fixture.cache(ceiling: 3000).evictIfNeeded()
+        _ = try await fixture.cache(ceiling: 3000).evictIfNeeded()
         #expect(!Self.exists(stray))
 
         // A second stray, and a second eviction in the same launch, leaves it.
         let second = folder.appending(path: "second_1x1_1x1.heic")
         try Data([1]).write(to: second)
         try fixture.save(fixture.photos[1], bytes: 5000)
-        _ = try fixture.cache(ceiling: 3000).evictIfNeeded()
+        _ = try await fixture.cache(ceiling: 3000).evictIfNeeded()
         #expect(Self.exists(second))
     }
 
@@ -255,7 +255,7 @@ struct ResizedCopiesTests {
 
         #expect(!fixture.evictions.all.isEmpty, "nothing evicted after the fetch that went over")
         #expect(fixture.evictions.all.allSatisfy { $0.evicted > 0 }, "reported an eviction that took nothing")
-        #expect(try fixture.cache.bytesOnDisk() <= 5000)
+        await #expect(try fixture.cache.bytesOnDisk() <= 5000)
     }
 
     @Test("Keeping a copy that takes the cache over its ceiling evicts")
@@ -264,13 +264,13 @@ struct ResizedCopiesTests {
         let photo = fixture.photos[1]
 
         // 2 × 2,048 held, and a 1,000-byte copy takes it to 5,096.
-        let copy = try fixture.cache(ceiling: 5000).keep(
+        let copy = try await fixture.cache(ceiling: 5000).keep(
             fixture.rendered(bytes: 1000), photoID: photo.id, photoUUID: photo.uuid,
             boxWidth: 200, boxHeight: 200)
 
         #expect(copy != nil)
         #expect(fixture.evictions.all.map(\.evicted) == [1])
-        #expect(try fixture.cache.bytesOnDisk() <= 5000)
+        await #expect(try fixture.cache.bytesOnDisk() <= 5000)
     }
 
     @Test("Keeping a copy that fits evicts nothing")
@@ -278,14 +278,14 @@ struct ResizedCopiesTests {
         let fixture = try await Fixture(photographs: 2)
         let photo = fixture.photos[1]
 
-        let copy = try #require(
+        let copy = try await #require(
             try fixture.cache.keep(
                 fixture.rendered(bytes: 1000), photoID: photo.id, photoUUID: photo.uuid,
                 boxWidth: 200, boxHeight: 200))
 
         #expect(fixture.evictions.all.isEmpty)
         #expect(Self.exists(copy.url))
-        #expect(try fixture.cache.bytesOnDisk() == 2 * 2048 + 1000)
+        await #expect(try fixture.cache.bytesOnDisk() == 2 * 2048 + 1000)
     }
 
     /// Fetches run several at a time and copies are kept on the resizer's
@@ -296,10 +296,10 @@ struct ResizedCopiesTests {
         let fixture = try await Fixture(photographs: 2)
         let tight = fixture.cache(ceiling: 3000)
 
-        #expect(fixture.bytes.claimEviction())
-        #expect(try tight.evictIfNeeded().evicted == 0, "evicted beside the one running")
-        fixture.bytes.endEviction()
-        #expect(try tight.evictIfNeeded().evicted == 1)
+        #expect(await fixture.bytes.claimEviction())
+        await #expect(try tight.evictIfNeeded().evicted == 0, "evicted beside the one running")
+        await fixture.bytes.endEviction()
+        await #expect(try tight.evictIfNeeded().evicted == 1)
     }
 
     // MARK: - Serving
@@ -314,10 +314,10 @@ struct ResizedCopiesTests {
         let fixture = try await Fixture(photographs: 1)
         let photo = try #require(fixture.photos.first)
         let copy = try fixture.save(photo, box: (200, 200))
-        #expect(try fixture.cache.deal() || (try fixture.cache.queue.size()) > 0)
+        await #expect(try fixture.cache.deal() || (try fixture.cache.queue.size()) > 0)
 
         // The original is evicted: its bytes go, and so does its residency.
-        fixture.bytes.remove(photoUUID: photo.uuid)
+        await fixture.bytes.remove(photoUUID: photo.uuid)
         try fixture.cache.releaseResidency(ofPhotos: [photo.uuid])
 
         var cache = fixture.cache
@@ -336,7 +336,7 @@ struct ResizedCopiesTests {
         #expect(!heard.all.contains { if case .waiting = $0 { true } else { false } })
 
         // Asked for with no box, the same card has nothing to serve.
-        #expect(try fixture.cache.deal())
+        await #expect(try fixture.cache.deal())
         cache.serveWait = .zero
         #expect(try await cache.serve() == nil)
     }
@@ -351,7 +351,7 @@ struct ResizedCopiesTests {
         let small = try fixture.save(photo, box: (200, 200))
         let large = try fixture.save(photo, box: (2560, 1440))
 
-        try fixture.cache.remove(photo.id)
+        try await fixture.cache.remove(photo.id)
 
         #expect(!Self.exists(small.url))
         #expect(!Self.exists(large.url))
@@ -375,7 +375,7 @@ struct ResizedCopiesTests {
         let fixture = try await Fixture(photographs: 2)
         let copy = try fixture.save(fixture.photos[1])
 
-        try fixture.store.remove(id: fixture.source.id)
+        try await fixture.store.remove(id: fixture.source.id)
 
         #expect(!Self.exists(copy.url))
         #expect(try fixture.rows() == 0)
@@ -400,7 +400,7 @@ struct ResizedCopiesTests {
         let fixture = try await Fixture(photographs: 1)
         let copy = try fixture.save(try #require(fixture.photos.first), bytes: 1000)
 
-        let result = try fixture.cache.clear(.source(fixture.source.id))
+        let result = try await fixture.cache.clear(.source(fixture.source.id))
 
         #expect(!Self.exists(copy.url))
         #expect(try fixture.rows() == 0)

@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 
 @testable import photogoroundd
 
@@ -31,4 +32,26 @@ extension DashboardEndpoint {
         endpoint.resizeBudget = awaitedResizeBudget
         return endpoint
     }
+}
+
+/// Waits for something to become true, rather than sleeping a guess.
+///
+/// **Why a wait at all.** Keeping a resized copy became `async` when
+/// `PhotoStore` became an actor, so the endpoint hands the write to a task of
+/// its own: the response goes out before the copy is on disk, and before the
+/// eviction that follows the write. A test about that eviction has to wait for
+/// it, and a fixed sleep is either too long to be quick or too short to be
+/// reliable under a parallel run.
+func until(
+    _ reached: () -> Bool,
+    _ what: String,
+    within limit: Duration = .seconds(10)
+) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now + limit
+    while clock.now < deadline {
+        if reached() { return }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    Issue.record("\(what) did not happen within \(limit)")
 }

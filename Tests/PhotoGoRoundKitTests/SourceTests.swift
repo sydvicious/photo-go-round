@@ -615,7 +615,7 @@ struct SourceTests {
         let source = try store.add(kind: .folder, locator: folder.path)
         await store.refresh(source)
         
-        try store.remove(id: source.id)
+        try await store.remove(id: source.id)
         #expect(try library.database.scalarInt("SELECT COUNT(*) FROM photo;") == 0)
         #expect(try library.database.scalarInt("SELECT COUNT(*) FROM queue;") == 0)
         #expect(try store.all().isEmpty)

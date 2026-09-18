@@ -91,7 +91,7 @@ struct DeleteStaysDeletedTests {
         let library = try Library()
         try await addThenDelete(library, path: library.folder.path(percentEncoded: false))
 
-        let changes = try library.store.reconcile(with: library.preferences)
+        let changes = try await library.store.reconcile(with: library.preferences)
         #expect(changes.added == 0, "the reconcile re-created a source that was deleted")
         #expect(try library.store.all().isEmpty)
     }
@@ -103,7 +103,7 @@ struct DeleteStaysDeletedTests {
         try await addThenDelete(library, path: library.folder.path(percentEncoded: false) + "/")
 
         #expect(library.preferences.sources.isEmpty)
-        #expect(try library.store.reconcile(with: library.preferences).added == 0)
+        await #expect(try library.store.reconcile(with: library.preferences).added == 0)
         #expect(try library.store.all().isEmpty)
     }
 
@@ -132,7 +132,7 @@ struct DeleteStaysDeletedTests {
 
         // The loop reconciles. It has no way to pass `asItWas` — the public
         // call takes the preferences and reads them — so the delete stands.
-        _ = try library.store.reconcile(with: library.preferences)
+        _ = try await library.store.reconcile(with: library.preferences)
 
         #expect(try library.store.all().isEmpty)
         #expect(library.preferences.sources.isEmpty)

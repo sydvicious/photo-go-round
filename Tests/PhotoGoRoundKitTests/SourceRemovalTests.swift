@@ -53,7 +53,7 @@ struct SourceRemovalTests {
                 sources: store,
                 store: bytes
             )
-            try cache.prepare()
+            try await cache.prepare()
         }
 
         /// Adds the folder through the same call `pgr_ctl` and the service make.
@@ -72,7 +72,9 @@ struct SourceRemovalTests {
 
         /// What the cache is holding, counted from the index rather than from
         /// what anything claims it did.
-        var held: Int64 { (try? cache.status())?.bytesOnDisk ?? 0 }
+        var held: Int64 {
+            get async { (try? await cache.status())?.bytesOnDisk ?? 0 }
+        }
 
         var pooled: Int { (try? library.deck.poolSize()) ?? 0 }
     }
@@ -87,16 +89,16 @@ struct SourceRemovalTests {
         try await fixture.materialize(source)
 
         #expect(try fixture.store.pool.size(forSource: source.id) == 3)
-        let before = fixture.held
+        let before = await fixture.held
         #expect(before > 0, "nothing was cached, so this proves nothing about deleting it")
 
-        let freed = try fixture.store.remove(source, from: scratch.preferences)
+        let freed = try await fixture.store.remove(source, from: scratch.preferences)
 
         #expect(try fixture.store.all().isEmpty)
         #expect(try fixture.store.pool.size(forSource: source.id) == 0)
         // The number it reported and the number that actually went.
         #expect(freed == before)
-        #expect(fixture.held == 0)
+        #expect(await fixture.held == 0)
         // And on disk, which is the claim that matters.
         #expect(
             !FileManager.default.fileExists(
@@ -114,7 +116,7 @@ struct SourceRemovalTests {
         _ = await fixture.store.refresh(source)
 
         // Referenced, never copied — so there is nothing of ours to delete.
-        #expect(try fixture.store.remove(source, from: scratch.preferences) == 0)
+        await #expect(try fixture.store.remove(source, from: scratch.preferences) == 0)
         #expect(try fixture.store.all().isEmpty)
     }
 
@@ -124,13 +126,13 @@ struct SourceRemovalTests {
         let fixture = try await Fixture(photos: ["one.png", "two.png"])
         let source = try await fixture.add(to: scratch.preferences)
         try await fixture.materialize(source)
-        #expect(fixture.held > 0)
+        #expect(await fixture.held > 0)
 
         // The same database, through a store that was handed no index. This is
         // the shape of a caller that forgot: the rows still go, and the zero is
         // how it announces itself rather than leaking quietly.
         let blind = SourceStore(database: fixture.library.database)
-        #expect(try blind.remove(source, from: scratch.preferences) == 0)
+        await #expect(try blind.remove(source, from: scratch.preferences) == 0)
         #expect(try blind.all().isEmpty)
     }
 
@@ -144,10 +146,10 @@ struct SourceRemovalTests {
         try await fixture.materialize(source)
 
         #expect(try fixture.store.pool.size(forSource: source.id) == 2)
-        let before = fixture.held
+        let before = await fixture.held
 
         // The user unticks the box. Nothing on disk moved.
-        let flat = try fixture.store.setRecursive(false, for: source, in: scratch.preferences)
+        let flat = try await fixture.store.setRecursive(false, for: source, in: scratch.preferences)
         #expect(flat.recursive == false)
 
         // Serving is where it is noticed: the nested photograph is not in this
@@ -158,7 +160,7 @@ struct SourceRemovalTests {
 
         #expect(served == ["top.png"])
         #expect(try fixture.store.pool.size(forSource: source.id) == 1)
-        #expect(fixture.held < before)
+        #expect(await fixture.held < before)
     }
 
     /// **The disk, not the index.** `PhotoStore.removeSource` forgets the
@@ -177,7 +179,7 @@ struct SourceRemovalTests {
             .appending(path: "cache").appending(path: source.uuid)
         #expect(FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)))
 
-        _ = try fixture.store.remove(source, from: scratch.preferences)
+        _ = try await fixture.store.remove(source, from: scratch.preferences)
 
         #expect(!FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)))
     }
@@ -190,7 +192,7 @@ struct SourceRemovalTests {
         try await fixture.materialize(source)
         #expect(try fixture.store.pool.size(forSource: source.id) == 3)
 
-        let flat = try fixture.store.setRecursive(false, for: source, in: scratch.preferences)
+        let flat = try await fixture.store.setRecursive(false, for: source, in: scratch.preferences)
         let result = await fixture.store.refresh(flat)
 
         #expect(result.removed == 2)
@@ -206,7 +208,7 @@ struct SourceRemovalTests {
         _ = await fixture.store.refresh(source)
         #expect(try fixture.store.pool.size(forSource: source.id) == 1)
 
-        let deep = try fixture.store.setRecursive(true, for: source, in: scratch.preferences)
+        let deep = try await fixture.store.setRecursive(true, for: source, in: scratch.preferences)
         _ = await fixture.store.refresh(deep)
         #expect(try fixture.store.pool.size(forSource: source.id) == 2)
     }
@@ -219,8 +221,8 @@ struct SourceRemovalTests {
         let source = try #require(
             try await fixture.store.add([.file(file)], to: scratch.preferences).added.first)
 
-        #expect(throws: SourceStore.EditFailure.optionNotAvailable(option: "recursive", kind: .file)) {
-            try fixture.store.setRecursive(true, for: source, in: scratch.preferences)
+        await #expect(throws: SourceStore.EditFailure.optionNotAvailable(option: "recursive", kind: .file)) {
+            try await fixture.store.setRecursive(true, for: source, in: scratch.preferences)
         }
     }
 

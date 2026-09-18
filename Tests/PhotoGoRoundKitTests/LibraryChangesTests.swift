@@ -55,7 +55,7 @@ struct LibraryChangesTests {
         let fixture = try Fixture(photos: ["a.png", "b.png"])
         let source = try await fixture.addFolder()
 
-        try fixture.store.remove(id: source.id)
+        try await fixture.store.remove(id: source.id)
 
         #expect(fixture.changes.bySource == [source.id: .init(added: 2, removed: 2)])
         #expect(fixture.changes.nameOfRemovedSource(source.id) == source.spokenName)
@@ -69,7 +69,7 @@ struct LibraryChangesTests {
         let cache = PhotoCache(
             database: fixture.library.database,
             root: fixture.cacheRoot.url.appending(path: "cache"), sources: fixture.store)
-        try cache.prepare()
+        try await cache.prepare()
         let photo = try #require(
             try fixture.library.database.first("SELECT id FROM photo LIMIT 1;") { try $0.int64("id") })
 
@@ -103,7 +103,7 @@ struct LibraryChangesTests {
             lasting: .standing)
         fixture.errors.record(kind: other, "empty", lasting: .standing)
 
-        try fixture.store.remove(id: source.id)
+        try await fixture.store.remove(id: source.id)
 
         #expect(fixture.errors.entries.compactMap(\.kind) == [other])
     }

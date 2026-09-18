@@ -509,13 +509,13 @@ struct SourceEndpointTests {
 
     /// The missing album, in preferences as well as the table, so the
     /// reconnect has a preference to rewrite.
-    private func listMissingAlbum(_ library: Library, locator: String) throws {
+    private func listMissingAlbum(_ library: Library, locator: String) async throws {
         library.preferences.setSources([
             SourceSpec(
                 kind: .photosCollection, locator: locator,
                 description: SourceDescription(title: "Kids 2019", collectionKind: "userAlbum"))
         ])
-        try library.store.reconcile(with: library.preferences)
+        try await library.store.reconcile(with: library.preferences)
         try library.store.database.run(
             "UPDATE source SET available = 0, unavailable_reason = 'the album is not in this Photos library';"
         )
@@ -535,7 +535,7 @@ struct SourceEndpointTests {
                 description: SourceDescription(
                     title: "Iceland", collectionKind: "userAlbum", folders: ["Trips", "2019"]))
         ])
-        try library.store.reconcile(with: library.preferences)
+        try await library.store.reconcile(with: library.preferences)
 
         let album = try #require(try sources(try await library.get("/v2/sources")).first)
         #expect(album.collectionKind == "userAlbum")
@@ -554,7 +554,7 @@ struct SourceEndpointTests {
                 description: SourceDescription(
                     title: "Iceland", collectionKind: "userAlbum", folders: ["Trips"]))
         ])
-        try library.store.reconcile(with: library.preferences)
+        try await library.store.reconcile(with: library.preferences)
 
         // v1 admits no Photos sources at all, so the absence is the whole
         // answer — and asserting it is what would catch a v2 field leaking into
@@ -566,14 +566,14 @@ struct SourceEndpointTests {
     @Test("The list says which missing albums can be reconnected")
     func theListSaysWhatIsReconnectable() async throws {
         let library = try rebuiltLibrary(successors: [Self.renumbered])
-        try listMissingAlbum(library, locator: "OLD/L0/040")
+        try await listMissingAlbum(library, locator: "OLD/L0/040")
 
         let album = try #require(try sources(try await library.get("/v2/sources")).first)
         #expect(album.missing == true)
         #expect(album.reconnectable == true)
 
         let none = try rebuiltLibrary(successors: [])
-        try listMissingAlbum(none, locator: "OLD/L0/040")
+        try await listMissingAlbum(none, locator: "OLD/L0/040")
         let orphan = try #require(try sources(try await none.get("/v2/sources")).first)
         #expect(orphan.missing == true)
         #expect(orphan.reconnectable == false)
@@ -582,7 +582,7 @@ struct SourceEndpointTests {
     @Test("Reconnecting answers with the source at its new identifier, the same uuid")
     func reconnectAnswersTheMovedSource() async throws {
         let library = try rebuiltLibrary(successors: [Self.renumbered])
-        try listMissingAlbum(library, locator: "OLD/L0/040")
+        try await listMissingAlbum(library, locator: "OLD/L0/040")
         let before = try #require(try sources(try await library.get("/v2/sources")).first)
 
         let response = try await library.post("", to: "/v2/sources/\(before.uuid)/reconnect")
@@ -598,14 +598,14 @@ struct SourceEndpointTests {
     @Test("A reconnect with no match, or several, is a conflict that names them")
     func reconnectWithoutOneMatchIsAConflict() async throws {
         let none = try rebuiltLibrary(successors: [])
-        try listMissingAlbum(none, locator: "OLD/L0/040")
+        try await listMissingAlbum(none, locator: "OLD/L0/040")
         let orphan = try #require(try sources(try await none.get("/v2/sources")).first)
         let refusedNone = try await none.post("", to: "/v2/sources/\(orphan.uuid)/reconnect")
         #expect(refusedNone.status == 409)
         #expect(try failure(refusedNone).matches == [])
 
         let two = try rebuiltLibrary(successors: [Self.renumbered, "OTHER/L0/042"])
-        try listMissingAlbum(two, locator: "OLD/L0/040")
+        try await listMissingAlbum(two, locator: "OLD/L0/040")
         let torn = try #require(try sources(try await two.get("/v2/sources")).first)
         let refusedTwo = try await two.post("", to: "/v2/sources/\(torn.uuid)/reconnect")
         #expect(refusedTwo.status == 409)

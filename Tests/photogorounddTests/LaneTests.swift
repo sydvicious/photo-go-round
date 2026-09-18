@@ -12,7 +12,7 @@ import Testing
 /// that started the overhaul had every thread of the shared pool inside a
 /// resize, with requests that needed nothing from it unable to start.
 @Suite("One lane per request", .timeLimit(.minutes(1)))
-struct RequestLaneTests {
+struct LaneTests {
 
     /// The thread the caller is on, as a number that can be compared.
     static func thread() -> UInt64 {
@@ -48,7 +48,7 @@ struct RequestLaneTests {
 
     @Test("A request's work stays on its lane's thread across a nonisolated async call")
     func staysOnItsThread() async {
-        let lane = RequestLane()
+        let lane = Lane("request")
 
         let (before, during, after) = await lane.run {
             let before = Self.thread()
@@ -70,7 +70,7 @@ struct RequestLaneTests {
         let secondArrived = DispatchSemaphore(value: 0)
         let threads = Mutex<[UInt64]>([])
 
-        func arrive(on lane: RequestLane, saying mine: DispatchSemaphore, awaiting theirs: DispatchSemaphore) async {
+        func arrive(on lane: Lane, saying mine: DispatchSemaphore, awaiting theirs: DispatchSemaphore) async {
             await lane.run {
                 threads.withLock { $0.append(Self.thread()) }
                 mine.signal()
@@ -78,8 +78,8 @@ struct RequestLaneTests {
             }
         }
 
-        let first = RequestLane()
-        let second = RequestLane()
+        let first = Lane("request")
+        let second = Lane("request")
         async let one: Void = arrive(on: first, saying: firstArrived, awaiting: secondArrived)
         async let two: Void = arrive(on: second, saying: secondArrived, awaiting: firstArrived)
         _ = await [one, two]
@@ -94,8 +94,8 @@ struct RequestLaneTests {
     @Test("A lane that blocks does not hold up another")
     func aBlockedLaneHoldsUpNobody() async {
         let released = DispatchSemaphore(value: 0)
-        let blocked = RequestLane()
-        let free = RequestLane()
+        let blocked = Lane("request")
+        let free = Lane("request")
 
         async let blocking: Void = blocked.run { Self.block(on: released) }
         let answered = await free.run { Self.thread() }

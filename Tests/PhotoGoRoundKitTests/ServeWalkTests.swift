@@ -77,7 +77,7 @@ struct ServeWalkTests {
             cache = PhotoCache(
                 database: library.database, root: cacheRoot.url.appending(path: "cache"),
                 sources: store, store: bytes)
-            try cache.prepare()
+            try await cache.prepare()
 
             source = try store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
@@ -95,14 +95,14 @@ struct ServeWalkTests {
         /// synchronously. A `dealAll()` after this deals nothing more, which
         /// is fine.
         func cacheAll() async throws {
-            try dealAll()
+            try await dealAll()
             try await cache.fetchAllQueued()
         }
 
         @discardableResult
-        func dealAll() throws -> Int {
+        func dealAll() async throws -> Int {
             var dealt = 0
-            while try cache.deal() { dealt += 1 }
+            while try await cache.deal() { dealt += 1 }
             return dealt
         }
 
@@ -114,7 +114,7 @@ struct ServeWalkTests {
 
         /// The one photograph a single-photo fixture has, straight from the
         /// row. What the cache's random draw would have landed on.
-        func firstPhoto() throws -> DeckCard? {
+        func firstPhoto() async throws -> DeckCard? {
             let first = try library.database.first(
                 "SELECT id FROM photo ORDER BY id LIMIT 1;"
             ) { try $0.int64("id") }
@@ -130,7 +130,9 @@ struct ServeWalkTests {
         var pooled: Int {
             (try? library.database.scalarInt("SELECT COUNT(*) FROM photo;")) ?? 0
         }
-        var resident: Int { (try? cache.status())?.residentCount ?? 0 }
+        var resident: Int {
+            get async { (try? await cache.status())?.residentCount ?? 0 }
+        }
     }
 
     // MARK: - The head of the deck is the picture
@@ -139,7 +141,7 @@ struct ServeWalkTests {
     func cachedCardIsServed() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
         try await fixture.cacheAll()
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         let served = try #require(try await fixture.cache.serve())
         #expect(served.card.externalID == "a.png")
@@ -160,7 +162,7 @@ struct ServeWalkTests {
     func servingConsumesTheCard() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         try await fixture.cacheAll()
-        try fixture.dealAll()
+        try await fixture.dealAll()
         #expect(fixture.queued == 2)
 
         let first = try #require(try await fixture.cache.serve())
@@ -182,7 +184,7 @@ struct ServeWalkTests {
         // `ServeWaitTests` for the wait itself.
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
 
-        #expect(try fixture.dealAll() == 2)
+        await #expect(try fixture.dealAll() == 2)
         #expect(try await fixture.cache.serve() == nil)
         #expect(fixture.heard.count { if case .waiting = $0 { true } else { false } } == 1)
         #expect(fixture.heard.count { if case .cacheDropped = $0 { true } else { false } } == 2)
@@ -195,7 +197,7 @@ struct ServeWalkTests {
     func theServedCardIsStillVerified() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
         try await fixture.cacheAll()
-        try fixture.dealAll()
+        try await fixture.dealAll()
         fixture.counting.reset()
 
         _ = try #require(try await fixture.cache.serve())
@@ -230,14 +232,14 @@ struct ServeWalkTests {
         let fixture = try await Fixture(photos: ["a.png"])
         // **Not via the queue.** These are about the fetch itself, asked of
         // the row directly, the way the queue's fetcher asks once it has a card.
-        let card = try #require(try fixture.firstPhoto())
+        let card = try await #require(try fixture.firstPhoto())
         #expect(try await fixture.cache.cache(photoID: card.id))
 
         // The second request comes off the queue, finds the bytes already here,
         // and stops. **This is the whole of the dedup** — the check is at the
         // fetch, not at the asking.
         #expect(try await fixture.cache.cache(photoID: card.id) == false)
-        #expect(fixture.resident == 1)
+        #expect(await fixture.resident == 1)
     }
 
     @Test("A fetch that fails from an online source removes the photograph")
@@ -245,7 +247,7 @@ struct ServeWalkTests {
         let fixture = try await Fixture(photos: ["a.png"])
         // **Not via the queue.** These are about the fetch itself, asked of
         // the row directly, the way the queue's fetcher asks once it has a card.
-        let card = try #require(try fixture.firstPhoto())
+        let card = try await #require(try fixture.firstPhoto())
 
         // The source is right there and the file is not, so it is gone.
         fixture.folder.remove("a.png")
@@ -258,7 +260,7 @@ struct ServeWalkTests {
         let fixture = try await Fixture(photos: ["a.png"])
         // **Not via the queue.** These are about the fetch itself, asked of
         // the row directly, the way the queue's fetcher asks once it has a card.
-        let card = try #require(try fixture.firstPhoto())
+        let card = try await #require(try fixture.firstPhoto())
         try fixture.goOffline()
 
         #expect(try await fixture.cache.cache(photoID: card.id) == false)
@@ -272,7 +274,7 @@ struct ServeWalkTests {
         let fixture = try await Fixture(photos: ["a.png"])
         // **Not via the queue.** These are about the fetch itself, asked of
         // the row directly, the way the queue's fetcher asks once it has a card.
-        let card = try #require(try fixture.firstPhoto())
+        let card = try await #require(try fixture.firstPhoto())
 
         // The cache root refuses writes — a condition entirely on our side that
         // says nothing about the photograph. The staging directory pre-exists
@@ -299,7 +301,7 @@ struct ServeWalkTests {
         let fixture = try await Fixture(photos: ["a.png"])
         // **Not via the queue.** These are about the fetch itself, asked of
         // the row directly, the way the queue's fetcher asks once it has a card.
-        let card = try #require(try fixture.firstPhoto())
+        let card = try await #require(try fixture.firstPhoto())
 
         // Unreadable is not absent: the provider can see the file and cannot
         // read it. Removal is earned only by a confirmed absence, so the row
@@ -322,7 +324,7 @@ struct ServeWalkTests {
     @Test("A failed fetch says why, and says so when its source confirms the photograph gone")
     func aFailedFetchSaysWhy() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        let card = try #require(try fixture.firstPhoto())
+        let card = try await #require(try fixture.firstPhoto())
 
         fixture.folder.remove("a.png")
         let answer = await fixture.cache.fetch(card)
@@ -336,7 +338,7 @@ struct ServeWalkTests {
     @Test("A fetch that cannot be kept gives that as its reason")
     func aFailedAdoptSaysWhy() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        let card = try #require(try fixture.firstPhoto())
+        let card = try await #require(try fixture.firstPhoto())
         let root = fixture.cache.root
         try FileManager.default.createDirectory(
             at: root.appending(path: ".staging"), withIntermediateDirectories: true)
@@ -356,7 +358,7 @@ struct ServeWalkTests {
     @Test("A fetch of a photograph whose bytes are already here has landed")
     func aFetchOfSomethingHeldLands() async throws {
         let fixture = try await Fixture(photos: ["a.png"])
-        let card = try #require(try fixture.firstPhoto())
+        let card = try await #require(try fixture.firstPhoto())
         #expect(try await fixture.cache.cache(photoID: card.id))
 
         #expect(await fixture.cache.fetch(card) == .landed)
@@ -369,7 +371,7 @@ struct ServeWalkTests {
         // **Nothing serving does asks for a fetch**, so the fetch is started
         // the way the queue's fetcher starts one: from the row.
         let fixture = try await Fixture(photos: ["a.png"])
-        let wanted = try #require(try fixture.firstPhoto()).id
+        let wanted = try await #require(try fixture.firstPhoto()).id
 
         // The source is gone by the time the fetch runs.
         try fixture.goOffline()
@@ -387,7 +389,7 @@ struct ServeWalkTests {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         // Both dealt — the deck deals every available photograph — and exactly
         // one of the two fetched, so the queue holds one warm card and one cold.
-        try fixture.dealAll()
+        try await fixture.dealAll()
         guard case .fetched = await fixture.cache.fetchQueuedOnce() else {
             Issue.record("the head card was not fetched"); return
         }
@@ -411,8 +413,8 @@ struct ServeWalkTests {
     func deletedPhotographsAreDropped() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         try await fixture.cacheAll()
-        try fixture.dealAll()
-        #expect(fixture.resident == 2)
+        try await fixture.dealAll()
+        #expect(await fixture.resident == 2)
 
         fixture.folder.remove("a.png")
 
@@ -422,7 +424,7 @@ struct ServeWalkTests {
         while let next = try await fixture.cache.serve() { served.append(next.card.externalID) }
         #expect(served == ["b.png"])
         #expect(fixture.pooled == 1)
-        #expect(fixture.resident == 1, "its cached copy went with it")
+        #expect(await fixture.resident == 1, "its cached copy went with it")
         #expect(fixture.heard.lines.contains { $0.hasPrefix("SERVE: a.png (source ") && $0.contains(" dropped") })
     }
 
@@ -430,7 +432,7 @@ struct ServeWalkTests {
     func goneSourcesAreDropped() async throws {
         let fixture = try await Fixture(photos: ["a.png", "b.png"])
         try await fixture.cacheAll()
-        try fixture.dealAll()
+        try await fixture.dealAll()
 
         // The folder is deleted while its volume stays — which is *gone*, not
         // offline, and the opposite answer.
@@ -438,7 +440,7 @@ struct ServeWalkTests {
 
         #expect(try await fixture.cache.serve() == nil)
         #expect(fixture.pooled == 0)
-        #expect(fixture.resident == 0)
+        #expect(await fixture.resident == 0)
     }
 
     // MARK: - What it says while doing it
@@ -452,7 +454,7 @@ struct ServeWalkTests {
         // so there is one thing left for the line to say.
         let fixture = try await Fixture(photos: ["a.png"])
         try await fixture.cacheAll()
-        try fixture.dealAll()
+        try await fixture.dealAll()
         _ = try #require(try await fixture.cache.serve())
 
         let lines = fixture.heard.lines

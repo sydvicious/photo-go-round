@@ -261,7 +261,7 @@ struct RendererTests {
 struct ByteStoreTests {
 
     @Test("The index survives a restart, rebuilt from the filenames alone")
-    func indexIsRebuiltFromDisk() throws {
+    func indexIsRebuiltFromDisk() async throws {
         let directory = URL.temporaryDirectory.appending(path: "pgr-rebuild-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -272,26 +272,26 @@ struct ByteStoreTests {
         let source = UUID().uuidString.lowercased()
 
         let writer = PhotoStore(root: root)
-        try writer.store(
+        try await writer.store(
             Data(count: 128), forPhoto: first, sourceUUID: source, pathExtension: "jpeg")
-        try writer.store(
+        try await writer.store(
             Data(count: 512), forPhoto: second, sourceUUID: source, pathExtension: "heic")
 
         // A different process, with nothing in memory and nothing in a database
         // telling it what is here.
         let reader = PhotoStore(root: root)
-        #expect(reader.url(forPhoto: first) == nil)
+        #expect(await reader.url(forPhoto: first) == nil)
 
-        let rebuilt = reader.rebuild(photos: [first: source, second: source])
+        let rebuilt = await reader.rebuild(photos: [first: source, second: source])
         #expect(rebuilt.kept == 2)
         #expect(rebuilt.discarded == 0)
         #expect(rebuilt.bytes == 640)
-        #expect(reader.url(forPhoto: first) != nil)
-        #expect(reader.url(forPhoto: second) != nil)
+        #expect(await reader.url(forPhoto: first) != nil)
+        #expect(await reader.url(forPhoto: second) != nil)
     }
 
     @Test("A file whose photograph is unknown is deleted, not adopted")
-    func unknownIdentitiesAreDiscarded() throws {
+    func unknownIdentitiesAreDiscarded() async throws {
         let directory = URL.temporaryDirectory.appending(path: "pgr-unknown-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -301,23 +301,23 @@ struct ByteStoreTests {
         let stranger = UUID().uuidString.lowercased()
         let source = UUID().uuidString.lowercased()
 
-        try store.store(
+        try await store.store(
             Data(count: 10), forPhoto: known, sourceUUID: source, pathExtension: "heic")
-        try store.store(
+        try await store.store(
             Data(count: 10), forPhoto: stranger, sourceUUID: source, pathExtension: "heic")
 
         // This is what a rebuilt database looks like from the cache's side: the
         // photographs it held are simply not there any more. Serving them under
         // whatever now owns those row ids would be the corruption UUIDs prevent.
-        let result = store.rebuild(photos: [known: source])
+        let result = await store.rebuild(photos: [known: source])
         #expect(result.kept == 1)
         #expect(result.discarded == 1)
-        #expect(store.url(forPhoto: stranger) == nil)
-        #expect(store.url(forPhoto: known) != nil)
+        #expect(await store.url(forPhoto: stranger) == nil)
+        #expect(await store.url(forPhoto: known) != nil)
     }
 
     @Test("One photograph is one file: storing again replaces what was there")
-    func oneFilePerPhotograph() throws {
+    func oneFilePerPhotograph() async throws {
         let directory = URL.temporaryDirectory.appending(path: "pgr-onefile-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -326,17 +326,17 @@ struct ByteStoreTests {
         let photo = UUID().uuidString.lowercased()
         let source = UUID().uuidString.lowercased()
 
-        try store.store(
+        try await store.store(
             Data(count: 500), forPhoto: photo, sourceUUID: source, pathExtension: "heic")
         // A different extension, which is a different filename: the file it
         // replaces must not be left where no index entry can name it again.
-        let second = try store.store(
+        let second = try await store.store(
             Data(count: 300), forPhoto: photo, sourceUUID: source, pathExtension: "jpeg")
 
-        #expect(store.totals.entries == 1)
-        #expect(store.totals.byteCount == 300)
-        #expect(store.url(forPhoto: photo) == second)
-        let rebuilt = PhotoStore(root: directory.appending(path: "cache"))
+        #expect(await store.totals.entries == 1)
+        #expect(await store.totals.byteCount == 300)
+        #expect(await store.url(forPhoto: photo) == second)
+        let rebuilt = await PhotoStore(root: directory.appending(path: "cache"))
             .rebuild(photos: [photo: source])
         #expect(rebuilt.kept == 1)
         #expect(rebuilt.bytes == 300)
@@ -345,7 +345,7 @@ struct ByteStoreTests {
     /// **Temporary, and goes when the sweep does.** See
     /// `PhotoStore.IndexResult.reclaimedDirectories`.
     @Test("Rendering directories left by the old resize cache are swept at launch")
-    func leftoverRenderingDirectoriesAreReclaimed() throws {
+    func leftoverRenderingDirectoriesAreReclaimed() async throws {
         let directory = URL.temporaryDirectory.appending(path: "pgr-sweep-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -355,7 +355,7 @@ struct ByteStoreTests {
         let source = UUID().uuidString.lowercased()
 
         let store = PhotoStore(root: root)
-        try store.store(
+        try await store.store(
             Data(count: 500), forPhoto: photo, sourceUUID: source, pathExtension: "heic")
 
         // What the resize cache used to write, by hand: the photograph is one
@@ -367,17 +367,17 @@ struct ByteStoreTests {
         try Data(count: 10).write(to: sized.appending(path: "\(UUID().uuidString).heic"))
 
         // A read-only pass removes nothing.
-        let peek = PhotoStore(root: root).index(photos: [photo: source])
+        let peek = await PhotoStore(root: root).index(photos: [photo: source])
         #expect(peek.reclaimedDirectories == 0)
         #expect(FileManager.default.fileExists(atPath: sized.path(percentEncoded: false)))
 
-        let swept = PhotoStore(root: root).rebuild(photos: [photo: source])
+        let swept = await PhotoStore(root: root).rebuild(photos: [photo: source])
         #expect(swept.reclaimedDirectories == 1)
         #expect(swept.reclaimedBytes == 100)
         #expect(!FileManager.default.fileExists(atPath: sized.path(percentEncoded: false)))
         // The original is untouched, and is all that is counted.
         #expect(swept.kept == 1)
         #expect(swept.bytes == 500)
-        #expect(store.url(forPhoto: photo) != nil)
+        #expect(await store.url(forPhoto: photo) != nil)
     }
 }

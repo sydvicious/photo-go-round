@@ -183,7 +183,7 @@ struct SourceEditingTests {
         _ = await store.refresh(source)
         #expect(try store.pool.size(forSource: source.id) == 2)
 
-        try store.remove(source, from: scratch.preferences)
+        try await store.remove(source, from: scratch.preferences)
 
         #expect(scratch.preferences.sources.isEmpty)
         #expect(try store.all().isEmpty)
@@ -205,7 +205,7 @@ struct SourceEditingTests {
         let orphan = try store.add(kind: .folder, locator: folder.path)
         #expect(scratch.preferences.sources.isEmpty)
 
-        try store.remove(orphan, from: scratch.preferences)
+        try await store.remove(orphan, from: scratch.preferences)
         #expect(try store.all().isEmpty)
     }
 
@@ -219,7 +219,7 @@ struct SourceEditingTests {
         let added = try await store.add(
             [.folder(one.path), .folder(two.path)], to: scratch.preferences
         ).added
-        try store.remove(added[0], from: scratch.preferences)
+        try await store.remove(added[0], from: scratch.preferences)
 
         #expect(scratch.preferences.sources.map(\.locator) == [two.path])
         #expect(try store.all().map(\.locator) == [two.path])

@@ -90,7 +90,7 @@ struct EndpointCacheTests {
         deinit { try? FileManager.default.removeItem(at: directory) }
 
         func fill(materialized: Bool = false) async throws {
-            try cache.prepare()
+            try await cache.prepare()
             let folder = directory.appending(path: "photos").path(percentEncoded: false)
             let source = try sources.add(kind: .folder, locator: folder)
             sourceIdentifier = source.id
@@ -142,6 +142,17 @@ struct EndpointCacheTests {
 
         func request(_ target: String) throws -> HTTPListener.Request {
             try #require(HTTPListener.parse("GET \(target) HTTP/1.1"))
+        }
+
+        /// How many resized copies are on disk and in the database.
+        ///
+        /// **Waited for, not assumed.** Keeping a copy became `async` when
+        /// `PhotoStore` became an actor, so the endpoint hands the write to a
+        /// task of its own: the response goes out before the row exists, and a
+        /// test that asks again immediately would sometimes miss the copy and
+        /// resize twice.
+        var copies: Int {
+            (try? sources.database.scalarInt("SELECT COUNT(*) FROM resized;")) ?? 0
         }
 
         static func write(width: Int, height: Int, to url: URL) throws {
@@ -320,13 +331,14 @@ struct EndpointCacheTests {
             resizes.withLock { $0 += 1 }
             return try PhotoRenderer.render(contentsOf: original, fitting: width, by: height, as: format)
         }
-        let originals = library.cache.store.totals
+        let originals = await library.cache.store.totals
 
         func get(_ box: String) async throws -> HTTPListener.Response {
             _ = try await library.cache.fillCompletely()
             return await endpoint.route(try library.request("/v1/next?\(box)"))
         }
         let first = try await get("w=200&h=200")
+        await until({ library.copies >= 1 }, "the first copy was written")
         let second = try await get("w=200&h=200")
         #expect(first.status == 200 && second.status == 200)
         #expect(resizes.withLock { $0 } == 1)
@@ -334,9 +346,10 @@ struct EndpointCacheTests {
 
         #expect(try await get("w=300&h=300").status == 200)
         #expect(resizes.withLock { $0 } == 2, "a different box is a different copy")
+        await until({ library.copies >= 2 }, "the second box's copy was written")
 
         // The originals are what they were: copies are kept beside them.
-        #expect(library.cache.store.totals == originals)
+        #expect(await library.cache.store.totals == originals)
     }
 
     /// Syd, 2026-09-16: "You can serve the copy if the original has been
@@ -357,19 +370,20 @@ struct EndpointCacheTests {
         let first = await endpoint.route(try library.request("/v1/next?w=200&h=200"))
         #expect(first.status == 200)
         #expect(resizes.withLock { $0 } == 1)
+        await until({ library.copies >= 1 }, "the copy was written")
 
         // Evict the original, and deal its card again without fetching it back.
         let card = try #require(try library.sources.database.first(
             "SELECT id, uuid FROM photo;", [:], { (id: try $0.int64("id"), uuid: try $0.string("uuid")) }))
-        library.cache.store.remove(photoUUID: card.uuid)
+        await library.cache.store.remove(photoUUID: card.uuid)
         try library.cache.releaseResidency(ofPhotos: [card.uuid])
-        #expect(try library.cache.deal())
+        await #expect(try library.cache.deal())
 
         let again = await endpoint.route(try library.request("/v1/next?w=200&h=200"))
         #expect(again.status == 200)
         #expect(again.headers["X-PGR-Pixels"] == first.headers["X-PGR-Pixels"])
         #expect(resizes.withLock { $0 } == 1, "resized from an original that is not there")
-        #expect(library.cache.store.url(forPhoto: card.uuid) == nil, "nothing fetched it back")
+        #expect(await library.cache.store.url(forPhoto: card.uuid) == nil, "nothing fetched it back")
     }
 
     @Test("One record per request, and no record for work that was skipped")
@@ -606,7 +620,7 @@ extension PhotoCache {
     @discardableResult
     func fillCompletely(limit: Int = 500) async throws -> Int {
         var dealt = 0
-        while dealt < limit, try deal() { dealt += 1 }
+        while dealt < limit, try await deal() { dealt += 1 }
         try await fetchAllQueued(limit: limit)
         return try queue.size()
     }

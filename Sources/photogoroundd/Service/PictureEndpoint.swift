@@ -105,13 +105,25 @@ struct PictureEndpoint {
     /// Its own connection, opened here, because the resizer's thread is not the
     /// request's. A copy that cannot be kept is logged and the picture still goes
     /// out: the cache is an optimisation, never a reason to fail a request.
+    /// **Handed to a task of its own.** Keeping a copy became `async` when
+    /// `PhotoStore` became an actor, and the resizer's work stays synchronous —
+    /// one resize at a time is the whole point of it. The copy is written off
+    /// the resizer's thread, which also covers the resize nobody waited for:
+    /// it still earns its copy.
     static func keep(
         _ rendered: PhotoRenderer.Rendered, of card: DeckCard, box: (width: Int, height: Int),
         into place: CopyPlace
     ) {
+        Task { await keepNow(rendered, of: card, box: box, into: place) }
+    }
+
+    private static func keepNow(
+        _ rendered: PhotoRenderer.Rendered, of card: DeckCard, box: (width: Int, height: Int),
+        into place: CopyPlace
+    ) async {
         do {
             let cache = try place.open()
-            try cache.keep(
+            try await cache.keep(
                 rendered, photoID: card.id, photoUUID: card.uuid, boxWidth: box.width,
                 boxHeight: box.height)
         } catch {
@@ -413,7 +425,7 @@ struct PictureEndpoint {
                     report(
                         request, status: 200, detail: served.card.spokenName, source: served.source,
                         card: served.card, bytes: stream.byteCount,
-                        cacheBytes: try? context.cache.bytesOnDisk(),
+                        cacheBytes: try? await context.cache.bytesOnDisk(),
                         queued: try? context.cache.queue.size(), timing: timing)
                     return HTTPListener.Response(
                         status: 200, reason: "OK", headers: headers, body: .file(stream))
@@ -485,7 +497,7 @@ struct PictureEndpoint {
                     report(
                         request, status: 200, detail: served.card.spokenName, source: served.source,
                         card: served.card, bytes: Int64(rendered.bytes.count),
-                        cacheBytes: try? context.cache.bytesOnDisk(),
+                        cacheBytes: try? await context.cache.bytesOnDisk(),
                         queued: try? context.cache.queue.size(), timing: timing)
                     return HTTPListener.Response(
                         status: 200, reason: "OK", headers: headers,

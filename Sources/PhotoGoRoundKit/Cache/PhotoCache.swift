@@ -86,7 +86,7 @@ public struct PhotoCache {
     /// sweep took 15 files and 33 directories on 2026-08-26 and said nothing
     /// the agent's own console showed.
     @discardableResult
-    public func prepare() throws -> PhotoStore.IndexResult {
+    public func prepare() async throws -> PhotoStore.IndexResult {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
@@ -97,8 +97,8 @@ public struct PhotoCache {
         // the right outcome by luck rather than by design, so it is still taken
         // here explicitly and stays correct when that sweep is deleted.
         try? FileManager.default.removeItem(at: root.appending(path: Self.stagingDirectory))
-        let result = try indexCache()
-        store.walked()
+        let result = try await indexCache()
+        await store.walked()
         return result
     }
 
@@ -113,7 +113,7 @@ public struct PhotoCache {
     /// is the photograph's uuid and its source's, with the extension the
     /// external id carries, which is what `adopt` wrote.
     @discardableResult
-    public func prepareFromDatabase() throws -> Held {
+    public func prepareFromDatabase() async throws -> Held {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
@@ -142,7 +142,7 @@ public struct PhotoCache {
                     uuid: photoUUID, sourceUUID: sourceUUID, url: url, byteCount: byteCount))
             bytes += byteCount
         }
-        store.believe(believed)
+        await store.believe(believed)
         return Held(photos: believed.count, bytes: bytes)
     }
 
@@ -161,9 +161,9 @@ public struct PhotoCache {
     /// default an hour". It is the same walk `prepare()` does, and it is what
     /// lets eviction run.
     @discardableResult
-    public func walkCache() throws -> PhotoStore.IndexResult {
-        let result = try indexCache()
-        store.walked()
+    public func walkCache() async throws -> PhotoStore.IndexResult {
+        let result = try await indexCache()
+        await store.walked()
         return result
     }
 
@@ -179,7 +179,7 @@ public struct PhotoCache {
     /// it, and a file whose UUID is unknown has no owner left that could name it
     /// correctly.
     @discardableResult
-    public func indexCache() throws -> PhotoStore.IndexResult {
+    public func indexCache() async throws -> PhotoStore.IndexResult {
         var owners: [String: String] = [:]
         try database.query(
             """
@@ -198,12 +198,12 @@ public struct PhotoCache {
         // materialized one and left the referenced cards that never needed
         // bytes, so a source reached only through the cache queue was emptied
         // out of the deck at every launch and never got a turn.
-        let result = store.rebuild(photos: owners)
+        let result = await store.rebuild(photos: owners)
         // **The disk wins.** The walk above is the truth about what is held;
         // `cached_at` is a projection of it, and this is where a projection
         // that drifted — a file deleted by hand, a database restored from a
         // backup, an upgrade that arrived with the column empty — is put back.
-        try reconcileResidency(with: store.residentPhotoUUIDs)
+        try reconcileResidency(with: await store.residentPhotoUUIDs)
         return result
     }
 
@@ -276,7 +276,7 @@ public struct PhotoCache {
     /// Referenced photos resolve through `FileAccess` against their source;
     /// materialized ones resolve against the cache root. A consumer asks this
     /// and does not care which it got.
-    public func residentURL(forPhoto photoID: Int64) throws -> URL? {
+    public func residentURL(forPhoto photoID: Int64) async throws -> URL? {
         let row = try database.first(
             """
             SELECT p.storage, p.uuid, p.external_id, p.source_id
@@ -295,7 +295,7 @@ public struct PhotoCache {
 
         switch row.storage {
         case .materialized:
-            return store.url(forPhoto: row.uuid)
+            return await store.url(forPhoto: row.uuid)
         case .referenced:
             guard let source = try sources.source(id: row.sourceID) else { return nil }
             // Through the seam, never from the stored path — so this keeps
@@ -324,24 +324,24 @@ public struct PhotoCache {
 
     /// What the cache occupies against its ceiling: originals and resized
     /// copies, which share it.
-    public func bytesOnDisk() throws -> Int64 {
-        store.totals.byteCount + (try ResizedCopies.byteCount(in: database))
+    public func bytesOnDisk() async throws -> Int64 {
+        await store.totals.byteCount + (try ResizedCopies.byteCount(in: database))
     }
 
-    public func status() throws -> Status {
+    public func status() async throws -> Status {
         let materialized =
             try database.scalarInt(
                 "SELECT COUNT(*) FROM photo WHERE storage = 'materialized';") ?? 0
         let referenced =
             try database.scalarInt(
                 "SELECT COUNT(*) FROM photo WHERE storage = 'referenced';") ?? 0
-        let totals = store.totals
+        let totals = await store.totals
 
         return Status(
             residentCount: totals.entries,
             referencedCount: referenced,
             pendingCount: max(0, materialized - totals.entries),
-            bytesOnDisk: try bytesOnDisk(),
+            bytesOnDisk: try await bytesOnDisk(),
             byteCeiling: settings.byteCeiling,
             freeBytesOnVolume: freeBytesOnVolume(),
             queued: try queue.size()
@@ -371,7 +371,7 @@ public struct PhotoCache {
     /// Returns false when there was nothing left to deal, which is ordinary: an
     /// empty library, or everything already queued.
     @discardableResult
-    public func deal(settings: DeckSettings = .default, now: Date = Date()) throws -> Bool {
+    public func deal(settings: DeckSettings = .default, now: Date = Date()) async throws -> Bool {
         guard let candidate = try deck.nextCandidate(settings: settings, now: now) else {
             return false
         }
@@ -384,14 +384,14 @@ public struct PhotoCache {
         // on 2026-09-06 and a referenced one is read where it lies; this is
         // called for every candidate anyway, because it is one dictionary write
         // and the alternative is a second place that has to know the rule.
-        store.note(photoUUID: candidate.uuid, sourceUUID: candidate.sourceUUID)
+        await store.note(photoUUID: candidate.uuid, sourceUUID: candidate.sourceUUID)
         guard try queue.append(photoID: candidate.id, sourceID: candidate.sourceID, at: now) else {
             return false
         }
         // The fetch side of the hit rate, counted only for a card that was
         // actually dealt. A referenced photograph never touches the cache.
         if candidate.storage == .materialized {
-            dealLookedUp(store.contains(photo: candidate.uuid) ? .hit : .miss)
+            dealLookedUp(await store.contains(photo: candidate.uuid) ? .hit : .miss)
         }
         log(.dealt(photo: candidate.externalID, source: candidate.sourceID, queued: (try? queue.size()) ?? 0))
         return true
@@ -464,7 +464,7 @@ public struct PhotoCache {
         guard card.storage == .materialized else {
             return .unnecessary("it is read in place and never fetched")
         }
-        guard !store.contains(photo: card.uuid) else {
+        guard await !store.contains(photo: card.uuid) else {
             log(.cacheUnnecessary(photo: card.spokenName, source: card.sourceID))
             return .unnecessary("its bytes are already here")
         }
@@ -500,7 +500,7 @@ public struct PhotoCache {
                 card)
         }
         do {
-            try store.adopt(
+            try await store.adopt(
                 fileAt: temporary, forPhoto: card.uuid,
                 sourceUUID: card.sourceUUID, pathExtension: extension_)
             // **Residency is recorded in the same statement as the size.**
@@ -534,7 +534,7 @@ public struct PhotoCache {
             // the disagreement would stand until the next launch. Dropping the
             // entry leaves both saying *not held*, which is true, and the
             // photograph is simply drawn again.
-            store.remove(photoUUID: card.uuid)
+            await store.remove(photoUUID: card.uuid)
             // Only logged here. The agent's fetcher records it with every other
             // reason a fetch comes to nothing, as `cache.fetch-failed`; this was
             // `cache.could-not-keep` until 2026-09-13, which recorded it twice.
@@ -543,7 +543,7 @@ public struct PhotoCache {
             return .failed("it was fetched and could not be kept: \(error)", card)
         }
 
-        evictAfterWriting()
+        await evictAfterWriting()
 
         // **Nothing about the queue changes here**, including when the card
         // these bytes were fetched for is no longer on it. Usually it is, and
@@ -564,7 +564,7 @@ public struct PhotoCache {
         log(
             .cached(
                 photo: named.spokenName, source: card.sourceID,
-                bytes: store.url(forPhoto: card.uuid).flatMap {
+                bytes: await store.url(forPhoto: card.uuid).flatMap {
                     (try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
                 } ?? 0))
         return .landed
@@ -600,7 +600,7 @@ public struct PhotoCache {
     /// which needs a detached task, which needs `Sendable`, which a `PhotoCache`
     /// holding a `Database` is deliberately not. Which thread runs a fetch and
     /// how long it may take are scheduling, and scheduling is the host's.
-    public func nextQueuedToFetch(after rank: Int64? = nil, now: Date = Date())
+    public func nextQueuedToFetch(after rank: Int64? = nil, now: Date = Date()) async
         -> QueueFetcher.Next
     {
         // Asked first: the disk is the bound nothing else may override.
@@ -622,7 +622,7 @@ public struct PhotoCache {
 
             // The column said not held and the store says otherwise: the store
             // is the truth, and there is nothing to fetch. Walk on.
-            if store.contains(photo: card.uuid) { continue }
+            if await store.contains(photo: card.uuid) { continue }
 
             // **A benched source is not asked at all.** Its card stays where it
             // is and is looked at again on the next kick; the lane moves past
@@ -666,7 +666,7 @@ public struct PhotoCache {
         } catch {
             reason = "\(error)"
         }
-        if store.contains(photo: card.uuid) { return .landed }
+        if await store.contains(photo: card.uuid) { return .landed }
         log(.cacheFailed(photo: card.spokenName, source: card.sourceID, because: reason))
         return .failed(because: reason)
     }
@@ -728,7 +728,7 @@ public struct PhotoCache {
     public func fetchQueuedOnce(after rank: Int64? = nil, now: Date = Date()) async
         -> FetchStep
     {
-        switch nextQueuedToFetch(after: rank, now: now) {
+        switch await nextQueuedToFetch(after: rank, now: now) {
         case .blocked: return .blocked
         case .drained: return .drained
         case .benched(let rank): return .benched(rank: rank)
@@ -797,7 +797,7 @@ public struct PhotoCache {
             Log.cache.notice(
                 "photo \(card.id, privacy: .public) failed to fetch and its source confirms it absent; removing it from the pool"
             )
-            try self.remove(card.id)
+            try await self.remove(card.id)
             return true
         case .present:
             Log.cache.info(
@@ -924,17 +924,18 @@ public struct PhotoCache {
                 log(.nothingToShow(walked: skipped, because: "out of cards"))
                 return nil
             }
-            let foundBytes = try bytesHere(for: card)
+            let foundBytes = try await bytesHere(for: card)
             // **The copy for the box asked for, if the cache keeps one**, so a
             // card whose original has been evicted is ready all the same. Syd,
             // 2026-09-16: "You can serve the copy if the original has been
             // evicted." Until then a card was ready only if its original was
             // here, and one whose original had gone waited for a fetch and was
             // dropped, however many copies of it were kept.
-            let copy = try request.flatMap {
+            let copyRoot = store.root
+            let copy = try request.flatMap { wanted in
                 try ResizedCopies.find(
-                    photoID: card.id, boxWidth: $0.width, boxHeight: $0.height, format: $0.format,
-                    root: store.root, database: database)
+                    photoID: card.id, boxWidth: wanted.width, boxHeight: wanted.height,
+                    format: wanted.format, root: copyRoot, database: database)
             }
 
             // Neither guard below is a photograph that has *gone*, so neither
@@ -1047,7 +1048,7 @@ public struct PhotoCache {
             case .absent:
                 skipped += 1
                 log(.dropped(photo: card.spokenName, source: card.sourceID, because: "gone from a source that is right there", queued: depth()))
-                try self.remove(card.id)
+                try await self.remove(card.id)
                 continue
 
             case .unknown(let reason):
@@ -1062,7 +1063,7 @@ public struct PhotoCache {
                 if case .gone(let why)? = availability {
                     skipped += 1
                     log(.dropped(photo: card.spokenName, source: card.sourceID, because: "its source is \(why)", queued: depth()))
-                    try self.remove(card.id)
+                    try await self.remove(card.id)
                     continue
                 }
                 unconfirmed = reason
@@ -1124,8 +1125,8 @@ public struct PhotoCache {
     /// the original, in the cache for a materialized photograph and in place
     /// through `FileAccess` for a referenced one. It used to check for a
     /// rendering at the requested size first.
-    private func bytesHere(for card: DeckCard) throws -> URL? {
-        try residentURL(forPhoto: card.id)
+    private func bytesHere(for card: DeckCard) async throws -> URL? {
+        try await residentURL(forPhoto: card.id)
     }
 
     /// A cold card leaving the queue at a request's hand.
@@ -1167,7 +1168,7 @@ public struct PhotoCache {
         let clock = ContinuousClock()
         let deadline = clock.now + limit
         while true {
-            if let url = try bytesHere(for: card) { return .landed(url) }
+            if let url = try await bytesHere(for: card) { return .landed(url) }
             guard try queue.contains(photoID: card.id) else { return .gone }
             guard clock.now < deadline else { return .timedOut }
             try await Task.sleep(for: .milliseconds(100))
@@ -1204,15 +1205,15 @@ public struct PhotoCache {
     /// Contrast a source that is merely offline, where the cached bytes are the
     /// most valuable thing we have and keep being served.
     @discardableResult
-    public func remove(_ photoIDs: [Int64]) throws -> PhotoPool.Removal {
-        let removal = try sources.pool.remove(photoIDs)
-        store.discard(removal)
+    public func remove(_ photoIDs: [Int64]) async throws -> PhotoPool.Removal {
+        let removal = try await sources.pool.remove(photoIDs)
+        await store.discard(removal)
         return removal
     }
 
     @discardableResult
-    public func remove(_ photoID: Int64) throws -> PhotoPool.Removal {
-        try remove([photoID])
+    public func remove(_ photoID: Int64) async throws -> PhotoPool.Removal {
+        try await remove([photoID])
     }
 
     // MARK: - Eviction
@@ -1285,19 +1286,19 @@ public struct PhotoCache {
     /// That needs a library several times the size of any tested here, and it is
     /// the point at which this wants measuring rather than reasoning about.
     @discardableResult
-    public func evictIfNeeded() throws -> EvictionResult {
+    public func evictIfNeeded() async throws -> EvictionResult {
         // **Nothing is evicted before the disk has been walked.** At launch the
         // index is what the database claimed (`prepareFromDatabase`), and a
         // total nobody has checked is not one to delete photographs over.
-        guard store.hasWalked else {
+        guard await store.hasWalked else {
             Log.cache.info("eviction waits for the first cache walk")
             return EvictionResult(evicted: 0, bytesFreed: 0, ceilingHalved: false)
         }
-        guard store.claimEviction() else {
+        guard await store.claimEviction() else {
             Log.cache.info("an eviction is already running; this one is skipped")
             return EvictionResult(evicted: 0, bytesFreed: 0, ceilingHalved: false)
         }
-        defer { store.endEviction() }
+        defer { await store.endEviction() }
 
         // The disk-space guard evicts ahead of the ceiling, folded in as a lower
         // effective ceiling rather than as a second pass.
@@ -1307,15 +1308,17 @@ public struct PhotoCache {
             Log.cache.notice(
                 "evicting ahead of the ceiling: only \(free, privacy: .public) bytes free"
             )
-            store.byteCeiling = max(0, settings.byteCeiling / 2)
+            await store.setByteCeiling(max(0, settings.byteCeiling / 2))
         } else {
-            store.byteCeiling = settings.byteCeiling
+            await store.setByteCeiling(settings.byteCeiling)
         }
 
         // Copies share the ceiling with originals. Syd, 2026-09-16: "no,
         // combined limit."
         let copyBytes = try ResizedCopies.byteCount(in: database)
-        guard store.totals.byteCount + copyBytes > store.byteCeiling else {
+        let held = await store.totals.byteCount
+        let ceiling = await store.byteCeiling
+        guard held + copyBytes > ceiling else {
             return EvictionResult(evicted: 0, bytesFreed: 0, ceilingHalved: halved)
         }
         // A file with no row — a copy written and never recorded, which takes
@@ -1324,13 +1327,13 @@ public struct PhotoCache {
             try ResizedCopies.removeUnclaimedFiles(root: store.root, database: database)
         }
 
-        let result = store.evictIfNeeded(inOrder: try evictionOrder(), copyBytes: copyBytes)
+        let result = await store.evictIfNeeded(inOrder: try evictionOrder(), copyBytes: copyBytes)
         // An evicted original is no longer servable, so it leaves the deck's
         // pool in the same breath as it leaves the disk.
         try releaseResidency(ofPhotos: result.releasedOriginals)
         // An evicted copy's row goes after its file, a hundred at a time.
         for page in result.evictedCopies.chunked(into: Self.copyRowPage) {
-            try database.transaction(.immediate) {
+            try await database.transaction(.immediate) {
                 for file in page {
                     try database.run("DELETE FROM resized WHERE file = :file;", ["file": .text(file)])
                 }
@@ -1353,9 +1356,9 @@ public struct PhotoCache {
     ///
     /// A failure is logged and the write stands: the file is the point, and
     /// the next write evicts again.
-    func evictAfterWriting() {
+    func evictAfterWriting() async {
         do {
-            let result = try evictIfNeeded()
+            let result = try await evictIfNeeded()
             if result.evicted > 0 { evicted(result) }
         } catch {
             Log.cache.error(kind: nil, "eviction after a write failed: \(error)")
@@ -1370,11 +1373,11 @@ public struct PhotoCache {
     public func keep(
         _ rendered: PhotoRenderer.Rendered, photoID: Int64, photoUUID: String,
         boxWidth: Int, boxHeight: Int, now: Date = Date()
-    ) throws -> ResizedCopies.Copy? {
+    ) async throws -> ResizedCopies.Copy? {
         let copy = try ResizedCopies.save(
             rendered, photoID: photoID, photoUUID: photoUUID, boxWidth: boxWidth,
             boxHeight: boxHeight, root: root, database: database, now: now)
-        if copy != nil { evictAfterWriting() }
+        if copy != nil { await evictAfterWriting() }
         return copy
     }
 
@@ -1409,7 +1412,7 @@ public struct PhotoCache {
         public let costsNothingToRefetch: Bool
     }
 
-    public func costOfClearing(_ scope: ClearScope) throws -> ClearCost {
+    public func costOfClearing(_ scope: ClearScope) async throws -> ClearCost {
         let (predicate, bindings) = Self.scopePredicate(scope)
         let rows = try database.all(
             """
@@ -1424,13 +1427,13 @@ public struct PhotoCache {
         var referenced = 0
         for row in rows {
             if row.storage == "referenced" { referenced += 1 }
-            guard store.contains(photo: row.uuid) else { continue }
+            guard await store.contains(photo: row.uuid) else { continue }
             if row.storage == "materialized" { refetch += 1 }
         }
         // The byte total comes from the index, since the database no longer
         // records what is held.
         let claimed = Set(rows.map(\.uuid))
-        bytes = store.byteCount(ofPhotos: claimed)
+        bytes = await store.byteCount(ofPhotos: claimed)
 
         return ClearCost(
             needingRefetch: refetch,
@@ -1453,7 +1456,7 @@ public struct PhotoCache {
     /// cleared cache refills into the same rotation rather than reshuffling the
     /// library. Clearing is a storage operation, never a shuffle operation.
     @discardableResult
-    public func clear(_ scope: ClearScope) throws -> ClearResult {
+    public func clear(_ scope: ClearScope) async throws -> ClearResult {
         let (predicate, bindings) = Self.scopePredicate(scope)
         let uuids = try database.all(
             """
@@ -1481,7 +1484,7 @@ public struct PhotoCache {
         if scope != .everything {
             ResizedCopies.removeFiles(copies.map(\.file), root: store.root)
         }
-        try database.transaction(.immediate) {
+        try await database.transaction(.immediate) {
             try database.run(
                 """
                 DELETE FROM resized
@@ -1493,20 +1496,20 @@ public struct PhotoCache {
 
         switch scope {
         case .everything:
-            freed += store.removeAll()
+            freed += await store.removeAll()
             cleared = uuids.count
         case .source(let sourceID):
             // One directory removal rather than thousands of unlinks, which is
             // the whole reason the layout has that level.
             if let uuid = try sources.source(id: sourceID)?.uuid {
-                freed += store.removeSource(uuid)
+                freed += await store.removeSource(uuid)
             }
             cleared = uuids.count
         case .unavailableSources:
             for uuid in uuids {
-                let before = store.byteCount(ofPhotos: [uuid])
+                let before = await store.byteCount(ofPhotos: [uuid])
                 if before > 0 { cleared += 1 }
-                freed += store.remove(photoUUID: uuid)
+                freed += await store.remove(photoUUID: uuid)
             }
         }
 
@@ -1527,7 +1530,7 @@ public struct PhotoCache {
         // exists: providers are asked, and pictures arrive as they answer.
         var queueCleared = 0
         if scope == .everything {
-            try database.transaction(.immediate) {
+            try await database.transaction(.immediate) {
                 try database.run("DELETE FROM queue;")
                 queueCleared = database.changes
             }

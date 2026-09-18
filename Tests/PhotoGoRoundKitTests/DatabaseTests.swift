@@ -371,7 +371,14 @@ struct DatabaseTests {
         // schedule outlasting the hold.
         let contender = try Database(path: path, busyTimeout: .seconds(10))
         let released = DispatchSemaphore(value: 0)
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+        // **Its own queue, at a QoS the run cannot starve.** On the global
+        // queue this block is behind whatever else the suite is doing, and a
+        // full parallel run saturates the cores: seen once on 2026-09-17, the
+        // COMMIT had not run when the contender's ten-second budget expired
+        // and the test failed with SQLITE_BUSY. The hold is still 50 ms; only
+        // the certainty that the release happens is bought here.
+        let releaser = DispatchQueue(label: "pgr-tests-release", qos: .userInitiated)
+        releaser.asyncAfter(deadline: .now() + 0.05) {
             try? holder.execute("COMMIT;")
             released.signal()
         }

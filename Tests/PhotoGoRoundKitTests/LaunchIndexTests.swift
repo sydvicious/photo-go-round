@@ -36,7 +36,7 @@ struct LaunchIndexTests {
                 database: library.database, root: directory.appending(path: "cache"),
                 sources: store, store: bytes)
             cache.log = { _ in }
-            try cache.prepare()
+            try await cache.prepare()
             self.cache = cache
             let source = try store.add(kind: .folder, locator: folder.path)
             _ = await store.refresh(source)
@@ -67,11 +67,11 @@ struct LaunchIndexTests {
         let fixture = try await Fixture(photographs: 3)
         let (bytes, cache) = try fixture.relaunched()
 
-        let held = try cache.prepareFromDatabase()
+        let held = try await cache.prepareFromDatabase()
 
         #expect(held.photos == 3)
         #expect(held.bytes == 3 * 2048)
-        #expect(bytes.totals.entries == 3)
+        #expect(await bytes.totals.entries == 3)
         #expect(try fixture.held() == 3)
     }
 
@@ -79,13 +79,13 @@ struct LaunchIndexTests {
     func servesWithoutWalking() async throws {
         let fixture = try await Fixture(photographs: 2)
         let (bytes, cache) = try fixture.relaunched()
-        try cache.prepareFromDatabase()
+        try await cache.prepareFromDatabase()
 
         let uuid = try #require(try fixture.library.database.first(
             "SELECT uuid FROM photo WHERE cached_at IS NOT NULL LIMIT 1;", [:],
             { try $0.string("uuid") }))
 
-        #expect(bytes.url(forPhoto: uuid) != nil)
+        #expect(await bytes.url(forPhoto: uuid) != nil)
     }
 
     /// The file that went while the agent was not running: an ordinary miss,
@@ -94,33 +94,33 @@ struct LaunchIndexTests {
     func aMissingFileIsAMiss() async throws {
         let fixture = try await Fixture(photographs: 2)
         let (bytes, cache) = try fixture.relaunched()
-        try cache.prepareFromDatabase()
+        try await cache.prepareFromDatabase()
         let uuid = try #require(try fixture.library.database.first(
             "SELECT uuid FROM photo WHERE cached_at IS NOT NULL LIMIT 1;", [:],
             { try $0.string("uuid") }))
-        let url = try #require(bytes.url(forPhoto: uuid))
+        let url = try #require(await bytes.url(forPhoto: uuid))
         try FileManager.default.removeItem(at: url)
 
-        #expect(bytes.url(forPhoto: uuid) == nil)
-        #expect(bytes.totals.entries == 1, "the store kept believing in a file that is gone")
+        #expect(await bytes.url(forPhoto: uuid) == nil)
+        #expect(await bytes.totals.entries == 1, "the store kept believing in a file that is gone")
     }
 
     @Test("The walk corrects what the database claimed, and says so in the database")
     func theWalkCorrectsIt() async throws {
         let fixture = try await Fixture(photographs: 3)
         let (bytes, cache) = try fixture.relaunched()
-        try cache.prepareFromDatabase()
+        try await cache.prepareFromDatabase()
         // One file goes behind the agent's back, as a hand-deleted file would.
         let uuid = try #require(try fixture.library.database.first(
             "SELECT uuid FROM photo WHERE cached_at IS NOT NULL ORDER BY id LIMIT 1;", [:],
             { try $0.string("uuid") }))
-        let url = try #require(bytes.url(forPhoto: uuid))
+        let url = try #require(await bytes.url(forPhoto: uuid))
         try FileManager.default.removeItem(at: url)
 
-        let walked = try cache.walkCache()
+        let walked = try await cache.walkCache()
 
         #expect(walked.kept == 2)
-        #expect(bytes.totals.entries == 2)
+        #expect(await bytes.totals.entries == 2)
         #expect(try fixture.held() == 2, "the row still claims bytes the disk does not have")
     }
 
@@ -135,12 +135,12 @@ struct LaunchIndexTests {
             settings: CacheSettings(byteCeiling: 2500),
             sources: SourceStore(database: fixture.library.database, bytes: bytes), store: bytes)
         tight.log = { _ in }
-        try tight.prepareFromDatabase()
+        try await tight.prepareFromDatabase()
 
-        #expect(try tight.evictIfNeeded().evicted == 0, "evicted against a total nothing had checked")
+        await #expect(try tight.evictIfNeeded().evicted == 0, "evicted against a total nothing had checked")
 
-        try tight.walkCache()
+        try await tight.walkCache()
 
-        #expect(try tight.evictIfNeeded().evicted > 0)
+        await #expect(try tight.evictIfNeeded().evicted > 0)
     }
 }

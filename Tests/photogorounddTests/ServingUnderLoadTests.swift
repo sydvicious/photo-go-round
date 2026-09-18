@@ -106,7 +106,7 @@ struct ServingUnderLoadTests {
                 database: database, root: root, sources: sources,
                 queueSize: photographs, store: bytes)
             cache.log = { _ in }
-            try cache.prepare()
+            try await cache.prepare()
             let source = try sources.add(
                 kind: .folder, locator: photos.path(percentEncoded: false))
             _ = await sources.refresh(source)
@@ -187,6 +187,14 @@ struct ServingUnderLoadTests {
         library.hang.release(1)
         _ = try await library.pictures.resizer.run {}
         library.hang.arm(false)
+        // **Draining the resizer is not the same as the copy being on disk.**
+        // Keeping it became `async` when `PhotoStore` became an actor, so the
+        // resize's completion hands the write to a task of its own and the
+        // resizer is free before the row exists. Without this wait the next
+        // request sometimes misses and resizes again.
+        await until(
+            { ((try? library.database.scalarInt("SELECT COUNT(*) FROM resized;")) ?? 0) > 0 },
+            "the late resize's copy was written")
 
         let (next, _) = try await library.sized("w=200&h=200")
         #expect(next.status == 200)

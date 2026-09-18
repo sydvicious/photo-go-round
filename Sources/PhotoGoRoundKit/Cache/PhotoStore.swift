@@ -1,6 +1,5 @@
 import Foundation
 import PhotoGoRoundAgentAPI
-import Synchronization
 
 /// The bytes on disk, and the only record of them.
 ///
@@ -27,23 +26,28 @@ import Synchronization
 /// leaves every cached original where it already is, and because a sweep that
 /// recognises exactly one directory name is what reclaims the sized directories
 /// left behind — see `index(photos:discardingUnclaimed:)`.
-public final class PhotoStore: @unchecked Sendable {
+public actor PhotoStore {
 
     public struct Entry: Sendable, Equatable {
         public let url: URL
         public let byteCount: Int64
     }
 
-    public let root: URL
+    public nonisolated let root: URL
     /// The only bound. A photograph count was always a poor proxy for the disk
     /// this exists to protect, and one file per photograph does not bring it
     /// back: the files differ in size by more than an order of magnitude.
-    public var byteCeiling: Int64
+    public private(set) var byteCeiling: Int64
 
-    private let lock = NSLock()
+    /// The ceiling the next eviction aims at. `PhotoCache` sets it from its
+    /// settings, and halves it when the volume is nearly full.
+    public func setByteCeiling(_ bytes: Int64) {
+        byteCeiling = bytes
+    }
+
     private var entries: [String: Entry] = [:]
     /// Whether an eviction is running in this process. See `claimEviction()`.
-    private let evicting = Mutex(false)
+    private var evicting = false
     /// Which source each photograph belongs to, so a key can be turned into a
     /// path without asking the database.
     private var sourceOfPhoto: [String: String] = [:]
@@ -57,7 +61,7 @@ public final class PhotoStore: @unchecked Sendable {
 
     // MARK: - Where a file goes
 
-    public func url(forPhoto photoUUID: String, sourceUUID: String, pathExtension: String) -> URL {
+    public nonisolated func url(forPhoto photoUUID: String, sourceUUID: String, pathExtension: String) -> URL {
         root
             .appending(path: sourceUUID)
             .appending(path: Self.originalDirectory)
@@ -189,10 +193,8 @@ public final class PhotoStore: @unchecked Sendable {
             emptied += 1
         }
 
-        lock.lock()
         entries = found
         sourceOfPhoto = photos
-        lock.unlock()
 
         if discarded > 0 {
             Log.cache.notice(
@@ -230,9 +232,7 @@ public final class PhotoStore: @unchecked Sendable {
     /// Tells the store about a photograph it may not have seen, so a file
     /// written for it can be placed.
     public func note(photoUUID: String, sourceUUID: String) {
-        lock.lock()
         sourceOfPhoto[photoUUID] = sourceUUID
-        lock.unlock()
     }
 
     // MARK: - Reading
@@ -242,9 +242,7 @@ public final class PhotoStore: @unchecked Sendable {
     /// A missing file is treated as a miss and forgotten, so a purge or a
     /// tidied directory costs a fetch rather than a broken answer.
     public func url(forPhoto photoUUID: String) -> URL? {
-        lock.lock()
         let entry = entries[photoUUID]
-        lock.unlock()
         guard let entry else { return nil }
         guard FileManager.default.fileExists(atPath: entry.url.path(percentEncoded: false)) else {
             forget(photoUUID)
@@ -268,15 +266,11 @@ public final class PhotoStore: @unchecked Sendable {
     /// vanished since the index was built costs one skipped card, which is
     /// exactly what the serve walk already handles.
     public var residentPhotoUUIDs: Set<String> {
-        lock.lock()
-        defer { lock.unlock() }
         return Set(entries.keys)
     }
 
     private func forget(_ photoUUID: String) {
-        lock.lock()
         entries.removeValue(forKey: photoUUID)
-        lock.unlock()
     }
 
     // MARK: - Writing
@@ -301,11 +295,9 @@ public final class PhotoStore: @unchecked Sendable {
         try data.write(to: temporary)
         _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
 
-        lock.lock()
         let previous = entries[photoUUID]
         entries[photoUUID] = Entry(url: destination, byteCount: Int64(data.count))
         sourceOfPhoto[photoUUID] = sourceUUID
-        lock.unlock()
         // One entry per photograph means one file: bytes re-fetched in another
         // format land under another extension, and the file they replace would
         // otherwise sit on disk where no index entry can ever name it again.
@@ -331,10 +323,8 @@ public final class PhotoStore: @unchecked Sendable {
         let byteCount =
             (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
 
-        lock.lock()
         entries[photoUUID] = Entry(url: destination, byteCount: byteCount)
         sourceOfPhoto[photoUUID] = sourceUUID
-        lock.unlock()
         return destination
     }
 
@@ -348,10 +338,8 @@ public final class PhotoStore: @unchecked Sendable {
     /// one. A photograph is one file now, so both were the same call.
     @discardableResult
     public func remove(photoUUID: String) -> Int64 {
-        lock.lock()
         let entry = entries.removeValue(forKey: photoUUID)
         sourceOfPhoto.removeValue(forKey: photoUUID)
-        lock.unlock()
 
         guard let entry else { return 0 }
         try? FileManager.default.removeItem(at: entry.url)
@@ -382,13 +370,11 @@ public final class PhotoStore: @unchecked Sendable {
 
     @discardableResult
     public func removeSource(_ sourceUUID: String) -> Int64 {
-        lock.lock()
         let mine = entries.filter { sourceOfPhoto[$0.key] == sourceUUID }
         for uuid in mine.keys {
             entries.removeValue(forKey: uuid)
             sourceOfPhoto.removeValue(forKey: uuid)
         }
-        lock.unlock()
 
         try? FileManager.default.removeItem(at: root.appending(path: sourceUUID))
         return mine.values.reduce(0) { $0 + $1.byteCount }
@@ -396,10 +382,8 @@ public final class PhotoStore: @unchecked Sendable {
 
     @discardableResult
     public func removeAll() -> Int64 {
-        lock.lock()
         let bytes = entries.values.reduce(Int64(0)) { $0 + $1.byteCount }
         entries.removeAll()
-        lock.unlock()
         try? FileManager.default.removeItem(at: root)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return bytes
@@ -435,12 +419,10 @@ public final class PhotoStore: @unchecked Sendable {
     /// database costs at worst a miss, where walking the disk first cost the
     /// port 8.9 to 39 seconds after a restart.
     public func believe(_ held: [Believed]) {
-        lock.lock()
         for photograph in held {
             entries[photograph.uuid] = Entry(url: photograph.url, byteCount: photograph.byteCount)
             sourceOfPhoto[photograph.uuid] = photograph.sourceUUID
         }
-        lock.unlock()
     }
 
     public struct Believed: Sendable, Equatable {
@@ -466,9 +448,7 @@ public final class PhotoStore: @unchecked Sendable {
     public private(set) var hasWalked = false
 
     func walked() {
-        lock.lock()
         hasWalked = true
-        lock.unlock()
     }
 
     /// Claims the one eviction this process runs at a time. False when another
@@ -482,14 +462,12 @@ public final class PhotoStore: @unchecked Sendable {
     /// the next write, which Syd accepted on 2026-09-16: "you might temporarily
     /// exceed the space, but that's fine".
     func claimEviction() -> Bool {
-        evicting.withLock { running in
-            defer { running = true }
-            return !running
-        }
+        defer { evicting = true }
+        return !evicting
     }
 
     func endEviction() {
-        evicting.withLock { $0 = false }
+        evicting = false
     }
 
     /// One file eviction may take.
@@ -514,10 +492,8 @@ public final class PhotoStore: @unchecked Sendable {
     public func evictIfNeeded(
         inOrder order: [EvictionCandidate], copyBytes: Int64 = 0
     ) -> Eviction {
-        lock.lock()
         var total = entries.values.reduce(Int64(0)) { $0 + $1.byteCount } + copyBytes
         guard total > byteCeiling else {
-            lock.unlock()
             return Eviction(evicted: 0, bytesFreed: 0)
         }
 
@@ -544,7 +520,6 @@ public final class PhotoStore: @unchecked Sendable {
             }
         }
         let remaining = total
-        lock.unlock()
 
         if remaining > byteCeiling {
             Log.cache.notice(
@@ -587,8 +562,6 @@ public final class PhotoStore: @unchecked Sendable {
     }
 
     public var totals: Totals {
-        lock.lock()
-        defer { lock.unlock() }
         return Totals(
             entries: entries.count,
             byteCount: entries.values.reduce(0) { $0 + $1.byteCount }
@@ -597,8 +570,6 @@ public final class PhotoStore: @unchecked Sendable {
 
     /// How many bytes are held for these photographs.
     public func byteCount(ofPhotos photoUUIDs: Set<String>) -> Int64 {
-        lock.lock()
-        defer { lock.unlock() }
         return entries.reduce(Int64(0)) {
             photoUUIDs.contains($1.key) ? $0 + $1.value.byteCount : $0
         }

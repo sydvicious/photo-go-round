@@ -89,11 +89,12 @@ extension SourceStore {
         _ requests: [SourceRequest], to preferences: Preferences,
         fileManager: FileManager = .default, now: Date = Date()
     ) async throws -> Addition {
-        // **Asked before the lock is taken, and that is not tidiness.**
+        // **Asked before the gate is taken, and that is not tidiness.**
         // Validating a locator that is not a path means asking a provider,
-        // which suspends, and `editing` is an `NSLock` — holding one across an
-        // await is unavailable in an async context for good reason. Nothing
-        // here writes, so there is nothing to guard yet.
+        // which suspends, and the gate admits one editor at a time — holding it
+        // across a question nobody needs answered under it would make every
+        // other editor wait for a network share. Nothing here writes, so there
+        // is nothing to guard yet.
         if let unsupported = requests.first(where: { provider(for: $0.kind) == nil })?.kind {
             throw EditFailure.unsupportedKind(unsupported)
         }
@@ -102,9 +103,11 @@ extension SourceStore {
             throw EditFailure.locatorsNotFound(resolution.unresolved)
         }
 
-        return try write(
-            requests, describedAs: resolution.descriptions, to: preferences,
-            fileManager: fileManager, now: now)
+        return try await editing {
+            try await writeGuarded(
+                requests, describedAs: resolution.descriptions, to: preferences,
+                fileManager: fileManager, now: now)
+        }
     }
 
     /// How long adding will question a library about an album before it stops
@@ -216,15 +219,13 @@ extension SourceStore {
         try? await Deadline.run(within: limit, work)
     }
 
-    /// The part that writes, and therefore the part that holds the lock.
-    private func write(
+    /// The part that writes, and therefore the part the gate is held around.
+    /// The write and the reconcile are one act — see `SourceStore.editing`.
+    private func writeGuarded(
         _ requests: [SourceRequest], describedAs descriptions: [String: SourceDescription] = [:],
         to preferences: Preferences,
         fileManager: FileManager, now: Date
-    ) throws -> Addition {
-        // The write and the reconcile are one act — see `SourceStore.editing`.
-        Self.editing.lock()
-        defer { Self.editing.unlock() }
+    ) async throws -> Addition {
 
         // The same refusal `setRecursive` gives, so the two verbs agree that a
         // file has no such option — dropping it silently here would store a
@@ -248,7 +249,7 @@ extension SourceStore {
         }
 
         let added = preferences.addSources(specs)
-        try reconcile(with: preferences, now: now)
+        try await reconcile(specs: preferences.sources, now: now)
 
         let rows = try all()
         var created: [Source] = []
@@ -279,19 +280,28 @@ extension SourceStore {
     /// nested photograph as absent once its source is no longer recursive, so
     /// the ordinary removal walk takes them out. Turning it on adds nothing
     /// until that same refresh finds the nested files.
+    /// Takes the gate, so the preferences write and the projection of it are
+    /// one act. See `SourceStore.editing`.
     @discardableResult
     public func setRecursive(
         _ recursive: Bool, for source: Source, in preferences: Preferences, now: Date = Date()
-    ) throws -> Source {
+    ) async throws -> Source {
+        try await editing {
+            try await setRecursiveGuarded(recursive, for: source, in: preferences, now: now)
+        }
+    }
+
+    @discardableResult
+    private func setRecursiveGuarded(
+        _ recursive: Bool, for source: Source, in preferences: Preferences, now: Date = Date()
+    ) async throws -> Source {
         guard source.kind == .folder else {
             throw EditFailure.optionNotAvailable(option: "recursive", kind: source.kind)
         }
-        Self.editing.lock()
-        defer { Self.editing.unlock() }
         guard preferences.setSourceRecursive(recursive, locator: source.locator) else {
             throw EditFailure.notProjected(source.locator)
         }
-        try reconcile(with: preferences, now: now)
+        try await reconcile(specs: preferences.sources, now: now)
         guard let updated = try self.source(uuid: source.uuid) else {
             throw EditFailure.notProjected(source.locator)
         }
@@ -331,17 +341,15 @@ extension SourceStore {
         guard matches.count == 1, let match = matches.first else {
             throw EditFailure.notReconnectable(matches: matches.map(\.description.title))
         }
-        return try move(source, to: match, in: preferences)
+        return try await editing { try moveGuarded(source, to: match, in: preferences) }
     }
 
-    /// The part of `reconnect` that writes, and therefore the part that holds
-    /// the lock — synchronous, because `NSLock` is unavailable from an async
-    /// context, and everything that had to suspend has already happened.
-    private func move(
+    /// The part of `reconnect` that writes, and therefore the part the gate is
+    /// held around. Everything that had to be asked of a provider has already
+    /// been asked, outside it.
+    private func moveGuarded(
         _ source: Source, to match: SourceMatch, in preferences: Preferences
     ) throws -> Source {
-        Self.editing.lock()
-        defer { Self.editing.unlock() }
         guard
             preferences.replaceSource(
                 locator: source.locator, with: match.locator, description: match.description)
@@ -382,16 +390,22 @@ extension SourceStore {
     /// survive until the next launch rebuilt the byte index from the filesystem
     /// and discarded whatever the database no longer claimed, so removing a
     /// large source freed nothing until the agent was restarted.
+    /// Takes the gate: removing from the durable list and projecting that
+    /// removal are one act.
     @discardableResult
     public func remove(
         _ source: Source, from preferences: Preferences, now: Date = Date()
-    ) throws -> Int64 {
+    ) async throws -> Int64 {
+        try await editing { try await removeGuarded(source, from: preferences, now: now) }
+    }
+
+    private func removeGuarded(
+        _ source: Source, from preferences: Preferences, now: Date = Date()
+    ) async throws -> Int64 {
         // Removing from the durable list and projecting that removal are one
         // act. Apart, a reconcile already under way with the list as it was puts
         // the source straight back — see `SourceStore.editing`.
-        Self.editing.lock()
-        defer { Self.editing.unlock() }
         preferences.removeSource(locator: source.locator)
-        return try reconcile(with: preferences, now: now).bytesFreed
+        return try await reconcile(specs: preferences.sources, now: now).bytesFreed
     }
 }

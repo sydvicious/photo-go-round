@@ -22,31 +22,31 @@ struct LastPhotoStandingTests {
     @discardableResult
     private static func store(
         _ bytes: Int, as photo: String, in store: PhotoStore
-    ) throws -> String {
-        try store.store(
+    ) async throws -> String {
+        try await store.store(
             Data(count: bytes), forPhoto: photo,
             sourceUUID: "SOURCE", pathExtension: "heic")
         return photo
     }
 
     @Test("One photo larger than the entire ceiling is kept rather than evicted")
-    func oneOversizedPhotoSurvives() throws {
+    func oneOversizedPhotoSurvives() async throws {
         let root = Self.temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = PhotoStore(root: root.appending(path: "cache"), byteCeiling: 100)
 
         let photo = UUID().uuidString.lowercased()
-        try Self.store(5_000, as: photo, in: store)
-        _ = store.rebuild(photos: [photo: "SOURCE"])
+        try await Self.store(5_000, as: photo, in: store)
+        _ = await store.rebuild(photos: [photo: "SOURCE"])
 
-        let result = store.evictIfNeeded(inOrder: [photo].map(PhotoStore.EvictionCandidate.original))
+        let result = await store.evictIfNeeded(inOrder: [photo].map(PhotoStore.EvictionCandidate.original))
 
         #expect(result.evicted == 0)
-        #expect(store.url(forPhoto: photo) != nil)
+        #expect(await store.url(forPhoto: photo) != nil)
     }
 
     @Test("With a ceiling too small for any of them, the most recently shown one stays")
-    func theMostRecentlyShownSurvives() throws {
+    func theMostRecentlyShownSurvives() async throws {
         let root = Self.temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = PhotoStore(root: root.appending(path: "cache"), byteCeiling: 100)
@@ -54,35 +54,35 @@ struct LastPhotoStandingTests {
         let oldest = UUID().uuidString.lowercased()
         let middle = UUID().uuidString.lowercased()
         let newest = UUID().uuidString.lowercased()
-        for photo in [oldest, middle, newest] { try Self.store(5_000, as: photo, in: store) }
-        _ = store.rebuild(photos: [oldest: "SOURCE", middle: "SOURCE", newest: "SOURCE"])
+        for photo in [oldest, middle, newest] { try await Self.store(5_000, as: photo, in: store) }
+        _ = await store.rebuild(photos: [oldest: "SOURCE", middle: "SOURCE", newest: "SOURCE"])
 
         // Oldest-first, which is the order `evictionOrder()` produces.
-        let result = store.evictIfNeeded(inOrder: [oldest, middle, newest].map(PhotoStore.EvictionCandidate.original))
+        let result = await store.evictIfNeeded(inOrder: [oldest, middle, newest].map(PhotoStore.EvictionCandidate.original))
 
         #expect(result.evicted == 2)
-        #expect(store.url(forPhoto: oldest) == nil)
-        #expect(store.url(forPhoto: middle) == nil)
-        #expect(store.url(forPhoto: newest) != nil)
+        #expect(await store.url(forPhoto: oldest) == nil)
+        #expect(await store.url(forPhoto: middle) == nil)
+        #expect(await store.url(forPhoto: newest) != nil)
     }
 
     /// The guard against an exemption that quietly stops eviction working. A
     /// ceiling that *can* be met must still be met exactly.
     @Test("A ceiling that can be met is still met")
-    func ordinaryEvictionIsUnchanged() throws {
+    func ordinaryEvictionIsUnchanged() async throws {
         let root = Self.temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = PhotoStore(root: root.appending(path: "cache"), byteCeiling: 2_500)
 
         let photos = (0..<4).map { _ in UUID().uuidString.lowercased() }
-        for photo in photos { try Self.store(1_000, as: photo, in: store) }
-        _ = store.rebuild(photos: Dictionary(uniqueKeysWithValues: photos.map { ($0, "SOURCE") }))
+        for photo in photos { try await Self.store(1_000, as: photo, in: store) }
+        _ = await store.rebuild(photos: Dictionary(uniqueKeysWithValues: photos.map { ($0, "SOURCE") }))
 
-        let result = store.evictIfNeeded(inOrder: photos.map(PhotoStore.EvictionCandidate.original))
+        let result = await store.evictIfNeeded(inOrder: photos.map(PhotoStore.EvictionCandidate.original))
 
         // Four thousand bytes against a ceiling of two and a half: two go.
         #expect(result.evicted == 2)
-        #expect(store.totals.byteCount <= 2_500)
+        #expect(await store.totals.byteCount <= 2_500)
     }
 
     /// **The exemption is a floor, not a privilege.** Nothing about the
@@ -92,40 +92,39 @@ struct LastPhotoStandingTests {
     /// everything else, and a cache that had room for one picture has room for
     /// many again.
     @Test("The oversized survivor is evicted as soon as a smaller photo arrives")
-    func theOversizedOneMakesWayForNewcomers() throws {
+    func theOversizedOneMakesWayForNewcomers() async throws {
         let root = Self.temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = PhotoStore(root: root.appending(path: "cache"), byteCeiling: 1_000)
 
         let giant = UUID().uuidString.lowercased()
-        try Self.store(5_000, as: giant, in: store)
-        _ = store.rebuild(photos: [giant: "SOURCE"])
-        store.evictIfNeeded(inOrder: [giant].map(PhotoStore.EvictionCandidate.original))
-        #expect(store.url(forPhoto: giant) != nil)
-
+        try await Self.store(5_000, as: giant, in: store)
+        _ = await store.rebuild(photos: [giant: "SOURCE"])
+        await store.evictIfNeeded(inOrder: [giant].map(PhotoStore.EvictionCandidate.original))
+        #expect(await store.url(forPhoto: giant) != nil)
         // Something smaller arrives. The giant is older, so it is first in the
         // eviction order and no longer the last entry standing.
         let small = UUID().uuidString.lowercased()
-        try Self.store(200, as: small, in: store)
-        _ = store.rebuild(photos: [giant: "SOURCE", small: "SOURCE"])
+        try await Self.store(200, as: small, in: store)
+        _ = await store.rebuild(photos: [giant: "SOURCE", small: "SOURCE"])
 
-        let result = store.evictIfNeeded(inOrder: [giant, small].map(PhotoStore.EvictionCandidate.original))
+        let result = await store.evictIfNeeded(inOrder: [giant, small].map(PhotoStore.EvictionCandidate.original))
 
         #expect(result.evicted == 1)
-        #expect(store.url(forPhoto: giant) == nil)
-        #expect(store.url(forPhoto: small) != nil)
-        #expect(store.totals.byteCount == 200)
+        #expect(await store.url(forPhoto: giant) == nil)
+        #expect(await store.url(forPhoto: small) != nil)
+        #expect(await store.totals.byteCount == 200)
     }
 
     @Test("An empty cache has nothing to protect and does not invent anything")
-    func anEmptyCacheStaysEmpty() throws {
+    func anEmptyCacheStaysEmpty() async throws {
         let root = Self.temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = PhotoStore(root: root.appending(path: "cache"), byteCeiling: 0)
 
-        let result = store.evictIfNeeded(inOrder: [])
+        let result = await store.evictIfNeeded(inOrder: [])
 
         #expect(result.evicted == 0)
-        #expect(store.totals.entries == 0)
+        #expect(await store.totals.entries == 0)
     }
 }

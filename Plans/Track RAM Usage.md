@@ -32,6 +32,18 @@ All three run for days without anybody looking at them — the agent under launc
 - The screensaver runs inside `legacyScreenSaver`, which hosts other savers too, so its number is not ours alone.
 - Nothing measures any of this today. The first two samples, taken while writing this plan on 2026-09-17: the agent at **113 MB** after 9 minutes, and the wallpaper extension at **53 MB** after 9 minutes.
 
+## Samples
+
+Taken before asking Syd to reinstall or reboot, until Phase 2 decides where they belong.
+
+| When | Agent | Wallpaper extension | Screensaver | Note |
+|---|---|---|---|---|
+| 2026-09-17 16:18 | 113 MB, 9 min | 53 MB, 9 min | not running | first sample |
+| 2026-09-17 16:41 | 157 MB, 23 min | 134 MB, 23 min | not running | before installing Phase 5's first slice |
+| 2026-09-17 17:51 | 101 MB, 1 h 18 min | 57 MB, 1 h 43 min | not running | before installing Phase 5's second slice |
+
+*The second pair is the same two processes half an hour older: the agent up 44 MB, the extension up 81 MB. Both had been serving pictures throughout — the extension changes its picture every ten minutes — so this says nothing yet. It is the shape of the next few days that will.*
+
 # Detailed discussions
 
 ## What a sample is

@@ -131,7 +131,7 @@ struct RefreshLockingTests {
         _ = await fixture.store.refresh(source)
         fixture.forget()
 
-        try fixture.store.remove(id: source.id)
+        try await fixture.store.remove(id: source.id)
 
         #expect(fixture.photos == 0)
         #expect(try fixture.store.source(id: source.id) == nil)

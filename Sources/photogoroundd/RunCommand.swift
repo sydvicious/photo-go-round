@@ -35,7 +35,7 @@ struct RunCommand {
         // on its caller's executor only with this on, and the request path is
         // made of them — so without it every request leaves its lane at the
         // first hop and runs its SQLite on the shared pool, which is what
-        // `RequestLane` exists to prevent. `Package.swift` sets it for the
+        // `Lane` exists to prevent. `Package.swift` sets it for the
         // package and the Xcode project for its own targets; this says so if
         // whichever built this agent did not.
         #if !hasFeature(NonisolatedNonsendingByDefault)
@@ -90,7 +90,7 @@ struct RunCommand {
         // can ask the database what the cache was the last time it was alive,
         // and can just try to get things out of the cache and return it",
         // "while the cache walk is going on".
-        let held = try cache.prepareFromDatabase()
+        let held = try await cache.prepareFromDatabase()
         startup.lap("index")
         Console.note(
             "cache index from the database: \(held.photos) photographs, \(RunCommand.bytes(held.bytes))")
@@ -156,7 +156,7 @@ struct RunCommand {
             concurrency: preferences.downloadConcurrency,
             next: { after in
                 guard let cache = cacheForFetch() else { return .blocked }
-                return cache.nextQueuedToFetch(after: after)
+                return await cache.nextQueuedToFetch(after: after)
             },
             fetch: { card, limit in
                 guard let cache = cacheForFetch() else { return .failed }
@@ -167,19 +167,21 @@ struct RunCommand {
                 // for an iCloud file to materialise answers neither cancellation
                 // nor this deadline, and a structured child would be awaited at
                 // scope exit — which is the wait this exists to escape.
-                let landed = Flag()
-                let failure = Note()
+                // What the fetch did, written inside the deadline's work and
+                // read after it. An actor since 2026-09-17; Syd: "I flatout
+                // don't want NSLocks".
+                let note = FetchNote()
                 let answered = await FetchDeadline.run(
                     within: limit,
                     work: {
                         guard let worker = cacheForFetch() else {
-                            failure.write("the library could not be opened to fetch it")
+                            await note.failed("the library could not be opened to fetch it")
                             return
                         }
                         let answer = await worker.fetch(card)
                         switch answer {
-                        case .landed: landed.raise()
-                        case .failed(let because): failure.write(because)
+                        case .landed: await note.landed()
+                        case .failed(let because): await note.failed(because)
                         }
                         // Whatever happened, the claim must not outlive the
                         // work: a photograph left claimed is sidelined for the
@@ -203,14 +205,15 @@ struct RunCommand {
                     tally.record(fetch: .timedOut)
                     return .timedOut
                 }
-                guard landed.lower() else {
+                guard await note.didLand else {
                     // **Told to the bench, the same as a timeout is.** Which of
                     // the two bounds noticed says nothing about the source; a
                     // fetch that produced no bytes is what the bench counts.
                     cache.fetchFailed(card)
                     cache.dropUnfetched(card, because: "its fetch failed")
                     tally.record(fetch: .failed)
-                    Self.recordFetchFailure(card, because: failure.read() ?? "it gave no reason")
+                    Self.recordFetchFailure(
+                        card, because: await note.reason ?? "it gave no reason")
                     return .failed
                 }
                 environment.announce(.cacheChanged)
@@ -328,12 +331,12 @@ struct RunCommand {
             // `cacheWalkInterval` after it — Syd, 2026-09-17: "its own
             // interval, default an hour", "but definitly at launch". On its own
             // thread, since it is thousands of `stat` calls; see `CacheWalk`.
-            let walker = CacheWalk()
+            let walker = Lane("cache-walk", qos: .utility)
             let walkRoot = environment.cacheRoot
             Task {
                 while !Task.isCancelled {
                     await walker.run {
-                        Self.walkCache(
+                        await Self.walkCache(
                             databasePath: databasePath, root: walkRoot,
                             settings: environment.preferences.cacheSettings, store: store)
                     }
@@ -423,7 +426,7 @@ struct RunCommand {
 
         // Preferences are the truth; the source table is a projection of them.
         // A database that was deleted rebuilds itself here.
-        let reconciled = try sources.reconcile(with: preferences)
+        let reconciled = try await sources.reconcile(with: preferences)
         startup.lap("sources")
         startup.report(as: "ready")
         if !reconciled.isEmpty {
@@ -436,22 +439,37 @@ struct RunCommand {
         // Raw `defaults write` must work from any terminal with no cooperation,
         // and cross-process UserDefaults observation is unreliable — so the
         // doorbell is what tells us to re-read.
-        let preferencesChanged = Flag()
+        // The callback yields into an `AsyncStream`; a task of its own turns
+        // each ring into state the loop reads at the top of a tick. See
+        // `Doorbell`.
+        let preferencesBell = Doorbell()
+        let preferencesChanged = Rang()
         let preferences_ = environment.doorbells.observe(.preferencesChanged, on: .global()) {
-            preferencesChanged.raise()
+            preferencesBell.ring()
+        }
+        let preferencesHeard = Task {
+            for await _ in preferencesBell.pulls { await preferencesChanged.heard() }
         }
 
         // Someone at another terminal added a source. Refresh now rather than
         // at the next scheduled pass — five minutes of apparently nothing
         // happening is the wrong first impression, and the doorbell exists
         // precisely so it does not have to be waited out.
-        let sourcesChanged = Flag()
+        let sourcesBell = Doorbell()
+        let sourcesChanged = Rang()
         let sources_ = environment.doorbells.observe(.sourcesChanged, on: .global()) {
-            sourcesChanged.raise()
+            sourcesBell.ring()
+        }
+        let sourcesHeard = Task {
+            for await _ in sourcesBell.pulls { await sourcesChanged.heard() }
         }
         defer {
             preferences_?.cancel()
             sources_?.cancel()
+            preferencesBell.finish()
+            sourcesBell.finish()
+            preferencesHeard.cancel()
+            sourcesHeard.cancel()
         }
 
         // The schedule, lifted out so it can be asserted rather than trusted.
@@ -469,7 +487,7 @@ struct RunCommand {
         /// Raised by a pass when it finishes, so the loop — which owns the
         /// heartbeat — can stamp it on the next tick rather than the pass
         /// reaching across for it.
-        let refreshFinished = Flag()
+        let refreshFinished = Rang()
 
         repeat {
             let now = Date()
@@ -481,12 +499,12 @@ struct RunCommand {
             // poll is the mechanism and the doorbell is what makes it prompt.
             // This is what lets `defaults write` reconfigure a running service
             // with no cooperation from anything.
-            let rang = preferencesChanged.lower()
+            let rang = await preferencesChanged.take()
             if heartbeat.isDue(.preferences, every: .seconds(30), at: now, forced: rang) {
                 preferences.reload()
                 preferences = environment.preferences
                 heartbeat.finished(.preferences, at: Date())
-                let changes = try sources.reconcile(with: preferences)
+                let changes = try await sources.reconcile(with: preferences)
                 if !changes.isEmpty {
                     Self.speak(
                         .configurationChanged(
@@ -494,19 +512,19 @@ struct RunCommand {
                                 "sources changed: +\(changes.added) -\(changes.removed) ~\(changes.changed)"
                                 + (changes.bytesFreed > 0
                                     ? ", freed \(Self.bytes(changes.bytesFreed))" : "")))
-                    sourcesChanged.raise()
+                    await sourcesChanged.heard()
                 }
                 if rang { Self.speak(.configurationChanged(what: "preferences re-read")) }
             }
 
             // A pass that finished since the last tick. Stamped here because
             // the heartbeat belongs to this loop and to nothing else.
-            if refreshFinished.lower() {
+            if await refreshFinished.take() {
                 heartbeat.finished(.refresh, at: Date())
             }
 
             let scanInterval = scanIntervalOverride ?? preferences.scanInterval
-            let asked = sourcesChanged.lower()
+            let asked = await sourcesChanged.take()
 
             // **Run in the order this tick calls for.** At launch that is the
             // queue first, so a restart with a warm cache serves immediately
@@ -539,15 +557,15 @@ struct RunCommand {
                         await Self.runRefresh(
                             databasePath: databasePath, bytes: store, localFirst: firstPass)
                         heartbeat.finished(.refresh, at: Date())
-                    } else if refreshPass.tryEnter() {
+                    } else if await refreshPass.tryEnter() {
                         // **`isDue` keeps saying yes while this runs**, because
                         // it reads the last *finish*. The gate is what stops a
                         // tick starting a second pass over the first.
                         Task {
                             await Self.runRefresh(
                                 databasePath: databasePath, bytes: store, localFirst: firstPass)
-                            refreshPass.leave()
-                            refreshFinished.raise()
+                            await refreshPass.leave()
+                            await refreshFinished.heard()
                         }
                     }
                     // A ring that lands mid-refresh stays raised and is honoured
@@ -573,7 +591,7 @@ struct RunCommand {
             }
 
 
-            let status = try describe(
+            let status = try await describe(
                 cache: PhotoCache(
                     database: database,
                     root: environment.cacheRoot,
@@ -649,26 +667,36 @@ struct RunCommand {
                     // Dropped rather than queued, because a refresh is
                     // idempotent — the walk already running sees everything the
                     // second would have, so repeating it is pure cost.
-                    guard Self.refreshing.tryEnter(source: source.id) else {
+                    guard await Self.refreshing.tryEnter(source: source.id) else {
                         Log.sources.notice(
                             "source \(source.id, privacy: .public) is already being refreshed; dropped"
                         )
                         return
                     }
-                    defer { Self.refreshing.leave(source: source.id) }
-
-                    // Its own connection: a `Database` belongs to one isolation
-                    // domain, and WAL is what makes several of them safe.
-                    guard let database = try? Database(path: databasePath) else { return }
-                    let store = SourceStore(database: database, bytes: bytes)
-                    reported.began(source)
-                    let started = ContinuousClock.now
-                    let result = await store.refresh(source) { change in
-                        reported.change(change, source: source.id)
+                    // **A lane per source, off the shared pool.** Syd,
+                    // 2026-09-16: "the agent should run the refresh and
+                    // downloads in separate actors". A walk is blocking file
+                    // I/O and synchronous SQLite for as long as the share
+                    // takes, and on the pool that is what left requests with
+                    // no thread to start on. Released explicitly rather than
+                    // by `defer`, since giving the gate back is now `await`.
+                    let lane = Lane("refresh-\(source.id)", qos: .utility)
+                    await lane.run {
+                        // Its own connection: a `Database` belongs to one
+                        // isolation domain, and WAL is what makes several of
+                        // them safe.
+                        guard let database = try? Database(path: databasePath) else { return }
+                        let store = SourceStore(database: database, bytes: bytes)
+                        reported.began(source)
+                        let started = ContinuousClock.now
+                        let result = await store.refresh(source) { change in
+                            reported.change(change, source: source.id)
+                        }
+                        reported.finish(
+                            result, wasAvailable: source.available,
+                            took: ContinuousClock.now - started)
                     }
-                    reported.finish(
-                        result, wasAvailable: source.available,
-                        took: ContinuousClock.now - started)
+                    await Self.refreshing.leave(source: source.id)
                 }
             }
             for _ in 0..<cap { schedule() }
@@ -780,12 +808,12 @@ struct RunCommand {
 
     /// One walk of the cache directory, checking the index against the disk.
     ///
-    /// Its own connection: it runs on `CacheWalk`'s thread, and a `Database`
+    /// Its own connection: it runs on the walk's own lane, and a `Database`
     /// belongs to one isolation domain. Anything it discards is a file the
     /// database does not claim; anything it misses, the next walk finds.
     private static func walkCache(
         databasePath: String, root: URL, settings: CacheSettings, store: PhotoStore
-    ) {
+    ) async {
         let started = ContinuousClock.now
         do {
             let database = try Database(path: databasePath)
@@ -793,7 +821,7 @@ struct RunCommand {
                 database: database, root: root, settings: settings,
                 sources: SourceStore(database: database, bytes: store), store: store)
             cache.log = Self.speak
-            let result = try cache.walkCache()
+            let result = try await cache.walkCache()
             let line =
                 "CACHE WALK: \(result.kept) held · \(bytes(result.bytes)) · "
                 + "\(result.discarded) discarded · \(StageTimes.milliseconds(ContinuousClock.now - started))"
@@ -812,8 +840,8 @@ struct RunCommand {
                 ? " — free space is below the critical floor, so the ceiling was halved" : "")
     }
 
-    private func describe(cache: PhotoCache, deck: Deck, preferences: Preferences) throws -> String {
-        let status = try cache.status()
+    private func describe(cache: PhotoCache, deck: Deck, preferences: Preferences) async throws -> String {
+        let status = try await cache.status()
         let stats = try deck.stats(settings: preferences.deckSettings)
         return """
             \(stats.dealablePhotos) in pool · \(status.queued)/\(preferences.queueSize) queued · \
@@ -1057,7 +1085,7 @@ final class FillerBox: @unchecked Sendable {
                         sources: store, queueSize: sizes.queueSize, store: bytes)
                     dealer.log = report
                     dealer.dealLookedUp = lookup
-                    return try dealer.deal(settings: sizes.deckSettings)
+                    return try await dealer.deal(settings: sizes.deckSettings)
                 }
             })
         lock.lock()
@@ -1354,70 +1382,44 @@ extension RunCommand {
 /// `Flag` is raise-and-read, which cannot express *test and set* — two ticks
 /// could both see it lowered and both start a pass. This is the smaller thing
 /// `QueueFiller` and `QueueFetcher` each build inline for their own rounds.
-final class Latch: @unchecked Sendable {
-    private let lock = NSLock()
+actor Latch {
     private var held = false
 
     /// True when the caller now holds it and must `leave`.
     func tryEnter() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
         guard !held else { return false }
         held = true
         return true
     }
 
     func leave() {
-        lock.lock()
         held = false
-        lock.unlock()
     }
 
     var isHeld: Bool {
-        lock.lock()
-        defer { lock.unlock() }
         return held
     }
 }
 
-/// A one-bit cross-thread signal, for the notification callback to hand work
-/// back to the loop rather than doing it on whatever queue it arrived on.
-final class Flag: @unchecked Sendable {
-    private var raised = false
-    private let lock = NSLock()
+/// What one fetch did, written inside `FetchDeadline.run`'s work and read once
+/// it has answered.
+///
+/// **An actor since 2026-09-17**, where a `Flag` and a `Note` behind `NSLock`s
+/// used to be. Syd: "I flatout don't want NSLocks", and "I don't mind
+/// everything being async; I prefer it". Both sides are already `async`, so
+/// nothing new suspends.
+actor FetchNote {
+    private var did = false
+    private var because: String?
 
-    func raise() {
-        lock.lock()
-        raised = true
-        lock.unlock()
-    }
+    func landed() { did = true }
 
-    /// Reads and clears.
-    func lower() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        let was = raised
-        raised = false
-        return was
-    }
-}
+    func failed(_ words: String) { because = words }
 
-/// The last words written, for a lane to read once its work has answered.
-final class Note: @unchecked Sendable {
-    private var text: String?
-    private let lock = NSLock()
+    var didLand: Bool { did }
 
-    func write(_ words: String) {
-        lock.lock()
-        text = words
-        lock.unlock()
-    }
-
-    func read() -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-        return text
-    }
+    /// Why it did not land, when something said.
+    var reason: String? { because }
 }
 
 /// Admits one walk per source and turns every other ask for that source away.
@@ -1430,34 +1432,23 @@ final class Note: @unchecked Sendable {
 /// walks rather than collapse them, which is the same contention arriving a
 /// little later; a refresh is idempotent, so the walk already running covers
 /// whatever the one being turned away would have found.
-final class RefreshGate: @unchecked Sendable {
-    private let lock = NSLock()
+actor RefreshGate {
     private var walking: Set<Int64> = []
 
     /// True when the caller now owns this source's walk and must `leave` it.
     func tryEnter(source: Int64) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return walking.insert(source).inserted
+        walking.insert(source).inserted
     }
 
     func leave(source: Int64) {
-        lock.lock()
         walking.remove(source)
-        lock.unlock()
     }
 
     func isWalking(source: Int64) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return walking.contains(source)
+        walking.contains(source)
     }
 
     /// For a status line that would otherwise leave a four-minute silence
     /// unexplained, and for tests.
-    var count: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return walking.count
-    }
+    var count: Int { walking.count }
 }

@@ -160,32 +160,32 @@ struct EmptySourceTests {
 struct RefreshPassTests {
 
     @Test("A second tick cannot start a pass over the first")
-    func onePassAtATime() {
+    func onePassAtATime() async {
         let pass = Latch()
 
-        #expect(pass.tryEnter(), "the first tick must get in")
-        #expect(!pass.tryEnter(), "a tick started a second pass over a running one")
-        #expect(pass.isHeld)
+        #expect(await pass.tryEnter(), "the first tick must get in")
+        #expect(await !pass.tryEnter(), "a tick started a second pass over a running one")
+        #expect(await pass.isHeld)
 
-        pass.leave()
-        #expect(pass.tryEnter(), "a finished pass must let the next one in")
+        await pass.leave()
+        #expect(await pass.tryEnter(), "a finished pass must let the next one in")
     }
 
     @Test("Finishing is reported to the loop rather than stamped by the pass")
-    func finishingIsHandedBack() {
+    func finishingIsHandedBack() async {
         // The heartbeat belongs to the loop, so a detached pass raises a flag
         // and the loop stamps it on the next tick. Read-and-clear, so one
         // finished pass is stamped exactly once.
-        let finished = Flag()
-        #expect(!finished.lower())
+        let finished = Rang()
+        #expect(await !finished.take())
 
-        finished.raise()
-        #expect(finished.lower())
-        #expect(!finished.lower(), "one pass was stamped twice")
+        await finished.heard()
+        #expect(await finished.take())
+        #expect(await !finished.take(), "one pass was stamped twice")
     }
 
     @Test("A pass that is still running leaves the heartbeat saying it is due")
-    func aRunningPassDoesNotStampItself() {
+    func aRunningPassDoesNotStampItself() async {
         // `isDue` reads the last *finish*, so it keeps saying yes for as long as
         // a pass runs. The latch is the only thing standing between that and a
         // new pass every tick — which is why it is a latch and not a flag.
@@ -194,12 +194,12 @@ struct RefreshPassTests {
         let pass = Latch()
 
         #expect(heartbeat.isDue(.refresh, every: .seconds(300), at: now))
-        #expect(pass.tryEnter())
+        #expect(await pass.tryEnter())
         // Ten ticks go by while the walk runs.
         for tick in 1...10 {
             let later = now.addingTimeInterval(Double(tick))
             #expect(heartbeat.isDue(.refresh, every: .seconds(300), at: later))
-            #expect(!pass.tryEnter(), "tick \(tick) started a second pass")
+            #expect(await !pass.tryEnter(), "tick \(tick) started a second pass")
         }
     }
 }

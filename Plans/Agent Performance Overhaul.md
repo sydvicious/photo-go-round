@@ -606,6 +606,21 @@ Syd, 2026-09-17: "this ties into 'each request is run on its own actor'", then "
 - **The refresh** runs as one actor per source being walked, each with its own serial queue and database connection. `RunCommand.refreshing` (`RefreshGate`, behind an `NSLock`) becomes state on a coordinating actor.
 - **The downloads** (`QueueFetcher` lanes, `FetchDeadline`) run on an actor with its own queue, or one per lane. `attemptCache`'s bare `UPDATE` moves inside a retried transaction, so contention waits instead of failing the download, as it did twice at 13:30:52.
 - **The `NSLock`s** in `QueueFetcher`, `FetchDeadline`, `QueueFiller`, `SourceBench`, `PhotoStore` and `RunCommand` go with them, following the list in `Deadline.swift`'s TODO. `SystemPhotoLibrary`'s three are left for last, for the reason that TODO gives.
+- **Every one of them, and actors rather than `Mutex`.** Syd, 2026-09-17: "I flatout don't want NSLocks", and asked whether an actor was wanted even where it makes synchronous code async — `PhotoStore.url(forPhoto:)` is the case — "I don't mind everything being async; I prefer it". So the answer is not a cheaper lock: the state moves onto actors and its callers await it.
+
+### Built: the refresh and the fetcher
+
+*2026-09-17, at Syd's "yes, start with the refresh and the fetcher". The first of four slices; the rest of the `NSLock`s follow.*
+
+- **`QueueFetcher` is an actor.** Its round guard and the lanes' shared tally are actor state. The lanes themselves are `@concurrent nonisolated`, because under `NonisolatedNonsendingByDefault` an ordinary `nonisolated async` function would run on the actor and `concurrency` would mean one.
+- **`QueueFiller` is an actor**, and so is `FetchDeadline`'s race between a fetch and its deadline.
+- **`RefreshGate` is an actor**, and the per-source walk gives it back explicitly rather than in a `defer`, since that is now `await`.
+- **Each source's refresh runs on a `Lane` of its own**, at `utility` — the blocking walk and its SQLite are off the shared pool.
+- **One `Lane` type** replaces `RequestLane` and `CacheWalk`; the request path, the cache walk and the refresh all take one, differing only in label and quality of service.
+- **The doorbells are `AsyncStream`s.** Syd, 2026-09-17: "AsyncStream for the doorbell". `Doorbell.ring()` yields from the notification callback — safe from any thread, no lock, no `Task` hop — and a task of its own turns rings into `Rang`, which the loop reads and clears at the top of a tick. Rings collapse, as the flag they replaced did: `bufferingNewest(1)`.
+- **`Flag` and `Note` are gone.** The fetch path's pair became `FetchNote`, an actor; the two tests that used `Flag` hold their own state now.
+- **Still holding a lock, for the slices after this one:** `PhotoStore`, `SourceBench`, `LibraryChanges`, `AgentErrors`, `LaunchTally`, `DarwinNotification`, `SourceStore.editing` (an `NSRecursiveLock`), `FillerBox`, and `SystemPhotoLibrary`'s three. `pgr_ctl`'s spike is not the agent and goes when it does.
+- **Tests:** the suite passed twice; `RefreshGateTests`, `RefreshPassTests` and `LaneTests` (was `RequestLaneTests`) are async now.
 
 ## What this leaves stale elsewhere
 

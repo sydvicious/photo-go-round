@@ -39,12 +39,12 @@ struct OriginalFilenameTests {
             var cache = PhotoCache(
                 database: library.database, root: root, sources: sources, store: bytes)
             cache.log = heard.log
-            try cache.prepare()
+            try await cache.prepare()
             self.cache = cache
 
             let source = try sources.add(kind: .photosCollection, locator: album)
             _ = await sources.refresh(source)
-            #expect(try cache.deal())
+            await #expect(try cache.deal())
         }
 
         func cleanUp() { try? FileManager.default.removeItem(at: directory) }
