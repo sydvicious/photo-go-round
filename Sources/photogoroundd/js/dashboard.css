@@ -34,7 +34,6 @@ table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nu
 td { padding: 3px 0; }
 td:last-child { text-align: right; }
 tr.total td { border-top: 1px solid var(--rule); font-weight: 600; padding-top: 6px; }
-tr.minor td { color: var(--muted); }
 tr.outcome td { color: var(--muted); }
 tr.outcome td:first-child { padding-left: 14px; }
 .last { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }

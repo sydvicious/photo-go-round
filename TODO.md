@@ -121,10 +121,13 @@ Syd, 2026-09-16: "put statistics about the cached resized picture where appropri
 
 Syd, 2026-09-17: "why is `system-wallpaper` gray? And you should only show tags you actually find; we will never have raw `wallpaper` again."
 
-- **Why it is gray.** `dashboard.js` keeps `const named = ["wallpaper", "screensaver", "app"]`. Those three are always drawn, at zero if nothing asked; every other tag found in the answer is appended with class `minor`, and `dashboard.css` has `tr.minor td { color: var(--muted) }`. So the grey means "a tag I was not expecting", which is a distinction nobody asked for.
-- **`wallpaper` is dead.** The extension identifies itself as `system-wallpaper`; nothing sends the bare tag any more, so the row is a permanent zero.
-- **What to do**: draw the tags actually present, and drop the `named` list and the `minor` styling with it. Whether the order stays fixed or becomes the count is Syd's.
-- Wherever the consumer tags are written down — `Documentation/photogoroundd.md` — says the same set.
+**Done 2026-09-18.** The `named` list and the `minor` styling are gone; the table
+draws the tags found in the answer, sorted by name so rows do not jump between
+refreshes.
+
+- **Why it was grey.** `dashboard.js` kept `const named = ["wallpaper", "screensaver", "app"]`. Those three were always drawn, at zero if nothing asked; every other tag was appended with class `minor`, which `dashboard.css` drew in `--muted`. The grey meant "a tag I was not expecting", which is a distinction nobody asked for.
+- **`wallpaper` was dead.** The extension identifies itself as `system-wallpaper`; nothing sends the bare tag any more, so the row was a permanent zero.
+- **`Documentation/photogoroundd.md` needed no change**: it already says `served` is "keyed by the `consumer` each request named, including `cli` and `anonymous`", with no fixed list.
 
 ## An Options button for the screensaver
 

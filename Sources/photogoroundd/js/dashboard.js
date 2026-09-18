@@ -5,7 +5,6 @@
 // /v1/dashboard. Nothing is said by colour alone: a stale page says
 // "not answering" in words and dims.
 "use strict";
-const named = ["wallpaper", "screensaver", "app"];
 const $ = (id) => document.getElementById(id);
 let lastAnswer = null;
 // The photograph whose thumbnail is drawn, or known to be missing.
@@ -173,17 +172,18 @@ function draw(s) {
     ? "free space on the volume unknown"
     : bytes(s.freeBytes) + " free on the volume; fetching stops below " + bytes(s.freeFloorBytes);
 
+  // **Only the tags actually found.** Syd, 2026-09-17: "you should only show
+  // tags you actually find; we will never have raw `wallpaper` again" — the
+  // extension calls itself `system-wallpaper`, so a fixed list of three left a
+  // permanent zero, and anything outside that list was drawn grey as though
+  // being unexpected meant something. Sorted by name rather than by count, so a
+  // row does not jump around between refreshes.
   const table = $("served");
   table.replaceChildren();
   let total = 0;
-  for (const name of named) {
-    const n = s.served[name] || 0;
-    total += n;
-    table.append(row(name, n));
-  }
-  for (const name of Object.keys(s.served).filter((k) => !named.includes(k)).sort()) {
+  for (const name of Object.keys(s.served).sort()) {
     total += s.served[name];
-    table.append(row(name, s.served[name], "minor"));
+    table.append(row(name, s.served[name]));
   }
   table.append(row("total", total, "total"));
   const since = new Date(s.since);

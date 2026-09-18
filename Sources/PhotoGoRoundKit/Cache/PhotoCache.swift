@@ -203,57 +203,94 @@ public struct PhotoCache {
         // `cached_at` is a projection of it, and this is where a projection
         // that drifted — a file deleted by hand, a database restored from a
         // backup, an upgrade that arrived with the column empty — is put back.
-        try reconcileResidency(with: await store.residentPhotoUUIDs)
+        try await reconcileResidency(with: await store.residentPhotoUUIDs)
         return result
     }
 
     // MARK: - Residency
 
+    /// What a reconciliation did, for the line it writes and for the tests.
+    public struct Residency: Sendable, Equatable {
+        /// Held on disk and now recorded as held.
+        public var recorded = 0
+        /// Recorded as held and no longer on disk.
+        public var cleared = 0
+        /// Transactions taken. Each one is a page, and each page is bounded.
+        public var pages = 0
+    }
+
     /// Brings `photo.cached_at` into line with the photographs whose originals
     /// are actually held.
     ///
-    /// A temp table rather than a bound list: the resident set is as large as
-    /// the cache — hundreds to thousands of entries — and per connection, so
-    /// two processes reconciling at once cannot see each other's.
-    func reconcileResidency(with resident: Set<String>, now: Date = Date()) throws {
-        // **Filled outside any transaction, deliberately.** A `TEMP` table
-        // lives in the connection's own temp database, so these inserts never
-        // touch the main file and never take its single writer — which they
-        // would have done for the length of the loop had this been wrapped in
-        // `BEGIN IMMEDIATE` along with the two updates below. The set is as
-        // large as the cache, so that is thousands of statements holding the
-        // writer to populate something no other connection can even see.
-        try database.run(
-            "CREATE TEMP TABLE IF NOT EXISTS resident_now (uuid TEXT PRIMARY KEY);")
-        try database.run("DELETE FROM resident_now;")
-        for uuid in resident {
-            try database.run(
-                "INSERT OR IGNORE INTO resident_now (uuid) VALUES (:uuid);",
-                ["uuid": .text(uuid)])
-        }
-        defer { try? database.run("DELETE FROM resident_now;") }
+    /// **The finding is a read; only the difference is written.** Measured on
+    /// 2026-09-18, the first reboot after the fixed port landed: this held the
+    /// writer for **17,208 ms** with `commit 0ms`, so the time was in the
+    /// statements. `EXPLAIN QUERY PLAN` says why — clearing the rows that are
+    /// recorded and no longer held was `SCAN photo`, a full table scan, and a
+    /// scan of thirty thousand rows a minute after a reboot is thirty thousand
+    /// rows off a cold disk. Warm, the same reconciliation takes 7.9 ms, which
+    /// is why nothing had ever noticed.
+    ///
+    /// So the scan happens with no writer held, and what comes out of it is
+    /// written by uuid, which uses `photo_uuid`, in pages of
+    /// `PhotoPool.batchSize`. Syd, 2026-09-10: "doing this 100 at a time saves
+    /// ram and keeps the database locks short."
+    ///
+    /// **The temp table is gone with it.** It existed to get the resident set
+    /// into SQL for those two statements; a page of a hundred bound parameters
+    /// needs no table, and the `CREATE`/`DELETE`/insert-per-uuid it cost is one
+    /// less thing done per walk.
+    @discardableResult
+    func reconcileResidency(with resident: Set<String>, now: Date = Date()) async throws
+        -> Residency
+    {
+        // Read, with nothing held: in WAL a reader blocks no writer and no
+        // writer blocks it.
+        let recordedAsHeld = Set(
+            try database.all("SELECT uuid FROM photo WHERE cached_at IS NOT NULL;") {
+                try $0.string("uuid")
+            })
 
-        // The writer is taken here and for exactly this: two statements, both
-        // against an index, and together they are the whole reconciliation.
-        try database.transaction(.immediate) {
-            // Held and unrecorded. The timestamp is now rather than the file's
-            // date: this column orders eviction, and what it wants to know is
-            // how long ago we last had a reason to keep the photograph, which
-            // for a photograph nobody has shown is when we noticed we had it.
+        // A resident file whose row has gone is in neither list after this:
+        // the update matches nothing, which is the right answer.
+        let toRecord = Array(resident.subtracting(recordedAsHeld))
+        let toClear = Array(recordedAsHeld.subtracting(resident))
+        var result = Residency(recorded: toRecord.count, cleared: toClear.count)
+        guard !toRecord.isEmpty || !toClear.isEmpty else { return result }
+
+        // The timestamp is now rather than the file's date: this column orders
+        // eviction, and what it wants to know is how long ago we last had a
+        // reason to keep the photograph, which for a photograph nobody has
+        // shown is when we noticed we had it.
+        for page in toRecord.chunked(into: PhotoPool.batchSize) {
+            try await write(page, cachedAt: SQLValue(now))
+            result.pages += 1
+        }
+        for page in toClear.chunked(into: PhotoPool.batchSize) {
+            try await write(page, cachedAt: .null)
+            result.pages += 1
+        }
+        // **Only when something drifted**, which is the point of saying it: the
+        // walk runs at launch and every hour, and the ordinary answer is that
+        // the database was already right. A line here means a file went or
+        // arrived behind the agent's back.
+        Log.cache.notice("RESIDENCY: \(result.recorded, privacy: .public) recorded · \(result.cleared, privacy: .public) cleared · \(result.pages, privacy: .public) pages")
+        return result
+    }
+
+    /// One page, one transaction, one statement against `photo_uuid`.
+    private func write(_ uuids: ArraySlice<String>, cachedAt: SQLValue) async throws {
+        var bindings: [String: SQLValue] = ["now": cachedAt]
+        var names: [String] = []
+        for (index, uuid) in uuids.enumerated() {
+            let name = "u\(index)"
+            names.append(":\(name)")
+            bindings[name] = SQLValue(uuid)
+        }
+        let list = names.joined(separator: ", ")
+        try await database.transaction(.immediate) {
             try database.run(
-                """
-                UPDATE photo SET cached_at = :now
-                 WHERE cached_at IS NULL
-                   AND uuid IN (SELECT uuid FROM resident_now);
-                """,
-                ["now": SQLValue(now)])
-            // Recorded and not held.
-            try database.run(
-                """
-                UPDATE photo SET cached_at = NULL
-                 WHERE cached_at IS NOT NULL
-                   AND uuid NOT IN (SELECT uuid FROM resident_now);
-                """)
+                "UPDATE photo SET cached_at = :now WHERE uuid IN (\(list));", bindings)
         }
     }
 
