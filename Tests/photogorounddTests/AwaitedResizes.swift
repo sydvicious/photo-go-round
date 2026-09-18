@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import photogoroundd
@@ -34,24 +35,38 @@ extension DashboardEndpoint {
     }
 }
 
-/// Waits for something to become true, rather than sleeping a guess.
+/// The tasks that kept resized copies, so a test can wait for a copy to be on
+/// disk instead of polling for its row.
 ///
-/// **Why a wait at all.** Keeping a resized copy became `async` when
-/// `PhotoStore` became an actor, so the endpoint hands the write to a task of
-/// its own: the response goes out before the copy is on disk, and before the
-/// eviction that follows the write. A test about that eviction has to wait for
-/// it, and a fixed sleep is either too long to be quick or too short to be
-/// reliable under a parallel run.
-func until(
-    _ reached: () -> Bool,
-    _ what: String,
-    within limit: Duration = .seconds(10)
-) async {
-    let clock = ContinuousClock()
-    let deadline = clock.now + limit
-    while clock.now < deadline {
-        if reached() { return }
-        try? await Task.sleep(for: .milliseconds(5))
+/// **Awaited, not polled.** Syd, 2026-09-17: "can you do `await Task { }.run()`
+/// instead of a timer?" Keeping a copy became `async` when `PhotoStore` became
+/// an actor, so the endpoint writes it in a task of its own and the response
+/// goes out first. `CopyPlace.kept` hands that task over; this collects them,
+/// and `settle()` is the handoff. A loop that watched for the `resized` row
+/// would be asserting how fast this machine is.
+final class KeptCopies: Sendable {
+    private let tasks = Mutex<[Task<Void, Never>]>([])
+
+    /// Installed as `PictureEndpoint.kept` or `DashboardEndpoint.kept`.
+    ///
+    /// Captures `self` rather than the `Mutex`: a `Mutex` is non-copyable, and
+    /// a capture list would consume it.
+    var collect: @Sendable (Task<Void, Never>) -> Void {
+        { [self] task in tasks.withLock { $0.append(task) } }
     }
-    Issue.record("\(what) did not happen within \(limit)")
+
+    /// Waits for every copy handed over so far, and for any handed over while
+    /// waiting — a copy whose eviction sets off another write would otherwise
+    /// be missed.
+    func settle() async {
+        while true {
+            let pending = tasks.withLock { held -> [Task<Void, Never>] in
+                let all = held
+                held = []
+                return all
+            }
+            if pending.isEmpty { return }
+            for task in pending { await task.value }
+        }
+    }
 }

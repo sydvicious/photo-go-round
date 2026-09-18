@@ -44,6 +44,10 @@ struct DashboardEndpoint {
     /// `PhotoCache.evictAfterWriting()`.
     var evicted: @Sendable (PhotoCache.EvictionResult) -> Void = { _ in }
 
+    /// Handed the task that keeps each thumbnail's copy. Nothing in the agent
+    /// wants it; the tests await it rather than polling. See `CopyPlace`.
+    var kept: @Sendable (Task<Void, Never>) -> Void = { _ in }
+
     /// Resizes an original to a thumbnail no larger than `side` on its longest
     /// edge, as JPEG. A hook so a test can make it hang.
     var resize: @Sendable (_ original: URL, _ side: Int) throws -> PhotoRenderer.Rendered = {
@@ -316,29 +320,16 @@ struct DashboardEndpoint {
             let ticket = Resizer.Ticket()
             let place = CopyPlace(
                 databasePath: databasePath, cacheRoot: cacheRoot,
-                settings: preferences.cacheSettings, store: store, evicted: evicted)
+                settings: preferences.cacheSettings, store: store, evicted: evicted, kept: kept)
             let outcome: (result: PhotoRenderer.Rendered, started: ContinuousClock.Instant)
             do {
                 outcome = try await Deadline.run(within: resizeBudget) {
                     try await resizer.run(ticket) {
                         let rendered = try resize(url, Self.thumbnailSize)
-                        // **Handed on rather than written here.** Keeping a copy
-                        // became `async` when `PhotoStore` became an actor, and
-                        // the resizer's work is synchronous by design — one
-                        // resize at a time. A task of its own keeps the copy,
-                        // which also holds for a resize nobody is waiting for
-                        // any more: it still earns its copy.
-                        Task {
-                            do {
-                                try await place.open().keep(
-                                    rendered, photoID: photo, photoUUID: uuid,
-                                    boxWidth: Self.thumbnailSize, boxHeight: Self.thumbnailSize)
-                            } catch {
-                                Log.cache.error(
-                                    kind: "cache.resized-copy-not-kept",
-                                    "dashboard thumbnail of photo \(photo) was not kept: \(error)")
-                            }
-                        }
+                        place.keeping(
+                            rendered, photoID: photo, photoUUID: uuid,
+                            boxWidth: Self.thumbnailSize, boxHeight: Self.thumbnailSize,
+                            named: "dashboard thumbnail of photo \(photo)")
                         return rendered
                     }
                 }

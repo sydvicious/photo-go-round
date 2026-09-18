@@ -11,7 +11,7 @@ import Testing
 /// was held around now suspends — and an actor on its own would not do either,
 /// because actors are re-entrant and a second editor would be let in while the
 /// first was awaiting. `Plans/Agent Performance Overhaul.md`, Phase 5.
-@Suite("The editing gate")
+@Suite("The editing gate", .timeLimit(.minutes(1)))
 struct EditingGateTests {
 
     /// The high-water mark of editors inside the gate at once.
@@ -22,20 +22,17 @@ struct EditingGateTests {
         var peak: Int { state.withLock { $0.peak } }
     }
 
-    /// Waits for something to become true rather than sleeping a guess, and
-    /// bounded so a gate that never hands the turn on fails here rather than
-    /// wedging the run.
-    private static func until(
-        _ reached: @Sendable () async -> Bool, _ what: String,
-        within limit: Duration = .seconds(10)
-    ) async {
-        let clock = ContinuousClock()
-        let deadline = clock.now + limit
-        while clock.now < deadline {
-            if await reached() { return }
-            try? await Task.sleep(for: .milliseconds(2))
-        }
-        Issue.record("\(what) did not happen within \(limit)")
+    /// Yields until something is true, with no deadline of its own.
+    ///
+    /// **A deadline here is a guess about the machine, not about the gate.**
+    /// Syd, 2026-09-17: "can you do `await Task { }.run()` instead of a timer?"
+    /// An earlier version gave up after ten seconds and recorded an issue:
+    /// these three tests take 15 ms alone, and two of them failed that way in a
+    /// full parallel run on 2026-09-17, because a waiter had not been given a
+    /// thread — nothing to do with the gate. A gate that genuinely never hands
+    /// the turn on hangs, and the suite's `.timeLimit` is what says so.
+    private static func until(_ reached: @Sendable () async -> Bool) async {
+        while await !reached() { await Task.yield() }
     }
 
     /// **The whole point, and what an actor alone would not give.** Every one
@@ -73,12 +70,12 @@ struct EditingGateTests {
             through.withLock { $0 = true }
             await gate.release()
         }
-        await Self.until({ await gate.waitingCount == 1 }, "the second editor queued")
+        await Self.until { await gate.waitingCount == 1 }
         #expect(through.withLock { $0 } == false, "it went through while the gate was held")
 
         await gate.release()
 
-        await Self.until({ through.withLock { $0 } }, "the waiter got the turn")
+        await Self.until { through.withLock { $0 } }
     }
 
     /// **The turn passes straight to the next in line**, rather than being
@@ -99,11 +96,11 @@ struct EditingGateTests {
             }
             // Queued before the next one asks, so the order asserted below is
             // the order they asked in and not the order they happened to start.
-            await Self.until({ await gate.waitingCount == index + 1 }, "editor \(index) queued")
+            await Self.until { await gate.waitingCount == index + 1 }
         }
 
         await gate.release()
-        await Self.until({ order.withLock { $0.count } == 4 }, "every editor got the turn")
+        await Self.until { order.withLock { $0.count } == 4 }
 
         #expect(order.withLock { $0 } == [0, 1, 2, 3])
     }

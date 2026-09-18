@@ -52,9 +52,26 @@ public actor PhotoStore {
     /// path without asking the database.
     private var sourceOfPhoto: [String: String] = [:]
 
-    public init(root: URL, byteCeiling: Int64 = CacheSettings.default.byteCeiling) {
+    /// Who to tell that a file was written to the cache, when evicting is
+    /// somebody else's job.
+    ///
+    /// **The one place every writer already shares.** A `PhotoCache` is built
+    /// wherever a connection is — a request, a fetch lane, the resizer's thread
+    /// — but all of them are handed this one store, so the bell reaches every
+    /// one of them by being here rather than by being threaded through each.
+    ///
+    /// Nil is the honest default: a cache with nobody to ring evicts on the
+    /// thread that wrote, which is what `pgr_ctl` and the tests want. The agent
+    /// sets it, and its `Evictor` rings.
+    public nonisolated let evictionBell: (@Sendable () -> Void)?
+
+    public init(
+        root: URL, byteCeiling: Int64 = CacheSettings.default.byteCeiling,
+        evictionBell: (@Sendable () -> Void)? = nil
+    ) {
         self.root = root
         self.byteCeiling = byteCeiling
+        self.evictionBell = evictionBell
     }
 
     static let originalDirectory = ".original"

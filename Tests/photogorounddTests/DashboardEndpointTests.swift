@@ -107,16 +107,6 @@ struct DashboardEndpointTests {
             return try decoder.decode(DashboardEndpoint.Snapshot.self, from: bytes)
         }
 
-        /// How many resized copies are on disk and in the database.
-        ///
-        /// **Waited for, not assumed.** Keeping a copy became `async` when
-        /// `PhotoStore` became an actor, so the endpoint hands the write to a
-        /// task of its own: the response goes out before the row exists, and a
-        /// page that asks again immediately would sometimes miss the copy and
-        /// resize twice.
-        var copies: Int {
-            (try? sources.database.scalarInt("SELECT COUNT(*) FROM resized;")) ?? 0
-        }
 
         static func write(to url: URL) throws {
             let context = CGContext(
@@ -572,13 +562,17 @@ struct DashboardEndpointTests {
             resizes.withLock { $0 += 1 }
             return try PhotoRenderer.render(contentsOf: original, fitting: side, by: side, as: .jpeg)
         }
+        let copies = KeptCopies()
+        dashboard.kept = copies.collect
 
         for pass in 0..<2 {
             let response = await dashboard.route(
                 try get("\(DashboardEndpoint.thumbnailPath)?photo=\(photo)"))
             #expect(response.status == 200)
             #expect(response.headers["Content-Type"] == "image/jpeg")
-            if pass == 0 { await until({ library.copies >= 1 }, "the thumbnail's copy was written") }
+            // The copy is written in a task of its own, so the second pass has
+            // to ask after it is on disk rather than before.
+            if pass == 0 { await copies.settle() }
         }
         #expect(resizes.withLock { $0 } == 1)
     }
@@ -597,14 +591,18 @@ struct DashboardEndpointTests {
         var pictures = library.pictures
         pictures.resizer = Resizer()
         pictures.evicted = { result in evictions.withLock { $0.append(result) } }
+        let copies = KeptCopies()
+        pictures.kept = copies.collect
 
         let response = await pictures.route(
             try #require(HTTPListener.parse("GET /v1/next?w=200&h=200 HTTP/1.1")))
 
         #expect(response.status == 200)
         // One pass, which took something. How much depends on the sizes: a
-        // copy bigger than the oldest original takes itself too.
-        await until({ evictions.withLock { !$0.isEmpty } }, "the copy was kept and evicted")
+        // copy bigger than the oldest original takes itself too. The eviction
+        // happens inside the task that keeps the copy, so awaiting that task
+        // is awaiting the eviction.
+        await copies.settle()
         let passes = evictions.withLock { $0 }
         #expect(passes.count == 1)
         #expect(passes.allSatisfy { $0.evicted > 0 })
@@ -623,14 +621,18 @@ struct DashboardEndpointTests {
         var dashboard = library.dashboard
         dashboard.resizer = Resizer()
         dashboard.evicted = { result in evictions.withLock { $0.append(result) } }
+        let copies = KeptCopies()
+        dashboard.kept = copies.collect
 
         let response = await dashboard.route(
             try get("\(DashboardEndpoint.thumbnailPath)?photo=\(photo)"))
 
         #expect(response.status == 200)
         // One pass, which took something. How much depends on the sizes: a
-        // copy bigger than the oldest original takes itself too.
-        await until({ evictions.withLock { !$0.isEmpty } }, "the copy was kept and evicted")
+        // copy bigger than the oldest original takes itself too. The eviction
+        // happens inside the task that keeps the copy, so awaiting that task
+        // is awaiting the eviction.
+        await copies.settle()
         let passes = evictions.withLock { $0 }
         #expect(passes.count == 1)
         #expect(passes.allSatisfy { $0.evicted > 0 })

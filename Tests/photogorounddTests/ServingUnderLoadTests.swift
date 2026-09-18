@@ -85,6 +85,9 @@ struct ServingUnderLoadTests {
         let database: Database
         let queued: Int
         let hang = Hang()
+        /// Every task that kept a resized copy, so a test can wait for the copy
+        /// to be on disk rather than watching for its row.
+        let copies = KeptCopies()
         let pictures: PictureEndpoint
         let cache: PhotoCache
 
@@ -123,6 +126,7 @@ struct ServingUnderLoadTests {
                 return PhotoRenderer.Rendered(bytes: Data([0]), format: format, width: 1, height: 1)
             }
             pictures.resizer = Resizer()
+            pictures.kept = copies.collect
             self.pictures = pictures
         }
 
@@ -190,11 +194,8 @@ struct ServingUnderLoadTests {
         // **Draining the resizer is not the same as the copy being on disk.**
         // Keeping it became `async` when `PhotoStore` became an actor, so the
         // resize's completion hands the write to a task of its own and the
-        // resizer is free before the row exists. Without this wait the next
-        // request sometimes misses and resizes again.
-        await until(
-            { ((try? library.database.scalarInt("SELECT COUNT(*) FROM resized;")) ?? 0) > 0 },
-            "the late resize's copy was written")
+        // resizer is free before the row exists. That task is what this awaits.
+        await library.copies.settle()
 
         let (next, _) = try await library.sized("w=200&h=200")
         #expect(next.status == 200)

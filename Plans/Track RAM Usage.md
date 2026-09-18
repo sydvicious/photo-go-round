@@ -41,6 +41,7 @@ Taken before asking Syd to reinstall or reboot, until Phase 2 decides where they
 | 2026-09-17 16:18 | 113 MB, 9 min | 53 MB, 9 min | not running | first sample |
 | 2026-09-17 16:41 | 157 MB, 23 min | 134 MB, 23 min | not running | before installing Phase 5's first slice |
 | 2026-09-17 17:51 | 101 MB, 1 h 18 min | 57 MB, 1 h 43 min | not running | before installing Phase 5's second slice |
+| 2026-09-17 19:20 | 150 MB, 1 h 28 min | 104 MB, 3 h 12 min | not running | before installing the evictor |
 
 *The second pair is the same two processes half an hour older: the agent up 44 MB, the extension up 81 MB. Both had been serving pictures throughout — the extension changes its picture every ten minutes — so this says nothing yet. It is the shape of the next few days that will.*
 

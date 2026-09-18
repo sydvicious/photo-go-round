@@ -7,6 +7,6 @@
     <key>CFBundleName</key>
     <string>pgr_ctl</string>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>pgr_ctl photos-spike measures how PhotoKit behaves against your photo library: it lists albums, copies a few originals to a temporary directory to check their size, and deletes them. It never writes to the library.</string>
+    <string>pgr_ctl reads your photo library to add an album as a source and to keep its photographs. It never writes to the library.</string>
 </dict>
 </plist>

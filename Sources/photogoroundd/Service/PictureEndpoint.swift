@@ -72,6 +72,10 @@ struct PictureEndpoint {
     /// `PhotoCache.evictAfterWriting()`.
     var evicted: @Sendable (PhotoCache.EvictionResult) -> Void = { _ in }
 
+    /// Handed the task that keeps each resized copy. Nothing in the agent wants
+    /// it; the tests await it rather than polling for the row. See `CopyPlace`.
+    var kept: @Sendable (Task<Void, Never>) -> Void = { _ in }
+
     /// Resizes an original to the box a request asked for.
     ///
     /// **So a test can make a resize hang.** Added 2026-09-16 for `Agent
@@ -95,51 +99,21 @@ struct PictureEndpoint {
     /// `ServiceTiming.resizeBudget`; see there.
     var resizeBudget: Duration = ServiceTiming.resizeBudget
 
+    /// Where a resized copy is kept, carried onto the resizer's thread.
+    ///
+    /// A `PhotoCache` holds a `Database`, which belongs to one isolation
+    /// domain, so the cache is opened where the copy is written rather than
+    /// carried there; see `CopyPlace`.
+    var copyPlace: CopyPlace {
+        CopyPlace(
+            databasePath: databasePath, cacheRoot: cacheRoot, settings: preferences.cacheSettings,
+            store: store, evicted: evicted, kept: kept)
+    }
+
     /// `RESIZE: gave up after 1000ms on IMG_0327.HEIC (…) · card 6921 · deal #84642; serving the original`
     ///
     /// The one line a stalled resize leaves, on the console and in the unified
     /// log. Filter on the prefix.
-    /// Saves a resize as a resized copy, on the resizer's thread, and evicts if
-    /// it took the cache over its ceiling.
-    ///
-    /// Its own connection, opened here, because the resizer's thread is not the
-    /// request's. A copy that cannot be kept is logged and the picture still goes
-    /// out: the cache is an optimisation, never a reason to fail a request.
-    /// **Handed to a task of its own.** Keeping a copy became `async` when
-    /// `PhotoStore` became an actor, and the resizer's work stays synchronous —
-    /// one resize at a time is the whole point of it. The copy is written off
-    /// the resizer's thread, which also covers the resize nobody waited for:
-    /// it still earns its copy.
-    static func keep(
-        _ rendered: PhotoRenderer.Rendered, of card: DeckCard, box: (width: Int, height: Int),
-        into place: CopyPlace
-    ) {
-        Task { await keepNow(rendered, of: card, box: box, into: place) }
-    }
-
-    private static func keepNow(
-        _ rendered: PhotoRenderer.Rendered, of card: DeckCard, box: (width: Int, height: Int),
-        into place: CopyPlace
-    ) async {
-        do {
-            let cache = try place.open()
-            try await cache.keep(
-                rendered, photoID: card.id, photoUUID: card.uuid, boxWidth: box.width,
-                boxHeight: box.height)
-        } catch {
-            Log.cache.error(
-                kind: "cache.resized-copy-not-kept",
-                "resized copy of \(card.spokenName) at \(box.width)x\(box.height) was not kept: \(error)")
-        }
-    }
-
-    /// Where a resized copy is kept, carried onto the resizer's thread.
-    var copyPlace: CopyPlace {
-        CopyPlace(
-            databasePath: databasePath, cacheRoot: cacheRoot, settings: preferences.cacheSettings,
-            store: store, evicted: evicted)
-    }
-
     static func resizeGaveUp(name: String, card: Int64, deal: Int64?, after budget: Duration) -> String {
         var parts = ["RESIZE: gave up after \(StageTimes.milliseconds(budget)) on \(name)", "card \(card)"]
         if let deal { parts.append("deal #\(deal)") }
@@ -457,7 +431,12 @@ struct PictureEndpoint {
                         outcome = try await Deadline.run(within: resizeBudget) {
                             try await resizer.run(ticket) {
                                 let rendered = try resize(served.url, box.width, box.height, format)
-                                Self.keep(rendered, of: served.card, box: box, into: place)
+                                place.keeping(
+                                    rendered, photoID: served.card.id,
+                                    photoUUID: served.card.uuid, boxWidth: box.width,
+                                    boxHeight: box.height,
+                                    named:
+                                        "resized copy of \(served.card.spokenName) at \(box.width)x\(box.height)")
                                 return rendered
                             }
                         }

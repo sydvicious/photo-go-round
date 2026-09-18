@@ -144,16 +144,6 @@ struct EndpointCacheTests {
             try #require(HTTPListener.parse("GET \(target) HTTP/1.1"))
         }
 
-        /// How many resized copies are on disk and in the database.
-        ///
-        /// **Waited for, not assumed.** Keeping a copy became `async` when
-        /// `PhotoStore` became an actor, so the endpoint hands the write to a
-        /// task of its own: the response goes out before the row exists, and a
-        /// test that asks again immediately would sometimes miss the copy and
-        /// resize twice.
-        var copies: Int {
-            (try? sources.database.scalarInt("SELECT COUNT(*) FROM resized;")) ?? 0
-        }
 
         static func write(width: Int, height: Int, to url: URL) throws {
             let context = CGContext(
@@ -332,13 +322,15 @@ struct EndpointCacheTests {
             return try PhotoRenderer.render(contentsOf: original, fitting: width, by: height, as: format)
         }
         let originals = await library.cache.store.totals
+        let copies = KeptCopies()
+        endpoint.kept = copies.collect
 
         func get(_ box: String) async throws -> HTTPListener.Response {
             _ = try await library.cache.fillCompletely()
             return await endpoint.route(try library.request("/v1/next?\(box)"))
         }
         let first = try await get("w=200&h=200")
-        await until({ library.copies >= 1 }, "the first copy was written")
+        await copies.settle()
         let second = try await get("w=200&h=200")
         #expect(first.status == 200 && second.status == 200)
         #expect(resizes.withLock { $0 } == 1)
@@ -346,7 +338,7 @@ struct EndpointCacheTests {
 
         #expect(try await get("w=300&h=300").status == 200)
         #expect(resizes.withLock { $0 } == 2, "a different box is a different copy")
-        await until({ library.copies >= 2 }, "the second box's copy was written")
+        await copies.settle()
 
         // The originals are what they were: copies are kept beside them.
         #expect(await library.cache.store.totals == originals)
@@ -365,12 +357,14 @@ struct EndpointCacheTests {
             resizes.withLock { $0 += 1 }
             return try PhotoRenderer.render(contentsOf: original, fitting: width, by: height, as: format)
         }
+        let copies = KeptCopies()
+        endpoint.kept = copies.collect
 
         _ = try await library.cache.fillCompletely()
         let first = await endpoint.route(try library.request("/v1/next?w=200&h=200"))
         #expect(first.status == 200)
         #expect(resizes.withLock { $0 } == 1)
-        await until({ library.copies >= 1 }, "the copy was written")
+        await copies.settle()
 
         // Evict the original, and deal its card again without fetching it back.
         let card = try #require(try library.sources.database.first(

@@ -272,8 +272,15 @@ struct ServeWaitTests {
         #expect(fixture.dropped().count == 6)
         #expect(fixture.queued == 0, "the cold cards must not still be queued")
         #expect(fixture.pooled == 7, "dropping a card keeps its photograph")
+        // **A pathology guard, not the claim.** What "one wait, not six" means
+        // is asserted directly above: `waited() == 1` and six dropped. This
+        // clock cannot tell those apart anyway — the wait here is 200 ms, so
+        // six of them would be 1.2 s and still inside two seconds. All it can
+        // catch is a request that hangs, and at two seconds it also caught a
+        // busy machine: it failed once on 2026-09-17 in a full parallel run
+        // while the assertions that matter passed.
         #expect(
-            clock.now - started < .seconds(2),
+            clock.now - started < .seconds(5),
             "a request spent more than its one wait walking cold cards")
         #expect(
             fixture.looked.all

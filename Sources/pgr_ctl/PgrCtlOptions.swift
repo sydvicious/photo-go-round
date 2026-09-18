@@ -23,7 +23,6 @@ struct Options {
         case deckStats
         case cache(CacheAction)
         case shuffleTest
-        case photosSpike
         case getPreferences(key: String?)
         case setPreference(key: String, value: String)
         case wallpaper(WallpaperAction)
@@ -95,9 +94,6 @@ struct Options {
     var repeatWindowFraction = DeckSettings.defaultRepeatWindowFraction
     var deals = 50_000
     var photos = 4_000
-    var albumIdentifier: String?
-    var probeCount = 200
-    var listAlbums = false
     var noDefaultValues = false
     var follow = false
     var lastInterval = "1h"
@@ -166,22 +162,11 @@ struct Options {
                 newSources.append(
                     NewSource(path: try next(argument), kind: .file, recursive: false))
             case "--album":
-                // **One flag, recorded two ways, which is what this parser is
-                // for.** Positionals are collected first and interpreted last,
-                // so both readings are kept and the command word decides which
-                // one meant anything: `sources add` takes the source,
-                // `photos-spike` takes the target. `--folder` has always worked
-                // this way — every other command simply ignores it.
-                //
                 // The value is a `PHAssetCollection` local identifier,
                 // `UUID/L0/040`, opaque here and everywhere: nothing
-                // standardizes it or reads its slashes as path separators. For
-                // the spike it may equally be a title, so a run aimed at one
-                // album needs no identifier copied out of the listing above it.
-                let album = try next(argument)
-                options.albumIdentifier = album
+                // standardizes it or reads its slashes as path separators.
                 newSources.append(
-                    NewSource(path: album, kind: .photosCollection, recursive: false))
+                    NewSource(path: try next(argument), kind: .photosCollection, recursive: false))
             case "--recursive", "-r":
                 // Only meaningful attached to a folder.
                 throw OptionsError.misplacedRecursive
@@ -209,10 +194,6 @@ struct Options {
                 options.deals = try nextInt(argument)
             case "--photos":
                 options.photos = try nextInt(argument)
-            case "--albums":
-                options.listAlbums = true
-            case "--probe":
-                options.probeCount = try nextInt(argument)
             case "--no-default-values":
                 options.noDefaultValues = true
             case "--follow", "-f":
@@ -335,9 +316,6 @@ struct Options {
         case "shuffle-test":
             return .shuffleTest
 
-        case "photos-spike":
-            return .photosSpike
-
         case "get":
             return .getPreferences(key: verb(1))
 
@@ -416,11 +394,6 @@ struct Options {
           shuffle-test [--deals <n>] [--photos <n>] [-w <f>]
                                     The statistical assertions, against a
                                     throwaway library. Never touches yours
-          photos-spike [-n <n>] [--probe <n>] [--album <id|title>] [--albums]
-                                    Measure PhotoKit against the system Photos
-                                    library: albums and their subtypes, fetch
-                                    laziness, resource lists, and N originals
-                                    pulled and checked. Read-only
           get [<key>] [--no-default-values]
           set <key> <value>         Preferences, in the domain the agent reads
           wallpaper get [<key>]
@@ -453,12 +426,6 @@ struct Options {
           -w, --window <0-1>      Repeat window fraction for shuffle-test. Default: 0.5
               --deals <n>         Cards to deal in shuffle-test. Default: 50000
               --photos <n>        Library size for shuffle-test. Default: 4000
-              --albums            List every collection with its identifier,
-                                  rather than a summary by subtype
-              --probe <n>         How many assets photos-spike asks about local
-                                  availability without fetching. Default: 200
-              --album <id|title>  Which album photos-spike works on. Default:
-                                  the largest, hidden photos excluded
           -f, --follow            Stream the log rather than printing it
               --last <time>       How far back to read. Default: 1h
           -h, --help              This
@@ -478,7 +445,6 @@ struct Options {
                               --folder ~/Pictures/Wallpaper
           pgr_ctl status
           pgr_ctl shuffle-test --deals 50000 --photos 4000
-          pgr_ctl photos-spike -n 20 --album Favorites
           pgr_ctl wallpaper get
           pgr_ctl wallpaper set interval thirtyMinutes
         """

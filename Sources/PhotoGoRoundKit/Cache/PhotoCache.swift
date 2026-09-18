@@ -543,7 +543,7 @@ public struct PhotoCache {
             return .failed("it was fetched and could not be kept: \(error)", card)
         }
 
-        await evictAfterWriting()
+        if let ring = evictionBell { ring() } else { await evictNow() }
 
         // **Nothing about the queue changes here**, including when the card
         // these bytes were fetched for is no longer on it. Usually it is, and
@@ -1356,7 +1356,12 @@ public struct PhotoCache {
     ///
     /// A failure is logged and the write stands: the file is the point, and
     /// the next write evicts again.
-    func evictAfterWriting() async {
+    /// Runs the eviction here, on the thread that wrote the file.
+    ///
+    /// Only when there is no `PhotoStore.evictionBell` to ring: `pgr_ctl`, and
+    /// the tests, where the write and its eviction being one act is what makes
+    /// them legible.
+    private func evictNow() async {
         do {
             let result = try await evictIfNeeded()
             if result.evicted > 0 { evicted(result) }
@@ -1364,6 +1369,21 @@ public struct PhotoCache {
             Log.cache.error(kind: nil, "eviction after a write failed: \(error)")
         }
     }
+
+    /// Whoever evicts for this cache, if it is not this cache.
+    ///
+    /// **Rung, never awaited.** Syd, 2026-09-17: "you only need to use `await
+    /// …` when you need the result, or you need the side effect", and "async
+    /// code is all about getting stuff out of the way." Nothing a write does
+    /// next reads anything eviction sets, so the writer rings and carries on —
+    /// "you might temporarily exceed the space, but that's fine".
+    ///
+    /// **Why a bell rather than a `Task`.** Eviction reads `resized`, builds the
+    /// order and writes in a transaction, all on this cache's `Database`, and
+    /// one connection belongs to one isolation domain. Detaching the work means
+    /// detaching a connection with it, which is what the agent's `Evictor`
+    /// owns.
+    private nonisolated var evictionBell: (@Sendable () -> Void)? { store.evictionBell }
 
     /// Saves a resized copy, and evicts if it took the cache over its ceiling.
     ///
@@ -1377,7 +1397,9 @@ public struct PhotoCache {
         let copy = try ResizedCopies.save(
             rendered, photoID: photoID, photoUUID: photoUUID, boxWidth: boxWidth,
             boxHeight: boxHeight, root: root, database: database, now: now)
-        if copy != nil { await evictAfterWriting() }
+        if copy != nil {
+            if let ring = evictionBell { ring() } else { await evictNow() }
+        }
         return copy
     }
 

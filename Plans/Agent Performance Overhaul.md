@@ -38,11 +38,11 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
 - **Phase 4 — The refresh locks only to write.** The walk stages what it found in temporary tables with no lock held, then applies additions and removals under the lock, 100 at a time. **Built 2026-09-16,** after a probe measured where the lock's time went, and installed the same night: 173 of 190 pages took no lock, and no transaction held the writer 50 ms. See *Built*, under *The refresh locks only to write*.
   - Each page of 100 is read with no lock, and locks only if it has something to write, as the walk goes. *Decided 2026-09-16: "as the walk goes, 100 at a time".*
   - Removing a source deletes its photographs 100 at a time too, before the source row goes. *Decided 2026-09-16: "pages of 100, accept the count".*
-- **Phase 5 — Refresh and downloads on their own actors.** Each gets its own executor and database connection, with no `NSLock`.
+- **Phase 5 — Refresh and downloads on their own actors.** Each gets its own executor and database connection, with no `NSLock`. **Three slices built 2026-09-17:** the refresh and the fetcher, `PhotoStore` and the editing gate, and the evictor. Sixteen locks are eleven; the seven files still holding one are the next slice.
 - **Phase 6 — The cache index comes from the database at launch**, so the port opens in milliseconds rather than after a walk of the cache. **Built 2026-09-17; not yet installed.** See *Built*, under the section of that name.
 - **After each phase,** Syd installs the agent and reads the `TIMING:` lines during a refresh.
 - **Not a phase, and the largest single win:** the LaunchAgent's `ProcessType` was `Background`, which throttles disk I/O. `Adaptive` since 2026-09-17; see *Most of the restart was an I/O throttle, not the walk*.
-- **Still open from this plan:** Phases 3 and 5; serving's own one-row writes that held the lock 0.5–2.2 s before Phase 4 (`TODO.md`, with the commit probe waiting on a new `LOCK:` line); and `Deadline`'s timer depending on the shared pool.
+- **Still open from this plan:** Phase 5's last slice — the eleven `NSLock`s in `SourceBench`, `LibraryChanges`, `AgentErrors`, `LaunchTally`, `DarwinNotification`, `RunCommand` and `SystemPhotoLibrary`; and `Deadline`'s timer depending on the shared pool. Serving's own one-row writes are no longer the story: since `ProcessType Adaptive` and the evictor, every long hold measured has been its own `COMMIT` with nothing waiting.
 
 # Design Decisions
 
@@ -621,6 +621,35 @@ Syd, 2026-09-17: "this ties into 'each request is run on its own actor'", then "
 - **`Flag` and `Note` are gone.** The fetch path's pair became `FetchNote`, an actor; the two tests that used `Flag` hold their own state now.
 - **Still holding a lock, for the slices after this one:** `PhotoStore`, `SourceBench`, `LibraryChanges`, `AgentErrors`, `LaunchTally`, `DarwinNotification`, `SourceStore.editing` (an `NSRecursiveLock`), `FillerBox`, and `SystemPhotoLibrary`'s three. `pgr_ctl`'s spike is not the agent and goes when it does.
 - **Tests:** the suite passed twice; `RefreshGateTests`, `RefreshPassTests` and `LaneTests` (was `RequestLaneTests`) are async now.
+
+### Built: `PhotoStore`, and a gate for the source list
+
+*2026-09-17, at Syd's "yes, do slice 2". Committed as `3bf08ba`.*
+
+- **`PhotoStore` is an actor**, and everything downstream of it is `async`: `status`, `bytesOnDisk`, `deal`, `residentURL`, `remove`, `clear`, `costOfClearing`, `nextQueuedToFetch` and `bytesHere` on `PhotoCache`, and the public source edits. 131 call sites across 24 files. Syd, told the size of it: "it will touch everything", then "push on".
+- **`root` is `nonisolated let`.** It is set at init and never changes, so the paths that want only the directory do not hop onto the actor to ask.
+- **`SourceStore.editing` is an `EditingGate`, not an actor.** Actors are re-entrant, so a second editor would be let in while the first was awaiting — exactly the overlap the `NSRecursiveLock` existed to prevent, and it could not survive the reconcile becoming a suspension. The gate keeps a FIFO queue of waiters and hands the turn on rather than dropping it. `EditingGateTests` fails on mutation of both halves: an `acquire()` that never waits, and a `release()` that resumes the last waiter instead of the first.
+- **The Xcode project needed the concurrency setting at project level.** `SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT` was set on the app target alone, so `ConfinedDatabase` would not compile under Xcode at all — *sending 'self.database' risks causing data races*. SwiftPM has it package-wide and never saw it.
+- **Keeping a resized copy became a task of its own**, since the write is `async` now and the resizer's work stays synchronous. The response goes out before the copy is on disk, which four tests had to learn to wait for.
+
+### Built: the evictor, and awaiting nothing nobody needs
+
+*2026-09-17, at Syd's "eviction actor".*
+
+- **The rule it came from.** Syd: "you only need to use `await …` when you need the result, or you need the side effect", and "async code is all about getting stuff out of the way." Every standalone `await` in the agent and the kit was read against it. Two qualified, both `evictAfterWriting()`: after a fetch adopts its bytes, and after a copy is kept. The rest set state the next lines read — `store.walked()` gates eviction, `store.believe()` builds the index the caller returns, `store.discard()` must land before a removal is reported.
+- **The database is the forcing function.** Syd's phrase, and it is the whole of why this is an actor rather than a `Task`: `Task { evictAfterWriting() }` does not compile, because `PhotoCache` is a struct holding a `Database` and one connection belongs to one isolation domain. Detaching the work means detaching a connection with it — which is what `CopyPlace` already does for the copy write, and what `ConfinedDatabase` does for a lane.
+- **`Evictor`** is an actor on a `utility` serial queue, with a connection of its own opened at the first ring and kept. It consumes a `Doorbell`, so a burst of writes costs one pass — where awaiting gave the same outcome by a worse route, each writer waiting to discover that `PhotoStore.claimEviction()` was already taken.
+- **`PhotoStore.evictionBell` carries the ring**, because the store is the one object every writer already shares: no closure threaded through `CopyPlace`, both endpoints and the fetch factory. Nil is the default, and a cache with nobody to ring evicts where it wrote.
+- **`pgr_ctl` and the tests keep that inline path**, because they are the short-lived processes: a detached task dies at exit, and `pgr_ctl queue fill` would leave the cache over its ceiling until the agent next wrote something.
+- **Measured, the first 42 minutes after installing:** 39 locks at or over 50 ms, worst 1621 ms, median 103 ms, and 5 of the 39 waited at all. Every long hold was its own `COMMIT` — held equals commit, waited nothing, one attempt — so what is left is the disk, not contention. The evictor's own writes logged two locks, 103 ms at worst. Nothing evicted between 19:22 and 19:59 while the machine was idle, and about forty passes in the six minutes after it came back: rings only come from writes.
+- **`pgr_ctl photos-spike` is gone**, and five `NSLock`s with it. Syd: "we don't need PhotosSpike.swift anymore, right?", then "keep what makes pgr_ctl work, but otherwise, nuke it." `--album` stays, since `sources add` takes one; the album listing it carried does not come back — the app's picker and `GET /v2/photos/albums` are where identifiers come from. `Options.swift` became `PgrCtlOptions.swift`, which no longer collides with the agent's file of that name.
+- **Tests wait on a task, not a clock.** Syd: "can you do `await Task { }.run()` instead of a timer?" `Evictor.run()` returns when the bell finishes, so the task running it is the handoff; `CopyPlace.keeping` hands back the task that writes a copy, and `KeptCopies.settle()` awaits it. `until` is gone from `photogorounddTests`. Two tests had been passing vacuously and were found by mutation: one counted evictions reported rather than passes made, and one could not tell a ring never answered from a pass that found nothing.
+
+### What the last slice has left
+
+Eleven locks in seven files, none of which touches a connection — so none needs a bell, a second connection or a `CopyPlace`: `SourceBench`, `LibraryChanges`, `AgentErrors`, `LaunchTally` and `DarwinNotification` one apiece, `RunCommand` three, `SystemPhotoLibrary` three. `DarwinNotification`'s database is a *path*, used to key the notification name, not a connection.
+
+`SystemPhotoLibrary`'s three stay last for the reason `Deadline.swift`'s TODO gives: PhotoKit calls its handlers back on a queue of its own, and that comment records what happened when Swift inferred actor isolation into them.
 
 ## What this leaves stale elsewhere
 

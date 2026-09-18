@@ -8,7 +8,7 @@ The window is showing a test folder. Every architectural claim this project has 
 
 # Phases
 
-- **Phase 1 — the spike.** — **run 2026-08-25. The approach holds; four things in this document do not.** `pgr_ctl photos-spike`, and no change to the kit at all. PhotoKit stays out of `PhotoGoRoundKit` until the measurements say the approach holds.
+- **Phase 1 — the spike.** — **run 2026-08-25. The approach holds; four things in this document do not.** `pgr_ctl photos-spike`, and no change to the kit at all. *The command was deleted on 2026-09-17; see References.* PhotoKit stays out of `PhotoGoRoundKit` until the measurements say the approach holds.
   - Request authorization; list albums and smart albums with identifier, title, subtype, and image count.
   - Time the fetch against the largest album, with `phys_footprint` sampled, so laziness is observed rather than assumed.
   - Pull N originals and compare each written file's `CGImageSource` pixel dimensions against `PHAsset.pixelWidth`/`pixelHeight`.
@@ -570,7 +570,7 @@ So the picker is ours to draw, which was already assumed. **The thing that follo
 - `Sources/PhotoGoRoundKit/Sources/SourceProvider.swift` — the four operations, and the contracts on `existence` and `availability`.
 - `Sources/PhotoGoRoundKit/Sources/SourceStore+Editing.swift` — `EditFailure.unsupportedKind`, and the all-or-none batch rule.
 - `Sources/PhotoGoRoundKit/Sources/SourceRequest.swift` — `resolve`, and the trailing-slash rule.
-- `Sources/pgr_ctl/PhotosSpike.swift` — the spike itself, and the measurements' provenance.
+- `Sources/pgr_ctl/PhotosSpike.swift` — the spike itself, and the measurements' provenance. **Deleted 2026-09-17**, its job done and the provider built; Syd: "keep what makes pgr_ctl work, but otherwise, nuke it." It is in the history at `3bf08ba` if a measurement ever needs re-reading. The album listing it carried has no replacement on the command line: the app's picker and the agent's `GET /v2/photos/albums` are where a local identifier comes from.
 - `Sources/photogoroundd/Service/SourceEndpoint.swift` — the five source routes and the `Wire` shape.
 - `app/mac/Sources/SourceService.swift` — the client's reading of the wire, and `Source.name`.
 - `PHAssetResourceManager.writeData(for:toFile:options:)` and `PHAssetResourceRequestOptions.isNetworkAccessAllowed`.

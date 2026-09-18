@@ -71,8 +71,14 @@ struct RunCommand {
         // bytes: the endpoint's per-request caches, the producer's, the fetcher's,
         // and the source store — which needs it so that removing a photograph's
         // row removes its bytes in the same breath.
+        // **Who is told that the cache was written to.** Rung by whichever
+        // thread wrote the file, answered by `Evictor` on a thread of its own;
+        // see there. Built before the store because the store carries the ring
+        // and the evictor carries the loop.
+        let evictionBell = Doorbell()
         let store = PhotoStore(
-            root: environment.cacheRoot, byteCeiling: preferences.cacheSettings.byteCeiling)
+            root: environment.cacheRoot, byteCeiling: preferences.cacheSettings.byteCeiling,
+            evictionBell: { [evictionBell] in evictionBell.ring() })
         let sources = SourceStore(database: database, bytes: store)
         let deck = Deck(database: database)
         let cache = PhotoCache(
@@ -136,6 +142,15 @@ struct RunCommand {
             Console.event(Self.evictedLine(eviction))
             environment.announce(.cacheChanged)
         }
+        let evictor = Evictor(
+            bell: evictionBell, databasePath: databasePath, root: environment.cacheRoot,
+            settings: preferences.cacheSettings, store: store, report: evicted)
+        let evicting = Task { await evictor.run() }
+        defer {
+            evictor.stop()
+            evicting.cancel()
+        }
+
         // Rebuilt per use rather than shared: a `Database` belongs to one
         // isolation domain, and these run on whichever lane reaches them.
         let cacheForFetch: @Sendable () -> PhotoCache? = {

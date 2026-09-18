@@ -30,12 +30,11 @@ import Foundation
 /// does not link, on purpose, which settles where this had to live.
 // TODO: replace every `NSLock` in this project with actors and tasks.
 //
-// Seven files still hold one, as of 2026-09-17: `SourceBench`,
-// `LibraryChanges`, `AgentErrors`, `LaunchTally`, `DarwinNotification`,
-// `RunCommand` (three of them) and `SystemPhotoLibrary` (three — `ChunkSink`,
-// `RequestHandle`, `ResumeOnce`). `PhotosSpike` holds five that go when the
-// spike does. Most are mechanical: state guarded by a lock and touched from one
-// place, which is an actor with the lock deleted.
+// Eleven locks across seven files, as of 2026-09-17: `SourceBench`,
+// `LibraryChanges`, `AgentErrors`, `LaunchTally` and `DarwinNotification` one
+// apiece, `RunCommand` three, and `SystemPhotoLibrary` three — `ChunkSink`,
+// `RequestHandle`, `ResumeOnce`. Most are mechanical: state guarded by a lock
+// and touched from one place, which is an actor with the lock deleted.
 //
 // Gone in Phase 5: `FetchDeadline`, `QueueFiller`, `QueueFetcher`, `PhotoStore`
 // and `SourceStore+Editing` — the last through an `EditingGate`, since an actor
