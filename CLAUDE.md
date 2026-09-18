@@ -63,6 +63,28 @@ Release is `com.sydpolk.photogoround.wallpaper.extension`, Syd's Debug builds ar
 `…wallpaper.debug.extension`, and an agent's are `…wallpaper.claude.extension`.
 `Plans/Wallpaper Plan.md`, *Debug builds under their own identity*.
 
+## Agent builds carry their own port
+
+The agent binds a fixed port, one per build variant — release 9427, Syd's Debug
+9428, an agent's build 9429 — so two of them can run at once. The variant is a
+compile-time condition, so an agent's builds pass it:
+
+```bash
+swift build --scratch-path "$HOME/.claude/build/photo-go-round/.build" -Xswiftc -DPGR_AGENT_CLAUDE
+```
+
+```bash
+xcodebuild build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Server" \
+    -destination "platform=macOS" -configuration Debug \
+    -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData" \
+    PGR_AGENT_CONDITION=PGR_AGENT_CLAUDE
+```
+
+Without it a debug build takes 9428, which is Syd's. Nothing breaks if it
+collides — the listener falls back to a port from the kernel and publishes it —
+but then the fixed port is doing nothing for either of you.
+`Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift`, `Plans/Service Port Plan.md`.
+
 ## Builds are warning-free, and checked on a clean build
 
 Fix the cause rather than silencing it, and verify with a clean build:

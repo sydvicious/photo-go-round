@@ -314,8 +314,15 @@ struct RunCommand {
         // it isolates storage and the preference domain is shared, which is
         // exactly where the port lives.
         let publishes = publishesPort
+        // **The fixed port for this build**, unless `--port` said otherwise.
+        // Syd, 2026-09-17: "Perhaps we had better actually pick a port and
+        // hardcode it. this dynamic port stuff is causing problems", and "each
+        // of the three build variants need their own fixed ports".
+        // `Plans/Service Port Plan.md`.
+        let wanted = servicePort ?? ServiceAddress.port
+        Console.note("serving on port \(wanted) — \(ServiceAddress.variant)")
         let listener = HTTPListener(
-            port: servicePort,
+            port: wanted,
             advertising: PictureEndpoint.path,
             onReady: { port in
                 // Pasteable, on both branches: a scratch agent has a dashboard
@@ -331,6 +338,12 @@ struct RunCommand {
                     return
                 }
                 environment.preferences.publishServicePort(port)
+            },
+            onFailure: { words in
+                // Only reached when even a kernel-assigned port could not be
+                // bound; the fixed one falling through is handled inside the
+                // listener. Nothing can be served without a socket.
+                Console.failure(words)
             }
         ) { await router.route($0) }
         // A one-pass run configures and fills; it does not serve. Its listener

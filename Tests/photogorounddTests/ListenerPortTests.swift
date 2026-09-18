@@ -9,7 +9,7 @@ import Testing
 /// These start real listeners. They are loopback-only and answer nothing, so
 /// they cost a bind and a teardown — worth it, because the port is the one fact
 /// in this design that cannot be checked by reading the arguments.
-@Suite("Listener port")
+@Suite("Listener port", .serialized)
 struct ListenerPortTests {
 
     /// Starts a listener and reports the port it bound, or nil if it never
@@ -80,13 +80,55 @@ struct ListenerPortTests {
         // Retried, because "free a moment ago" is not "free now": the listener
         // that surrendered it may not have finished letting go. Losing that
         // race is not the failure this is looking for.
-        for _ in 0..<5 {
+        //
+        // **A bound port that is not the candidate is that same lost race**, not
+        // a failure: since 2026-09-17 the listener answers a refused fixed port
+        // by taking one from the kernel rather than by not starting. Syd: "If
+        // the agent can't get the port it wants, it should fall back to what it
+        // does now."
+        for _ in 0..<10 {
             guard let candidate = try await bind(nil) else { continue }
-            if let bound = try await bind(candidate) {
-                #expect(bound == candidate)
-                return
-            }
+            // The listener that surrendered the number is torn down
+            // asynchronously, so asking for it in the same breath is the race
+            // this loop exists to lose occasionally. The wait is for that
+            // teardown and not for the assertion.
+            try await Task.sleep(for: .milliseconds(20))
+            if let bound = try await bind(candidate), bound == candidate { return }
         }
-        Issue.record("no port could be pinned in five attempts")
+        Issue.record("no port could be pinned in ten attempts")
+    }
+
+    /// **The fixed port is a preference, not a requirement.** Two agents on one
+    /// Mac — Syd's and an agent's, or a scratch run beside the installed one —
+    /// must both start, and the second one is found the way everything was
+    /// found before: by the value it publishes.
+    @Test("A port that is already held is fallen back from, not failed on")
+    func aHeldPortFallsBack() async throws {
+        // **The holder takes a port from the kernel and keeps it**, rather than
+        // this binding one, letting it go and hoping to find it still free. The
+        // first version did that and failed in a full run: the holder lost the
+        // race to re-take its own number, fell back, and left the number free
+        // for the listener that was supposed to be refused it.
+        let reported = Reported()
+        let holder = HTTPListener(
+            port: nil, advertising: PictureEndpoint.path, onReady: { reported.set($0) }
+        ) { _ in .noContent() }
+        try holder.start()
+        defer { holder.stop() }
+
+        var holding: UInt16?
+        for _ in 0..<100 {
+            if let port = reported.value {
+                holding = port
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let held = try #require(holding, "the holder never became ready")
+
+        let bound = try #require(try await bind(held), "the second listener never became ready")
+
+        #expect(bound != held, "it bound a port another listener was holding")
+        #expect(bound != 0)
     }
 }

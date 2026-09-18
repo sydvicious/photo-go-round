@@ -8,11 +8,13 @@ The dynamic port is the one piece of the system that changes on every launch, an
 
 # Phases
 
-- **Phase 1 — The agent binds a fixed default.** `--port` still pins another number, and the bound port is still published.
-  - Choose the number; check it against `/etc/services` and what the machine actually listens on.
-  - Bind failure is fatal and says what holds the port.
-- **Phase 2 — Clients try the fixed port first.** The published value becomes the fallback, for an agent that was told to use a different one.
+- **Phase 1 — The agent binds a fixed default.** `--port` still pins another number, and the bound port is still published. **Built and installed 2026-09-17**; see *Built: the agent takes its number*.
+  - **Three numbers, one per build variant** — release 9427, Syd's Debug 9428, an agent's build 9429. Syd: "I think each of the three build variants need their own fixed ports."
+  - **The variant is a compile-time condition**, not the deployment. Syd: "build-time identity."
+  - **A refused port is fallen back from, not failed on**: the agent takes one from the kernel and publishes it, as it always did. Syd: "If the agent can't get the port it wants, it should fall back to what it does now."
+- **Phase 2 — Clients try the fixed port first.** The published value becomes the fallback. Syd: "The clients will try the hardcoded port first, and then fall back to what they do now."
   - The app, the screensaver, the wallpaper extension and `pgr_ctl`.
+  - Each has its own handling of *no port published* against *unreadable*, so what a failed first attempt means to the surface is the part to get right.
 - **Phase 3 — Retire what the discovery dance needed.** Whatever is left unused after Phase 2 goes: the plist-file read in `ServicePort`, and possibly `servicePort` itself.
 - **Phase 4 — Several users on one Mac.** Decide what a second user's agent binds, since two agents cannot hold the same port.
 
@@ -20,11 +22,12 @@ The dynamic port is the one piece of the system that changes on every launch, an
 
 *All of these are Claude's proposals; none is decided.*
 
-- **A number outside the ephemeral range**, which on this Mac is 49152–65535 (`net.inet.ip.portrange`). Inside it, a transient client socket can be holding our port when the agent starts. **Proposed: 9427**, unlisted in `/etc/services` and not in use on Syd's Mac.
+- **Numbers outside the ephemeral range**, which on this Mac is 49152–65535 (`net.inet.ip.portrange`). Inside it, a transient client socket can be holding our port when the agent starts. **9427, 9428 and 9429**, none listed in `/etc/services` and none in use on Syd's Mac. The numbers carry no other meaning.
+- **One per build variant, decided at compile time.** `Deployment` answers *whose pictures* — production against `.build` — and that is a different question from *whose build*. Two agents built differently can be running at once on this Mac, which is the collision the three numbers exist to avoid, and it is the same three identities the wallpaper extension already has.
 - **Loopback only, as now.** Nothing off the machine reaches it, so the number is a local convention rather than an allocation anyone else must respect.
 - **`--port` stays**, for a scratch agent beside the real one, and for a second user.
 - **Publishing stays**, so a pinned or scratch agent can still be found, and so `pgr_ctl status` keeps working unchanged.
-- **A bind failure is fatal**, loudly: the agent names the port and what holds it rather than quietly taking another, since the whole value of a fixed port is that it is the one clients try.
+- **A bind failure is not fatal.** *Proposed as fatal, and reversed by Syd on 2026-09-17: "If the agent can't get the port it wants, it should fall back to what it does now."* The agent names the port and prints what to run to find the holder, then takes one from the kernel and publishes it. The discovery path is still there; it has stopped being the ordinary one. A fixed port the agent could not have is a reason to be findable, not a reason not to start.
 - **Clients try the fixed port first and the published value second**, so an agent told to use another port still answers.
 
 # Background
@@ -44,11 +47,22 @@ Three things, in order of how much trouble they have caused:
 2. **The sandbox workaround.** `ServicePort`'s plist read exists only because the published value cannot be read the ordinary way from the screensaver. A fixed default means the saver needs no value at all in the common case.
 3. **Typing a URL.** `curl` against the agent needs a lookup first, which is why `Documentation/photogoroundd.md`'s examples pin `--port`.
 
+## Built: the agent takes its number
+
+*2026-09-17, installed the same night. `http listener ready on port 9428`, `lsof` agreeing, and the app finding the dashboard by itself.*
+
+- **`ServiceAddress`** holds the three numbers behind `#if PGR_AGENT_CLAUDE` / `#elseif DEBUG`, and a `variant` string so the startup line says which build took which port rather than leaving a number nobody can account for.
+- **The Xcode project takes `PGR_AGENT_CONDITION`**, appended to `SWIFT_ACTIVE_COMPILATION_CONDITIONS`, which is the same shape `WALLPAPER_ID_SUFFIX` already had. `swift build` takes `-Xswiftc -DPGR_AGENT_CLAUDE`. Both are recorded in `CLAUDE.md`, because a build that forgets takes 9428, which is Syd's.
+- **The listener binds once and falls back once.** On `.failed` with a fixed port it alerts with the number and `lsof -nP -iTCP:<port>`, then rebinds with no port. A second failure is reported and nothing is served, which is the only case left where the agent has no socket.
+- **`--port` is unchanged**, and is what a scratch agent still uses.
+- **Tests:** a pinned port is still honoured, and a port another listener holds is fallen back from rather than failed on. The first of those had to change: it treated "bound something other than the candidate" as a failure, which is now the ordinary fallback.
+- **What Phase 1 does not do**: clients still read the published value, so the window after a restart is still there. That is Phase 2, and it is the half that removes it.
+
 ## Choosing the number
 
 The constraint that matters is macOS's ephemeral range, 49152–65535 on this Mac: anything inside it can be taken by an outgoing connection before the agent starts, and a fixed port that is sometimes stolen is worse than a dynamic one. Below 1024 needs privilege. That leaves 1024–49151, where the risk is colliding with software Syd runs rather than with the kernel.
 
-**9427 is the proposal**: not in `/etc/services`, not listening on his Mac today. Anything in that range with the same two properties would do — the number itself carries no meaning, and the plan should not pretend otherwise.
+**9427, 9428 and 9429**: none in `/etc/services`, none listening on his Mac. Anything in that range with the same two properties would do — the numbers carry no meaning, and the plan should not pretend otherwise. Three of them because three builds of the agent exist and two can run at once; see *Design Decisions*.
 
 ## Several users on one Mac
 

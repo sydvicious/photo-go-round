@@ -119,18 +119,24 @@ final class HTTPListener: @unchecked Sendable {
     /// A ready listener reports the port it actually bound.
     private let onReady: @Sendable (UInt16) -> Void
 
-    /// `port` nil asks the kernel for a free one, which is how this normally
-    /// runs: nothing has to guess a number, two agents cannot collide, and the
-    /// answer is published for clients to read.
+    /// Called when the listener cannot bind, which for a fixed port means
+    /// something else holds it. See `start()`.
+    private let onFailure: @Sendable (String) -> Void
+
+    /// `port` nil asks the kernel for a free one, which is what the tests do.
+    /// The agent passes a number: `ServiceAddress.port` for its build, or
+    /// whatever `--port` said.
     init(
         port: UInt16?,
         advertising: String,
         onReady: @escaping @Sendable (UInt16) -> Void = { _ in },
+        onFailure: @escaping @Sendable (String) -> Void = { _ in },
         route: @escaping @Sendable (Request) async -> Response
     ) {
         self.port = port.flatMap { NWEndpoint.Port(rawValue: $0) }
         self.advertising = advertising
         self.onReady = onReady
+        self.onFailure = onFailure
         self.route = route
     }
 
@@ -139,7 +145,16 @@ final class HTTPListener: @unchecked Sendable {
     /// this.
     private(set) var boundPort: UInt16 = 0
 
+    /// Whether the fixed port was already refused once, so the fallback is
+    /// tried once and not in a loop. Touched only from `queue`, as `boundPort`
+    /// is.
+    private var fellBack = false
+
     func start() throws {
+        try bind(to: port)
+    }
+
+    private func bind(to port: NWEndpoint.Port?) throws {
         let parameters = NWParameters.tcp
         // Loopback only, and settled: every platform runs its own agent against
         // its own library, so nothing off this machine has any reason to reach
@@ -149,6 +164,7 @@ final class HTTPListener: @unchecked Sendable {
 
         let listener = try port.map { try NWListener(using: parameters, on: $0) }
             ?? NWListener(using: parameters)
+        let wasFixed = port != nil
         self.listener = listener
 
         listener.stateUpdateHandler = { [weak self] state in
@@ -161,9 +177,28 @@ final class HTTPListener: @unchecked Sendable {
                 Log.deck.notice("http listener ready on port \(self.boundPort, privacy: .public)")
                 self.onReady(self.boundPort)
             case .failed(let error):
+                let wanted = port.map { "port \($0.rawValue)" } ?? "a port"
+                let words =
+                    "http listener failed on \(wanted): \(error)"
+                    + (port.map { "; what holds it: lsof -nP -iTCP:\($0.rawValue)" } ?? "")
                 // The alert records it; the log record below says the same words.
-                Console.alert("http listener failed: \(error)", recording: .kind("listener.failed"))
-                Log.deck.error("http listener failed: \(String(describing: error), privacy: .public)")
+                Console.alert(words, recording: .kind("listener.failed"))
+                Log.deck.error("\(words, privacy: .public)")
+                // **The fixed port is a preference, not a requirement.** Syd,
+                // 2026-09-17: "If the agent can't get the port it wants, it
+                // should fall back to what it does now." Which is a port from
+                // the kernel, published for clients to read — the discovery
+                // path is still there, it has just stopped being the ordinary
+                // one. `Plans/Service Port Plan.md`.
+                guard wasFixed, !self.fellBack else {
+                    self.onFailure(words)
+                    return
+                }
+                self.fellBack = true
+                let falling = "taking a port from the kernel instead; clients read the published one"
+                Console.note(falling)
+                Log.deck.notice("\(falling, privacy: .public)")
+                do { try self.bind(to: nil) } catch { self.onFailure("\(error)") }
             default:
                 break
             }

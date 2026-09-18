@@ -71,7 +71,8 @@ Syd, 2026-09-17: "I also want a task setup every this you ask me to reboot the a
 
 Syd, 2026-09-17: "Perhaps we had better actually pick a port and hardcode it. this dynamic port stuff is causing problems."
 
-- **Planned in `Plans/Service Port Plan.md`**, drafted the same day. Nothing decided; the number, the multi-user answer and what gets deleted are all open.
+- **Phase 1 built and installed 2026-09-17.** Three numbers, one per build variant — release 9427, Syd's Debug 9428, an agent's build 9429 — chosen by a compile-time condition, and a refused port is fallen back from rather than failed on. `Plans/Service Port Plan.md`.
+- **Still open:** Phase 2, the clients trying the fixed port first — which is the half that removes the *waiting for the agent* window. Then what the discovery dance leaves behind, and what a second user's agent binds.
 - **What prompted it:** across five reboots the agent took a different port each time (56333, 58192, …), and the app showed *waiting for the agent* until it re-read the published value.
 - **Also noticed in the same window, not acted on:** for about a minute after a restart every request logged `RESIZE: gave up after 1000ms`, so the app was served originals while the HEIC encoder was cold. That is Phase 2a working as designed; worth knowing it lasts a minute.
 
