@@ -238,10 +238,11 @@ upright. Nothing is ever enlarged, so asking for a box larger than the original
 returns the original's pixels; `X-PGR-Pixels` reports what was actually produced.
 Naming neither returns the original bytes, untouched.
 
-**A resize that takes longer than one second returns the original instead**,
+**A resize that takes longer than 1.5 seconds returns the original instead**,
 untouched and without `X-PGR-Pixels`, and the agent's console says
-`RESIZE: gave up after 1000ms on …`. A client must be ready to scale and orient
-an original. Resizes run one at a time.
+`RESIZE: gave up after 1500ms on …`. A client must be ready to scale and orient
+an original. Resizes run one at a time. The bound is the 95th percentile of
+measured renders, so about one picture in twenty is served this way.
 
 Today that is the only fit: shrink or grow, aspect ratio preserved. More options
 will be added to the endpoint later.

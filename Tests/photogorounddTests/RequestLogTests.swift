@@ -155,6 +155,27 @@ struct RequestLogTests {
                 == "RESIZE: gave up after 1000ms on IMG_0327.HEIC (B5E295AD-B306-4E08-9876-135BBF49E2AA/L0/001) · card 6921 · deal #84642; serving the original")
     }
 
+    /// **The man page names the number, so the number has to be checked.**
+    /// `Documentation/photogoroundd.md` tells a client that a resize over 1.5
+    /// seconds returns the original and that the console says `RESIZE: gave up
+    /// after 1500ms on …`. Nothing above ties that to `ServiceTiming`, because
+    /// the test beside this one passes its own duration to check the shape of
+    /// the sentence. So this one checks the shipped budget, and fails when it
+    /// moves — which is the moment the man page needs editing.
+    ///
+    /// The budget itself is the p95 of 3,573 measured renders, 2026-09-19;
+    /// `Plans/Agent Performance Overhaul.md`, *The budget was measuring its own
+    /// wall*.
+    @Test("The budget the man page documents is the budget that ships")
+    func theDocumentedBudget() {
+        #expect(ServiceTiming.resizeBudget == .milliseconds(1500))
+        #expect(
+            PictureEndpoint.resizeGaveUp(
+                name: "IMG_0327.HEIC", card: 1, deal: nil,
+                after: ServiceTiming.resizeBudget)
+                == "RESIZE: gave up after 1500ms on IMG_0327.HEIC · card 1; serving the original")
+    }
+
     @Test("The timing line names the consumer, the status, the deal, each step, and the total")
     func timingLine() {
         let start = ContinuousClock.now

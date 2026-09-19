@@ -12,11 +12,16 @@ The dynamic port is the one piece of the system that changes on every launch, an
   - **Three numbers, one per build variant** — release 9427, Syd's Debug 9428, an agent's build 9429. Syd: "I think each of the three build variants need their own fixed ports."
   - **The variant is a compile-time condition**, not the deployment. Syd: "build-time identity."
   - **A refused port is fallen back from, not failed on**: the agent takes one from the kernel and publishes it, as it always did. Syd: "If the agent can't get the port it wants, it should fall back to what it does now."
-- **Phase 2 — Clients try the fixed port first.** The published value becomes the fallback. Syd: "The clients will try the hardcoded port first, and then fall back to what they do now."
+**Status, 2026-09-19.** Phase 1 is built, installed, and did the job it was asked to do: the published value is now correct as soon as the agent starts, so the *waiting for the agent* window Syd complained about is gone without Phases 2 and 3. **This plan stays open for Phase 4 alone** — Syd: "leave it open for the multi-user phase." Phases 2 and 3 are not cancelled, only unscheduled: they remove a discovery mechanism that is no longer load-bearing, which is tidying rather than fixing. `TODO.md`'s pointer to this plan was removed the same day.
+
+- **Phase 2 — Clients try the fixed port first.** *Unscheduled 2026-09-19; see the status note above.* The published value becomes the fallback. Syd: "The clients will try the hardcoded port first, and then fall back to what they do now."
   - The app, the screensaver, the wallpaper extension and `pgr_ctl`.
   - Each has its own handling of *no port published* against *unreadable*, so what a failed first attempt means to the surface is the part to get right.
-- **Phase 3 — Retire what the discovery dance needed.** Whatever is left unused after Phase 2 goes: the plist-file read in `ServicePort`, and possibly `servicePort` itself.
-- **Phase 4 — Several users on one Mac.** Decide what a second user's agent binds, since two agents cannot hold the same port.
+- **Phase 3 — Retire what the discovery dance needed.** *Unscheduled 2026-09-19, and dependent on Phase 2.* Whatever is left unused after Phase 2 goes: the plist-file read in `ServicePort`, and possibly `servicePort` itself.
+- **Phase 4 — Several users on one Mac. The open phase, and why this plan is still here.** Decide what a second user's agent binds, since two agents cannot hold the same port.
+  - **Nothing breaks today, which is why it has waited:** the loser of the race falls back to a kernel-assigned port and publishes it, so both agents serve. What is lost is the fixed port meaning anything for that user — their clients are back to discovery, and Phases 2 and 3 could not apply to them at all.
+  - **It matters because multi-user is deliberate.** The agent is installed per-user in `~/Library/LaunchAgents` for exactly this reason. Syd, 2026-09-10: "the agent MUST be installed in ~/Library/LaunchAgents; this needs to support multiple users on the same machine."
+  - Nothing is designed. An offset per user, a small range probed in order, and accepting the fallback as the answer are all on the table and none has been argued.
 
 # Design Decisions
 

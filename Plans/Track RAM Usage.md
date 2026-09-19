@@ -1,5 +1,9 @@
 # Summary
 
+**Closed 2026-09-19.** Syd: "we can remove Track RAM Usage. We have monitors in place, and we have not detected any memory leaks." Phases 1 to 3 are built and running; 4 and 5 were dropped unbuilt, because the question they were meant to help answer has been answered. **There is no leak.**
+
+The monitoring stays in place and keeps working whether or not anybody is watching it: all three services log `MEMORY:` every five minutes, so the evidence for the next version of this question will already exist when it is asked. What was dropped is the automation around reading it — a dashboard panel for the other two services, and a rule for when to complain.
+
 A running record of how much memory the agent, the wallpaper extension and the screensaver hold, written by each of them every five minutes, so a leak shows up as a trend rather than as a machine that has gone slow.
 
 # Rationale
@@ -8,14 +12,16 @@ All three run for days without anybody looking at them — the agent under launc
 
 # Phases
 
-*Phases 1 to 3 are built; 4 and 5 are proposals, and nothing under them is decided.*
+*Phases 1 to 3 are built and still running. **Phases 4 and 5 were dropped unbuilt on 2026-09-19** when the plan closed — the sections below them are kept as the design they were, not as work outstanding.*
 
 - **Phase 1 — Sample before every restart.** Whenever Claude asks Syd to reinstall or reboot, it first records each process's memory and how long it had been running, and appends it to the record. **In use since 2026-09-17**; the table below is it.
 - **Phase 2 — A record with a shape.** Decide where the samples live and in what form, so a trend can be read without re-reading a transcript. **Answered by Phase 3**: the log is the record.
 - **Phase 3 — Each service logs its own, every five minutes.** Syd, 2026-09-18: "what we should be doing is logging the RAM usage every five minutes", and "for all three of the permanent services". **Built 2026-09-18**; see *Built: the services say what they hold*.
   - The agent's dashboard has a panel for its own. Syd: "the agent dashboard should have a panel for RAM usage."
-- **Phase 4 — The agent reads the other two out of the log.** Syd, 2026-09-18: the agent should read the logs for the wallpaper extension and the screensaver and report their RAM in the dashboard, so one page answers the question for all three. See *The agent reads the other two*.
-- **Phase 5 — Say when it looks wrong.** Decide what counts as growth worth reporting, and where that is said. Still open, and better answerable now that there is a curve rather than two points.
+- ~~**Phase 4 — The agent reads the other two out of the log.**~~ *Dropped unbuilt 2026-09-19.* Syd, 2026-09-18: the agent should read the logs for the wallpaper extension and the screensaver and report their RAM in the dashboard, so one page answers the question for all three. The design is under *The agent reads the other two*; what it would have saved is a `log show` when somebody wants the number, which is not much against a question that turned out to have no leak behind it.
+- ~~**Phase 5 — Say when it looks wrong.**~~ *Dropped unbuilt 2026-09-19.* Decide what counts as growth worth reporting, and where that is said. Nothing was ever decided, and a threshold is hard to choose honestly when every reading so far has been flat.
+
+**If this is ever reopened**, the thing worth knowing is that the hard part is already done and still running: three services writing `MEMORY:` every five minutes into the same subsystem, and `footprint` rather than `rss` as the number. Phases 4 and 5 are a dashboard panel and a threshold on top of data that will already be there.
 
 # Design Decisions
 
@@ -140,7 +146,25 @@ The wallpaper extension holds one picture per surface by design, so its floor ri
 
 Every time Claude asks for a restart is the rule Syd gave, and it has a useful property: those are the moments with the longest uptimes, since they follow a stretch of work. It is also biased — a day of heavy development produces many short-lived samples and no long ones. Phase 3's periodic sample is what fixes that, and the agent logging its own figure is the cheapest version.
 
+## The answer: there is no leak
+
+**Measured 2026-09-18, and the reason this plan closed.** Once every service logged its own figure, the question took one night to answer rather than the weeks of restart-sampling Phase 1 was designed around.
+
+**The agent**, 77 samples over 8h 18m: footprint minimum 50 MB, maximum 145.3 MB, last 81.4 MB — **ending lower than it started**, which is the shape of a process that holds a working set rather than one that accumulates. None of the three suspects under *What growth would look like* showed itself.
+
+**All three, read again 2026-09-19** after a night of ordinary use:
+
+| | footprint | uptime |
+|---|---|---|
+| agent | 111.8 MB | 5h 25m |
+| screensaver | 38.6 MB | 4h 41m |
+| wallpaper extension | 131.5 MB | 14h 0m |
+
+**And the number everyone would have used was wrong.** `ps` reported 531 MB for the agent where `footprint` said 299 MB — 181 MB of it reclaimable `Malloc Large`. Every RAM figure in this project taken before 2026-09-18 overstates, and that is the part of this plan most worth remembering: see *What `rss` was hiding*.
+
+**What stays.** The five-minute `MEMORY:` line in all three services, and the agent's dashboard panel for its own. They cost nothing, they run unattended, and they mean the evidence for the next version of this question will exist before the question is asked. Syd, 2026-09-19: "We have monitors in place, and we have not detected any memory leaks."
+
 # References
 
-- `TODO.md`, *Track RAM usage*.
+- ~~`TODO.md`, *Track RAM usage*.~~ *Removed 2026-09-19 when this closed; TODO.md holds only open items.*
 - `Plans/Agent Performance Overhaul.md` — the cache index at launch, and what the agent holds.

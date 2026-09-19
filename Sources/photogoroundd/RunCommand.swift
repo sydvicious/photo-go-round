@@ -359,6 +359,12 @@ struct RunCommand {
                 Console.note(line)
                 Log.deck.notice("\(line, privacy: .public)")
             }
+            // **The measurement Phase 7 is judged by**, and it goes in before
+            // the fix rather than after. Syd, 2026-09-18: "you should be the
+            // probe so you can prove it does when we think we are done."
+            PoolWait.startLogging { line in
+                Log.deck.notice("\(line, privacy: .public)")
+            }
             startup.lap("wiring")
             try listener.start()
             startup.lap("listen")

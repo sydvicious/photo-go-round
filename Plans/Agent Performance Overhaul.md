@@ -1,5 +1,10 @@
 # Summary
 
+**Closed 2026-09-19.** Syd: "we are not doing Phase 7. I am closing this effort." Everything here is
+built and installed except the `NSLock`s outside the agent, which are the test doubles and the
+wallpaper extension's `PaneHandler`; Phase 7 was answered by measurement rather than built. The agent
+does not go silent under load any more.
+
 Stop the agent going silent under load. The agent keeps resizing for its clients, one resize at a time on a `Resizer` actor of its own, and caches what it resizes again so the queue has less to do. It also gives every HTTP request its own actor on its own thread, holds the database's write lock only while it writes, and moves the refresh and the downloads onto actors of their own.
 
 # Rationale
@@ -42,12 +47,12 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
 - **Phase 6 — The cache index comes from the database at launch**, so the port opens in milliseconds rather than after a walk of the cache. **Built and installed 2026-09-17.** See *Built*, under the section of that name.
 - **After each phase,** Syd installs the agent and reads the `TIMING:` lines during a refresh.
 - **Not a phase, and the largest single win:** the LaunchAgent's `ProcessType` was `Background`, which throttles disk I/O. `Adaptive` since 2026-09-17; see *Most of the restart was an I/O throttle, not the walk*.
-- **`Deadline`'s timer no longer depends on the shared pool.** **Built 2026-09-18** after the app spent a morning blank; see *The deadline's own clock*. What it left behind is Phase 7.
-- **Phase 7 — Nothing that blocks runs on the cooperative pool.** A task can wait seconds for a thread on it, which is why a resize loses its turn and why a request can miss the client's bound. The work that blocks gets threads of its own, as the resizer, the evictor and the request lanes already have.
-  - Measure first: how long a task waits to *start*, in the agent and under a full test run.
-  - `QueueFetcher`'s lanes are `@concurrent nonisolated`, so a download waiting on PhotoKit holds a pool thread for as long as it waits.
-  - Then look for what else blocks there, rather than assuming the fetcher is all of it.
-- **Still open from this plan:** Phase 7, and the `NSLock`s outside the agent, which are the test doubles and the wallpaper extension's `PaneHandler`. Serving's own one-row writes are no longer the story: since `ProcessType Adaptive` and the evictor, every long hold measured has been its own `COMMIT` with nothing waiting.
+- **`Deadline`'s timer no longer depends on the shared pool.** **Built 2026-09-18** after the app spent a morning blank; see *The deadline's own clock*. What it left behind was Phase 7.
+- **Phase 7 — Nothing that blocks runs on the cooperative pool. Answered 2026-09-19 by measurement, and not built.** The probe went in first, at Syd's "you should be the probe so you can prove it does when we think we are done" — and it said the pool is not starved. `0ms typical` in every one of some 325 windows, worst single sample 364 ms, and 1–10 ms in the windows that contained a late deadline. See *Phase 7 — nothing that blocks runs on the cooperative pool*, under *What the probe said*.
+  - **`PoolWait` stays.** Syd, 2026-09-18: "keep PoolWait." One sampler, one line a minute, and the thing that would say if this ever changes.
+  - What the give-ups actually were is the item below.
+- **The resize budget is the p95 of measured renders, not a guess. Built 2026-09-19.** One second was set from the healthy case and was cutting one render in nine; 1.5 s is the p95 of 3,573 measured ones. See *The budget was measuring its own wall*.
+- **Nothing is left open here.** The two items this plan was holding were carried to `TODO.md` when it closed on 2026-09-19 — *The `NSLock`s outside the agent* (one in `PaneHandler`, 28 in test doubles) and *A disallow-list for images that will not decode*. Serving's own one-row writes are no longer the story either: since `ProcessType Adaptive` and the evictor, every long hold measured has been its own `COMMIT` with nothing waiting. **Everything in this plan is built and installed.**
 
 # Design Decisions
 
@@ -70,7 +75,10 @@ On 2026-09-16 the app and the screensaver lost the agent three times in one afte
 - **Resizing runs on an actor of its own, one resize at a time.** Syd, 2026-09-16: "since we have to keep resizing, please make sure that it itself is done in a separate actor", and after the thread sample at 16:40: "it looks like we will need a queue for the Renderer. I would not be surprised if resizing requires MainActor, and two cannot be resized at once." The probe answered both: nothing needs the main thread, and two at once work but HEIC stops getting faster past two. One `Resizer` actor for the process, its executor a serial dispatch queue. **Built 2026-09-16.**
 - ~~**The one open risk: a resize that hangs holds up every sized request behind it.**~~ *Answered below.* Serial means one stuck decoder call stops all resizing, as an 89 s resize did at 17:02 on 2026-09-16.
 - **Resized copies are evicted oldest first, by creation date, and outlive their originals.** Syd, 2026-09-16: "I suggest cache eviction is based on LRU of the files themselves, and don't bother with removing resized images if the original is evicted", then: "should be strictly based on creation date of the file, or an equivalent semantic in the database." So the order is when each copy was made, not when it was last served, and nothing needs to be recorded on a read. *Claude's reading: this is the eviction for the resized copies Phase 2b brings back; originals keep the eviction they have.*
-- **If the resizer stalls, serve the original.** Syd, 2026-09-16, after three thread samples caught the resizer waiting inside Apple's HEIC decoder: "just serve the original image if the resizer stalls." Then, of the shape proposed — a one-second budget covering queue and resize, skipping queued resizes nobody is waiting for, a `RESIZE:` line, `Shuffle` applying orientation, and no render failure charged: "I like all of those choices." *The one-second number is Claude's*: `serveWait` 2 s + check 1 s + resize 1 s stays under `pictureReadLimit` 5 s.
+- **If the resizer stalls, serve the original.** Syd, 2026-09-16, after three thread samples caught the resizer waiting inside Apple's HEIC decoder: "just serve the original image if the resizer stalls." Then, of the shape proposed — a one-second budget covering queue and resize, skipping queued resizes nobody is waiting for, a `RESIZE:` line, `Shuffle` applying orientation, and no render failure charged: "I like all of those choices." *The one-second number is Claude's*: `serveWait` 2 s + check 1 s + resize 1 s stays under `pictureReadLimit` 5 s. *Superseded 2026-09-19 by the decision below; the behaviour is unchanged, only the number.*
+- **The resize budget is the p95 of measured renders.** Syd, 2026-09-19: "we should set the limit to the p95 of our measurements." One picture in twenty is served as its original, which is the case the budget was always for. He accepted that it is machine-specific — "on slower machines it might not be enough. Oh, well. M1 Max is 6 years old now" — because a slower Mac serves more originals rather than showing nothing, which is the right direction to be wrong in. **1.5 s, built 2026-09-19**; `serveWait` 2 + check 1 + resize 1.5 = 4.5 still fits under `pictureReadLimit` 5, so the agent carried the change alone and no client needed reinstalling.
+- **A budget wide enough to measure comes before the budget that ships.** Syd, 2026-09-19: "let's do 10 now and pick the real number after data", and "but we have to measure". A budget that cuts work censors the data you would set it from — the old one-second number looked defensible because the renders that *finished* had a p99 of 997 ms, which was the wall and not the distribution. Ten seconds for one night, `RENDER:` on every render including the abandoned ones, then the p95 and put it back.
+- **Why abandoning a resize buys so little.** Syd, 2026-09-19: "the calling client is going to resize them anyway; no sense in abandoning a mostly-done resize just to redo it again on the client side." Cutting a resize does not save that second, it moves it to the client and adds a 6.4 MB mean transfer. The budget exists for the 89-second decoder, and a generous number does that job as well as a tight one.
 
 # Background
 
@@ -371,7 +379,7 @@ app: could not decode card 4821 · deal #83911 · IMG_2481.HEIC · source 5 (Pho
 - **In `Shuffle`**, so the app and the screensaver share one line; **in `AgentPicture`** for the wallpaper, with its own `system-wallpaper:` prefix.
 - **Tested for its wording**, as `TIMING:` is: a test hands `Shuffle` bytes that do not decode and asserts the line and that the next card was asked for.
 
-**Later, and not in this plan: a disallow-list.** Syd's sketch: the client counts failures per image, and after some number in a row calls an endpoint that puts the image on a disallow-list. The log line is written so that work can start from it — it already names the card a client would report. The count, the threshold and the endpoint are decided then. Whether that list is the agent's existing `render_failures` retirement or something beside it is part of that decision.
+**Later, and not in this plan: a disallow-list.** Syd's sketch: the client counts failures per image, and after some number in a row calls an endpoint that puts the image on a disallow-list. The log line is written so that work can start from it — it already names the card a client would report. The count, the threshold and the endpoint are decided then. Whether that list is the agent's existing `render_failures` retirement or something beside it is part of that decision. **Carried to `TODO.md`, *A disallow-list for images that will not decode*, when this plan closed on 2026-09-19** — it is the only open item this plan was holding, and closing the plan would have been the end of it.
 
 **The agent's retirement stays.** An earlier draft of this plan deleted `render_failures` and everything that reads it, reasoning that the agent would no longer decode anything. Then: Syd, 2026-09-16: "you still need the entire resizing mechanism; it just needs to perform better. and it will be much less commonly called". Asked whether the retirement is part of that mechanism, Syd: "yes, keep the retirement". So a sized request the agent cannot resize still counts against the photograph as it does now. It will simply fire far less often, because almost nothing asks for a size.
 
@@ -706,7 +714,10 @@ The bounds are now 10 s for a library that answers, 100 ms where the subject *is
 
 ## Phase 7 — nothing that blocks runs on the cooperative pool
 
-*Nothing here is decided. The evidence is in* The deadline's own clock, *under* What it exposed.
+**Answered 2026-09-19 by measurement, and not built. The pool is not starved.** What follows is kept
+in the order it was learned, because the reasoning that led here was wrong and the record of it is
+the useful part: the case for Phase 7 is in *What is known* and *What runs there now*, and the
+measurement that dismissed it is in *What the probe said* at the end.
 
 ### What is known
 
@@ -722,24 +733,139 @@ The bounds are now 10 s for a library that answers, 100 ms where the subject *is
 
 ### What might be done, none of it decided
 
+*Written before the measurement. The third option is what the evidence chose, by default rather than
+by argument: there was nothing to fix.*
+
 - **A lane per fetch**, as the refresh already has one per source. Bounded by how many lanes exist rather than by the pool's width, and a blocked fetch then costs one Dispatch thread rather than one of the runtime's few.
 - **A bounded executor for fetching** — one serial queue with N lanes — so the concurrency is a number this project chose rather than the core count.
 - **Leave it, and make the deadline the answer.** A punctual clock already means a starved resize is abandoned on time and the original goes out; the cost is the resize cache staying cold. That is the cheapest option and it is not obviously wrong.
 
-### How to measure it
+### How it is measured
 
-A probe that records how long a `Task` takes to begin running — `Task { start.duration(to: .now) }` sampled on a timer — logged with the other diagnostics as `POOL: waited Nms to start`. That number, on the agent doing real work, is what decides between the three above; the test-suite evidence says it is seconds, but a test process is not the agent.
+**Built 2026-09-18, before the fix.** `PoolWait` asks `await Task { ContinuousClock.now }.value` once a second — a task that does nothing but read the clock, so everything between asking and running is time the pool made it wait — and says a line a minute:
+
+```
+POOL: waited 2ms typical · 1842ms worst · 60 samples
+```
+
+The median says what an ordinary task pays; the worst says what a deadline has to survive, and an average would hide exactly the shape that breaks one. **Whatever Phase 7 turns out to be, the worst figure before and after is how it is judged.**
+
+### What the field said before any of it
+
+Nine hours of the agent serving 2,503 pictures on 2026-09-18, with the deadline's clock already moved off the pool that morning:
+
+- **149 `DEADLINE:` lines.** Median overrun **2,017 ms** against a 1,000 ms limit; worst **197,544 ms**.
+- **311 resize give-ups of 2,503 served**, 12.4%.
+- Zero errors.
+
+The timer was not the whole story, and saying so is the point of having put the probe in. `Deadline.report` measures from before the timer is scheduled to when `run` returns, so an overrun means the timer fired on time and *the awaiting task did not resume* — which is a thread, not a clock.
+
+### What the probe said
+
+**Installed 16:50 on 2026-09-18, read at 22:20 over 5h 25m and 2,257 deals.** Every one of some 325
+windows: `0ms typical`. The worst single sample of the evening was 364 ms and the next 346 ms;
+almost every window's worst was under 10 ms. In the windows that contained a late deadline, the
+worst pool wait was 1–10 ms.
+
+So the premise was wrong. The pool is not starved, and the work Phase 7 proposed — lanes for the
+fetcher, a bounded executor — would have been built against a fault that measurement says is not
+there. **This is what putting the probe in first was for**, and it is worth writing down that it
+paid off by cancelling the phase rather than by proving it.
+
+**What the give-ups actually were**, from the same five hours:
+
+| | |
+|---|---|
+| deals served | 2,257 |
+| `RESIZE: gave up` | 242 (10.7%) |
+| of those, with a late deadline | **20** |
+| `resize wait` (queue for the resizer) | median 0 ms, p90 0 ms, worst 611 ms |
+
+**222 of the 242 were the budget firing on time.** The deadline was punctual, the resizer was never
+queued, nothing waited for a thread — the renders simply took longer than the budget allowed. That
+is not a concurrency fault at all, and it is the subject of the section below.
+
+**One honest limit on the instrument.** `PoolWait` stamps `asked` *after* its own `Task.sleep`
+returns, so a stall that delays the sampler's wakeup is invisible to `worst`. The sample count is
+what catches those: 18 windows collected fewer than 56 of an expected 60, and two collected 17. Those
+do line up with the overruns. But even reading those windows as badly as possible, the late
+deadlines are 0.9% of deals.
+
+## The budget was measuring its own wall
+
+**The fault under the give-ups, found 2026-09-18 and fixed 2026-09-19.** `resizeBudget` was one
+second, chosen in Phase 2a from a probe that measured healthy resizes at 0.10–0.24 s. The agent's own
+`TIMING:` lines appeared to confirm it: renders had a median of 334 ms and a p99 of **997 ms**
+against a 1,000 ms budget.
+
+**That p99 was not a distribution. It was the shape of the wall.** `TIMING:` only exists on the path
+that returns a picture, so the 10.7% that were cut recorded no duration at all. The data describing
+the budget had been censored by the budget.
+
+### What was measured
+
+**`RENDER:` went in first**, on every render including the ones nobody was waiting for — the
+abandoned ones run to completion anyway, because `CopyPlace.keeping` saves their bytes, so the
+duration was already there and being thrown away. Then `resizeBudget` went to ten seconds for one
+night so almost nothing would be cut. `pictureReadLimit` had to move to fifteen with it, because
+`BoundOrderingTests` holds `serveWait + serveCheckBudget + resizeBudget` under it.
+
+Overnight into 2026-09-19, **3,573 renders**, 16 of them abandoned — so the distribution is real and
+not its left half:
+
+| | |
+|---|---|
+| median | 357 ms |
+| p90 | 927 ms |
+| **p95** | **1,406 ms** |
+| p99 | 4,489 ms |
+| worst | **26,683 ms** |
+
+Three checks before trusting it: only 16 were still cut; the slow ones are spread through the night
+rather than clustered after the launch, so this is the decoder and not a cold page cache; and 324
+renders (9.1%) exceeded a second, against the 10.7% give-up rate the old budget produced. Syd ran the
+same query independently and got p95 1,395 ms over 3,584 renders.
+
+### What it changed
+
+**`resizeBudget` is 1.5 s, `pictureReadLimit` is back to 5 s.** Give-ups should fall from 10.7% to
+about 5%, the 26-second monster is still cut, and 2 + 1 + 1.5 = 4.5 fits under five — so the agent
+carried the whole change and no client needed reinstalling.
+
+### What it killed
+
+**Slow does not mean big.** The first night's lines had a 10.9 MB JPEG render in 124 ms and a 1.8 MB
+one take 5,997 ms. Anyone tuning this by looking at file sizes will tune the wrong thing.
+
+### What it left behind
+
+`RENDER:` writes to the unified log only, not to the agent's console. Syd, 2026-09-19: "I don't plan
+on running this diagnostic unless needed, so please don't pollute /tmp." One line per render is some
+3,600 a day; the unified log is ring-buffered by the system and costs nothing until somebody asks.
+Reading them back is fast only if the filtering happens in the predicate rather than in a pipe —
+`subsystem == "com.sydpolk.photogoround" AND eventMessage CONTAINS "RENDER:"` takes 32 seconds
+where the unfiltered form takes many minutes.
+
+**And a measurement constraint worth knowing before planning another overnight run:** `logd` holds
+about **9 hours** on this machine — 51 chunks, 499 MB, measured 2026-09-19. The render run was read
+with roughly twenty minutes to spare.
 
 ## What this leaves stale elsewhere
 
-- `PLAN.md`, *The resize cache is removed*: reversed by Phase 2b once it is designed.
-- `PictureClient` and `AgentPicture` doc comments describing the box.
-- `Documentation/photogoroundd.md` stays accurate about `w`, `h`, `Accept` and `X-PGR-Pixels`; it may want a sentence saying no client in the project sends them.
+*All three settled; checked when the plan closed, 2026-09-19.*
+
+- ~~`PLAN.md`, *The resize cache is removed*: reversed by Phase 2b once it is designed.~~ *Done 2026-09-16 — that section now opens "Reversed, decided and built 2026-09-16".*
+- ~~`PictureClient` and `AgentPicture` doc comments describing the box.~~ *Moot. These were stale only under "clients stop asking for a size", which Syd reversed the same day: the clients still send `w` and `h`, so the comments still describe what the code does.*
+- ~~`Documentation/photogoroundd.md` may want a sentence saying no client in the project sends them.~~ *Moot, for the same reason — they all do.* The man page did need the resize budget corrected to 1.5 s, done 2026-09-19 and pinned by a test so the number cannot drift away from `ServiceTiming` again.
 
 # References
 
 - `PLAN.md` — Phase 1.5.2 (the renderer), *The resize cache is removed*, and the decode measurement at line 194.
 - `Sources/PhotoGoRoundAgentAPI/Support/Deadline.swift` — the TODO listing every `NSLock`.
+- `Sources/PhotoGoRoundAgentAPI/Support/PoolWait.swift` — the probe that answered Phase 7, and `Tests/PhotoGoRoundDisplayTests/PoolWaitTests.swift`.
+- `Sources/PhotoGoRoundAgentAPI/Host/ServiceTiming.swift` — `resizeBudget` and `pictureReadLimit`, each carrying the measurement it was set from.
+- `Tests/photogorounddTests/BoundOrderingTests.swift` — the sum that keeps the budget honest, and what forced `pictureReadLimit` to move with it.
+- `TODO.md`, *Next: the agent's own log file grows without bound* — found while deciding where `RENDER:` should write.
 - `Sources/photogoroundd/ConfinedDatabase.swift` and `SystemPhotoLibrary.Album` — the existing pattern for keeping blocking work off the pool.
 - `Tests/PhotoGoRoundKitTests/RefreshWhileServingTests.swift` — the test that did not reproduce, and why.
 - `Tests/PhotoGoRoundKitTests/SilentLibraryServingTests.swift` — the one-second check budget.

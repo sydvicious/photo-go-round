@@ -120,6 +120,52 @@ struct PictureEndpoint {
         return parts.joined(separator: " · ") + "; serving the original"
     }
 
+    /// **What one render actually took**, said whether or not anybody was still
+    /// waiting for the answer.
+    ///
+    /// **The hole this fills.** Until 2026-09-18 a resize cut by
+    /// `ServiceTiming.resizeBudget` recorded nothing — the `TIMING:` lap only
+    /// exists on the path that returns a picture, so the agent's own numbers
+    /// described the renders that *finished* and were silent about the ones
+    /// that mattered. Over 2,257 deals that meant a median of 334 ms and a p99
+    /// of 997 ms against a 1,000 ms budget, which is not a distribution so much
+    /// as the shape of the wall it was hitting: censored data, read as if it
+    /// were the whole picture.
+    ///
+    /// **The abandoned ones run to completion anyway**, which is what makes
+    /// this cheap. `CopyPlace.keeping` already saves their bytes — Syd,
+    /// 2026-09-16: "save the copy of the file that did not finish resizing in 1
+    /// second. Maybe it will be asked for again." The duration was sitting in
+    /// that closure and being thrown away.
+    ///
+    /// **Every render, not just the slow ones**, because a percentile needs the
+    /// whole set: Syd, 2026-09-18, on how the real budget gets chosen — "we
+    /// should set the limit to the p95 of our measurements." A line that only
+    /// printed the slow ones would make every percentile unknowable.
+    ///
+    /// The original's size is here because it is the correlate worth having
+    /// when the number gets picked — whether slow means *big file* or slow
+    /// means *HEIC* is the difference between raising the budget and fixing the
+    /// decoder.
+    static func renderTook(
+        _ took: Duration, name: String, original: URL, rendered: PhotoRenderer.Rendered,
+        abandoned: Bool
+    ) -> String {
+        var parts = [
+            "RENDER: \(name) took \(StageTimes.milliseconds(took))",
+            "\(rendered.width)x\(rendered.height)",
+            RunCommand.bytes(Int64(rendered.bytes.count)),
+        ]
+        if let size = try? original.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+            parts.append("from \(RunCommand.bytes(Int64(size)))")
+        }
+        // The request gave up while this was inside ImageIO. Worth saying: it
+        // is the line that explains a `RESIZE: gave up` above it, and with a
+        // ten-second budget it should be nearly absent.
+        if abandoned { parts.append("nobody waiting") }
+        return parts.joined(separator: " · ")
+    }
+
     /// One request, as it happened. A value rather than a formatted line, so the
     /// facts can be asserted without parsing the sentence they end up in.
     struct Served: Sendable, Equatable {
@@ -430,7 +476,30 @@ struct PictureEndpoint {
                     do {
                         outcome = try await Deadline.run(within: resizeBudget) {
                             try await resizer.run(ticket) {
+                                // Started here rather than at `resizer.run`, so
+                                // this is the render alone and not its turn in
+                                // the queue — `resize wait` is the other one.
+                                let began = ContinuousClock.now
                                 let rendered = try resize(served.url, box.width, box.height, format)
+                                let line = Self.renderTook(
+                                    began.duration(to: ContinuousClock.now),
+                                    name: served.card.spokenName, original: served.url,
+                                    rendered: rendered, abandoned: ticket.isAbandoned)
+                                // **The unified log only, unlike `RESIZE: gave
+                                // up`, which also goes to the console.** This
+                                // is one line per render — some 3,600 a day —
+                                // and Syd, 2026-09-19: "I don't plan on running
+                                // this diagnostic unless needed, so please
+                                // don't pollute /tmp." The unified log is
+                                // ring-buffered by the system and costs nothing
+                                // until somebody asks; the agent's own file is
+                                // a thing a person reads top to bottom.
+                                //
+                                // Reading them back is fast if the filtering
+                                // happens in the predicate rather than in a
+                                // pipe — `subsystem == "com.sydpolk.photogoround"
+                                // AND eventMessage CONTAINS "RENDER:"`.
+                                Log.deck.notice("\(line, privacy: .public)")
                                 place.keeping(
                                     rendered, photoID: served.card.id,
                                     photoUUID: served.card.uuid, boxWidth: box.width,
