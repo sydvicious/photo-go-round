@@ -17,16 +17,28 @@
 
 set -euo pipefail
 
-AGENT_LABEL="com.sydpolk.photogoround.server"
-# Release, Syd's Debug builds and Claude's builds each register under their own.
-# `Wallpaper Plan.md`, *Debug builds under their own identity*.
+# **Three of everything, one per build configuration.** Release, Syd's Debug and
+# an agent's Claude build each install under their own label, their own saver
+# name and their own extension identifier, so all three can be on this Mac at
+# once — and an uninstall that knew only one name would leave the other two
+# running. `BuildVariant.swift` is the Swift half of these same three;
+# `Plans/Xcode - Separate Build and Run.md`, *The build variant, compiled in*.
+AGENT_LABELS=(
+    "com.sydpolk.photogoround.server"
+    "com.sydpolk.photogoround.server.debug"
+    "com.sydpolk.photogoround.server.claude"
+)
 EXTENSION_IDS=(
     "com.sydpolk.photogoround.wallpaper.extension"
     "com.sydpolk.photogoround.wallpaper.debug.extension"
     "com.sydpolk.photogoround.wallpaper.claude.extension"
 )
 EXTENSION_PROCESS="Photo-Go-Round Wallpaper"
-SAVER="$HOME/Library/Screen Savers/Photo-Go-Round Screensaver.saver"
+SAVERS=(
+    "$HOME/Library/Screen Savers/Photo-Go-Round Screensaver.saver"
+    "$HOME/Library/Screen Savers/Photo-Go-Round Screensaver (Debug).saver"
+    "$HOME/Library/Screen Savers/Photo-Go-Round Screensaver (Claude).saver"
+)
 
 AGENT=0
 WALLPAPER=0
@@ -42,14 +54,16 @@ USAGE
   With no options it removes all three.
 
 WHAT EACH ONE REMOVES
-  --agent       Boots out the LaunchAgent and deletes its plist from
-                ~/Library/LaunchAgents. The built bundle stays where it is.
+  --agent       Boots out every LaunchAgent — release, Debug and Claude's —
+                and deletes their plists from ~/Library/LaunchAgents. The built
+                bundles stay where they are.
   --wallpaper   Unregisters every copy of the wallpaper extension — release,
                 Debug and Claude's builds — and stops the extension processes.
                 If it is the chosen wallpaper, macOS falls back to a default
                 picture.
-  --saver       Deletes ~/Library/Screen Savers/Photo-Go-Round Screensaver.saver
-                and stops the hosts holding it.
+  --saver       Deletes every Photo-Go-Round Screensaver bundle from
+                ~/Library/Screen Savers — release, " (Debug)" and " (Claude)" —
+                and stops the hosts holding them.
 
 WHAT IT NEVER TOUCHES
   The library, the cache, preferences, and anything under a build directory. See
@@ -75,19 +89,21 @@ fi
 
 if [[ "$AGENT" -eq 1 ]]; then
     echo "agent:"
-    if launchctl print "gui/$UID/$AGENT_LABEL" >/dev/null 2>&1; then
-        launchctl bootout "gui/$UID/$AGENT_LABEL" 2>/dev/null || true
-        echo "  booted out $AGENT_LABEL"
-    else
-        echo "  no job to boot out"
-    fi
-    plist="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
-    if [[ -f "$plist" ]]; then
-        rm -f "$plist"
-        echo "  removed $plist"
-    else
-        echo "  no plist to remove"
-    fi
+    found=0
+    for label in "${AGENT_LABELS[@]}"; do
+        if launchctl print "gui/$UID/$label" >/dev/null 2>&1; then
+            launchctl bootout "gui/$UID/$label" 2>/dev/null || true
+            echo "  booted out $label"
+            found=1
+        fi
+        plist="$HOME/Library/LaunchAgents/$label.plist"
+        if [[ -f "$plist" ]]; then
+            rm -f "$plist"
+            echo "  removed $plist"
+            found=1
+        fi
+    done
+    [[ "$found" -eq 0 ]] && echo "  no job and no plist for any configuration"
     # An agent started by hand is somebody's terminal process, not this script's
     # to end.
     others="$(pgrep -f photogoroundd 2>/dev/null || true)"
@@ -123,12 +139,15 @@ fi
 
 if [[ "$SAVER_WANTED" -eq 1 ]]; then
     echo "screensaver:"
-    if [[ -d "$SAVER" ]]; then
-        rm -rf "$SAVER"
-        echo "  removed $SAVER"
-    else
-        echo "  nothing installed"
-    fi
+    found=0
+    for saver in "${SAVERS[@]}"; do
+        if [[ -d "$saver" ]]; then
+            rm -rf "$saver"
+            echo "  removed $saver"
+            found=1
+        fi
+    done
+    [[ "$found" -eq 0 ]] && echo "  nothing installed"
     killall legacyScreenSaver 2>/dev/null && echo "  stopped legacyScreenSaver" || true
     killall ScreenSaverEngine 2>/dev/null && echo "  stopped ScreenSaverEngine" || true
 fi

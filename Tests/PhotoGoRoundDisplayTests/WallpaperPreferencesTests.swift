@@ -11,8 +11,14 @@ struct WallpaperPreferencesTests {
 
     @Test("Each deployment has its own wallpaper domain, beside the screensaver's")
     func domainFollowsDeployment() {
-        #expect(WallpaperPreferences(deployment: .development).domain == "com.sydpolk.photogoround.wallpaper.dev")
-        #expect(WallpaperPreferences(deployment: .production).domain == "com.sydpolk.photogoround.wallpaper.prod")
+        // Spelled from the storage identifier so this holds in every build
+        // configuration; `BuildVariantTests` pins the suffixes themselves.
+        #expect(
+            WallpaperPreferences(deployment: .development).domain
+                == "\(Deployment.storageIdentifier()).wallpaper.dev")
+        #expect(
+            WallpaperPreferences(deployment: .production).domain
+                == "\(Deployment.storageIdentifier()).wallpaper.prod")
         #expect(
             WallpaperPreferences(deployment: .development).domain
                 != ScreensaverPreferences(deployment: .development).domain)

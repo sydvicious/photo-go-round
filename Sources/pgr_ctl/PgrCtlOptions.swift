@@ -78,7 +78,17 @@ struct Options {
     // Where the library is. Identical to the agent's, because a subcommand that
     // disagreed with the agent about the container would be reading a different
     // library and saying nothing about it.
-    var deployment: Deployment = .development
+    /// **Production, unlike the agent's default.** Syd, 2026-09-19: "pgr_ctl
+    /// would default to production", and "it should be able to completely
+    /// control any of the three configurations. It will never be shipped to
+    /// users, so there is no danger here." The agent still defaults to
+    /// development, because a casual `swift run` of the agent should not be
+    /// able to reach a real library.
+    var deployment: Deployment = .production
+    /// Which build's storage to address. **Defaults to this build's own**, so a
+    /// `pgr_ctl` compiled in one configuration cannot silently operate another
+    /// configuration's library; name one to cross over.
+    var variant: BuildVariant = .current
     var containerOverride: URL?
     var databaseOverride: URL?
     var cacheOverride: URL?
@@ -138,8 +148,16 @@ struct Options {
         while index < arguments.endIndex {
             let argument = arguments[index]
             switch argument {
-            case "--prod":
+            case "--prod", "--production":
                 options.deployment = .production
+            case "--development", "--dev":
+                options.deployment = .development
+            case "--release":
+                options.variant = .release
+            case "--debug":
+                options.variant = .debug
+            case "--claude":
+                options.variant = .claude
             case "--container":
                 options.containerOverride = URL(filePath: try next(argument))
             case "--database", "-d":
@@ -408,10 +426,13 @@ struct Options {
                                     ./Scripts/make-agent-bundle.sh
 
         OPTIONS
-              --prod              Use the real library: ~/Library/Containers,
-                                  ~/Library/Caches, and the real preference
-                                  domain. Without it everything lives under
-                                  .build, so a plain run cannot disturb anything
+              --production        The real library (the default), and
+              --development       the disposable one beside it. Both live under
+                                  ~/Library; all three of container, cache and
+                                  preference domain move together
+              --release           Which build's library to address. Defaults to
+              --debug             this build's own, which is what the agent you
+              --claude            are probably running was built as
               --container <dir>   Storage root
           -d, --database <path>   Database file
               --cache-root <dir>  Cache root

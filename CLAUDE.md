@@ -5,85 +5,88 @@ also runs it. They exist because a build that installs itself takes over the
 running system: the agent, the screensaver and the wallpaper extension are all
 registered with macOS by name, and there is only one of each per user.
 
-## Build where your output cannot be mistaken for the installed one
+## Build the `Claude` configuration, into your own directory
 
-Agent builds go under `~/.claude/build/photo-go-round`, never into the default
-DerivedData and never into the repository:
+Two rules, and together they are the whole of build hygiene. Everything an
+agent builds uses `-configuration Claude`, and lands under
+`~/.claude/build/photo-go-round`:
 
 ```bash
 xcodebuild build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Server" \
-    -destination "platform=macOS" -configuration Debug \
+    -destination "platform=macOS" -configuration Claude \
     -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData"
 ```
 
 ```bash
-swift build --scratch-path "$HOME/.claude/build/photo-go-round/.build"
+swift build --scratch-path "$HOME/.claude/build/photo-go-round/DerivedData" -Xswiftc -DPGR_AGENT_CLAUDE
 ```
 
-`swift test` takes the same `--scratch-path`. Syd's Xcode owns the default
-DerivedData; two builders sharing it invalidate each other's intermediates, and
-anything written inside the checkout is something he has to notice and exclude.
+`swift test` takes the same two. SwiftPM has only `debug` and `release`, so it
+keeps the flag; Xcode has the configuration and needs nothing else.
 
-## Never build an `Install …` scheme, and never run `Scripts/install-*.sh`
+**Nothing generated goes in the repository.** Syd, 2026-09-19: "I really don't
+want build artifacts in the repo directory", and "I would prefer ALL generated
+artifacts to be in DerivedData and not .build directories". `Scripts/make-*.sh`
+default their output to
+`~/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts`; set
+`PGR_BUILD_ROOT` or pass `--output` to put yours under your own directory.
 
-`Install Agent`, `Install Screen Saver` and `Install Wallpaper Extension` are
-aggregate targets whose scripts *install*: they boot out the running agent,
-replace `~/Library/Screen Savers/Photo-Go-Round Screensaver.saver`, and register
-the wallpaper extension with `pluginkit`. `-derivedDataPath` does not make them
-safe — it only moves the build, and the script still installs from wherever that
-is. Building `Install Screen Saver` into an agent's own directory replaced Syd's
-installed saver on 2026-09-17.
+**`pgr_ctl` addresses one configuration's library at a time, and defaults to the
+one it was built as.** A Claude-built `pgr_ctl` reads Claude storage; pass
+`--release` or `--debug` only when you mean to look at Syd's.
+
+Syd's Xcode owns the default DerivedData; two builders sharing it invalidate
+each other's intermediates, and anything written inside the checkout is
+something he has to notice and exclude.
+
+## `Claude` is a build configuration, and it carries an identity
+
+Since 2026-09-19 there are three configurations — `Debug`, `Release`, `Claude` —
+and each names every installable product differently, so all three can be
+installed on one Mac at once and none can be mistaken for another:
+
+| | Release | Debug | Claude |
+|---|---|---|---|
+| Agent port | 9427 | 9428 | 9429 |
+| LaunchAgent label | `…photogoround.server` | `….server.debug` | `….server.claude` |
+| Screensaver bundle | `Photo-Go-Round Screensaver.saver` | `… (Debug).saver` | `… (Claude).saver` |
+| Wallpaper extension | `…wallpaper.extension` | `…wallpaper.debug.extension` | `…wallpaper.claude.extension` |
+
+`-configuration Claude` sets all of it. The three settings that used to be
+passed by hand — `PGR_AGENT_CONDITION`, `WALLPAPER_ID_SUFFIX`,
+`WALLPAPER_NAME_SUFFIX` — are in the configuration now; passing them yourself is
+how you break this.
+
+The suffixes live twice: as build settings at project level in
+`project.pbxproj`, and in `BuildVariant.swift`, because Swift cannot read an
+`.xcconfig` at runtime. `BuildVariantTests` reads the project file and fails
+when the two disagree. `Plans/Xcode - Separate Build and Run.md`.
+
+## Never build an `Install …` scheme unless Syd asks
+
+Building `Install Agent`, `Install Screen Saver` or `Install Wallpaper
+Extension` still *installs*: the aggregate target's script phase runs on ⌘B.
+`-derivedDataPath` does not make it safe — it only moves the build, and the
+script installs from wherever that is.
+
+In the `Claude` configuration it can no longer replace anything of Syd's, which
+is what it did on 2026-09-17. It still changes the running system: it
+bootstraps a job under launchd, registers with `pkd`, restarts his
+`WallpaperAgent`, and can raise a Photos prompt on his screen. So it is still
+not yours to run.
 
 To check something compiles, build the product scheme — `Photo-Go-Round`,
-`Photo-Go-Round Server`, `Photo-Go-Round Wallpaper Host` — and hand Syd the
-Install scheme to run from his own Xcode.
+`Photo-Go-Round Server`, `Photo-Go-Round Saver`, `Photo-Go-Round Wallpaper
+Host`. Hand Syd the Install scheme to run from his own Xcode.
 
-`Scripts/uninstall.sh` is his too: it unregisters and deletes.
+`Scripts/install-*.sh` and `Scripts/uninstall.sh` are his for the same reason.
 
-## Wallpaper builds carry their own identity
-
-Every build of the wallpaper extension registers itself with `pkd`, whoever
-built it, so an agent's build must not share Syd's identifier:
+After building `Photo-Go-Round Wallpaper Host`, unregister the copy and delete
+the host app, so nothing of yours is left in the Wallpaper pane:
 
 ```bash
-xcodebuild build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Wallpaper Host" \
-    -destination "platform=macOS" -configuration Debug \
-    -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData" \
-    -allowProvisioningUpdates WALLPAPER_ID_SUFFIX=.claude "WALLPAPER_NAME_SUFFIX= (Claude)"
+pluginkit -r "$HOME/.claude/build/photo-go-round/DerivedData/Build/Products/Claude/Photo-Go-Round Wallpaper Host.app/Contents/Extensions/Photo-Go-Round Wallpaper.appex"
 ```
-
-Afterwards, unregister the copy and delete the host app, so nothing of yours is
-left in the Wallpaper pane:
-
-```bash
-pluginkit -r "$HOME/.claude/build/photo-go-round/DerivedData/Build/Products/Debug/Photo-Go-Round Wallpaper Host.app/Contents/Extensions/Photo-Go-Round Wallpaper.appex"
-```
-
-Release is `com.sydpolk.photogoround.wallpaper.extension`, Syd's Debug builds are
-`…wallpaper.debug.extension`, and an agent's are `…wallpaper.claude.extension`.
-`Plans/Wallpaper Plan.md`, *Debug builds under their own identity*.
-
-## Agent builds carry their own port
-
-The agent binds a fixed port, one per build variant — release 9427, Syd's Debug
-9428, an agent's build 9429 — so two of them can run at once. The variant is a
-compile-time condition, so an agent's builds pass it:
-
-```bash
-swift build --scratch-path "$HOME/.claude/build/photo-go-round/.build" -Xswiftc -DPGR_AGENT_CLAUDE
-```
-
-```bash
-xcodebuild build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Server" \
-    -destination "platform=macOS" -configuration Debug \
-    -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData" \
-    PGR_AGENT_CONDITION=PGR_AGENT_CLAUDE
-```
-
-Without it a debug build takes 9428, which is Syd's. Nothing breaks if it
-collides — the listener falls back to a port from the kernel and publishes it —
-but then the fixed port is doing nothing for either of you.
-`Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift`, `Plans/Service Port Plan.md`.
 
 ## Builds are warning-free, and checked on a clean build
 
@@ -91,7 +94,7 @@ Fix the cause rather than silencing it, and verify with a clean build:
 
 ```bash
 xcodebuild clean build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Server" \
-    -destination "platform=macOS" -configuration Debug \
+    -destination "platform=macOS" -configuration Claude \
     -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData" 2>&1 \
     | sed 's/\x1b\[[0-9;]*m//g' | grep -E "warning:|error:"
 ```

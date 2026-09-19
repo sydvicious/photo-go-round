@@ -16,7 +16,13 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$REPO/app/Photo-Go-Round.xcodeproj"
-BUILD_DIR="$REPO/build/xcode"
+# **Build artifacts never land in the repository.** Syd, 2026-09-19: "I really
+# don't want build artifacts in the repo directory", and "I would prefer ALL
+# generated artifacts to be in DerivedData and not .build directories". Override
+# with --output; an agent building on Syd's Mac points it at its own directory,
+# per CLAUDE.md.
+DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}"
+BUILD_DIR="$DERIVED_DATA/saver"
 CONFIGURATION="Debug"
 INSTALL=0
 SPIKE=0

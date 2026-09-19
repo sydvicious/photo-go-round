@@ -32,9 +32,10 @@ public struct WallpaperPreferences: Sendable, Equatable {
     }
 
     /// `com.sydpolk.photogoround.wallpaper.dev` and `.prod`, beside the
-    /// screensaver's.
+    /// screensaver's — and carrying the build variant, so a Debug wallpaper and
+    /// a release one do not share an interval. `BuildVariant.swift`.
     public init(deployment: Deployment) {
-        self.init(domain: "\(Deployment.identifier).wallpaper.\(deployment.domainSuffix)")
+        self.init(domain: "\(Deployment.storageIdentifier()).wallpaper.\(deployment.domainSuffix)")
     }
 
     /// **The suite first, the file underneath**, as `ScreensaverPreferences`

@@ -35,28 +35,15 @@ import Foundation
 ///
 /// The variant comes from the compiler, not from which library a run opens:
 /// `Deployment` answers *whose pictures*, and that is a different question from
-/// *whose build*. `PGR_AGENT_CLAUDE` is passed by an agent's own builds — see
-/// `CLAUDE.md` — and `DEBUG` is what an Xcode or SwiftPM debug build defines
-/// for itself.
+/// *whose build*. **Since 2026-09-19 that decision lives in `BuildVariant`**,
+/// which also owns the LaunchAgent label, the screensaver's bundle name and the
+/// wallpaper extension's identifier — the port was the first of four things
+/// that vary by build, and a second `#if` beside this one was the wrong answer.
 public enum ServiceAddress {
     /// What the agent binds, and what a client tries first.
-    #if PGR_AGENT_CLAUDE
-        public static let port: UInt16 = 9429
-    #elseif DEBUG
-        public static let port: UInt16 = 9428
-    #else
-        public static let port: UInt16 = 9427
-    #endif
+    public static var port: UInt16 { BuildVariant.current.port }
 
     /// Which build this is, for the line the agent prints at startup: a port
     /// nobody can account for is worse than no fixed port at all.
-    public static var variant: String {
-        #if PGR_AGENT_CLAUDE
-            "Claude's build"
-        #elseif DEBUG
-            "debug build"
-        #else
-            "release build"
-        #endif
-    }
+    public static var variant: String { BuildVariant.current.description }
 }

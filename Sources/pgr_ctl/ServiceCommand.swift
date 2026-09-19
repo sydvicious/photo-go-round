@@ -1,5 +1,6 @@
 import Console
 import Foundation
+import PhotoGoRoundAgentAPI
 import PhotoGoRoundKit
 import ServiceManagement
 
@@ -22,8 +23,15 @@ import ServiceManagement
 struct ServiceCommand {
     var action: Options.ServiceAction
 
-    /// Must match the plist filename in `Contents/Library/LaunchAgents/`.
-    static let plistName = "com.sydpolk.photogoround.server.plist"
+    /// Must match the plist filename in `Contents/Library/LaunchAgents/`, which
+    /// `Scripts/make-agent-bundle.sh` names after the same label.
+    ///
+    /// **Per configuration, since 2026-09-19.** launchd allows one job per label
+    /// per user, so a debug agent and a release one sharing a label would be one
+    /// job and the second install would silently displace the first. The bundle
+    /// identifier deliberately does not vary — TCC grants hang off it.
+    /// `BuildVariant.swift`.
+    static let plistName = BuildVariant.current.agentLabel + ".plist"
 
     func run() throws {
         guard Bundle.main.bundleURL.pathExtension == "app" else {

@@ -19,17 +19,63 @@ struct HostTests {
 
     // MARK: - Storage roots
 
-    private static let build = URL(filePath: "/repo/.build/arm64-apple-macosx/debug/photogoroundd")
-
-    @Test("Development is the default, and it cannot reach the real library")
+    @Test("Development is the agent's default, and it cannot reach the real library")
     func developmentIsTheDefault() {
         // The safety has to live in the program rather than in a wrapper script,
         // or it evaporates the moment somebody runs the binary directly.
-        let resolved = MacHostEnvironment.resolveContainer(
-            deployment: .development, override: nil, environment: [:], executableURL: Self.build
-        )
-        #expect(resolved.origin == .development)
-        #expect(resolved.container.path(percentEncoded: false) == "/repo/.build/pgr-container")
+        let development = MacHostEnvironment.resolveContainer(
+            deployment: .development, override: nil, environment: [:])
+        let production = MacHostEnvironment.resolveContainer(
+            deployment: .production, override: nil, environment: [:])
+        #expect(development.origin == .development)
+        #expect(development.container != production.container)
+        #expect(development.container.lastPathComponent.hasSuffix(".dev"))
+    }
+
+    @Test("Every path is under the user's home, so two people on one Mac never share one")
+    func everythingIsPerUser() {
+        // Syd, 2026-09-19: "all of the datafiles have to run in the users home
+        // directory so that this will work for two different users on the same
+        // machine." Development wrote into the checkout until then, which two
+        // users sharing a clone would have shared.
+        let home = URL.homeDirectory.path(percentEncoded: false)
+        for deployment in [Deployment.development, .production] {
+            let container = MacHostEnvironment.resolveContainer(
+                deployment: deployment, override: nil, environment: [:])
+            let cache = MacHostEnvironment.defaultCacheRoot(
+                deployment: deployment, container: container.container, origin: container.origin)
+            #expect(container.container.path(percentEncoded: false).hasPrefix(home))
+            #expect(cache.path(percentEncoded: false).hasPrefix(home))
+            #expect(!container.container.path(percentEncoded: false).contains("/.build/"))
+        }
+    }
+
+    @Test("No two build variants share a container, a cache or a domain")
+    func variantsDoNotShareStorage() {
+        // Three agents can run at once, so they cannot open one database.
+        for deployment in [Deployment.development, .production] {
+            let containers = BuildVariant.allCases.map {
+                MacHostEnvironment.resolveContainer(
+                    deployment: deployment, override: nil, environment: [:], variant: $0
+                ).container
+            }
+            let domains = BuildVariant.allCases.map {
+                MacHostEnvironment.preferenceDomain(for: deployment, variant: $0)
+            }
+            #expect(Set(containers).count == BuildVariant.allCases.count)
+            #expect(Set(domains).count == BuildVariant.allCases.count)
+        }
+    }
+
+    @Test("A release build's names are the plain ones, in both deployments")
+    func releaseIsUnadorned() {
+        // Syd's production library keeps the name it already has on disk.
+        #expect(
+            MacHostEnvironment.preferenceDomain(for: .production, variant: .release)
+                == "com.sydpolk.photogoround")
+        #expect(
+            MacHostEnvironment.preferenceDomain(for: .development, variant: .release)
+                == "com.sydpolk.photogoround.dev")
     }
 
     @Test("`--prod` moves the storage root, the cache, and the preferences together")
@@ -43,15 +89,19 @@ struct HostTests {
         )
         #expect(container.origin == .production)
         #expect(container.container.path(percentEncoded: false).hasSuffix(
-            "/Library/Containers/com.sydpolk.photogoround"))
+            "/Library/Containers/\(Deployment.storageIdentifier())"))
 
         let cache = MacHostEnvironment.defaultCacheRoot(
             deployment: .production, container: container.container, origin: .production)
         #expect(cache.path(percentEncoded: false).hasSuffix(
-            "/Library/Caches/com.sydpolk.photogoround"))
+            "/Library/Caches/\(Deployment.storageIdentifier())"))
 
-        #expect(MacHostEnvironment.preferenceDomain(for: .production) == "com.sydpolk.photogoround")
-        #expect(MacHostEnvironment.preferenceDomain(for: .development) != "com.sydpolk.photogoround")
+        #expect(
+            MacHostEnvironment.preferenceDomain(for: .production)
+                == Deployment.storageIdentifier())
+        #expect(
+            MacHostEnvironment.preferenceDomain(for: .development)
+                != MacHostEnvironment.preferenceDomain(for: .production))
     }
 
     @Test("The cache is not nested inside the container")
@@ -97,8 +147,7 @@ struct HostTests {
         // An empty variable is not a value.
         #expect(
             MacHostEnvironment.resolveContainer(
-                deployment: .development, override: nil, environment: ["PGR_CONTAINER": ""],
-                executableURL: Self.build
+                deployment: .development, override: nil, environment: ["PGR_CONTAINER": ""]
             ).origin == .development
         )
     }
@@ -145,11 +194,12 @@ struct HostTests {
         // An empty variable is not a value, here as everywhere else.
         let empty = MacHostEnvironment(
             deployment: .development,
-            environment: ["PGR_DATABASE": "", "PGR_CACHE": ""],
-            executableURL: Self.build
+            environment: ["PGR_DATABASE": "", "PGR_CACHE": ""]
         )
         #expect(empty.databaseURL.lastPathComponent == Deployment.databaseFilename)
-        #expect(empty.cacheRoot.lastPathComponent == "pgr-cache")
+        #expect(
+            empty.cacheRoot.lastPathComponent
+                == MacHostEnvironment.preferenceDomain(for: .development))
     }
 
     @Test("Relocating the container does not relocate preferences; PGR_PREFS_SUITE is what does")
@@ -185,7 +235,7 @@ struct HostTests {
         let blank = MacHostEnvironment(
             deployment: .production, environment: ["PGR_PREFS_SUITE": ""]
         )
-        #expect(blank.preferences.synchronisedDomain == Deployment.identifier)
+        #expect(blank.preferences.synchronisedDomain == Deployment.storageIdentifier())
     }
 
     // MARK: - Preferences

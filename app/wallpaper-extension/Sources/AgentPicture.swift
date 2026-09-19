@@ -93,7 +93,10 @@ enum AgentPicture {
             return
         }
         let deployment = deployments[index]
-        let domain = "\(Deployment.identifier)\(deployment == .development ? ".dev" : "")"
+        // The agent's own domain, asked for rather than spelled again: it
+        // carries the build variant now, so a second copy of this expression
+        // would send a Debug extension at the release agent's published port.
+        let domain = MacHostEnvironment.preferenceDomain(for: deployment)
         let next: @Sendable () -> Void = {
             ask(deployments, at: index + 1, uuid: uuid, pixels: pixels, slot: slot, done: done)
         }

@@ -20,6 +20,7 @@ setvbuf(stdout, nil, _IOLBF, 0)
 func hostEnvironment(_ options: Options) -> MacHostEnvironment {
     MacHostEnvironment(
         deployment: options.deployment,
+        variant: options.variant,
         containerOverride: options.containerOverride,
         databaseOverride: options.databaseOverride,
         cacheOverride: options.cacheOverride

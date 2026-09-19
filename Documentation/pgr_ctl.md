@@ -56,23 +56,33 @@ the database is deleted again within half a minute.
 Every command has to agree with the running agent about the container, so these
 are spelled exactly as the agent spells them.
 
-`--prod`
-Use the real library: `~/Library/Containers`, `~/Library/Caches`, and the real
-preference domain. Without it everything lives under `<repo>/.build`, so a plain
-run cannot disturb anything. All three move together, deliberately.
-`./Scripts/scrub-dev.sh` deletes the development three; see FILES.
+Two axes: which library, and whose build's. Both resolve to one directory name
+used for the container, the cache and the preference domain, all under the
+user's own home so that two people on one Mac never share a library.
+
+`--production`, `--prod` (default), `--development`, `--dev`
+Which library. Production is `~/Library/Containers/<identifier>`,
+`~/Library/Caches/<identifier>` and the domain `<identifier>`; development is
+the same three with `.dev` appended. All three move together, deliberately.
+**The default is production here and development in the agent** — the agent must
+not be one typo from a real library, and this is the rig, never shipped.
+`./Scripts/scrub-dev.sh` deletes the development libraries; see FILES.
+
+`--release`, `--debug`, `--claude`
+Whose build's library. Each build configuration has its own identifier —
+`com.sydpolk.photogoround`, `….debug`, `….claude` — so all three agents can run
+at once without sharing a database. **Defaults to the configuration `pgr_ctl`
+itself was built as**, which is the agent you are most likely running.
 
 `--container <dir>`
-Storage root. Defaults to `<repo>/.build/pgr-container`, or with `--prod` to
-`~/Library/Containers/com.sydpolk.photogoround`.
+Storage root. Defaults to `~/Library/Containers/<identifier>` for the axes above.
 
 `-d`, `--database <path>`
 Database file. Defaults to `<container>/photogoround.sqlite` in both deployments.
 
 `--cache-root <dir>`
-Cache root. Defaults to `<repo>/.build/pgr-cache`, or with `--prod` to
-`~/Library/Caches/com.sydpolk.photogoround`. Naming a container takes the cache
-with it: give `--container` or `PGR_CONTAINER` and this defaults to
+Cache root. Defaults to `~/Library/Caches/<identifier>`. Naming a container takes
+the cache with it: give `--container` or `PGR_CONTAINER` and this defaults to
 `<container>/cache` instead.
 
 ### Per command
@@ -332,11 +342,12 @@ Materialized photo bytes. Only photos on volumes that can disappear are copied;
 anything on the boot volume is read where it lies.
 
 `Scripts/scrub-dev.sh`
-Deletes the development database and cache, after stopping an agent running from
-this checkout. `--preferences` deletes the dev preference domain as well, which
-takes the source list with it; `--dry-run` says what would go; `--yes` skips the
-prompt. Paths are derived from the repository and cannot be overridden, so the
-production library is unreachable from it (_internal testing only_).
+Deletes every configuration's development database and cache — release, Debug and
+Claude — after stopping any agent holding one. `--preferences` deletes the dev
+preference domains as well, which takes the source lists with them; `--dry-run`
+says what would go; `--yes` skips the prompt. Every path it touches ends in
+`.dev` and none can be overridden, so the production libraries are unreachable
+from it (_internal testing only_).
 
 ## EXIT STATUS
 

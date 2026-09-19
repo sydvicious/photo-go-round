@@ -23,7 +23,7 @@ public struct ScreensaverPreferences: Sendable, Equatable {
     /// `com.sydpolk.photogoround.screensaver.dev` and `.prod`, beside the
     /// wallpaper's.
     public init(deployment: Deployment) {
-        self.init(domain: "\(Deployment.identifier).screensaver.\(deployment.domainSuffix)")
+        self.init(domain: "\(Deployment.storageIdentifier()).screensaver.\(deployment.domainSuffix)")
     }
 
     /// **The suite first, the file underneath**, which is `ServicePort`'s route

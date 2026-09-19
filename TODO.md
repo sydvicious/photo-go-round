@@ -254,6 +254,35 @@ The agent should answer for its own configuration over HTTP, and its preference 
 - `pgr_ctl` keeps its direct access, as the rig rather than a client. Same exception it already holds for the database.
 - The screensaver's Options sheet is the first thing that needs this, and the reason it is parked above.
 
+## Reorganize the source code directories
+
+Syd, 2026-09-19: *"TODO.md: Reorganize the source code directories"*. Nothing is designed and nothing was discussed; this is the whole of it.
+
+- For whoever picks it up, the layout today: the Swift package's `Sources/` holds `PhotoGoRoundAgentAPI`, `PhotoGoRoundKit`, `PhotoGoRoundDisplay`, `Console`, `photogoroundd` and `pgr_ctl`; the Xcode project's `app/` holds `mac`, `ios` (empty), `common`, `agent`, `saver`, `wallpaper-extension`, `wallpaper-host`, `tests` and `Config`.
+
+## Settings are the only data a user would miss
+
+Syd, 2026-09-19, while deciding what a clean slate could throw away: *"the only thing in my data that would be actually missed by users if it disappeared is the settings"*. **Needs its own plan if it is picked up.**
+
+- **Everything else is derived.** The database re-enumerates from the sources, the cache refetches, the deck's shuffle position is not precious. Proven the same day: the whole library, cache and both containers were deleted and rebuilt from four sources in minutes.
+- **So backup, migration and upgrade have one thing to protect** — the preference domains — and may treat the container and the cache as disposable. That is a much smaller problem than backing up a library.
+- **It is also what makes a version upgrade safe to test**: throwing away storage costs time, not data, as long as the domains survive.
+- Where they live is now `com.sydpolk.photogoround[.debug|.claude][.dev]`, plus the surfaces' own `.screensaver.*` and `.wallpaper.*` domains. `BuildVariant.swift`, and `Plans/Xcode - Separate Build and Run.md`.
+- **Not decided:** whether anything should export them, and whether the app should offer it.
+
+## A private support page at `/private`
+
+Syd, 2026-09-19: *"there should be a not-user-documented URL to have an HTML page with all of the command available there"*, and *"this is part of supporting existing users"*. Indeed's "Poodlepants" is what he is describing. `Plans/Private REST API.md` went further than he asked for and is his to keep or delete.
+
+Settled in conversation the same day, before he stopped the design:
+
+- **`pgr_ctl` is not reimplemented over the API and stays standalone.** He retracted his own *"all of the commands that pgr_ctl supports should be reflected in the agent's REST API"* once it was clear that direct access is what makes it work with the agent down — which is when it is wanted. Same exception it already holds in *Settings endpoints* above.
+- **Eleven of fifteen command families**: `status`, `sources`, `refresh`, `pool stats`, `queue peek|fill`, `deck stats`, `cache status|evict|clear`, `get|set`, `wallpaper get|set`, `notify`. Dropped: *"ditch shuffle-test, log, register. Keep the cache clear."*
+- **A typed URL runs the command**, and `/private` is *"just a button to press which would navigate to the typedURL"*. No forms and no confirmation page.
+- **Two namespaces.** `/v2/…` stays RESTful for the app; `/private/…` is the GET-invocable support surface and *"does not have to be completely API-formal"*. `/v2` grows when a client needs it, not for symmetry.
+- **Open, and accepted:** a mutating GET can be fired by any page in any browser on the Mac with `<img src="…">`, and no `Origin` check helps. Bounded by what the commands can do.
+- **Open, undecided:** `pgr_ctl cache clear` prompts with how much would be cleared, and a GET that just does it has nowhere to put that.
+
 ## Settings inside the wallpaper extension and the screensaver bundle
 
 Syd, 2026-09-16: *"explore putting settings directly into both the wallpaper extension and the screensaver bundle."* Today settings change only in the app or through `pgr_ctl`. Nothing is designed.

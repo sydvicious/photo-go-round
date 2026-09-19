@@ -22,9 +22,7 @@
 
 set -euo pipefail
 
-LABEL="com.sydpolk.photogoround.server"
 EXECUTABLE="photogoroundd"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 APP="${1:-${BUILT_PRODUCTS_DIR:-}/Photo-Go-Round Server.app}"
 
@@ -38,6 +36,22 @@ if [[ ! -x "$BINARY" ]]; then
     echo "install-agent: no executable at $BINARY" >&2
     exit 1
 fi
+
+# **The label is the bundle's own, never a constant.** launchd allows one job
+# per label per user, so a single label means a Debug install boots out a
+# Release one and neither can tell it happened. Each configuration writes
+# `PGRLaunchAgentLabel` into its own Info.plist — `…server`, `…server.debug`,
+# `…server.claude` — and this installs, restarts and reports only that one.
+# The bundle identifier stays the same across all three on purpose: TCC grants
+# hang off it, and Photos should be answered once rather than once per
+# configuration.
+LABEL="$(/usr/libexec/PlistBuddy -c "Print :PGRLaunchAgentLabel" "$APP/Contents/Info.plist" 2>/dev/null || true)"
+if [[ -z "$LABEL" ]]; then
+    echo "install-agent: $APP carries no PGRLaunchAgentLabel" >&2
+    echo "  it was built before the label moved into the bundle; rebuild it" >&2
+    exit 1
+fi
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 # An agent nobody's launchd started — the `Scripts/photogoroundd` route, or an
 # Xcode run of the package's executable. It holds the port, and the job cannot
@@ -134,5 +148,8 @@ done
 
 # **The plist points into DerivedData**, which is right for development and wrong
 # for anything left running: a clean build directory takes the agent with it.
-# `Scripts/make-agent-bundle.sh --install-to ~/Applications` is the stable one.
+# Syd, 2026-09-19: "We use Archive to generate the app bundle, and that can be
+# copied or moved to /Applications." Every scheme archives Release, so an
+# archived agent carries the release identity — port 9427, label
+# `com.sydpolk.photogoround.server` — and nothing else has to arrange that.
 echo "install-agent: note — this job points into the build directory"

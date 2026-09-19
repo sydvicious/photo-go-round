@@ -12,17 +12,26 @@
 # a separate flag rather than part of "scrub", and it says how many sources it
 # is about to lose before it does it.
 #
-# **Production is unreachable from here on purpose.** Every path is derived from
-# the repository directory, and nothing is taken from an argument or from
+# **Production is unreachable from here on purpose.** Every path is spelled here
+# and ends in ".dev", and nothing is taken from an argument or from
 # PGR_CONTAINER — otherwise the one command whose whole job is deleting things
 # would be one flag away from deleting the real library.
+#
+# **Three development libraries, one per build configuration.** Since 2026-09-19
+# the storage lives under ~/Library rather than in the checkout — Syd: "all of
+# the datafiles have to run in the users home directory so that this will work
+# for two different users on the same machine" — and each configuration has its
+# own, so all three agents can run at once. This clears all three.
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONTAINER="$REPO/.build/pgr-container"
-CACHE="$REPO/.build/pgr-cache"
-DOMAIN="com.sydpolk.photogoround.dev"
+# Release, Syd's Debug and an agent's Claude build. `BuildVariant.swift`.
+DOMAINS=(
+    "com.sydpolk.photogoround.dev"
+    "com.sydpolk.photogoround.debug.dev"
+    "com.sydpolk.photogoround.claude.dev"
+)
 
 PREFERENCES=0
 ASSUME_YES=0
@@ -58,25 +67,38 @@ size_of() {
     [[ -e "$1" ]] && du -sh "$1" 2>/dev/null | cut -f1 || echo "absent"
 }
 
-# Matched on the repository's own build directory rather than on the process
-# name, so an agent running from another checkout — or from the installed
-# production bundle — is never a candidate.
-running_agent() {
-    pgrep -f "$REPO/.build/.*photogoroundd" || true
-}
+container_of() { echo "$HOME/Library/Containers/$1"; }
+cache_of()     { echo "$HOME/Library/Caches/$1"; }
 
 sources_held() {
-    defaults read "$DOMAIN" sources 2>/dev/null | grep -c "kind = " || true
+    defaults read "$1" sources 2>/dev/null | grep -c "kind = " || true
 }
 
-echo "development library under $REPO/.build"
-echo "  database     $(size_of "$CONTAINER")"
-echo "  cache        $(size_of "$CACHE")"
-if (( PREFERENCES )); then
-    echo "  preferences  $DOMAIN — $(sources_held) sources, which will be lost"
-else
-    echo "  preferences  kept ($(sources_held) sources); pass --preferences to take them too"
-fi
+# **Every development agent, whichever configuration built it**, matched on the
+# development container it has open rather than on the process name — so an
+# agent serving the production library is never a candidate.
+running_agent() {
+    local pids=""
+    for domain in "${DOMAINS[@]}"; do
+        pids="$pids$(pgrep -f "photogoroundd" 2>/dev/null | while IFS= read -r pid; do
+            if lsof -p "$pid" 2>/dev/null | grep -qF "/Library/Containers/$domain/"; then echo "$pid"; fi
+        done)
+"
+    done
+    echo "$pids" | grep -v '^$' | sort -u || true
+}
+
+echo "development libraries under $HOME/Library"
+for domain in "${DOMAINS[@]}"; do
+    echo "  $domain"
+    echo "    database     $(size_of "$(container_of "$domain")")"
+    echo "    cache        $(size_of "$(cache_of "$domain")")"
+    if (( PREFERENCES )); then
+        echo "    preferences  $(sources_held "$domain") sources, which will be lost"
+    else
+        echo "    preferences  kept ($(sources_held "$domain") sources); --preferences takes them too"
+    fi
+done
 
 PIDS="$(running_agent)"
 if [[ -n "$PIDS" ]]; then
@@ -110,15 +132,19 @@ if [[ -n "$PIDS" ]]; then
     echo "stopped the agent"
 fi
 
-rm -rf "$CONTAINER" "$CACHE"
-echo "deleted the database and the cache"
+for domain in "${DOMAINS[@]}"; do
+    rm -rf "$(container_of "$domain")" "$(cache_of "$domain")"
+done
+echo "deleted the databases and the caches"
 
 if (( PREFERENCES )); then
-    defaults delete "$DOMAIN" 2>/dev/null || true
+    for domain in "${DOMAINS[@]}"; do
+        defaults delete "$domain" 2>/dev/null || true
+        echo "deleted $domain"
+    done
     # cfprefsd caches a domain it has read, and hands the stale copy back to the
     # next process that asks. Deleting the file is not enough on its own.
     killall cfprefsd 2>/dev/null || true
-    echo "deleted $DOMAIN"
 fi
 
 echo "next launch starts cold"

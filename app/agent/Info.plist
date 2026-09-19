@@ -22,6 +22,8 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>27.0</string>
+	<key>PGRLaunchAgentLabel</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)$(SERVER_LABEL_SUFFIX)</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>

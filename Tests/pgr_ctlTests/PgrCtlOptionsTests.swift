@@ -251,10 +251,28 @@ struct OptionsTests {
 
     // MARK: - Storage
 
-    @Test("Development is the default here too, so a plain run cannot reach a real library")
-    func developmentIsTheDefault() throws {
-        #expect(try parse(["status"]).deployment == .development)
+    /// **The rig's default is production, unlike the agent's.** Syd,
+    /// 2026-09-19: "pgr_ctl would default to production", and "it should be able
+    /// to completely control any of the three configurations. It will never be
+    /// shipped to users, so there is no danger here."
+    @Test("Production is the default here, unlike the agent")
+    func productionIsTheDefault() throws {
+        #expect(try parse(["status"]).deployment == .production)
+        #expect(try parse(["status", "--production"]).deployment == .production)
         #expect(try parse(["status", "--prod"]).deployment == .production)
+        #expect(try parse(["status", "--development"]).deployment == .development)
+        #expect(try parse(["status", "--dev"]).deployment == .development)
+    }
+
+    /// The other axis: whose build's library, rather than which library of that
+    /// build's. It defaults to this build's own so that a `pgr_ctl` compiled one
+    /// way cannot silently operate another configuration's storage.
+    @Test("The variant defaults to this build's, and each configuration can be named")
+    func variantIsNameable() throws {
+        #expect(try parse(["status"]).variant == .current)
+        #expect(try parse(["status", "--release"]).variant == .release)
+        #expect(try parse(["status", "--debug"]).variant == .debug)
+        #expect(try parse(["status", "--claude"]).variant == .claude)
     }
 
     @Test("Explicit roots are taken as given")

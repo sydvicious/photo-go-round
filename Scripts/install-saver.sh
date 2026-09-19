@@ -15,20 +15,27 @@
 # exactly like a change that did nothing — which cost a debugging round once
 # already.
 #
-# **It replaces only our own bundle**, by name, in the user's own Screen Savers
-# folder. Nothing else there is touched.
+# **It replaces only the bundle of its own configuration**, by that bundle's own
+# name, in the user's own Screen Savers folder. Nothing else there is touched.
 
 set -euo pipefail
 
-NAME="Photo-Go-Round Screensaver"
 DESTINATION="$HOME/Library/Screen Savers"
 
-SAVER="${1:-${BUILT_PRODUCTS_DIR:-}/$NAME.saver}"
+SAVER="${1:-${BUILT_PRODUCTS_DIR:-}/Photo-Go-Round Screensaver${SAVER_NAME_SUFFIX:-}.saver}"
 
 if [[ ! -d "$SAVER" ]]; then
     echo "install-saver: no bundle at $SAVER" >&2
     exit 1
 fi
+
+# **The name is the bundle's own, never a constant.** Each configuration builds
+# a differently named saver — "Photo-Go-Round Screensaver.saver" for Release,
+# " (Debug)" and " (Claude)" for the other two — so a hard-coded name would have
+# this script remove somebody else's installed saver and then fail to find the
+# one it copied. Three savers can sit in Screen Savers at once, and each install
+# replaces only its own.
+NAME="$(basename "$SAVER" .saver)"
 
 mkdir -p "$DESTINATION"
 rm -rf "$DESTINATION/$NAME.saver"

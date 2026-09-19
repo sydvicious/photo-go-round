@@ -19,8 +19,13 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGURATION="release"
 CONTAINER=""
 SIGN_IDENTITY="-"
-OUTPUT_DIR="$REPO/build"
-INSTALL_TO=""
+# **Build artifacts never land in the repository.** Syd, 2026-09-19: "I really
+# don't want build artifacts in the repo directory", and "I would prefer ALL
+# generated artifacts to be in DerivedData and not .build directories". Override
+# with --output; an agent building on Syd's Mac points it at its own directory,
+# per CLAUDE.md.
+DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}"
+OUTPUT_DIR="$DERIVED_DATA/agent"
 
 usage() {
     cat <<'HELPTEXT'
@@ -38,12 +43,9 @@ OPTIONS
                       a machine-local build. Use a Developer ID for anything you
                       intend to keep across updates, because TCC grants are
                       recorded against the signature.
-  --output <dir>      Where to build the bundle. Default: ./build
-  --install-to <dir>  Copy the finished bundle here and point the LaunchAgent at
-                      that copy. Use this for anything you intend to leave
-                      running: a login item pointing into a git working tree
-                      breaks the moment you rebuild or move the checkout.
-                      Suggestion: ~/Applications
+  --output <dir>      Where to build the bundle. Default:
+                      ~/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts/agent
+                      or $PGR_BUILD_ROOT/agent. Never the repository.
   -h, --help          This
 
 AFTERWARDS
@@ -59,7 +61,6 @@ while [[ $# -gt 0 ]]; do
         --debug) CONFIGURATION="debug"; shift ;;
         --sign) SIGN_IDENTITY="$2"; shift 2 ;;
         --output) OUTPUT_DIR="$2"; shift 2 ;;
-        --install-to) INSTALL_TO="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option $1" >&2; usage; exit 1 ;;
     esac
@@ -67,6 +68,17 @@ done
 
 BUNDLE_NAME="Photo-Go-Round Server"
 BUNDLE_ID="com.sydpolk.photogoround.server"
+# **The label varies by configuration; the bundle identifier does not.** launchd
+# allows one job per label per user, so a debug agent sharing the release label
+# would boot the release one out and neither could tell. TCC grants hang off the
+# identifier instead, and Syd, 2026-09-19, chose "label per configuration" so
+# Photos is answered once rather than once per build. `BuildVariant.swift` holds
+# the same three; Xcode's own builds get them from the build configuration.
+if [[ "$CONFIGURATION" == "debug" ]]; then
+    LABEL="$BUNDLE_ID.debug"
+else
+    LABEL="$BUNDLE_ID"
+fi
 EXECUTABLE="photogoroundd"
 BUNDLE="$OUTPUT_DIR/$BUNDLE_NAME.app"
 
@@ -129,13 +141,13 @@ if [[ -n "$CONTAINER" ]]; then
     echo "baking storage root: $CONTAINER"
 fi
 
-cat > "$BUNDLE/Contents/Library/LaunchAgents/$BUNDLE_ID.plist" <<PLIST
+cat > "$BUNDLE/Contents/Library/LaunchAgents/$LABEL.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>$BUNDLE_ID</string>
+    <string>$LABEL</string>
     <key>BundleProgram</key>
     <string>Contents/MacOS/$EXECUTABLE</string>
     <key>ProgramArguments</key>
@@ -161,22 +173,11 @@ echo "signing with identity: $SIGN_IDENTITY"
 codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$BUNDLE" >/dev/null 2>&1 \
     || codesign --force --sign "$SIGN_IDENTITY" "$BUNDLE"
 
-# Move the bundle somewhere stable before writing the plist, so the LaunchAgent
-# never points at a build directory.
-if [[ -n "$INSTALL_TO" ]]; then
-    mkdir -p "$INSTALL_TO"
-    INSTALLED="$INSTALL_TO/$BUNDLE_NAME.app"
-    rm -rf "$INSTALLED"
-    cp -R "$BUNDLE" "$INSTALLED"
-    BUNDLE="$INSTALLED"
-    echo "installed to $BUNDLE"
-fi
-
 # The 0.1 installation path: one plist and two launchctl commands. Emitted
 # rather than installed, because putting a login item on someone's Mac is their
 # decision to make.
 ABSOLUTE_EXECUTABLE="$(cd "$BUNDLE/Contents/MacOS" && pwd)/$EXECUTABLE"
-STANDALONE="$OUTPUT_DIR/$BUNDLE_ID.plist"
+STANDALONE="$OUTPUT_DIR/$LABEL.plist"
 
 STANDALONE_ENVIRONMENT=""
 if [[ -n "$CONTAINER" ]]; then
@@ -194,7 +195,7 @@ cat > "$STANDALONE" <<PLIST
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>$BUNDLE_ID</string>
+    <string>$LABEL</string>
     <key>ProgramArguments</key>
     <array>
         <string>$ABSOLUTE_EXECUTABLE</string>
@@ -216,23 +217,22 @@ plutil -lint "$STANDALONE" >/dev/null
 
 echo
 echo "  built  $BUNDLE"
-if [[ -z "$INSTALL_TO" ]]; then
-    echo
-    echo "  NOTE: the LaunchAgent points into the build directory. Rebuilding is"
-    echo "        fine, but moving or deleting the checkout will break it. Use"
-    echo "        --install-to ~/Applications for anything you leave running."
-fi
+echo
+echo "  NOTE: the LaunchAgent points into the build directory. Rebuilding is"
+echo "        fine, but moving or deleting the checkout will break it. For an"
+echo "        agent you intend to leave running, Archive in Xcode and move the"
+echo "        result to /Applications."
 echo
 echo "  install:"
 echo "    cp \"$STANDALONE\" ~/Library/LaunchAgents/"
-echo "    launchctl bootstrap gui/\$UID ~/Library/LaunchAgents/$BUNDLE_ID.plist"
+echo "    launchctl bootstrap gui/\$UID ~/Library/LaunchAgents/$LABEL.plist"
 echo
 echo "  watch it:"
 echo "    /usr/bin/log stream --info --predicate 'subsystem == \"com.sydpolk.photogoround\"'"
-echo "    launchctl print gui/\$UID/$BUNDLE_ID | head -20"
+echo "    launchctl print gui/\$UID/$LABEL | head -20"
 echo
 echo "  stop it:"
-echo "    launchctl bootout gui/\$UID/$BUNDLE_ID"
+echo "    launchctl bootout gui/\$UID/$LABEL"
 echo
 echo "  add a folder (while stopped, or just edit the plist's ProgramArguments):"
 echo "    \"$BUNDLE/Contents/MacOS/$EXECUTABLE\" --once --add-folder ~/Pictures/YourFolder -r"
