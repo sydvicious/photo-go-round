@@ -6,34 +6,6 @@ Things to look into, deferred out of the phase list. Each one earns its own plan
 
 **When a plan closes, check what it was holding.** Anything it left as later work moves here before the plan is marked done, or it disappears with it.
 
-## Next: the agent's own log file grows without bound
-
-**Syd, 2026-09-19: "separate piece of work; put it in TODO.md, but it's the next thing I want to do."**
-Raised when he refused a per-render line in that file — "I just don't want the disk filling up if
-this runs for weeks or months unattended" — and the measurement said the worry was right but aimed
-at the wrong log.
-
-- **Measured 2026-09-19 08:40.** `/tmp/com.sydpolk.photogoround.server.log` was **10.3 MB and 86,152
-  lines**, written since 00:45 that morning: about **31 MB a day, 11 GB a year**. Nothing rotates it
-  and launchd *appends* to `StandardOutPath`, so it survives restarts — that file held six launches.
-- **It is the ordinary serving lines, not diagnostics:** 24,528 `CACHE:`, 11,592 `DEAL:`, 11,547
-  `SERVE:`, against 12 `STARTUP:`.
-- **What has been hiding it is reboots.** macOS clears `/private/tmp` of files older than three days
-  at boot, and this machine reboots often enough that the file never gets old. A Mac left up for
-  months — the case Syd is asking about — carries gigabytes.
-- **The unified log is not the problem and cannot become one.** `logd` holds a fixed budget and ages
-  the oldest out: measured the same morning, 51 chunks and **499 MB**, with nothing older than about
-  **9 hours** still answerable. Lines we add there shorten the window, never grow the disk. *Worth
-  knowing for diagnostics: an overnight measurement is close to the edge of that window — the
-  2026-09-18 render run was read at 08:34 with roughly twenty minutes to spare.*
-- **Undecided, and the reason this is its own piece of work:** rotate, cap, or move off `/tmp`
-  (`StandardOutPath` under `~/Library/Logs` would at least be where a person looks, and is not
-  cleared at boot — which cuts both ways). launchd will not rotate for us; `newsyslog` and a
-  self-imposed cap are both on the table. Nothing designed.
-- **This is the agent's alone.** `StandardOutPath` appears only in `Scripts/install-agent.sh` and
-  `Scripts/make-agent-bundle.sh`; the screensaver and the wallpaper extension are loaded into hosts
-  we do not launch, so their console output has nowhere of ours to go.
-
 ## Passed over on 2026-09-16 — to fix, not to keep
 
 Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't remember any issues you mention and bypass, so let's not bypass them." Every issue Claude mentioned during the agent performance work and did not fix is here. **Delete each one when it is fixed** — Syd, 2026-09-19: "cleaning it up every once in a while keeps me sane." Git has what was removed.
