@@ -114,7 +114,7 @@ struct NotifyCommandTests {
 
     @Test("An unknown topic is refused rather than posted")
     func unknownTopicIsAnError() {
-        _ = Refusals.installed
+        Refusals.install()
         #expect(throws: (any Error).self) {
             try NotifyCommand.run(topic: "wallpaper", environment: environment)
         }

@@ -105,10 +105,6 @@ cat > "$PLIST" <<PLIST_END
     </dict>
     <key>ProcessType</key>
     <string>Adaptive</string>
-    <key>StandardOutPath</key>
-    <string>/tmp/$LABEL.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/$LABEL.log</string>
 </dict>
 </plist>
 PLIST_END
@@ -120,7 +116,7 @@ launchctl bootstrap "gui/$UID" "$PLIST"
 if launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
     echo "install-agent: $LABEL bootstrapped"
     echo "  $BINARY"
-    echo "  log: tail -f /tmp/$LABEL.log"
+    echo "  log: /usr/bin/log stream --info --predicate 'subsystem == \"com.sydpolk.photogoround\"'"
 else
     echo "install-agent: $LABEL did not bootstrap" >&2
     exit 1

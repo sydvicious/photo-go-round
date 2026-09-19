@@ -40,18 +40,28 @@ public enum Console {
             print("  " + paint(String(line), .grey))
         }
         print()
+        // One log line rather than five blank-separated ones: a banner is one
+        // fact spread over a shape that only means anything on a terminal.
+        send(text.split(separator: "\n").map(String.init).joined(separator: " · "))
     }
 
     /// Untimestamped, for the banner and for anything printed before the loop
     /// starts.
     public static func note(_ text: String) {
         print("  " + paint(text, .grey))
+        send(text)
     }
 
     /// Timestamped, for anything happening inside the loop — otherwise it sorts
     /// oddly against the events around it when you are reading back a session.
-    public static func event(_ text: String) {
+    ///
+    /// **`mirrored` is false for the queue's own lines**, which
+    /// `QueueEvent.report` already logs at a level chosen per case. Mirroring
+    /// them as well would log each one twice, and the second copy at the wrong
+    /// level.
+    public static func event(_ text: String, mirrored: Bool = true) {
         print("\(timestamp)  \(paint(text, .grey))")
+        if mirrored { send(text) }
     }
 
     /// A line about one named thing.
@@ -66,13 +76,60 @@ public enum Console {
     /// Painting only the mark for both was the original, and it did not work: a
     /// single green glyph against a single yellow one, with the rest of each
     /// line identical, is not a difference you can see while scrolling.
+    ///
+    /// **`mirrored` is false for the served `▸` line.** `PictureEndpoint` logs
+    /// the same request as `served status=…`, which is the structured record;
+    /// mirroring this one as well put the same picture in the log twice.
+    /// `Plans/Logging.md`, Phase 5.
     public static func change(
         _ mark: String, _ name: String, _ colour: Colour, suffix: String? = nil,
-        whole: Bool = false
+        whole: Bool = false, mirrored: Bool = true
     ) {
         let tail = suffix.map { "  " + paint($0, .grey) } ?? ""
         let body = whole ? paint(name, colour) : name
         print("\(timestamp)  \(paint(mark, colour)) \(body)\(tail)")
+        // The mark travels, for the callers that do mirror: it is the whole
+        // identity of the line.
+        if mirrored { send("\(mark) \(name)" + (suffix.map { "  \($0)" } ?? "")) }
+    }
+
+    /// How loud a mirrored line is. Two shades, because every Console call the
+    /// agent makes outside the queue is either something that happened or
+    /// something that went wrong.
+    ///
+    /// **Console's own names rather than the log's.** `Console` knows about
+    /// terminals and colours and does not import `OSLog`; which unified-log
+    /// level a shade becomes is the sink's decision, and the agent is the only
+    /// process that makes it.
+    public enum Level: Sendable, Equatable {
+        case notice
+        case error
+    }
+
+    /// Where every printed line also goes, when something has asked for it.
+    ///
+    /// **Only the agent asks, and this is why it exists.** Under launchd the
+    /// agent's standard output goes nowhere, so a `Console` call there is a line
+    /// that is simply lost — which is what removing the log file would have made
+    /// true of all fifty-seven of them, the served `▸` line included. The mirror
+    /// is additive: a run started from a terminal or from Xcode prints exactly
+    /// what it always printed, and the mirror is a second destination rather
+    /// than a replacement. `pgr_ctl` installs nothing.
+    ///
+    /// `Plans/Logging.md`, Phase 1.
+    private static let mirrorSink = Mutex<(@Sendable (String, Level) -> Void)?>(nil)
+
+    /// Sends every printed line to `sink` as well as to standard output, or
+    /// stops, given nil.
+    public static func mirror(to sink: (@Sendable (_ text: String, _ level: Level) -> Void)?) {
+        mirrorSink.withLock { $0 = sink }
+    }
+
+    /// The mirrored copy: untimestamped and uncoloured, because whatever reads
+    /// it stamps its own lines and has no terminal.
+    private static func send(_ text: String, _ level: Level = .notice) {
+        guard let sink = mirrorSink.withLock({ $0 }) else { return }
+        sink(text, level)
     }
 
     /// Whether a red line is kept in the agent's record of its errors, and
@@ -100,8 +157,12 @@ public enum Console {
         alertRecorder.withLock { $0 = recorder }
     }
 
-    public static func alert(_ text: String, recording: Recording = .byText) {
+    /// `mirrored` is false for the queue's own lines. See `event`.
+    public static func alert(
+        _ text: String, recording: Recording = .byText, mirrored: Bool = true
+    ) {
         print("\(timestamp)  \(paint("!", .red)) \(paint(text, .red))")
+        if mirrored { send(text, .error) }
         guard let recorder = alertRecorder.withLock({ $0 }) else { return }
         switch recording {
         case .byText: recorder(text, nil)
@@ -112,10 +173,12 @@ public enum Console {
 
     public static func recovered(_ text: String) {
         print("\(timestamp)  \(paint("✓", .green)) \(text)")
+        send(text)
     }
 
     public static func summary(_ text: String) {
         print("\(timestamp)  \(paint(text, .grey))")
+        send(text)
     }
 
     /// Where `failure` writes, when something has redirected it.
@@ -140,5 +203,6 @@ public enum Console {
             return
         }
         FileHandle.standardError.write(Data((paint("error: ", .red) + text + "\n").utf8))
+        send(text, .error)
     }
 }

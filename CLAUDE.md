@@ -104,7 +104,9 @@ a clean build succeeded. `Plans/Build Plan.md`.
 
 - **Plans** are in `Plans/`; `TODO.md` and `README.md` stay at the top level.
 - **Man pages and the install steps** are in `Documentation/`.
-- **The agent's own logs**: `/tmp/com.sydpolk.photogoround.server.log`, and the
-  unified log under subsystem `com.sydpolk.photogoround` — `/usr/bin/log show
-  --info`, since `log` is a zsh builtin. Test runs log under
-  `com.sydpolk.photogoround.tests` instead.
+- **The agent's own logs**: the unified log under subsystem
+  `com.sydpolk.photogoround` — `/usr/bin/log show --info`, since `log` is a zsh
+  builtin. No binary writes a log file. Test runs log under
+  `com.sydpolk.photogoround.tests` instead. Categories: `console` is everything
+  the agent prints on standard output, `cache` the queue's own lines,
+  `system-wallpaper` the extension, `saver` the screensaver.

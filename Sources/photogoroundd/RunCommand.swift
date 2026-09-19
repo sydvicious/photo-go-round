@@ -56,6 +56,18 @@ struct RunCommand {
         // nowhere else.
         AgentErrors.shared.startRecording()
         Console.recordAlerts { text, kind in AgentErrors.shared.record(kind: kind, text) }
+        // **Everything the console says also goes to the unified log, and only
+        // here.** Under launchd the agent's standard output goes nowhere, so a
+        // `Console` call is otherwise a line that is lost — the served `▸` line
+        // among them. A terminal or Xcode run still prints exactly what it
+        // printed before; this is a second destination, not a replacement.
+        // `Plans/Logging.md`, Phase 1.
+        Console.mirror { text, level in
+            switch level {
+            case .notice: Log.console.notice("\(text, privacy: .public)")
+            case .error: Log.console.error("\(text, privacy: .public)")
+            }
+        }
         // The photographs added and removed by source, for the dashboard's
         // photos panel, counted from here on and in this process only.
         LibraryChanges.shared.startRecording()
@@ -328,13 +340,9 @@ struct RunCommand {
                 // Pasteable, on both branches: a scratch agent has a dashboard
                 // too, and it is the one nobody can find by the published port.
                 Console.event("dashboard at http://localhost:\(port)\(DashboardEndpoint.pagePath)")
-                Log.deck.notice(
-                    "dashboard at http://localhost:\(port, privacy: .public)\(DashboardEndpoint.pagePath, privacy: .public)")
                 guard publishes else {
                     // Nothing can discover it, so say it plainly enough to copy.
                     Console.event("not published — reach this agent at http://localhost:\(port)")
-                    Log.deck.notice(
-                        "serving on port \(port, privacy: .public), not published")
                     return
                 }
                 environment.preferences.publishServicePort(port)
@@ -357,13 +365,15 @@ struct RunCommand {
             // `Plans/Track RAM Usage.md`, Phase 3.
             Footprint.startLogging { line in
                 Console.note(line)
-                Log.deck.notice("\(line, privacy: .public)")
             }
             // **The measurement Phase 7 is judged by**, and it goes in before
             // the fix rather than after. Syd, 2026-09-18: "you should be the
             // probe so you can prove it does when we think we are done."
+            // At the per-request rung since Phase 5 of `Plans/Logging.md`: the
+            // phase it was the measurement for closed on 2026-09-19, and it
+            // writes a line every thirty seconds for ever.
             PoolWait.startLogging { line in
-                Log.deck.notice("\(line, privacy: .public)")
+                Log.deck.log(level: Log.chatter, "\(line, privacy: .public)")
             }
             startup.lap("wiring")
             try listener.start()
@@ -868,7 +878,6 @@ struct RunCommand {
                 "CACHE WALK: \(result.kept) held · \(bytes(result.bytes)) · "
                 + "\(result.discarded) discarded · \(StageTimes.milliseconds(ContinuousClock.now - started))"
             Console.note(line)
-            Log.cache.notice("\(line, privacy: .public)")
         } catch {
             Console.alert(
                 "the cache walk failed: \(error)", recording: .kind("cache.walk-failed"))
@@ -895,6 +904,12 @@ struct RunCommand {
     /// Every queue decision, on the console where a person is watching and in
     /// the unified log. The prefixes are what keep two interleaved queues
     /// readable: `SERVE:`, `CACHE:`, `CONFIG:`.
+    ///
+    /// **These are the one set of lines the console mirror does not carry**, so
+    /// every call here passes `mirrored: false`. `event.report()` at the foot of
+    /// this function is their route to the log, and it picks a level per case —
+    /// which the mirror, holding a `String`, could not do without matching on
+    /// the wording. `Plans/Logging.md`.
     static let speak: @Sendable (QueueEvent) -> Void = { event in
         switch event {
         // **Red is for the library changing, not for a fetch that could not
@@ -905,18 +920,18 @@ struct RunCommand {
         // resolves itself when the drive returns, and colouring it red draws
         // the eye to the one line on the console that needs no attention.
         case .dropped:
-            Console.alert(event.line, recording: .unrecorded)
+            Console.alert(event.line, recording: .unrecorded, mirrored: false)
             Self.record(event)
         // A failed fetch is recorded by its lane, which alone knows whether
         // anyone was still waiting for it. See `recordFetchFailure`.
-        case .serving, .cached, .cacheFailed: Console.event(event.line)
+        case .serving, .cached, .cacheFailed: Console.event(event.line, mirrored: false)
         // Red, and it earns it: this is the failure that hides.
         case .cacheTimedOut:
-            Console.alert(event.line, recording: .unrecorded)
+            Console.alert(event.line, recording: .unrecorded, mirrored: false)
             Self.record(event)
         // Red as well: a benched source is why nothing from it is appearing.
         case .sourcePaused:
-            Console.alert(event.line, recording: .unrecorded)
+            Console.alert(event.line, recording: .unrecorded, mirrored: false)
             Self.record(event)
         // **Timestamped, because all of these happen inside the loop.** This
         // was `Console.note` — untimestamped, and documented as being for the
@@ -925,7 +940,7 @@ struct RunCommand {
         // sorting oddly. `DEAL:`, `asked for`, `fetching`, `looked ahead` and
         // `resized` never were, and a console that timestamps some of a burst
         // and not the rest is unreadable when you come back to it.
-        default: Console.event(event.line)
+        default: Console.event(event.line, mirrored: false)
         }
         event.report()
     }

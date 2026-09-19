@@ -207,11 +207,7 @@ cat > "$STANDALONE" <<PLIST
         <false/>
     </dict>
     <key>ProcessType</key>
-    <string>Background</string>
-    <key>StandardOutPath</key>
-    <string>/tmp/$BUNDLE_ID.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/$BUNDLE_ID.log</string>$STANDALONE_ENVIRONMENT
+    <string>Background</string>$STANDALONE_ENVIRONMENT
 </dict>
 </plist>
 PLIST
@@ -232,7 +228,7 @@ echo "    cp \"$STANDALONE\" ~/Library/LaunchAgents/"
 echo "    launchctl bootstrap gui/\$UID ~/Library/LaunchAgents/$BUNDLE_ID.plist"
 echo
 echo "  watch it:"
-echo "    tail -f /tmp/$BUNDLE_ID.log"
+echo "    /usr/bin/log stream --info --predicate 'subsystem == \"com.sydpolk.photogoround\"'"
 echo "    launchctl print gui/\$UID/$BUNDLE_ID | head -20"
 echo
 echo "  stop it:"

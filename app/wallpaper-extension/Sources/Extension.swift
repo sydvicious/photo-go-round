@@ -15,6 +15,7 @@ import ExtensionFoundation
 import Foundation
 import OSLog
 import PhotoGoRoundAgentAPI
+import Synchronization
 
 let extensionLog = Logger(subsystem: Log.subsystem, category: "system-wallpaper")
 
@@ -22,6 +23,27 @@ let extensionLog = Logger(subsystem: Log.subsystem, category: "system-wallpaper"
 /// process with no window is diagnosed at all.
 func wallpaperLog(_ line: String) {
     extensionLog.notice("system-wallpaper: \(line, privacy: .public)")
+}
+
+/// What each standing fact last said, so it is logged when it changes rather
+/// than every time it is read.
+private let lastSaid = Mutex<[String: String]>([:])
+
+/// A line about a fact rather than an event: written the first time, and then
+/// only when the fact itself changes.
+///
+/// **The port line is why this exists.** `port 9428 from the … suite` was
+/// written on every wake — six times in thirty minutes, measured 2026-09-19 —
+/// saying exactly the same thing each time, in a log whose whole job is to be
+/// read by a person. The value is worth a line; re-reading it is not.
+/// `Plans/Logging.md`, Phase 2.
+func wallpaperLogWhenChanged(_ fact: String, _ line: String) {
+    let changed = lastSaid.withLock { said in
+        guard said[fact] != line else { return false }
+        said[fact] = line
+        return true
+    }
+    if changed { wallpaperLog(line) }
 }
 
 @main

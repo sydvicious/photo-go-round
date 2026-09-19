@@ -45,7 +45,7 @@ struct RefreshCommandTests {
 
     @Test("Naming one source is refused rather than quietly ignored")
     func perSourceRefreshIsRefused() async throws {
-        _ = Refusals.installed
+        Refusals.install()
         let scratch = Scratch()
         // The doorbell carries no payload, so "only this one" cannot be said.
         // Accepting the flag and refreshing everything would be worse than

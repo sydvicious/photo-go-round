@@ -242,7 +242,10 @@ struct PictureEndpoint {
         /// how it happens to be phrased.
         func report() {
             switch status {
-            case 200: Console.change("▸", detail, .yellow, suffix: summary)
+            // **Terminal only.** `served status=…` below is this request's
+            // record in the log; mirroring this line too logged the same
+            // picture twice. `Plans/Logging.md`, Phase 5.
+            case 200: Console.change("▸", detail, .yellow, suffix: summary, mirrored: false)
             // The error logged where the failure happened records it; this
             // line carries a latency, and would never collapse into one row.
             case 500...599: Console.alert("\(status) \(detail) · \(summary)", recording: .unrecorded)
@@ -261,7 +264,12 @@ struct PictureEndpoint {
                 queued=\(queued ?? -1, privacy: .public) ms=\(milliseconds, privacy: .public)
                 """
             )
-            if let timing { Log.deck.notice("\(timing, privacy: .public)") }
+            // **A probe from a closed investigation**, so it takes the rung
+            // per-request traffic takes: `.default` where somebody is watching,
+            // below it in a release build. `Plans/Logging.md`, Phase 5.
+            if let timing {
+                Log.deck.log(level: Log.chatter, "\(timing, privacy: .public)")
+            }
         }
 
         /// `TIMING: app · 200 · deal #83911 · waited 0ms · open 2ms · … · total 29012ms`
@@ -499,7 +507,11 @@ struct PictureEndpoint {
                                 // happens in the predicate rather than in a
                                 // pipe — `subsystem == "com.sydpolk.photogoround"
                                 // AND eventMessage CONTAINS "RENDER:"`.
-                                Log.deck.notice("\(line, privacy: .public)")
+                                //
+                                // At the per-request rung since Phase 5 of
+                                // `Plans/Logging.md`: one line per render is
+                                // what a closed investigation left behind.
+                                Log.deck.log(level: Log.chatter, "\(line, privacy: .public)")
                                 place.keeping(
                                     rendered, photoID: served.card.id,
                                     photoUUID: served.card.uuid, boxWidth: box.width,
@@ -515,8 +527,10 @@ struct PictureEndpoint {
                         let line = Self.resizeGaveUp(
                             name: served.card.spokenName, card: served.card.id,
                             deal: served.card.dealSeq, after: resizeBudget)
+                        // The console mirror carries it. It used to be logged
+                        // here as well, which since Phase 1 was the same line
+                        // twice. `Plans/Logging.md`, Phase 5.
                         Console.event(line)
-                        Log.deck.notice("\(line, privacy: .public)")
                         guard
                             let response = original(
                                 served, request: request, context: context, timing: &timing)

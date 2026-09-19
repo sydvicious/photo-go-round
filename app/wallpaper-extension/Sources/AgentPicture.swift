@@ -104,7 +104,9 @@ enum AgentPicture {
         switch ServicePort.read(Preferences(suiteName: domain)) {
         case .published(let found, let origin):
             port = found
-            wallpaperLog("port \(found) from the \(domain) \(origin.rawValue)")
+            // A standing fact, so it is said when it changes. It used to be
+            // written on every wake. `Plans/Logging.md`, Phase 2.
+            wallpaperLogWhenChanged("port", "port \(found) from the \(domain) \(origin.rawValue)")
         case .none:
             wallpaperLog("no port published in \(domain)")
             next()

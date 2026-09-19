@@ -14,13 +14,20 @@ The app itself is not installed: run the **Photo-Go-Round** scheme from Xcode. `
 
 Scheme **Install Agent**, ⌘B. The script `Scripts/install-agent.sh` boots out any running job and waits for launchd to finish removing it, writes `~/Library/LaunchAgents/com.sydpolk.photogoround.server.plist` pointing at the built bundle, bootstraps it, waits for the port, then asks Photos for access if it has never been asked. Allow the prompt. macOS may also ask for Documents and iCloud Drive if a source lives there.
 
-The agent logs to `/tmp/com.sydpolk.photogoround.server.log`:
+The agent logs to the unified log, subsystem `com.sydpolk.photogoround`. It writes no file:
 
 ```bash
-tail -20 /tmp/com.sydpolk.photogoround.server.log
+/usr/bin/log show --info --last 5m --predicate 'subsystem == "com.sydpolk.photogoround"'
 ```
 
-It ends with `serving pictures on http://localhost:<port>/v1/next` when it is up.
+It says `serving pictures on http://localhost:<port>/v1/next` when it is up. To watch it live:
+
+```bash
+/usr/bin/log stream --info --predicate 'subsystem == "com.sydpolk.photogoround"'
+```
+
+`--info` is needed: a release build logs per-picture lines below the level `log show` prints by
+default.
 
 ## 2. Install Wallpaper Extension
 
@@ -53,7 +60,7 @@ Then System Settings › Screen Saver › **Photo-Go-Round Screensaver**, under 
 The agent's served lines name the consumer:
 
 ```bash
-grep "▸" /tmp/com.sydpolk.photogoround.server.log | tail -10
+/usr/bin/log show --last 15m --predicate 'subsystem == "com.sydpolk.photogoround" AND eventMessage BEGINSWITH "served status="'
 ```
 
 `system-wallpaper` is the extension on the desktop, `screensaver` is the saver. The extension's own lines:

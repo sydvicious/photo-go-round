@@ -181,9 +181,9 @@ final class HTTPListener: @unchecked Sendable {
                 let words =
                     "http listener failed on \(wanted): \(error)"
                     + (port.map { "; what holds it: lsof -nP -iTCP:\($0.rawValue)" } ?? "")
-                // The alert records it; the log record below says the same words.
+                // The alert records it, and the agent's console mirror puts the
+                // same words in the log. `Plans/Logging.md`, Phase 1.
                 Console.alert(words, recording: .kind("listener.failed"))
-                Log.deck.error("\(words, privacy: .public)")
                 // **The fixed port is a preference, not a requirement.** Syd,
                 // 2026-09-17: "If the agent can't get the port it wants, it
                 // should fall back to what it does now." Which is a port from

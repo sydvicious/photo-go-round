@@ -44,6 +44,17 @@ public enum Log {
         return testing ? "com.sydpolk.photogoround.tests" : "com.sydpolk.photogoround"
     }
 
+    /// Everything the agent prints on its console, mirrored here because under
+    /// launchd its standard output goes nowhere.
+    ///
+    /// **Its own category rather than borrowed ones.** The mirror holds a
+    /// `String` and cannot know whether a line was about a source, a photograph
+    /// or the cache, so putting it under `deck` would quietly file source
+    /// refreshes and cache walks as deck lines. `category == "console"` names
+    /// exactly the set that would have been on standard output, which is the
+    /// question somebody reading these is actually asking.
+    /// `Plans/Logging.md`, Phase 1.
+    public static let console = Logger(subsystem: subsystem, category: "console")
     public static let sql = Logger(subsystem: subsystem, category: "sql")
     public static let deck = Logger(subsystem: subsystem, category: "deck")
     public static let cache = Logger(subsystem: subsystem, category: "cache")
@@ -52,6 +63,30 @@ public enum Log {
     public static let prefs = Logger(subsystem: subsystem, category: "prefs")
     public static let saver = Logger(subsystem: subsystem, category: "saver")
     public static let widget = Logger(subsystem: subsystem, category: "widget")
+
+    /// The level a line that happens on every request is logged at.
+    ///
+    /// **A release build says less, and this is the whole mechanism.** Syd,
+    /// 2026-09-19: the prod versions "should have less than the claude or debug
+    /// versions", and "putting in logs while we are investigating is great, but
+    /// downgrading them later is essential." `.default` persists to disk and is
+    /// therefore the budget; `.info` does not, and comes back with
+    /// `log show --info` or `log config` without a rebuild.
+    ///
+    /// **A Debug or Claude build keeps everything at `.default`**, because that
+    /// is the build somebody is watching, and a shorter retention window on a
+    /// development machine costs nothing.
+    ///
+    /// The same compile-time conditions that pick the service port, for the same
+    /// reason: build-time identity rather than which library a run opens.
+    /// `ServiceAddress`, and `Plans/Logging.md`, Phase 2.
+    public static var chatter: OSLogType {
+        #if DEBUG || PGR_AGENT_CLAUDE
+            .default
+        #else
+            .info
+        #endif
+    }
 
     /// Intervals go through signposts rather than log lines, so they are
     /// readable in Instruments without a benchmark harness.

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import PhotoGoRoundAgentAPI
 
 /// What the two queues did, and why.
@@ -164,10 +165,51 @@ public enum QueueEvent: Sendable, Equatable {
         }
     }
 
+    /// How loud this event is, given the level per-request traffic takes in this
+    /// build.
+    ///
+    /// **The split is *did something change* against *did the machinery turn
+    /// over*.** A photograph leaving the library, a source going quiet, a fetch
+    /// that never answered — those are the log's job and stay at `.default` in
+    /// every build. A card dealt, a card served, a fetch queued and landed: that
+    /// is the machinery working, and in a release build it belongs one rung
+    /// down, where `log show --info` still finds it and the retention window
+    /// does not pay for it.
+    ///
+    /// **Takes the rung rather than reading it**, so the policy can be asserted
+    /// in a Debug test run — where `Log.chatter` is `.default` and every case
+    /// would otherwise look the same. `Plans/Logging.md`, Phase 2.
+    func level(chatter: OSLogType) -> OSLogType {
+        switch self {
+        // The library changed, or the machinery failed in a way that hides.
+        case .dropped, .cacheFailed, .cacheTimedOut, .sourcePaused, .configurationChanged:
+            .default
+        // The deck came up empty, which contradicts *always have something to
+        // show*.
+        case .nothingToShow:
+            .default
+        // **Announced before the wait, so a request that hangs is
+        // distinguishable from one that is silent.** Syd, 2026-09-19, on
+        // demoting it: log rotation will save us.
+        case .waiting:
+            .default
+        // **`unconfirmed` is the one moment the deleted-photo guarantee is
+        // knowingly relaxed**, and it is said out loud by design. The ordinary
+        // success beside it is the single most frequent line in the system.
+        case .serving(_, _, let unconfirmed, _):
+            unconfirmed == nil ? chatter : .default
+        // The queues turning over. `cacheDropped` is here rather than with
+        // `dropped` because the library did not change: the photograph is back
+        // in the deck's contention, and its own documentation says *not red*.
+        case .dealt, .skipped, .caching, .cacheUnnecessary, .cached, .cacheDropped:
+            chatter
+        }
+    }
+
     /// Where these go when nobody has asked for them on a console. The unified
     /// log takes every one; a host that wants them in a terminal supplies its
     /// own sink and prints `line`.
     public func report() {
-        Log.cache.notice("\(self.line, privacy: .public)")
+        Log.cache.log(level: level(chatter: Log.chatter), "\(self.line, privacy: .public)")
     }
 }

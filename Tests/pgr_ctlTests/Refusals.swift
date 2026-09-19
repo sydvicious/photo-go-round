@@ -15,11 +15,20 @@ import Synchronization
 /// suites run in parallel, so another test's refusal can land here too.
 enum Refusals {
     private static let said = Mutex<[String]>([])
+    private static let ready = Atomic(false)
 
-    /// Touch this before running anything that refuses.
-    static let installed: Void = {
+    /// Call this before running anything that refuses.
+    ///
+    /// **A call rather than a `Void` `static let`.** The lazy-global pattern
+    /// reads a value of type `Void`, and reading one is trivially removable — so
+    /// whether the side effect happens at all becomes a question about the
+    /// optimiser rather than about this code. An explicit call has no such
+    /// question. Changed 2026-09-19 after `ConsoleMirrorTests`, which used the
+    /// same shape, failed once and could not be made to fail again.
+    static func install() {
+        guard !ready.exchange(true, ordering: .acquiringAndReleasing) else { return }
         Console.redirectFailures { text in said.withLock { $0.append(text) } }
-    }()
+    }
 
     static var all: [String] { said.withLock { $0 } }
 }
