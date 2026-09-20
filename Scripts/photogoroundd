@@ -17,6 +17,12 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGURATION="${PGR_CONFIGURATION:-debug}"
 
+# **Nothing generated goes in the repository.** Syd, 2026-09-19: "I really don't
+# want build artifacts in the repo directory", and "I would prefer ALL generated
+# artifacts to be in DerivedData and not .build directories". SwiftPM writes to
+# `<package>/.build` unless told otherwise, so it is told otherwise.
+SCRATCH="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}/swiftpm"
+
 if [[ "${1:-}" == "--release" ]]; then
     CONFIGURATION="release"
     shift
@@ -24,12 +30,12 @@ fi
 
 # Build to stderr so stdout stays clean for the agent's own output — which
 # matters when this is piped to a file or read back through a screen scrollback.
-swift build --configuration "$CONFIGURATION" --package-path "$REPO" >&2
+swift build --configuration "$CONFIGURATION" --package-path "$REPO" --scratch-path "$SCRATCH" >&2
 
-BIN="$(swift build --configuration "$CONFIGURATION" --package-path "$REPO" --show-bin-path)/photogoroundd"
+BIN="$(swift build --configuration "$CONFIGURATION" --package-path "$REPO" --scratch-path "$SCRATCH" --show-bin-path)/photogoroundd"
 
-# Nothing is exported here on purpose. The binary already defaults to two
-# directories under .build, and reaching the real library takes --prod. Setting
+# Nothing is exported here on purpose. The binary already defaults to its own
+# development container and cache, and reaching the real library takes --prod. Setting
 # it from the wrapper would mean the safety lived in the script rather than in
 # the program, and would evaporate the moment somebody ran the binary directly.
 

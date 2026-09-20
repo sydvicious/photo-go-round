@@ -63,7 +63,8 @@ fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
 
-# Agent bundle assembled by Scripts/make-agent-bundle.sh
+# Nothing writes here since 2026-09-19 — Scripts/make-*.sh build into
+# DerivedData — but the entry stays so a stray build is never committed.
 build/
 
 *.xcworkspacedata

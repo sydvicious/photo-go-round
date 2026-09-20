@@ -1,8 +1,28 @@
 # Installing Photo-Go-Round on a Mac
 
-The three products that run outside Xcode — the agent, the wallpaper extension and the screensaver — each have an Install target in `app/Photo-Go-Round.xcodeproj`. Select the scheme and build it (⌘B). The targets are aggregates with no product, so Run (⌘R) does nothing. Each one builds what it installs first. `Build Plan.md`, *The install phases*, holds why they are separate targets and what each script does; this file is only the steps. Written 2026-09-16. If the scripts and this file ever disagree, the scripts are right and this file is stale.
+The three products that run outside Xcode — the agent, the wallpaper extension and the screensaver — each have an Install target in `app/Photo-Go-Round.xcodeproj`. Select the scheme and build it (⌘B). The targets are aggregates with no product, so Run (⌘R) does nothing. Each one builds what it installs first. `Build Plan.md`, *The install phases*, holds why they are separate targets and what each script does; this file is only the steps. Written 2026-09-16, revised 2026-09-19 for the build configurations. If the scripts and this file ever disagree, the scripts are right and this file is stale.
 
-The app itself is not installed: run the **Photo-Go-Round** scheme from Xcode. `pgr_ctl` is not installed either: `swift run pgr_ctl` from the repo root.
+**The configuration decides the identity of everything you install.** `Debug`, `Release` and `Claude` each install under their own names, so all three can sit on one Mac at once and an install never replaces another configuration's copy. Build in `Debug` unless you mean otherwise; set it in Product → Scheme → Edit Scheme → Run → Info → Build Configuration.
+
+| | Release | Debug | Claude |
+|---|---|---|---|
+| Agent port | 9427 | 9428 | 9429 |
+| LaunchAgent label | `com.sydpolk.photogoround.server` | `….server.debug` | `….server.claude` |
+| Screensaver | `Photo-Go-Round Screensaver.saver` | `… (Debug).saver` | `… (Claude).saver` |
+| Wallpaper extension | `…wallpaper.extension` | `…wallpaper.debug.extension` | `…wallpaper.claude.extension` |
+| Container, cache, domain | `~/Library/…/com.sydpolk.photogoround[.dev]` | `….debug[.dev]` | `….claude[.dev]` |
+
+`Claude` is what an agent working on this project builds; you will not normally choose it.
+
+The app itself is not installed: run the **Photo-Go-Round** scheme from Xcode.
+
+`pgr_ctl` is not installed either. Build the **pgr_ctl** scheme and put the product on your `PATH` — a copy or a symlink into `~/bin`. Do not reach for `swift run pgr_ctl`: it writes a `.build` directory into the checkout, and nothing generated belongs there.
+
+**`pgr_ctl` addresses one configuration's library at a time**, and defaults to its own build's and to production. Against a Debug agent installed by the steps below, that means:
+
+```bash
+pgr_ctl status --development --debug
+```
 
 ## Order
 
@@ -12,7 +32,7 @@ The app itself is not installed: run the **Photo-Go-Round** scheme from Xcode. `
 
 ## 1. Install Agent
 
-Scheme **Install Agent**, ⌘B. The script `Scripts/install-agent.sh` boots out any running job and waits for launchd to finish removing it, writes `~/Library/LaunchAgents/com.sydpolk.photogoround.server.plist` pointing at the built bundle, bootstraps it, waits for the port, then asks Photos for access if it has never been asked. Allow the prompt. macOS may also ask for Documents and iCloud Drive if a source lives there.
+Scheme **Install Agent**, ⌘B. The script `Scripts/install-agent.sh` boots out any running job and waits for launchd to finish removing it, writes `~/Library/LaunchAgents/<label>.plist` — the label read from the built bundle's `PGRLaunchAgentLabel`, so `com.sydpolk.photogoround.server.debug` for a Debug build — pointing at that bundle, bootstraps it, waits for the port, then asks Photos for access if it has never been asked. Allow the prompt. macOS may also ask for Documents and iCloud Drive if a source lives there.
 
 The agent logs to the unified log, subsystem `com.sydpolk.photogoround`. It writes no file:
 
@@ -44,14 +64,14 @@ open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
 The desktop shows the last photograph it kept, or the blue-and-yellow mark on a first install, then a photograph from the agent. It changes on the wallpaper's *Shuffle All* interval, an hour unless set otherwise in the app's Settings or with:
 
 ```bash
-swift run pgr_ctl wallpaper set interval oneHour
+pgr_ctl wallpaper set interval oneHour --development --debug
 ```
 
 A change to the interval is picked up within ten seconds.
 
 ## 3. Install Screen Saver
 
-Scheme **Install Screen Saver**, ⌘B. `Scripts/install-saver.sh` copies `Photo-Go-Round Screensaver.saver` into `~/Library/Screen Savers`, stops the screen saver hosts holding the old copy, and checks Photos access.
+Scheme **Install Screen Saver**, ⌘B. `Scripts/install-saver.sh` copies the built bundle — `Photo-Go-Round Screensaver (Debug).saver` in Debug — into `~/Library/Screen Savers`, replacing only the one of its own name, stops the screen saver hosts holding the old copy, and checks Photos access.
 
 Then System Settings › Screen Saver › **Photo-Go-Round Screensaver**, under *Other*. Its interval is the screensaver's *Shuffle All* in the app's Settings, ten seconds by default.
 

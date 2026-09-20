@@ -7,10 +7,6 @@
 # be debugged; this script deploys, because Xcode has no idea about
 # ~/Library/Screen Savers or about the two caches that have to be cleared before
 # a rebuild is the thing that actually runs.
-#
-# --spike builds the Phase 1 probe instead, which links nothing at all and still
-# answers "is the sandbox letting us out" on a macOS release that changes the
-# host's entitlements under us.
 
 set -euo pipefail
 
@@ -25,7 +21,6 @@ DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-
 BUILD_DIR="$DERIVED_DATA/saver"
 CONFIGURATION="Debug"
 INSTALL=0
-SPIKE=0
 
 usage() {
     cat <<'HELPTEXT'
@@ -35,9 +30,9 @@ USAGE
   ./Scripts/make-saver-bundle.sh [options]
 
 OPTIONS
-  --spike           Build the sandbox probe instead: "Photo-Go-Round Spike.saver".
-  --output <dir>    Where to build. Default: ./build/xcode. Point it outside the
-                    checkout to leave nothing behind in it.
+  --output <dir>    Where to build. Default:
+                    ~/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts/saver
+                    or $PGR_BUILD_ROOT/saver. Never the repository.
   --release         Build the Release configuration instead of Debug.
   --install         Copy the result to ~/Library/Screen Savers and stop the
                     hosts holding the previous build.
@@ -67,7 +62,6 @@ HELPTEXT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --spike) SPIKE=1; shift ;;
         --output) BUILD_DIR="$2"; shift 2 ;;
         --release) CONFIGURATION="Release"; shift ;;
         --install) INSTALL=1; shift ;;
@@ -76,13 +70,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "$SPIKE" -eq 1 ]]; then
-    SCHEME="Photo-Go-Round Saver Spike"
-    NAME="Photo-Go-Round Spike"
-else
-    SCHEME="Photo-Go-Round Saver"
-    NAME="Photo-Go-Round Screensaver"
-fi
+SCHEME="Photo-Go-Round Saver"
 
 # By scheme, not -target: a -target build gives the local package targets a
 # "Conditional compilation flags do not have values in Swift" warning that a
@@ -102,8 +90,16 @@ xcodebuild build \
     -derivedDataPath "$BUILD_DIR" \
     >/dev/null
 
-BUNDLE="$BUILD_DIR/Build/Products/$CONFIGURATION/$NAME.saver"
-[[ -d "$BUNDLE" ]] || { echo "expected a bundle at $BUNDLE and there is none" >&2; exit 1; }
+# **The name comes from what was built, not from a constant.** Each
+# configuration produces a differently named bundle — "Photo-Go-Round
+# Screensaver.saver" for Release, " (Debug)" and " (Claude)" for the other two —
+# so a hard-coded name would miss the build and, on install, remove another
+# configuration's saver. `BuildVariant.swift`.
+PRODUCTS="$BUILD_DIR/Build/Products/$CONFIGURATION"
+BUNDLE="$(find "$PRODUCTS" -maxdepth 1 -name "Photo-Go-Round Screensaver*.saver" 2>/dev/null | head -1)"
+[[ -n "$BUNDLE" && -d "$BUNDLE" ]] \
+    || { echo "expected a Photo-Go-Round Screensaver bundle in $PRODUCTS and there is none" >&2; exit 1; }
+NAME="$(basename "$BUNDLE" .saver)"
 echo "built $BUNDLE"
 
 if [[ "$INSTALL" -eq 1 ]]; then

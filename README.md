@@ -20,7 +20,7 @@ Open `app/Photo-Go-Round.xcodeproj`. Everything below is the Debug configuration
 | Install the screensaver | **Install Screen Saver** | ⌘B |
 | Run the app | **Photo-Go-Round** | ⌘R |
 
-`pgr_ctl` has no shared scheme; run it from the repo root with `swift run pgr_ctl`.
+`pgr_ctl` has no shared scheme. Build its target and put the product on your `PATH` — a copy or a symlink into `~/bin`. Not `swift run pgr_ctl`: that writes a `.build` directory into the checkout, and nothing generated belongs there.
 
 Install the agent first; the wallpaper and the screensaver get their pictures from it. The install schemes build what they install, then install it, so ⌘B is the whole step. Rebuilding a scheme reinstalls it.
 
@@ -55,9 +55,10 @@ arguments at all:
 
 `--add-folder` does not walk subdirectories unless `--recursive` is given between
 it and the path, which applies to that folder alone. By default everything lives
-under `.build`, where a
+under `~/Library/Containers/<identifier>.dev` and the matching cache, where a
 development run cannot disturb a real library — reaching the real one takes
-`--prod`, typed on purpose.
+`--prod`, typed on purpose. `<identifier>` carries the build configuration, so a
+release, a Debug and an agent's build never share a library.
 
 The agent serves pictures on a port the kernel assigns, and publishes it where
 every process on the machine can read it; `pgr_ctl status` prints the address.

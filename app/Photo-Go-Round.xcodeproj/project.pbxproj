@@ -118,7 +118,6 @@
 		AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-RoundTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000082 /* FEATURES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FEATURES.md; sourceTree = "<group>"; };
 		AA00000000000000000000A1 /* Photo-Go-Round Screensaver.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-Round Screensaver.saver"; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA00000000000000000000B1 /* Photo-Go-Round Spike.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-Round Spike.saver"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000C1 /* Photo-Go-Round Server.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Photo-Go-Round Server.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000D1 /* pgr_ctl */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = pgr_ctl; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000E1 /* Photo-Go-Round Wallpaper.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = "Photo-Go-Round Wallpaper.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -141,12 +140,6 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			name = Sources;
 			path = saver/Sources;
-			sourceTree = "<group>";
-		};
-		AA00000000000000000000B5 /* Spike */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			name = Spike;
-			path = saver/Spike/Sources;
 			sourceTree = "<group>";
 		};
 		AA00000000000000000000C5 /* photogoroundd */ = {
@@ -190,11 +183,6 @@
 				AA00000000000000000000AA /* PhotoGoRoundDisplay in Frameworks */,
 			);
 		};
-		AA00000000000000000000B3 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			files = (
-			);
-		};
 		AA00000000000000000000C3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
@@ -234,7 +222,6 @@
 				62C4AE00303557B800A88363 /* mac */,
 				AA0000000000000000000081 /* Sources */,
 				AA00000000000000000000A5 /* Sources */,
-				AA00000000000000000000B5 /* Spike */,
 				AA00000000000000000000C5 /* photogoroundd */,
 				AA00000000000000000000D5 /* pgr_ctl */,
 				AA00000000000000000000E5 /* Sources */,
@@ -250,7 +237,6 @@
 				000000000000000000000120 /* Photo-Go-Round.app */,
 				AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */,
 				AA00000000000000000000A1 /* Photo-Go-Round Screensaver.saver */,
-				AA00000000000000000000B1 /* Photo-Go-Round Spike.saver */,
 				AA00000000000000000000C1 /* Photo-Go-Round Server.app */,
 				AA00000000000000000000D1 /* pgr_ctl */,
 				AA00000000000000000000E1 /* Photo-Go-Round Wallpaper.appex */,
@@ -339,24 +325,6 @@
 			);
 			productName = "Photo-Go-Round Saver";
 			productReference = AA00000000000000000000A1 /* Photo-Go-Round Screensaver.saver */;
-			productType = "com.apple.product-type.bundle";
-		};
-		AA00000000000000000000B0 /* Photo-Go-Round Saver Spike */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = AA00000000000000000000B6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Saver Spike" */;
-			buildPhases = (
-				AA00000000000000000000B2 /* Sources */,
-				AA00000000000000000000B3 /* Frameworks */,
-				AA00000000000000000000B4 /* Resources */,
-			);
-			buildRules = (
-			);
-			fileSystemSynchronizedGroups = (
-				AA00000000000000000000B5 /* Spike */,
-			);
-			name = "Photo-Go-Round Saver Spike";
-			productName = "Photo-Go-Round Saver Spike";
-			productReference = AA00000000000000000000B1 /* Photo-Go-Round Spike.saver */;
 			productType = "com.apple.product-type.bundle";
 		};
 		AA00000000000000000000C0 /* Photo-Go-Round Server */ = {
@@ -479,17 +447,16 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				000000000000000100000000 /* Photo-Go-Round */,
-				AA0000000000000000000063 /* Photo-Go-RoundTests */,
-				AA00000000000000000000A0 /* Photo-Go-Round Saver */,
-				AA00000000000000000000B0 /* Photo-Go-Round Saver Spike */,
-				AA00000000000000000000C0 /* Photo-Go-Round Server */,
-				AA00000000000000000000D0 /* pgr_ctl */,
-				AA00000000000000000000E0 /* Photo-Go-Round Wallpaper */,
-				AA00000000000000000000F0 /* Photo-Go-Round Wallpaper Host */,
-				AA0000000000000000000110 /* Install Wallpaper Extension */,
 				AA0000000000000000000120 /* Install Agent */,
 				AA0000000000000000000130 /* Install Screen Saver */,
+				AA0000000000000000000110 /* Install Wallpaper Extension */,
+				AA00000000000000000000D0 /* pgr_ctl */,
+				000000000000000100000000 /* Photo-Go-Round */,
+				AA00000000000000000000A0 /* Photo-Go-Round Saver */,
+				AA00000000000000000000C0 /* Photo-Go-Round Server */,
+				AA00000000000000000000E0 /* Photo-Go-Round Wallpaper */,
+				AA00000000000000000000F0 /* Photo-Go-Round Wallpaper Host */,
+				AA0000000000000000000063 /* Photo-Go-RoundTests */,
 			);
 		};
 /* End PBXProject section */
@@ -501,11 +468,6 @@
 			);
 		};
 		AA00000000000000000000A4 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			files = (
-			);
-		};
-		AA00000000000000000000B4 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -585,11 +547,6 @@
 			);
 		};
 		AA00000000000000000000A2 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			files = (
-			);
-		};
-		AA00000000000000000000B2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
 			);
@@ -1118,75 +1075,6 @@
 			};
 			name = Release;
 		};
-		AA00000000000000000000B7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = R5PQPZARC5;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = saver/Spike/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "@loader_path/../Frameworks";
-				MACH_O_TYPE = mh_bundle;
-				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.saver.spike;
-				PRODUCT_NAME = "Photo-Go-Round Spike";
-				SDKROOT = auto;
-				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = macosx;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 6.0;
-				WRAPPER_EXTENSION = saver;
-			};
-			name = Debug;
-		};
-		AA0000000000000000000205 /* Claude configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = R5PQPZARC5;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = saver/Spike/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "@loader_path/../Frameworks";
-				MACH_O_TYPE = mh_bundle;
-				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.saver.spike;
-				PRODUCT_NAME = "Photo-Go-Round Spike";
-				SDKROOT = auto;
-				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = macosx;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 6.0;
-				WRAPPER_EXTENSION = saver;
-			};
-			name = Claude;
-		};
-		AA00000000000000000000B8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = R5PQPZARC5;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = saver/Spike/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "@loader_path/../Frameworks";
-				MACH_O_TYPE = mh_bundle;
-				MACOSX_DEPLOYMENT_TARGET = 27.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photogoround.saver.spike;
-				PRODUCT_NAME = "Photo-Go-Round Spike";
-				SDKROOT = auto;
-				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = macosx;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 6.0;
-				WRAPPER_EXTENSION = saver;
-			};
-			name = Release;
-		};
 		AA00000000000000000000C7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Server" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1550,15 +1438,6 @@
 				AA00000000000000000000A7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Saver" */,
 				AA0000000000000000000204 /* Claude configuration for PBXNativeTarget "Photo-Go-Round Saver" */,
 				AA00000000000000000000A8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Saver" */,
-			);
-			defaultConfigurationName = Release;
-		};
-		AA00000000000000000000B6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Saver Spike" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				AA00000000000000000000B7 /* Debug configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */,
-				AA0000000000000000000205 /* Claude configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */,
-				AA00000000000000000000B8 /* Release configuration for PBXNativeTarget "Photo-Go-Round Saver Spike" */,
 			);
 			defaultConfigurationName = Release;
 		};

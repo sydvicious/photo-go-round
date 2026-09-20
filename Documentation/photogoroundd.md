@@ -57,18 +57,24 @@ While developing, run it in a terminal instead:
     cd photo-go-round
     ./Scripts/photogoroundd
 
-The wrapper script builds first, so a stale binary is never run, and points the
-agent's storage at `.build` so a development run cannot disturb a real library. A
+The wrapper script builds first, so a stale binary is never run, and leaves the
+agent on its development storage so a run cannot disturb a real library. A
 detached `screen` or `tmux` session keeps it running after the terminal closes,
 which is what a long unattended run wants.
 
 ## OPTIONS
 
 `--prod`
-Use the real library — `~/Library/Containers`, `~/Library/Caches`, and the real
-preference domain. Without it everything lives under `.build`, so a plain run
-cannot disturb anything. All three move together, deliberately: relocating the
-storage root alone would leave the source list pointing at the real one.
+Use the real library — `~/Library/Containers/<identifier>`,
+`~/Library/Caches/<identifier>`, and the domain `<identifier>`. Without it the
+same three take a `.dev` suffix, so a plain run cannot disturb anything. All
+three move together, deliberately: relocating the storage root alone would leave
+the source list pointing at the real one.
+
+**`<identifier>` carries the build configuration** — `com.sydpolk.photogoround`, `….debug` or `….claude` by build configuration — so a
+release, a Debug and an agent's build never share a database and can all run at
+once. Everything is under the user's own home directory, so two people on one
+Mac never share a library either.
 
 `--port` *n*
 Which port to serve pictures on, pinning it to a number you choose. Worth doing
@@ -99,16 +105,16 @@ agent is running.
 
 `--container` *dir*
 Storage root, holding `photogoround.sqlite` and its WAL sidecars. Defaults to
-`<repo>/.build/pgr-container`, or with `--prod` to
-`~/Library/Containers/com.sydpolk.photogoround`.
+`~/Library/Containers/<identifier>.dev`, or with `--prod` to
+`~/Library/Containers/<identifier>`.
 
 `-d`, `--database` *file*
 The database file, overriding its default position inside the storage root.
 Defaults to `<container>/photogoround.sqlite` in both deployments.
 
 `--cache-root` *dir*
-Where copied photo bytes live. Defaults to `<repo>/.build/pgr-cache`, or with
-`--prod` to `~/Library/Caches/com.sydpolk.photogoround`. **Naming a container
+Where copied photo bytes live. Defaults to `~/Library/Caches/<identifier>.dev`,
+or with `--prod` to `~/Library/Caches/<identifier>`. **Naming a container
 takes the cache with it**: give `--container` or `PGR_CONTAINER` and the cache
 defaults to `<container>/cache` instead, because somebody who named one
 directory meant both.
@@ -559,8 +565,8 @@ favour, always.
 
 |                | storage root | cache root |
 | --- | --- | --- |
-| default | `<repo>/.build/pgr-container` | `<repo>/.build/pgr-cache` |
-| `--prod` | `~/Library/Containers/com.sydpolk.photogoround` | `~/Library/Caches/com.sydpolk.photogoround` |
+| default | `~/Library/Containers/<identifier>.dev` | `~/Library/Caches/<identifier>.dev` |
+| `--prod` | `~/Library/Containers/<identifier>` | `~/Library/Caches/<identifier>` |
 | container named | as given | `<container>/cache` |
 
 **Development is the default, and reaching a real library takes `--prod`, typed

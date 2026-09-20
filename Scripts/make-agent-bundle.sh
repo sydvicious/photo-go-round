@@ -83,8 +83,8 @@ EXECUTABLE="photogoroundd"
 BUNDLE="$OUTPUT_DIR/$BUNDLE_NAME.app"
 
 echo "building $CONFIGURATION…"
-swift build --configuration "$CONFIGURATION" --package-path "$REPO" >/dev/null
-BIN_PATH="$(swift build --configuration "$CONFIGURATION" --package-path "$REPO" --show-bin-path)"
+swift build --configuration "$CONFIGURATION" --package-path "$REPO" --scratch-path "$DERIVED_DATA/swiftpm" >/dev/null
+BIN_PATH="$(swift build --configuration "$CONFIGURATION" --package-path "$REPO" --scratch-path "$DERIVED_DATA/swiftpm" --show-bin-path)"
 
 echo "assembling $BUNDLE"
 rm -rf "$BUNDLE"

@@ -94,12 +94,26 @@ Each phase leaves the tree working, and the products are taken smallest first.
   - Measure whether a Run action sees `pluginkit -m` output that a sandboxed
     build phase could not.
   - `Scripts/install-wallpaper-extension.sh` deleted.
-- **Phase 5 — Uninstall, and the scripts that also install.**
+- **Phase 5 — One implementation of every build and every install.** Syd,
+  2026-09-19: "there should not be multiple versions of the build scripts. the
+  targets and the command line builds should share their guts, and behave the
+  same, based on input parameters."
   - `pgr_install uninstall`, with `--agent`, `--saver`, `--wallpaper`. Three
     configurations means three of everything to find.
-  - `Scripts/uninstall.sh`, `make-agent-bundle.sh --install-to` and
-    `make-saver-bundle.sh --install` route through the binary instead of
-    keeping their own copies.
+  - `Scripts/uninstall.sh` becomes a thin call into it.
+  - **The three duplications go**: `make-saver-bundle.sh --install` keeping its
+    own copy of the saver install; `make-agent-bundle.sh` writing its own
+    LaunchAgent plist; and each product having two build mechanisms that produce
+    differently named output in different places.
+  - What is left takes parameters — configuration, output, whether to install —
+    and behaves identically whichever door it was entered by.
+  - **`xcodebuild` is the single route.** Syd, 2026-09-19: "what I really want
+    is each target runnable via xcodebuild. If there are shell scripts that get
+    called, ok." Every product builds by scheme and configuration; scripts are
+    what a target calls, not a second way in.
+  - **Shared test schemes**, so `xcodebuild test` reaches the package's four
+    test targets as well as `Photo-Go-RoundTests`. Syd: "add the test schemes
+    somewhere."
 - **Phase 6 — The documents, and the rules that change.**
   - `Documentation/pgr_install.md`, and `Documentation/Installing.md` rewritten
     around it.
@@ -402,21 +416,85 @@ moving to Swift buys correctness rather than reach.
   `WallpaperAgent` does not re-acquire from the new process by itself. It comes
   straight back under launchd and re-acquires every surface from the store.
 
-### `uninstall.sh` and the `make-*` scripts — Phase 5
+### One implementation of every build and every install — Phase 5
+
+**Syd, 2026-09-19:** "there should not be multiple versions of the build
+scripts. the targets and the command line builds should share their guts, and
+behave the same, based on input parameters." This is the phase that makes that
+true, and it is wider than the install half the plan first described.
+
+#### The three duplications, named
+
+- **The saver's install exists twice.** `Scripts/install-saver.sh` copies the
+  bundle, replaces the previous one and kills `legacyScreenSaver` and
+  `ScreenSaverEngine`; `make-saver-bundle.sh --install` does the same again in
+  its own words. The second one's header says why — "that script keeps its own
+  copy of these steps because it is also the route for a machine with no Xcode
+  project open" — and that justification dissolves once the install is a binary
+  rather than a build phase, because a binary runs anywhere.
+- **The agent's LaunchAgent plist exists twice.** `install-agent.sh` writes one
+  into `~/Library/LaunchAgents`; `make-agent-bundle.sh` writes another into the
+  bundle's `Contents/Library/LaunchAgents` for `SMAppService`. Both carry the
+  label, `RunAtLoad`, `KeepAlive`/`SuccessfulExit` and `ProcessType` —
+  **`Adaptive`, not `Background`**, for reasons measured 2026-09-17 that only
+  one of the two copies explains. On 2026-09-19 the label had to be corrected in
+  both, separately; that is the drift arriving, not a hypothetical.
+- **Each product builds two ways.** The saver by `xcodebuild -scheme` from
+  `make-saver-bundle.sh` and by its Xcode target; the agent by `swift build`
+  from `make-agent-bundle.sh` and `Scripts/photogoroundd`, and by the
+  `Photo-Go-Round Server` target. The two routes put differently named products
+  in different directories, and only one of them gets the build configuration's
+  identity — which is why `make-agent-bundle.sh` needs an `if` on
+  `$CONFIGURATION` to spell a label the Xcode route gets from a build setting.
+
+#### What replaces them
+
+`PhotoGoRoundInstall` already holds one implementation of each install by the
+end of Phase 4; Phase 5 finishes the job by leaving exactly one caller shape.
+Every entry point — an Xcode scheme's ⌘R, a script, CI — resolves to the same
+code with different arguments:
+
+- **the configuration**, which decides every identity;
+- **where the product is**, rather than each caller deriving it;
+- **whether to install**, which is a parameter and not a different program.
 
 `uninstall.sh` stays runnable from a terminal — Syd, 2026-09-15: "I am willing
-to run that on the command line" — but as a thin call into `pgr_install
-uninstall`, so there is one place that knows the label, the three extension
-identifiers and the saver's name. It must keep the property that nothing in it
-needs the checkout that installed it: everything is found by label, identifier
-and name.
+to run that on the command line" — as a thin call into `pgr_install uninstall`.
+It must keep the property that nothing in it needs the checkout that installed
+it: everything is found by label, identifier and name.
 
-`make-agent-bundle.sh --install-to` and `make-saver-bundle.sh --install` keep
-their own copies of the install steps today, on the stated grounds that they are
-the route for a machine with no Xcode project open. That grounds dissolves once
-the install is a binary built by `swift build`, so they call it instead. This is
-the *be thorough and consistent* half of the plan: three sites installing the
-saver becomes one.
+#### `xcodebuild` is the single route
+
+**Decided 2026-09-19.** Syd: "what I really want is each target runnable via
+xcodebuild. If there are shell scripts that get called, ok." So a scheme and a
+configuration are the whole interface to building anything, and a script is
+something a target invokes rather than a parallel way in. Three things follow:
+
+- **`make-saver-bundle.sh` and `make-agent-bundle.sh` stop being build entry
+  points.** Either they become thin wrappers over `xcodebuild -scheme …
+  -configuration …`, or they go and the scheme is the command. The assembly work
+  they do — the bundle layout, the `Info.plist`, the `SMAppService` plist — moves
+  into the targets, which is also what makes it stop being a second
+  implementation.
+- **`CLAUDE.md` loses its SwiftPM asymmetry.** It tells an agent to build with
+  both `xcodebuild … -configuration Claude` and `swift build --scratch-path …
+  -Xswiftc -DPGR_AGENT_CLAUDE`, because SwiftPM has no third configuration.
+  Under one route the second line goes, and with it the note that the two halves
+  are spelled differently.
+- **Test schemes have to exist.** The package's four test targets —
+  `PhotoGoRoundKitTests`, `PhotoGoRoundDisplayTests`, `photogorounddTests`,
+  `pgr_ctlTests` — run through `swift test` today and are invisible to
+  `xcodebuild test`, which reaches only `Photo-Go-RoundTests` through the app's
+  scheme. Shared schemes carrying them as `Testables` are what make "each target
+  runnable via xcodebuild" true of the tests as well. They could come forward
+  from this phase if an earlier one wants them.
+
+**Still open: `Scripts/photogoroundd`.** Its stated purpose is running the agent
+with no Xcode project open, by `swift build`, and it is the one route that
+exercises the agent outside an app bundle. Under this rule it either builds by
+`xcodebuild` like everything else — losing that property — or it goes. Not
+decided; `Build Plan.md`'s *One target, one scheme, one script per product* is
+where the answer belongs.
 
 ## The build variant, compiled in
 

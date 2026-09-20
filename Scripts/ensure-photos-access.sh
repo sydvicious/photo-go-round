@@ -20,9 +20,22 @@
 
 set -euo pipefail
 
+# **Every configuration's domain, since 2026-09-19.** Each build configuration
+# has its own storage identifier — `com.sydpolk.photogoround`, `….debug`,
+# `….claude` — and each of those has a development and a production domain, so
+# there are six places an agent may have published its port. Probing only the
+# release pair, as this did until the identities were introduced, reports "no
+# agent is publishing a port" against a perfectly healthy Debug agent.
+# `BuildVariant.swift`; `Plans/Xcode - Separate Build and Run.md`.
+#
+# Development first within each identity, because that is the agent's own
+# default and what an install has just started.
 port=""
 domain=""
-for candidate in com.sydpolk.photogoround.dev com.sydpolk.photogoround; do
+for candidate in \
+    com.sydpolk.photogoround.debug.dev com.sydpolk.photogoround.debug \
+    com.sydpolk.photogoround.claude.dev com.sydpolk.photogoround.claude \
+    com.sydpolk.photogoround.dev com.sydpolk.photogoround; do
     found="$(defaults read "$candidate" servicePort 2>/dev/null || true)"
     if [[ -n "$found" ]]; then
         port="$found"
@@ -32,10 +45,12 @@ for candidate in com.sydpolk.photogoround.dev com.sydpolk.photogoround; do
 done
 
 if [[ -z "$port" ]]; then
-    echo "photos: no agent is publishing a port, so Photos access was not checked"
+    echo "photos: no agent is publishing a port in any configuration, so Photos access was not checked"
     echo "  start one, or build the Install Agent target"
     exit 0
 fi
+
+echo "photos: found an agent on $port ($domain)"
 
 status="$(curl -s --max-time 5 "http://localhost:$port/v2/photos/authorization" 2>/dev/null || true)"
 case "$status" in
