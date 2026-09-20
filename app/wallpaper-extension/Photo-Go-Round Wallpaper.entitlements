@@ -8,17 +8,17 @@
     <true/>
     <key>com.apple.security.temporary-exception.shared-preference.read-only</key>
     <array>
-        <string>com.sydpolk.photogoround.dev</string>
-        <string>com.sydpolk.photogoround</string>
-        <string>com.sydpolk.photogoround.wallpaper.dev</string>
-        <string>com.sydpolk.photogoround.wallpaper.prod</string>
+        <string>com.sydpolk.photogoround$(STORAGE_ID_SUFFIX).dev</string>
+        <string>com.sydpolk.photogoround$(STORAGE_ID_SUFFIX)</string>
+        <string>com.sydpolk.photogoround$(STORAGE_ID_SUFFIX).wallpaper.dev</string>
+        <string>com.sydpolk.photogoround$(STORAGE_ID_SUFFIX).wallpaper.prod</string>
     </array>
     <key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
     <array>
-        <string>/Library/Preferences/com.sydpolk.photogoround.dev.plist</string>
-        <string>/Library/Preferences/com.sydpolk.photogoround.plist</string>
-        <string>/Library/Preferences/com.sydpolk.photogoround.wallpaper.dev.plist</string>
-        <string>/Library/Preferences/com.sydpolk.photogoround.wallpaper.prod.plist</string>
+        <string>/Library/Preferences/com.sydpolk.photogoround$(STORAGE_ID_SUFFIX).dev.plist</string>
+        <string>/Library/Preferences/com.sydpolk.photogoround$(STORAGE_ID_SUFFIX).plist</string>
+        <string>/Library/Preferences/com.sydpolk.photogoround$(STORAGE_ID_SUFFIX).wallpaper.dev.plist</string>
+        <string>/Library/Preferences/com.sydpolk.photogoround$(STORAGE_ID_SUFFIX).wallpaper.prod.plist</string>
     </array>
 </dict>
 </plist>

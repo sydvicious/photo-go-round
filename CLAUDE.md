@@ -17,17 +17,26 @@ xcodebuild build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round S
     -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData"
 ```
 
+**`xcodebuild` is the only route**, since 2026-09-19. Syd: "what I really want
+is each target runnable via xcodebuild. If there are shell scripts that get
+called, ok." Not `swift build`: it has only `debug` and `release`, so it cannot
+produce the `Claude` identity, and an agent built that way binds Syd's Debug
+port and carries his label.
+
+The tests run the same way, through the package's own scheme — note that this
+one takes no `-project`, because it is a package scheme:
+
 ```bash
-swift build --scratch-path "$HOME/.claude/build/photo-go-round/DerivedData" -Xswiftc -DPGR_AGENT_CLAUDE
+xcodebuild test -scheme "Package Tests" -destination "platform=macOS,arch=arm64" -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData"
 ```
 
-`swift test` takes the same two. SwiftPM has only `debug` and `release`, so it
-keeps the flag; Xcode has the configuration and needs nothing else.
+That covers all five package test targets. `Package Tests.xctestplan` at the top
+of the repository is what lists them.
 
 **Nothing generated goes in the repository.** Syd, 2026-09-19: "I really don't
 want build artifacts in the repo directory", and "I would prefer ALL generated
-artifacts to be in DerivedData and not .build directories". `Scripts/make-*.sh`
-default their output to
+artifacts to be in DerivedData and not .build directories". The scripts in
+`Scripts/` default their output to
 `~/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts`; set
 `PGR_BUILD_ROOT` or pass `--output` to put yours under your own directory.
 

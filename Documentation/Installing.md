@@ -40,6 +40,14 @@ Scheme **Install Agent**, **⌘R** — not ⌘B, which since 2026-09-19 only bui
 
 **Photos access is granted in the app, not by an install.** Open **Photo-Go-Round** and add a Photos source; the prompt comes from there. No install asks, because a grant is asked for by something with a window and an installer has none — and the agent cannot ask at all, since reading its authorization status is a TCC preflight that shows nothing.
 
+### The gap this leaves, which is accepted
+
+**Install everything and never open the app, and the agent is permanently half-blind.** Folder sources work; every Photos source stays unavailable, and the only sign is a line in the log. Measured 2026-09-15, before the app owned the ask: a fresh install sat at 867 of 9183 photographs with both Photos sources dark, reporting nothing on screen.
+
+Nothing recovers from it on its own, because nothing will ever prompt. Opening the app once fixes it for good — the grant is recorded against the agent's bundle identifier, which does not vary by build configuration, so it is answered once and not once per build.
+
+Syd, 2026-09-19, deciding it: "all access is controlled either by the toy app I have now, the app we are going to develop, any potential app-store friendly apps, or any potential menubar apps", and "this limitation should be fine". The alternative was a second implementation of the prompt inside every install, which is what was deleted.
+
 The agent logs to the unified log, subsystem `com.sydpolk.photogoround`. It writes no file:
 
 ```bash
@@ -97,13 +105,13 @@ The agent's served lines name the consumer:
 
 ## Reinstalling
 
-Build the same target again. Each script replaces its own product and nothing else: the agent's plist is rewritten, the extension's dead registrations — those whose bundle no longer exists, or now holds a different identifier — are removed and the new copy registered, the saver's old bundle is replaced. Selections in System Settings survive.
+⌘R the same scheme again. `pgr_install` replaces its own configuration's product and nothing else: the agent's plist is rewritten, the extension's dead registrations — those whose bundle no longer exists, or now holds a different identifier — are removed and the new copy registered, the saver's old bundle is replaced. Selections in System Settings survive.
 
 ## After a Clean Build Folder
 
 ⇧⌘K deletes the built products, and the wallpaper extension's registration goes with them: `pkd` drops a registration whose bundle is gone, so at the next login `WallpaperAgent` cannot build our wallpaper and falls back to one of Apple's — Golden Gate. Measured 2026-09-17.
 
-Rebuild and reinstall all three, in the order above, and choose the wallpaper again in System Settings.
+⌘R all three, in the order above, and choose the wallpaper again in System Settings.
 
 ## Removing
 
@@ -111,4 +119,22 @@ Rebuild and reinstall all three, in the order above, and choose the wallpaper ag
 ./Scripts/uninstall.sh
 ```
 
-Or one at a time with `--agent`, `--wallpaper`, `--saver`. The library, cache and preferences are left alone.
+Or one at a time with `--agent`, `--wallpaper`, `--saver`. `--dry-run` says what would go and removes nothing. The library, cache and preferences are left alone — `Scripts/scrub-dev.sh` is what clears development storage.
+
+It finds every configuration's copy, not just the one you last built: three labels, three saver names, three extension identifiers, all from `BuildVariant`.
+
+## What is doing the installing
+
+All three schemes run `pgr_install` on ⌘R. It is a development tool that ships in nothing, and it is expected to be replaced by the app once the app installs on first launch.
+
+The work lives in `PhotoGoRoundInstall`, which is the part that lasts: the menu-bar app will link it. `pgr_install` is the door an `Install …` scheme knocks on until then.
+
+`Documentation/pgr_install.md` is its man page. `--dry-run` works on every command, and prints what would happen without doing any of it — which is the quickest way to see what an install is about to change.
+
+## SEE ALSO
+
+`pgr_install(1)`, `Documentation/pgr_install.md` — every install and the uninstall.
+
+`photogoroundd(1)`, `Documentation/photogoroundd.md` — the agent itself, and running it in a terminal instead.
+
+`Plans/Xcode - Separate Build and Run.md` — why ⌘B stopped installing.

@@ -81,11 +81,22 @@ Which port to serve pictures on, pinning it to a number you choose. Worth doing
 when something has to reach the agent without asking where it is — a `curl` you
 type by hand, a client with a hard-coded URL.
 
-By default the agent takes whatever port the kernel gives it at launch and
-publishes it to preferences under `servicePort`, where every process on the
-machine can read it. Nothing has to agree on a number in advance, and two agents
-can run side by side without either being told about the other. `pgr_ctl status`
-prints the published address.
+By default the agent binds a fixed port and publishes it to preferences under
+`servicePort`, where every process on the machine can read it. **There is one
+port per build configuration** — 9427 release, 9428 Debug, 9429 Claude — so two
+agents can run side by side without either being told about the other, and a
+client can hold a number rather than chase one.
+
+It was whatever the kernel gave at launch until 2026-09-17. Syd, that day:
+"Perhaps we had better actually pick a port and hardcode it. this dynamic port
+stuff is causing problems." Measured across five reboots, each launch took a
+different port and the app showed *waiting for the agent* until it re-read the
+preference — from the person's side, indistinguishable from the agent being
+down.
+
+**A port already held is still fallen back from**, and the kernel's choice
+published in its place, so a fixed port that somebody else has taken degrades
+rather than failing. `pgr_ctl status` prints the published address either way.
 
 `--no-publish` (_internal testing only_)
 Serve normally, but do not write `servicePort`. Nothing announces this agent, so
@@ -601,5 +612,8 @@ are no photos available.
 
 `pgr_ctl(1)`, `Documentation/pgr_ctl.md` — the tool for inspecting and
 configuring a library.
+
+`pgr_install(1)`, `Documentation/pgr_install.md` — what installs this agent as a
+LaunchAgent, and what ⌘R on **Install Agent** runs.
 
 `README.md`, *Testing the picture endpoint* — driving the service with `curl`.

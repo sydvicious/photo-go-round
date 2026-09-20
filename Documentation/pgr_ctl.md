@@ -15,7 +15,7 @@ pgr_ctl queue {peek [-n <count>] | fill [-n <rounds>]}
 pgr_ctl deck stats
 pgr_ctl cache {status | evict | clear [--source <id>] [--unavailable] [--yes]}
 pgr_ctl shuffle-test [--deals <n>] [--photos <n>] [-w <fraction>]
-pgr_ctl get [<key>] | set <key> <value>
+pgr_ctl get [<key>] [--no-default-values] | set <key> <value>
 pgr_ctl wallpaper get [<key>] | wallpaper set <key> <value>
 pgr_ctl notify <topic>
 pgr_ctl log [-f] [--last <time>]
@@ -271,11 +271,15 @@ shuffle order (_internal testing only_).
 Test the shuffle algorithms against a dummy library of empty files and an in-memory
 database (_internal testing only_).
 
-`get [<key>]`
+`get [<key>] [--no-default-values]`
 Reads preferences. With no key it lists every setting with its stored value, or
 `(default)` where nothing is stored. With a key it prints that value alone, for
 scripts — an empty line if nothing is stored, rather than the default the agent
 would use. An unknown key is an error.
+
+`--no-default-values` reports only what is stored, leaving a setting blank where
+nothing is — so a script can tell "nobody has chosen" from "chosen to be the
+same as the default", which the ordinary listing deliberately blurs.
 
 `set <key> <value>`
 Writes one preference, to the current domain. A running agent picks the change
@@ -284,9 +288,11 @@ up immediately. For a list of valid keys, see `get`.
 `wallpaper get [<key>]`
 Reads the wallpaper's own preferences, which live in
 `com.sydpolk.photogoround.wallpaper.dev` — or `.prod` with `--prod` — rather than
-in the domain `get` reads. With no key it lists every setting; with a key it
-prints that value alone, for scripts. An unset `interval` reports the value the
-wallpaper would use. The only key is `interval`.
+in the domain `get` reads. The domain carries the build configuration as the
+library does: `….debug.wallpaper.dev` with `--debug`, `….claude.wallpaper.dev`
+with `--claude`. With no key it lists every setting; with a key it prints that
+value alone, for scripts. An unset `interval` reports the value the wallpaper
+would use. The only key is `interval`.
 
 `wallpaper set <key> <value>`
 Writes one of them. `interval` takes a *Shuffle All* tag such as
@@ -381,6 +387,9 @@ pgr_ctl shuffle-test --deals 50000 --photos 4000 -w 1.0
 ## SEE ALSO
 
 `photogoroundd(1)`, `Documentation/photogoroundd.md`
+
+`pgr_install(1)`, `Documentation/pgr_install.md` — installing what was built,
+which is a separate job from configuring what is installed.
 
 `README.md`, *Testing the picture endpoint* — taking a picture, which is `curl`
 against the agent rather than anything in this tool.

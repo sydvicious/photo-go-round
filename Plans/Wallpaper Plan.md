@@ -400,7 +400,7 @@ A no at any gate ends it: the answer is "it cannot work", and route A is what is
 - The host registers the extension by being launched once, as Phosphene's app does.
 - Deployment target macOS 27.0.
 - **Two signatures, as two runs:** ad-hoc, and Syd's development identity. One may be refused where the other is not, and that is measured rather than guessed.
-- **A script with `swiftc` and `codesign`, following `make-agent-bundle.sh`, so the Xcode project is not touched.** Its source sits beside `Scripts/wallpaper-probe.swift`, as the second wallpaper probe.
+- **A script with `swiftc` and `codesign`, following `make-agent-bundle.sh`, so the Xcode project is not touched.** *Written when that script existed; it was deleted 2026-09-19 and `xcodebuild` is the only build route now.* Its source sits beside `Scripts/wallpaper-probe.swift`, as the second wallpaper probe.
 - **The output defaults to a directory under DerivedData**, never the checkout.
 - **The script only builds.** Copying the app to `~/Applications` and registering it are Syd's, handed to him as commands, as every install is.
 
@@ -612,7 +612,7 @@ Claude's draft, 2026-09-15, after Syd chose pictures from the agent as the next 
 **What would be built:**
 
 - The third probe grown again, at version 0.4, with the same host, script and identifiers.
-- **Entitlements:** `com.apple.security.network.client`; `com.apple.security.temporary-exception.shared-preference.read-only` naming `com.sydpolk.photogoround.dev` and `com.sydpolk.photogoround`; `com.apple.security.temporary-exception.files.home-relative-path.read-only` naming both plists under `/Library/Preferences/`.
+- **Entitlements:** `com.apple.security.network.client`; `com.apple.security.temporary-exception.shared-preference.read-only` naming `com.sydpolk.photogoround.dev` and `com.sydpolk.photogoround`; `com.apple.security.temporary-exception.files.home-relative-path.read-only` naming both plists under `/Library/Preferences/`. *The domain names here are the probe's, 2026-09-15, and are left as written. Since 2026-09-19 they carry the build configuration and are spelled `com.sydpolk.photogoround$(STORAGE_ID_SUFFIX)…`; see* The entitlements that did not follow.
 - **On each desktop `acquire`:**
   - reply at once with the generated picture, as now;
   - then, off the main thread, read the port both ways for both domains and log each result, with the domain and which read found it;
@@ -620,7 +620,7 @@ Claude's draft, 2026-09-15, after Syd chose pictures from the agent as the next 
   - log the status, byte count and time taken;
   - decode the photograph and enqueue it on that surface's layer, replacing the generated picture; if any step fails, the generated picture stays and the log says which step.
 - **`snapshot`** answers with whatever that display's surface is showing — the photograph once it has arrived.
-- **The two products are named apart, 2026-09-15.** Syd: "make one extension named 'Photo-Go-Round Wallpaper' and the other 'Photo-Go-Round Screensaver'." The extension's pane item is now **Photo-Go-Round Wallpaper** — its `localizedName` and its choice's `name`; the section heading stays "Photo-Go-Round", since the section names the family. The saver's `PRODUCT_NAME` is now **Photo-Go-Round Screensaver**, so the bundle is `Photo-Go-Round Screensaver.saver` and, because its `CFBundleName` is `$(PRODUCT_NAME)`, that is what the Screen Saver list shows. `Scripts/make-saver-bundle.sh`, `install-saver.sh` and `uninstall.sh` follow the new bundle name. **A previously installed `Photo-Go-Round.saver` is not touched by any of them** and has to be removed by hand, or both appear in the list.
+- **The two products are named apart, 2026-09-15.** Syd: "make one extension named 'Photo-Go-Round Wallpaper' and the other 'Photo-Go-Round Screensaver'." The extension's pane item is now **Photo-Go-Round Wallpaper** — its `localizedName` and its choice's `name`; the section heading stays "Photo-Go-Round", since the section names the family. The saver's `PRODUCT_NAME` is now **Photo-Go-Round Screensaver**, so the bundle is `Photo-Go-Round Screensaver.saver` and, because its `CFBundleName` is `$(PRODUCT_NAME)`, that is what the Screen Saver list shows. `Scripts/make-saver-bundle.sh` and `uninstall.sh` follow the new bundle name; `install-saver.sh` became `pgr_install saver` on 2026-09-19, and reads the name from the bundle it is handed rather than following anything. **A previously installed `Photo-Go-Round.saver` is not touched by any of them** and has to be removed by hand, or both appear in the list.
 - **Measured step by step, 2026-09-15**, to Syd's method: "Build the Wallpaper extension. set the wallpaper. check the logs. set the screensaver. check the logs. invoke the screensaver. check the logs."
   - *Setting the wallpaper*: `presentationMode default` acquires only — desktop and its preview — one fetch as `consumer=system-wallpaper`, card 7261, drawn on 2 of 2 desktop surfaces.
   - *Setting the screensaver*: still only `default`, card 3159 to `system-wallpaper`, drawn on 3 of 3 desktop surfaces. **Choosing the screen saver never reaches the screen saver slot**, and the Screen Saver pane's own preview arrives as a *desktop* preview — which is why it shows the wallpaper's photograph and why per-slot pictures cannot fix it. Syd saw this before it was measured: "I don't think that the preview in Screen Saver is behaving identically to when the screen saver comes up for real."
@@ -750,8 +750,8 @@ Claude's proposal, 2026-09-14, in answer to "Wallpapers needs its own binary/bun
 
 **Where it does not fit what is already decided — each named to Syd, none answered:**
 
-- **Where the bundle lives.** The saver's `--install` copies its bundle into `~/Library/Screen Savers`. For the agent, Syd decided "the binary stays in the app bundle", and *Its own binary* says the wallpaper follows that shape. A standalone install puts the bundle somewhere else — `~/Applications`, as `make-agent-bundle.sh --install-to` suggests.
-- **Whether the script runs `launchctl`.** `make-saver-bundle.sh --install` installs outright; `make-agent-bundle.sh` prints the commands instead, because "putting a login item on a Mac is the owner's call."
+- **Where the bundle lives.** The saver's `--install` copies its bundle into `~/Library/Screen Savers`. For the agent, Syd decided "the binary stays in the app bundle", and *Its own binary* says the wallpaper follows that shape. A standalone install puts the bundle somewhere else — `~/Applications`, as `make-agent-bundle.sh --install-to` suggested. *That flag and that script are gone, 2026-09-19: Syd, "Archive for release, command-R for dev."*
+- **Whether the script runs `launchctl`.** `make-saver-bundle.sh --install` installs outright; `make-agent-bundle.sh` printed the commands instead, because "putting a login item on a Mac is the owner's call." **Answered differently, 2026-09-19:** installing is what ⌘R does, and pressing ⌘R is the owner's act — so `pgr_install agent` bootstraps the job outright and nothing prints commands to paste.
 - **Two hosts must not both run the loop.** The app and the bundle together ask for every display twice and spend two cards for one picture. TODO.md's *A wallpaper bundle* says the same.
 - **The checkbox reaches another process late.** `Wallpaper` reads `enabled` once, in `init`, so ticking or unticking it in the app does not start or stop a separate process until that process restarts. The interval has no such problem; it is read on every use. *Moot since 2026-09-16: there is no checkbox and no second host.*
 
@@ -765,7 +765,7 @@ Syd, 2026-09-16, with the extension working on the desktop and the screen saver 
 
 **The interval reached the extension late, measured the same morning.** Syd: "changing the setting in the app is NOT updating the setting for the wallpaper. you should be able to see that in the logs." The write was read — but only at the next tick, and the next tick's wait had been fixed at the previous one: set from one hour to ten seconds at 08:13:30, nothing happened, because the rotation had gone to sleep at 08:02:42 for an hour; set from ten seconds to ten minutes at 08:14:54, the tick at 08:14:58 still fired. The app's loop had capped its sleep at thirty seconds for exactly this. **Fixed:** `Rotation.run` keeps a due time per surface — last ask plus the interval — and sleeps at most `recheck` before reading the interval again, logging `interval now X, was Y` when it changes. Syd: "how about a 10-second recheck?" — so ten seconds, the shortest *Shuffle All* choice; the cost is one preference read per display every ten seconds. Confirmed in the log: set at 08:22:15, seen at 08:22:15, asked at 08:22:17; set back at 08:22:46, seen at 08:22:46, quiet after.
 
-**The install left the desktop grey, measured the same morning.** The install script kills the extension process, as it must, and `WallpaperAgent` did not re-acquire the desktop from the new process on its own: the desktop stayed dark grey until Syd chose another wallpaper and chose this one again. **Fixed:** once `pkd` has the new copy, `install-wallpaper-extension.sh` restarts `WallpaperAgent`, which launchd brings straight back and which re-acquires every surface from the store — what `uninstall.sh` already relied on. Confirmed: the next install re-acquired the desktop in the same second the extension started.
+**The install left the desktop grey, measured the same morning.** The install kills the extension process, as it must, and `WallpaperAgent` did not re-acquire the desktop from the new process on its own: the desktop stayed dark grey until Syd chose another wallpaper and chose this one again. **Fixed:** once `pkd` has the new copy, `install-wallpaper-extension.sh` restarts `WallpaperAgent`, which launchd brings straight back and which re-acquires every surface from the store — what `uninstall.sh` already relied on. Confirmed: the next install re-acquired the desktop in the same second the extension started.
 
 ## Two wallpapers, told apart in the log
 
@@ -963,6 +963,8 @@ Two cards an hour per display, against the screensaver's 341 an hour. **At sixty
 
 ## Testing
 
+**This section describes the app's own wallpaper loop, which went on 2026-09-16; `Tests/PhotoGoRoundDisplayTests/WallpaperTests.swift` went with it.** Left as written, like the probe entries above. What the extension is held to instead is in *The entitlements that did not follow* and in `Tests/PhotoGoRoundDisplayTests/WallpaperEntitlementsTests.swift`.
+
 The loop is written so a test drives it without touching anybody's desktop: the list of displays, the call that sets a desktop, and the clock are all passed in as closures. In `Tests/PhotoGoRoundDisplayTests`:
 
 - each display is asked for as `wallpaper`, at its own pixel size, under its own UUID
@@ -1082,11 +1084,11 @@ Syd, 2026-09-16: "is there a way to build debug builds of the wallpaper that hav
 
 **What follows the identifier.**
 
-- **`Scripts/install-wallpaper-extension.sh`** hard-codes the Release identifier. It reads it instead from the appex it was given, with `/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier"`, so it registers, waits for and reports whichever identity was built. *Built 2026-09-16, and it fails loudly on a bundle with no Photo-Go-Round wallpaper identifier. Its stale-registration sweep now covers every identity, and counts a registration dead when its bundle is gone **or no longer holds the identifier it was registered under** — what a rebuild at the same path under a new identity leaves.*
+- **`Scripts/install-wallpaper-extension.sh`** hard-codes the Release identifier. *That script became `pgr_install wallpaper` on 2026-09-19; the judgement below survived the move and has tests now.* It reads it instead from the appex it was given, with `/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier"`, so it registers, waits for and reports whichever identity was built. *Built 2026-09-16, and it fails loudly on a bundle with no Photo-Go-Round wallpaper identifier. Its stale-registration sweep now covers every identity, and counts a registration dead when its bundle is gone **or no longer holds the identifier it was registered under** — what a rebuild at the same path under a new identity leaves.*
 - **`Scripts/uninstall.sh`** hard-codes it too. `--wallpaper` removes all three identities. *Built 2026-09-16.*
 - **`killall "Photo-Go-Round Wallpaper"`** in both scripts. `PRODUCT_NAME` does not change, so the process name is the same for all three and an install stops every identity's running extension, not only its own. ~~*Claude's reading: harmless, since `WallpaperAgent` relaunches the one that is chosen — not measured.*~~ *Changed when built, 2026-09-16: the install stops only the process running from the bundle it installs, `pkill -f "$APPEX/Contents/MacOS/"`, since the probe showed a stopped chosen extension can leave `WallpaperAgent` wedged. `uninstall.sh --wallpaper` still stops them all by name, since it removes them all.*
 - **The sandbox container** is named by the extension's identifier, so each identity has its own `Application Support`, and `LastPicture` remembers pictures for each identity apart. A new identity starts with nothing remembered and shows the generated picture until the agent answers.
-- **Preferences and agents do not follow it.** The extension reads `com.sydpolk.photogoround.wallpaper.dev` and `.prod` by deployment, and asks the development agent and then the production one, whatever its own identifier. The entitlement's exceptions name those domains, not the bundle, and do not change. A Debug and a Release wallpaper share settings.
+- ~~**Preferences and agents do not follow it.** The extension reads `com.sydpolk.photogoround.wallpaper.dev` and `.prod` by deployment, and asks the development agent and then the production one, whatever its own identifier. The entitlement's exceptions name those domains, not the bundle, and do not change. A Debug and a Release wallpaper share settings.~~ **Reversed 2026-09-19 by the three configurations.** `Deployment.storageIdentifier` is the bundle identifier plus the variant's suffix, so every domain follows the build after all: the extension reads `com.sydpolk.photogoround.debug.dev` for the port and `com.sydpolk.photogoround.debug.wallpaper.dev` for the interval, each configuration's wallpaper has its own settings, and each asks its own agent on its own port. **The entitlement's exceptions did not follow, and that stopped the wallpaper**; see *The entitlements that did not follow*, below.
 - **The log.** Every identity logs under the same subsystem and process name. The extension logs its bundle identifier once at launch, so a line says which identity ran.
 - **Claude's own clean-up** after a build still unregisters and deletes its copy — Xcode registers every host it builds, whatever the identifier. The identity stops the collision; it does not stop the registration. The check becomes `pluginkit -m -D -v -p com.apple.wallpaper` for `.claude.extension`.
 
@@ -1129,6 +1131,22 @@ The gates:
 - **Gate 3 passes.** At 21:27:11 the agent served card 3658 to `system-wallpaper` from Syd's extension, pid 58311, with Claude's copy registered and running beside it.
 - **Gate 5 passes.** At 21:27:33 Claude ran `pluginkit -r` on its copy, deleted the host and the stray appex from its products, and stopped its copy's process by pid — not by name, which would have taken Syd's too. Syd's pid 58311 kept running, and at 21:37:12 the agent served it card 2086. Unlike 20:12, when Claude removed a copy under Syd's own identifier and his extension was terminated 1.2 seconds later.
 - **All five gates pass.** The second slice — the `.debug` suffix for Syd's builds, the scripts reading the identifier from the bundle, `uninstall.sh` removing all three, and moving Syd's machine over — is next, and not yet approved to build. *Built the same night at Syd's "yes, build the wallpaper second slice": Debug is `…wallpaper.debug` and `…wallpaper.debug.extension`, named "(Debug)"; Release unchanged; `-showBuildSettings` confirms all three identities. The scripts are checked by `bash -n` and the registration parser against `pluginkit`'s real output and a path with spaces; the install itself is first run by Syd.*
+
+### The entitlements that did not follow
+
+*2026-09-19.* Syd: "The wallpaper is not updating. I think that there may still be some build configuration issues with it."
+
+**What it was.** The extension is sandboxed, so every preference domain it reads has to be named in its entitlements. The domains took the variant's suffix that day; `app/wallpaper-extension/Photo-Go-Round Wallpaper.entitlements` still named the four unsuffixed ones. The sandbox refused every read, and the log said so every ten seconds: `the port in com.sydpolk.photogoround.debug.dev could not be read: … you don't have permission to view it`, then `no port published in com.sydpolk.photogoround.debug`, then `no agent answered; the desktop keeps what it has`.
+
+**Nothing else noticed.** The agent was serving the app the whole time, and the screensaver read the same port out of the same plist — `saver: agent on port 9428 via file` — because `legacyScreenSaver` is granted read-only access to `/` and does not need an exception of its own. Only the extension was locked out, and only the desktop stopped changing.
+
+**The fix.** A fourth project-level build setting, `STORAGE_ID_SUFFIX` — empty, `.debug`, `.claude`, beside the three identifier suffixes that were already there — and the entitlements spell all eight entries with `$(STORAGE_ID_SUFFIX)`. **Xcode expands build settings inside an entitlements file at signing; measured** on a clean `Claude` build, where `codesign -d --entitlements` on the appex gave `com.sydpolk.photogoround.claude.dev` and its three siblings. The setting name is Claude's.
+
+**A second defect, found on the way.** `pgr_ctl --debug wallpaper set interval` ignored the flag. Both call sites spelled `WallpaperPreferences(deployment:)`, which takes the *running* build's variant, so a Claude-built `pgr_ctl` wrote the Claude domain with `--debug` on the command line — and the write succeeded, so nothing said otherwise. Both surfaces' inits take `variant:` now, defaulting to `.current`, and `pgr_ctl` passes `options.variant` through `WallpaperCommands.domain(deployment:variant:)`.
+
+**What keeps the halves honest.** `WallpaperEntitlementsTests` reads the entitlements file, puts each variant's suffix in, and requires the result to equal the domains `AgentPicture` and `Rotation` compute — twelve issues against the old file. `BuildVariantTests` holds `STORAGE_ID_SUFFIX` in `project.pbxproj` equal to `BuildVariant.identifierSuffix`, which is the substitution Xcode performs. `WallpaperCommandsTests` holds `pgr_ctl`'s domain to both axes. Those three are what the reversed bullet above lacked.
+
+**Run on Syd's machine**, 22:41 the same night; Syd: "ok, it seems to be working now." Three pictures in forty seconds — `asked com.sydpolk.photogoround.debug.dev on 9428 for 3600x2338: 200`, `showed a 3117x2338 picture on 2 of 2 desktop surfaces` — and `interval now tenSeconds, was oneMinute`, so the wallpaper's own domain reads as well as the agent's.
 
 ## Not yet decided
 
@@ -1175,7 +1193,7 @@ The gates:
 - `app/mac/FEATURES.md` — *The app brings its own agent*.
 - `Sources/PhotoGoRoundDisplay/` — `PictureClient.swift`, `PictureLayerView.swift` (`identifier(of:)`), `Shuffle.swift`, `AspectFit.swift`.
 - `Sources/PhotoGoRoundAgentAPI/` — `Host/HostEnvironment.swift`, `Model/Consumer.swift` (`ConsumerKind.wallpaper`), `Support/Log.swift` (`Log.wallpaper`).
-- `Sources/pgr_ctl/ServiceCommand.swift` and `Scripts/make-agent-bundle.sh` — the two agent-installation routes as they stand.
+- `Sources/pgr_ctl/ServiceCommand.swift` and `Scripts/make-agent-bundle.sh` — both deleted 2026-09-19. The agent is installed by `pgr_install agent`, run by ⌘R on the **Install Agent** scheme; `Documentation/pgr_install.md`.
 - Apple: `NSWorkspace.setDesktopImageURL(_:for:options:)`, `desktopImageURL(for:)`, `NSWorkspace.DesktopImageOptionKey`; `launchd.plist(5)` (`LimitLoadToSessionType`); `SMAppService`.
 - `/System/Library/ExtensionKit/ExtensionPoints/com.apple.wallpaper.appexpt` and `/System/Library/ExtensionKit/Extensions/Wallpaper*.appex` — the extension point and Apple's extensions, read 2026-09-14; `pluginkit -m -v -p com.apple.wallpaper`, `codesign -d --entitlements`, `otool -L`.
 - `/System/Library/CoreServices/WallpaperAgent.app` — the host, read 2026-09-14: its entitlements, its links, its `Info.plist` and its strings. `/System/Library/ExtensionKit/Extensions/Wallpaper.appex` and `WallpaperSettingsIntents.appex` — the Settings side.
@@ -1185,7 +1203,7 @@ The gates:
 - kageroumado, *How to Reverse Engineer Apple Frameworks* — https://kagerou.glass/blog/how-to-reverse-engineer-apple-frameworks/
 - Howard Oakley, *An overview of app extensions and plugins in macOS Sequoia*, The Eclectic Light Company, 2025-04-23 — https://eclecticlight.co/2025/04/23/an-overview-of-app-extensions-and-plugins-in-macos-sequoia/
 - Bart Reardon, *Adding Wallpaper folders to macOS System Settings* (WallpaperFolderManager), 2025-12-04 — https://bartreardon.github.io/2025/12/04/adding-wallpaper-folders-to-macos-system-settings.html
-- `Scripts/make-saver-bundle.sh` — what Phase 2's script follows. `Scripts/make-agent-bundle.sh` — `--install-to`, and printing the `launchctl` commands rather than running them.
+- `Scripts/make-saver-bundle.sh` — what Phase 2's script follows; its `--install` calls `pgr_install saver` since 2026-09-19. `Scripts/make-agent-bundle.sh` is deleted.
 - `Package.swift` — the `.macOS("27.0")` line; `.macOS("26.0")` until 2026-09-14.
 - `Scripts/make-wallpaper-extension-probe.sh` and `Scripts/wallpaper-extension-probe/` — the first extension probe. `~/Library/Logs/DiagnosticReports/WallpaperProbeExtension-2026-09-14-204957.ips` — its first run's crash report.
 - `Scripts/wallpaper-extension-probe/PaneHandler.swift`, `PaneModels.swift`, `ProbePicture.swift` — the second extension probe.

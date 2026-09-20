@@ -387,8 +387,16 @@ final class PaneHandler: NSObject, WallpaperExtensionXPC {
 /// closure on the main thread, and a method would capture the handler with it.
 func wallpaperError(_ code: Int, _ text: String) -> NSError {
     wallpaperLog("answering with an error: \(text)")
+    // **This build's own identifier, not a literal.** It was
+    // `com.sydpolk.photogoround.wallpaper-extension` until 2026-09-19 — the
+    // spelling the bundle carried before the 2026-09-15 rename, so an error
+    // named a bundle that no longer existed, in a log somebody would be
+    // grepping by identifier. Each configuration now answers under its own:
+    // `…wallpaper.extension`, `…wallpaper.debug.extension`,
+    // `…wallpaper.claude.extension`.
     return NSError(
-        domain: "com.sydpolk.photogoround.wallpaper-extension", code: code,
+        domain: Bundle.main.bundleIdentifier ?? "com.sydpolk.photogoround.wallpaper.extension",
+        code: code,
         userInfo: [NSLocalizedDescriptionKey: text])
 }
 

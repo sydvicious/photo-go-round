@@ -56,7 +56,7 @@
 
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Photo-Go-Round.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Photo-Go-Round.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		6221C1AA305F67C900B4B65D /* Package Tests.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Package Tests.xctestplan"; sourceTree = "<group>"; };
+		6221C1AA305F67C900B4B65D /* Package Tests.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = file; path = "../Package Tests.xctestplan"; sourceTree = "<group>"; };
 		AA0000000000000000000030 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		AA0000000000000000000060 /* Photo-Go-RoundTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-RoundTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000082 /* FEATURES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FEATURES.md; sourceTree = "<group>"; };
@@ -583,6 +583,7 @@
 				SAVER_ID_SUFFIX = .debug;
 				SAVER_NAME_SUFFIX = " (Debug)";
 				SERVER_LABEL_SUFFIX = .debug;
+				STORAGE_ID_SUFFIX = .debug;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited) $(PGR_AGENT_CONDITION)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -655,6 +656,7 @@
 				SAVER_ID_SUFFIX = "";
 				SAVER_NAME_SUFFIX = "";
 				SERVER_LABEL_SUFFIX = "";
+				STORAGE_ID_SUFFIX = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT = YES;
@@ -1060,6 +1062,7 @@
 				SAVER_ID_SUFFIX = .claude;
 				SAVER_NAME_SUFFIX = " (Claude)";
 				SERVER_LABEL_SUFFIX = .claude;
+				STORAGE_ID_SUFFIX = .claude;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited) $(PGR_AGENT_CONDITION)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";

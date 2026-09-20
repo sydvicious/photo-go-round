@@ -82,11 +82,14 @@ do {
         try await PreferenceCommands.set(key: key, value: value, environment: hostEnvironment(options))
 
     case .wallpaper(.get(let key)):
-        try WallpaperCommands.get(key: key, domain: WallpaperPreferences(deployment: options.deployment).domain)
+        try WallpaperCommands.get(
+            key: key,
+            domain: WallpaperCommands.domain(deployment: options.deployment, variant: options.variant))
 
     case .wallpaper(.set(let key, let value)):
         try WallpaperCommands.set(
-            key: key, value: value, domain: WallpaperPreferences(deployment: options.deployment).domain)
+            key: key, value: value,
+            domain: WallpaperCommands.domain(deployment: options.deployment, variant: options.variant))
 
     case .notify(let topic):
         try NotifyCommand.run(topic: topic, environment: hostEnvironment(options))

@@ -22,8 +22,10 @@ The kernel assigns the port and the agent publishes it; `--port 9000` pins one i
 Inspecting and configuring, with or without the agent running:
 
 ```
-"$(swift build --show-bin-path)/pgr_ctl" status
+pgr_ctl status --development --debug
 ```
+
+**Built and put on a `PATH` since 2026-09-19**, rather than run through `swift build`: it addresses one build configuration's library at a time and defaults to production and to the configuration it was built as. `Documentation/pgr_ctl.md`.
 
 ## The screensaver
 
@@ -79,7 +81,9 @@ A healthy night is a flat rate: a ten-second dwell is about 341 an hour, and rou
 
 ## Xcode
 
-Every product is a target in `app/Photo-Go-Round.xcodeproj` — app, tests, `Photo-Go-Round Saver`, `Photo-Go-Round Saver Spike`, `Photo-Go-Round Server`, `pgr_ctl` — so anything can be run under the debugger. `swift build` and `swift test` are unchanged and remain how the suites run.
+Every product is a target in `app/Photo-Go-Round.xcodeproj` — app, tests, `Photo-Go-Round Saver`, `Photo-Go-Round Server`, `pgr_ctl`, `pgr_install`, `Photo-Go-Round Wallpaper` and its host — so anything can be run under the debugger.
+
+**`xcodebuild` is the only build route since 2026-09-19.** Syd: "what I really want is each target runnable via xcodebuild." Not `swift build`, which has only `debug` and `release` and so cannot produce the `Claude` identity; the suites run by `xcodebuild test -scheme "Package Tests"`, which reaches all five package test targets. The `Photo-Go-Round Saver Spike` target was deleted the same day. `Plans/Xcode - Separate Build and Run.md`.
 
 # Rationale
 
@@ -338,7 +342,7 @@ Syd built a screensaver from Xcode's built-in template about two years ago. That
 
 Targeting 27.0 everywhere removes a whole category of work. `SMAppService`, Swift 6 strict concurrency, `ScreenCaptureKit`-era display APIs, and the modern WidgetKit and SwiftUI surfaces are all simply present; there are no `@available` ladders and no fallback implementations to write or test. Since this is software for you rather than for a market, there is no user base stranded on an older OS to weigh against that.
 
-**Lifted 2026-09-14.** Syd: "you can go ahead and upgrade everything to our minimum support to macOS 27, so yes, use the OS 27 APIs", and "you can update the plan files with this decision." Every macOS minimum is now 27.0: `Package.swift`'s macOS line; `MACOSX_DEPLOYMENT_TARGET` on the twelve Xcode target configurations that set 26.0; and `LSMinimumSystemVersion` in the agent's, the saver's and the saver spike's `Info.plist`, and in the one `Scripts/make-agent-bundle.sh` writes. There were no availability checks to remove — lifting it was the settings change the paragraphs below said it would be. The second Mac has to run 27 to run the agent from now on. The first 27-only API adopted is `AVSampleBufferRenderSynchronizer.sampleBufferReceiver(adding:)`, in the wallpaper extension probe; see `Wallpaper Plan.md`. **What follows is as it was written while the hold stood.**
+**Lifted 2026-09-14.** Syd: "you can go ahead and upgrade everything to our minimum support to macOS 27, so yes, use the OS 27 APIs", and "you can update the plan files with this decision." Every macOS minimum is now 27.0: `Package.swift`'s macOS line; `MACOSX_DEPLOYMENT_TARGET` on the twelve Xcode target configurations that set 26.0; and `LSMinimumSystemVersion` in the agent's, the saver's and the saver spike's `Info.plist`, and in the one `Scripts/make-agent-bundle.sh` writes. *The saver spike target and that script were both deleted on 2026-09-19; the agent's and the saver's `Info.plist` carry it still.* There were no availability checks to remove — lifting it was the settings change the paragraphs below said it would be. The second Mac has to run 27 to run the agent from now on. The first 27-only API adopted is `AVSampleBufferRenderSynchronizer.sampleBufferReceiver(adding:)`, in the wallpaper extension probe; see `Wallpaper Plan.md`. **What follows is as it was written while the hold stood.**
 
 **The target is held at 26.0 until 27 ships, and the hold expires by itself.** This machine is on a 27 seed; the second Mac — the one that has to keep the agent running while nobody is at a desk — is on the current public release, because that is the only release there is. Building against a seed would mean the server could only run on the machine it was written on, which is precisely the wrong property for a background service. 27 will have shipped well before the server is finished, at which point the target goes to 27 and stays there.
 
@@ -1561,7 +1565,11 @@ The agent writes to exactly two places, and **development is the default**:
 | cache root | copied photo bytes | `<repo>/.build/pgr-cache/` | `~/Library/Caches/com.sydpolk.photogoround/` |
 | preferences | the source list and every setting | `com.sydpolk.photogoround.dev` | `com.sydpolk.photogoround` |
 
-**Safe by default, dangerous on purpose.** Running the binary with no arguments cannot touch a real library — it writes into `.build`, which is gitignored and is already the directory you delete for a clean slate. Reaching the real one takes `--prod`, typed deliberately. The inverse default would mean every casual `swift run` was one typo away from a library that took hours to fetch, and every test of a delete path was a live-fire exercise.
+**Safe by default, dangerous on purpose.** Running the binary with no arguments cannot touch a real library — it writes to a development container of its own. Reaching the real one takes `--prod`, typed deliberately. The inverse default would mean every casual run was one typo away from a library that took hours to fetch, and every test of a delete path was a live-fire exercise.
+
+**Both deployments moved under the user's home directory on 2026-09-19**, and the storage name carries the build configuration: `~/Library/Containers/com.sydpolk.photogoround[.debug|.claude][.dev]`, with the cache and the preference domain named to match. Development wrote into `<repo>/.build` until then, which two users sharing a checkout would have shared, and which all three build configurations opened at once. Syd: "all of the datafiles have to run in the users home directory so that this will work for two different users on the same machine", and "as long as the three agent configs can all run at the same time without clobbering each other".
+
+**`pgr_ctl` is the exception to the default.** It defaults to production, because it is the rig and is never shipped, and takes `--development` and `--release`/`--debug`/`--claude` to reach any of the six.
 
 **All three switch together, and that is the whole point of the flag.** This was learned the hard way: pointing the storage root at scratch space moved the database and the cache and left *preferences* — and therefore the source list — pointing at the real ones, so a run that believed it was isolated would happily remove somebody's sources for good. Two of the three are obviously per-deployment and the third silently is not. One flag that moves all three is the only version of this that a person can hold in their head.
 
@@ -1571,13 +1579,17 @@ The individual overrides remain, for the cases that genuinely want them — a ca
 
 **`~/Library/Containers` was expected to arrive with the LaunchAgent**, since a container is what a bundle identifier gets you. The agent bundle exists and no container came with it — nothing is sandboxed — so `--prod` uses that path because `HostEnvironment` names it, not because a container put it there.
 
-### Finding `.build` from Xcode
+### Finding `.build` from Xcode — the mechanism, and why it went
 
-The development root is found by walking up from the executable looking for `.build`, which a SwiftPM binary carries in its own path — `<repo>/.build/<triple>/<config>/photogoroundd` — so `swift run`, the wrapper script, and a bare invocation all agree without being told anything.
+**Removed 2026-09-19, when development storage moved under `~/Library`.** There is nothing to walk to any more, and `MacHostEnvironment.buildDirectory` is deleted. Kept here because the problem it solved is real and will be met again by anything that tries to find a checkout from a binary.
 
-**Xcode is the case that cannot cover**, and it matters because debugging the agent under a debugger has to work without a scheme argument. Xcode builds into DerivedData, which is nowhere near the checkout, so the walk finds nothing and the old fallback — the working directory — resolved to `/.build` and failed outright on a read-only volume.
+The development root was found by walking up from the executable looking for `.build`, which a SwiftPM binary carries in its own path — `<repo>/.build/<triple>/<config>/photogoroundd` — so `swift run`, the wrapper script and a bare invocation all agreed without being told anything.
 
-The second rung is therefore the source tree the binary was compiled from: `#filePath` is a compile-time constant pointing into the checkout, walked up to `Package.swift`. It is exactly the right answer for a *development* default and is never consulted for `--prod`, where the roots are absolute. A shared scheme lives at `.swiftpm/xcode/xcshareddata/xcschemes/`, and it deliberately sets no arguments and no environment — the binary finding its own roots is a property worth keeping true rather than papering over in a scheme.
+**Xcode was the case that could not cover**, and it mattered because debugging the agent has to work without a scheme argument. Xcode builds into DerivedData, which is nowhere near the checkout, so the walk found nothing and the old fallback — the working directory — resolved to `/.build` and failed outright on a read-only volume.
+
+The second rung was therefore the source tree the binary was compiled from: `#filePath`, a compile-time constant pointing into the checkout, walked up to `Package.swift`. **That rung is what made the mechanism untenable in the end**: it answers with where the *source* was, not where the agent is, so every Xcode-built agent from one checkout resolved to the same container — Syd's Debug build and an agent's Claude build opening one SQLite, with one write lock between them. Naming the storage after the build configuration and putting it under `~/Library` removed the question rather than answering it.
+
+A shared scheme lives at `.swiftpm/xcode/xcshareddata/xcschemes/`, and still sets no arguments and no environment — the binary finding its own roots is a property worth keeping true rather than papering over in a scheme.
 
 ### Where an Xcode-launched *app* puts its container, which is not where you think
 
@@ -1918,12 +1930,12 @@ pgr_ctl queue {peek [-n <count>] | fill [-n <rounds>]}
 pgr_ctl deck stats
 pgr_ctl cache {status | evict | clear [--source <id>] [--unavailable] [--yes]}
 pgr_ctl shuffle-test [--deals <n>] [--photos <n>] [-w <fraction>]
-pgr_ctl photos-spike [-n <count>] [--probe <count>] [--album <id|title>] [--albums]
 pgr_ctl get [<key>] | set <key> <value>
 pgr_ctl notify <topic>
 pgr_ctl log [-f] [--last <time>]
-pgr_ctl register | unregister | service-status
 ```
+
+**`register`, `unregister` and `service-status` were removed 2026-09-19.** They drove `SMAppService`, which needs a plist inside the bundle that only `Scripts/make-agent-bundle.sh` ever wrote — and that script went when `xcodebuild` became the single build route. Installing the agent is `pgr_install agent`, run by ⌘R on the **Install Agent** scheme, which writes a per-user plist in `~/Library/LaunchAgents`. Syd: "they go too."
 
 `refresh` rings the doorbell and returns, so it takes no `--source`; see *`pgr_ctl` keeps the database, and never speaks HTTP*.
 

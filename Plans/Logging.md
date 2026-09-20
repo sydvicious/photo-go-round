@@ -59,6 +59,8 @@ the step that never happens unless the plan says so.
 - **Phase 3 — The file goes away. Built 2026-09-19.** Remove `StandardOutPath` and
   `StandardErrorPath` from
   `Scripts/install-agent.sh` and `Scripts/make-agent-bundle.sh`; launchd then discards stdout.
+    *Both scripts were themselves deleted on 2026-09-19 — the plist is written by
+    `JobDescription` in `PhotoGoRoundInstall` now, and it has never carried either key.*
   - Both scripts stop echoing `tail -f /tmp/…`.
   - `Documentation/Installing.md` (three places) and `CLAUDE.md` (*Where things are*) get
     `log show` / `log stream` instead. **`Documentation/photogoroundd.md` never mentioned the file**
@@ -323,12 +325,20 @@ by `report()` at the chosen one. Three ways out, in order of preference:
 Nothing here removes a `print`. `Console` writes to stdout unconditionally and always will; the
 mirror is a second destination, not a replacement. So:
 
-- **`swift run photogoroundd` in a terminal** prints exactly what it prints today, in colour, because
+- **`./Scripts/photogoroundd` in a terminal** prints exactly what it prints today, in colour, because
   `Console.isTTY` is true.
 - **Running the `Photo-Go-Round Server` scheme in Xcode** prints the same lines, uncoloured, in the
-  console pane — `isatty` is false there, which is precisely the case `Console` already handles by
-  dropping the escape sequences rather than the text.
-- **Piping to a file yourself** — `swift run photogoroundd > /tmp/mine.log` — still works and is now
+  console pane — `Console` drops the escape sequences rather than the text.
+
+  **This paragraph was wrong until 2026-09-19, and the error was visible all along.** It said
+  `isatty` is false in Xcode's console. It is not: Xcode runs a command-line tool on a
+  pseudo-terminal, so `isatty` answers yes and `Console` coloured — and Xcode's console does not
+  interpret the escapes, so they arrived as literal text. Measured that day, when `pgr_install`'s
+  first error in the Xcode console read `[31merror: [0munknown option Screensaver`. `Console.isTTY`
+  now also requires a usable `TERM`, which Xcode sets and a launchd job sets to nothing; both
+  directions were checked. `pgr_ctl` and the agent had been emitting the same noise into that pane
+  for as long as either had run there.
+- **Piping to a file yourself** — `./Scripts/photogoroundd > /tmp/mine.log` — still works and is now
   the only way that file comes into existence: a person asked for it, for one run, and can delete it.
 
 The thing being removed is narrower than "stdout to a file". It is *launchd* writing a daemon's
@@ -407,8 +417,10 @@ What is worth pinning:
   entry points, assert seven lines with the expected levels. Cheap, and it is what catches a new
   Console call kind added without mirroring.
 - **The plists carry no `StandardOutPath`.** A shell-level check in whatever already lints the
-  scripts, or a test that runs `make-agent-bundle.sh --build-only` and `plutil -p`s the result. The
-  weak version — grep the script for the key — is worth more than nothing and costs a line.
+  scripts. **Answered better on 2026-09-19:** the plist is a `Codable` value, `JobDescription`, and
+  a test asserts its fields directly — `Label`, `ProgramArguments`, `RunAtLoad`, `KeepAlive` and
+  `ProcessType` — so a `StandardOutPath` could not appear without someone adding the property. No
+  grep, and no script to run.
 
 `Tests/PhotoGoRoundKitTests/TestLoggingTests.swift` already exists and pins the test-subsystem split,
 so there is a home for the first two.
@@ -436,6 +448,7 @@ so there is a home for the first two.
   double-logging.
 - `Sources/photogoroundd/Service/PictureEndpoint.swift:245` — the `▸` line.
 - `Scripts/install-agent.sh`, `Scripts/make-agent-bundle.sh` — the two `StandardOutPath` writers.
+  Both deleted 2026-09-19; `Sources/PhotoGoRoundInstall/JobDescription.swift` is the one writer now.
 - `Documentation/Installing.md` — three references to the file.
 - `Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift` — the `PGR_AGENT_CLAUDE` / `DEBUG` /
   release conditions Phase 2 reuses.

@@ -1,5 +1,6 @@
 import Console
 import Foundation
+import PhotoGoRoundAgentAPI
 import PhotoGoRoundDisplay
 
 /// Reading and writing the wallpaper's own preferences.
@@ -22,6 +23,19 @@ enum WallpaperCommands {
 
     enum Key: String, CaseIterable {
         case interval
+    }
+
+    /// The domain `get` and `set` address, from the two axes the flags name:
+    /// the deployment (`--prod`) and the build configuration (`--debug`,
+    /// `--claude`).
+    ///
+    /// **Here rather than inline at the two call sites.** Until 2026-09-19 both
+    /// spelled `WallpaperPreferences(deployment:)`, which takes the running
+    /// build's variant — so `--debug` reached the agent's Debug library and the
+    /// *wallpaper's* Claude domain, silently. `Documentation/pgr_ctl.md`,
+    /// `wallpaper get`.
+    static func domain(deployment: Deployment, variant: BuildVariant) -> String {
+        WallpaperPreferences(deployment: deployment, variant: variant).domain
     }
 
     static func get(key: String?, domain: String) throws {

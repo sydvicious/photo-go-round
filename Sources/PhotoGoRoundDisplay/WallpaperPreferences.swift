@@ -34,8 +34,16 @@ public struct WallpaperPreferences: Sendable, Equatable {
     /// `com.sydpolk.photogoround.wallpaper.dev` and `.prod`, beside the
     /// screensaver's — and carrying the build variant, so a Debug wallpaper and
     /// a release one do not share an interval. `BuildVariant.swift`.
-    public init(deployment: Deployment) {
-        self.init(domain: "\(Deployment.storageIdentifier()).wallpaper.\(deployment.domainSuffix)")
+    ///
+    /// **The variant is a parameter because `pgr_ctl` names one.** Syd,
+    /// 2026-09-19: "it should be able to completely control any of the three
+    /// configurations." Until 2026-09-19 this read `.current`, so a
+    /// Claude-built `pgr_ctl --debug wallpaper set interval` wrote the Claude
+    /// domain and the Debug extension never saw it. Everything else — the app,
+    /// the extension — wants the build that is asking, which is the default.
+    public init(deployment: Deployment, variant: BuildVariant = .current) {
+        self.init(
+            domain: "\(Deployment.storageIdentifier(for: variant)).wallpaper.\(deployment.domainSuffix)")
     }
 
     /// **The suite first, the file underneath**, as `ScreensaverPreferences`

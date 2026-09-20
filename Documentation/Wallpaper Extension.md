@@ -8,7 +8,7 @@ The four probes that came before it were built by `Scripts/make-wallpaper-extens
 
 ## 1. Build and install it
 
-Scheme **Install Wallpaper Extension**, ⌘B — `Documentation/Installing.md`. It builds the host, registers the appex and restarts `WallpaperAgent`. The manual route it replaced, kept for when the script is what is broken:
+Scheme **Install Wallpaper Extension**, **⌘R** — `Documentation/Installing.md`. ⌘B only builds, since 2026-09-19. It builds the host, registers the appex and restarts `WallpaperAgent`. The manual route it replaced, kept for when the script is what is broken:
 
 ```bash
 xcodebuild build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Wallpaper Host" -destination "platform=macOS,arch=arm64" -configuration Debug
@@ -26,10 +26,14 @@ An appex registers only from inside a signed app bundle — measured 2026-09-15 
 pluginkit -m -D -v -p com.apple.wallpaper | grep photogoround
 ```
 
-It should list `com.sydpolk.photogoround.wallpaper.extension` once, at your DerivedData path. A second copy under another path — a build directory of Claude's, say — is the one to remove with `pluginkit -r` on its path: LaunchServices keeps one record per identifier and the wrong copy may be the one loaded. If a stale extension process is still answering, stop it:
+It should list **`com.sydpolk.photogoround.wallpaper.debug.extension`** once, at your DerivedData path — a Debug build's identifier. Release is `…wallpaper.extension` and an agent's build is `…wallpaper.claude.extension`; since 2026-09-16 each configuration registers under its own, so seeing more than one identifier is normal and not a conflict.
+
+**A second copy of the same identifier at a different path** is the one to remove, with `pluginkit -r` on that path: LaunchServices keeps one record per identifier and the wrong copy may be the one loaded. A *different* identifier at a different path belongs to another configuration and is left alone — `pgr_install wallpaper` makes exactly that distinction, and removing another build's live copy is a mistake that has been made here before.
+
+If a stale extension process is still answering, stop **only yours**. Every configuration's process has the same name, so `killall` by name stops another build's wallpaper too:
 
 ```bash
-killall "Photo-Go-Round Wallpaper"
+pkill -f "$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-"*"/Build/Products/Debug/Photo-Go-Round Wallpaper Host.app/Contents/MacOS/"
 ```
 
 ## 3. Run the gates
@@ -64,11 +68,14 @@ The agent's served lines for it:
 /usr/bin/log show --info --last 15m --predicate 'eventMessage CONTAINS "consumer=system-wallpaper"'
 ```
 
-Everything the system said about the extension:
+Everything the system said about the extension — `pkd`, `WallpaperAgent` and the rest, which name it by its bundle identifier:
 
 ```bash
-/usr/bin/log show --info --last 15m --predicate 'eventMessage CONTAINS "wallpaper-extension"'
+/usr/bin/log show --info --last 15m --predicate 'eventMessage CONTAINS "photogoround.wallpaper"'
 ```
+
+That matches all three configurations. Narrow it to one by naming it in full —
+`com.sydpolk.photogoround.wallpaper.debug.extension` for a Debug build.
 
 ## 5. Put things back
 

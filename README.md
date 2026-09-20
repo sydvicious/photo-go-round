@@ -11,23 +11,37 @@ screensaver, widgets, and apps across Apple's platforms. The library problem
 
 ## Building and installing from Xcode
 
-Open `app/Photo-Go-Round.xcodeproj`. Everything below is the Debug configuration; a Release build installs nothing yet.
+Open `app/Photo-Go-Round.xcodeproj`. Everything below is the Debug configuration; Release is Archive, moved to `/Applications` by hand.
+
+**⌘B builds, ⌘R installs**, since 2026-09-19. Building an install scheme changes nothing.
 
 | To | Scheme | Key |
 |---|---|---|
-| Install the agent, and restart it | **Install Agent** | ⌘B |
-| Install the wallpaper extension | **Install Wallpaper Extension** | ⌘B |
-| Install the screensaver | **Install Screen Saver** | ⌘B |
+| Install the agent, and restart it | **Install Agent** | ⌘R |
+| Install the wallpaper extension | **Install Wallpaper Extension** | ⌘R |
+| Install the screensaver | **Install Screen Saver** | ⌘R |
 | Run the app | **Photo-Go-Round** | ⌘R |
+| Run the agent under the debugger | **Photo-Go-Round Server** | ⌘R |
+| Run every test | **Package Tests** | ⌘U |
+
+`Package Tests` covers the package's five test targets — 1,001 tests. From a terminal, note that it takes no `-project`, because a scheme whose targets are the package's is a package scheme:
+
+```
+xcodebuild test -scheme "Package Tests" -destination "platform=macOS,arch=arm64"
+```
+
+The app's own bundle, `Photo-Go-RoundTests`, is not in it: it wants a running agent. Run it through the **Photo-Go-Round** scheme.
 
 `pgr_ctl` has no shared scheme. Build its target and put the product on your `PATH` — a copy or a symlink into `~/bin`. Not `swift run pgr_ctl`: that writes a `.build` directory into the checkout, and nothing generated belongs there.
 
-Install the agent first; the wallpaper and the screensaver get their pictures from it. The install schemes build what they install, then install it, so ⌘B is the whole step. Rebuilding a scheme reinstalls it.
+Install the agent first; the wallpaper and the screensaver get their pictures from it. Each install scheme builds its product and `pgr_install`, and ⌘R runs it — so ⌘R is the whole step, and ⌘R again reinstalls.
+
+Each build configuration installs under its own names, so Debug, Release and an agent's `Claude` build can sit on one Mac at once without displacing each other. `Documentation/Installing.md` has the table.
 
 Then choose them in System Settings:
 
 - **Wallpaper** › *Photo-Go-Round* › **Photo-Go-Round Wallpaper (Debug)**
-- **Screen Saver** › *Other* › **Photo-Go-Round Screensaver**
+- **Screen Saver** › *Other* › **Photo-Go-Round Screensaver (Debug)**
 
 To take all three off the Mac, leaving the library, cache and preferences alone:
 
@@ -40,11 +54,12 @@ To take all three off the Mac, leaving the library, cache and preferences alone:
 ## Running the agent
 
 ```
-swift build
 ./Scripts/photogoroundd --add-folder ~/Pictures/Wallpaper
 ```
 
-The wrapper builds first, so a stale binary is never run. A bare invocation runs
+The wrapper builds first, so a stale binary is never run — the `Photo-Go-Round
+Server` target, so the agent it runs carries its configuration's port and label
+exactly as an installed one does. `--release` and `--claude` pick another. A bare invocation runs
 the agent — it has exactly one job and takes no subcommand. Name each folder
 once; it is written through to preferences, and every later run needs no
 arguments at all:
@@ -60,19 +75,26 @@ development run cannot disturb a real library — reaching the real one takes
 `--prod`, typed on purpose. `<identifier>` carries the build configuration, so a
 release, a Debug and an agent's build never share a library.
 
-The agent serves pictures on a port the kernel assigns, and publishes it where
-every process on the machine can read it; `pgr_ctl status` prints the address.
-`--port` pins a number instead, which is what you want for a URL you are going
-to type.
+The agent serves pictures on a fixed port — one per build configuration — and
+publishes it where every process on the machine can read it; `pgr_ctl status`
+prints the address. `--port` pins a different number, which is what you want for
+a URL you are going to type.
 
 ## Inspecting and configuring it
 
 `pgr_ctl` is the rig: sources, preferences, the pool, the queue, the cache, and
 the deck's statistical checks. It never needs the agent running.
 
+Build its scheme and put the product on your `PATH` — a copy or a symlink into
+`~/bin`. Then, against a Debug agent installed by ⌘R:
+
 ```
-"$(swift build --show-bin-path)/pgr_ctl" status
+pgr_ctl status --development --debug
 ```
+
+It addresses one configuration's library at a time and defaults to production
+and to the configuration it was built as, so those two flags are how you reach
+a development agent you have running. `Documentation/pgr_ctl.md`.
 
 ## Testing the picture endpoint
 
@@ -80,9 +102,15 @@ The agent serves pictures over HTTP. Clients ask it for one and are handed the
 bytes; they never open the database or the cache. From a terminal that means
 `curl`.
 
-The port is whatever the kernel gave the agent at launch, so the examples below
-pin one with `--port` rather than making you look it up. Without it, `pgr_ctl
-status` prints the address.
+**The port is fixed, and there is one per build configuration** — 9427 release,
+9428 Debug, 9429 Claude — so two of them can run at once and neither has to
+chase the other. It was whatever the kernel gave the agent at launch until
+2026-09-17; Syd: "this dynamic port stuff is causing problems." A port already
+held by something else is still fallen back from and published, so `pgr_ctl
+status` remains the way to be certain.
+
+The examples below pin one with `--port` anyway, so they are copy-pasteable
+whichever configuration you are running.
 
 Start the agent in one terminal and leave it running — it prints the URL once the
 listener is up, then a line for every request it answers:

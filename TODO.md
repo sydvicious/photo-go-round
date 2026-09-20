@@ -6,45 +6,80 @@ Things to look into, deferred out of the phase list. Each one earns its own plan
 
 **When a plan closes, check what it was holding.** Anything it left as later work moves here before the plan is marked done, or it disappears with it.
 
+## The wallpaper extension cannot find the agent in Debug or Claude builds
+
+Measured 2026-09-19, with the Debug agent listening on 9428 and serving the app `200`: the Debug
+wallpaper extension logged `the port in com.sydpolk.photogoround.debug.dev could not be read: The
+file "com.sydpolk.photogoround.debug.dev.plist" couldn't be opened because you don't have permission
+to view it`, then `no port published in com.sydpolk.photogoround.debug`, then `no agent answered; the
+desktop keeps what it has`. The same wake also fell back to the default interval, because
+`com.sydpolk.photogoround.debug.wallpaper.dev` could not be read either.
+
+Both exception arrays in `app/wallpaper-extension/Photo-Go-Round Wallpaper.entitlements` name the
+same four domains, all of them Release spellings: `com.sydpolk.photogoround`,
+`com.sydpolk.photogoround.dev`, `…wallpaper.dev`, `…wallpaper.prod`. But
+`Deployment.storageIdentifier(for:)` appends `BuildVariant.identifierSuffix`, so a Debug extension
+asks for `com.sydpolk.photogoround.debug.dev` and a Claude one for `…claude.dev` — neither entitled,
+so `ServicePort`'s file fallback is refused along with the suite, which is exactly the case that
+fallback exists to cover. Release is unaffected. The lists predate the variant suffix.
+
 ## Passed over on 2026-09-16 — to fix, not to keep
 
 Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't remember any issues you mention and bypass, so let's not bypass them." Every issue Claude mentioned during the agent performance work and did not fix is here. **Delete each one when it is fixed** — Syd, 2026-09-19: "cleaning it up every once in a while keeps me sane." Git has what was removed.
 
 - **Flaky tests, below: how to fix them.** Syd, 2026-09-16: "we fixed flaky timing tests at Indeed by using await Task {}.run." *Claude's reading: a test awaits the work it depends on rather than racing it against a clock.*
+- **The flaky build problem — caught and named 2026-09-19.** It is not a flaky *test*: it is `pgr_ctl`'s **testable** build failing to compile. `WallpaperCommands.swift:36` reports `cannot find type 'Deployment' in scope` and then `cannot find type 'BuildVariant'`, with `import PhotoGoRoundAgentAPI` present on line 3 of that file. Everything downstream of it — the whole run — is then reported as a test failure, which is why it read as flakiness for three days.
+  - **Build-order dependent.** `xcodebuild clean test` passes every time; incremental `xcodebuild test -scheme "Package Tests"` failed on the second of six consecutive runs over an unchanged tree. The full log is at `~/.claude/build/flaky/run2.log`.
+  - **The same shape as `Build Plan.md`'s 2026-09-16 finding**, where `pgr_ctl` linked when built alone and failed when built after `Photo-Go-Round Server` in the same folder. That one was fixed by declaring the package product dependency, which *is* declared here — so this is a second instance with a different cause, not a regression of the first.
+  - **The leading suspect is a second builder.** Syd, 2026-09-19: "There is another agent working on the fact that the wallpaper agent wasn't changing pictures" — in this same working copy. `WallpaperCommands.swift` was being edited by it while these runs happened, and two builders sharing intermediates invalidate each other's, which `CLAUDE.md` already says of Syd's own Xcode. A source file rewritten under an incremental compile would produce exactly this.
+  - **To settle it:** run the loop again when nothing else is working in the checkout. If it stops failing, the answer is contention and there is no defect to chase. If it still fails, the suspicion is the `-enable-testing` variant of `PhotoGoRoundAgentAPI` being rebuilt under the compile that needs it — unmeasured.
+  - It is a build problem wearing a test problem's clothes, and the two above it are the timing-flaky tests proper.
 - **Some photographs change on every refresh.** After Phase 4 was installed, 2026-09-16 22:24, two refreshes 20 seconds apart each wrote about 17 pages of Favorites (source 5) with one or two "changed" rows apiece; the probe's refreshes before it showed the same. Nothing about those photographs changed in between, so a storage or byte size is probably read differently each walk — a Photos asset whose size flips between known and unknown, say. Each costs a short lock (0–4 ms) and a needless write. Not looked into; the `REFRESH:` line does not name which rows.
 - **The test run stalls the cooperative pool for up to two seconds.** Measured 2026-09-16 while fixing `RequestBodyTests`: a 10 ms `Task.sleep` resumed 1.2–1.96 s late in full parallel runs of the agent's tests. Not traced to which suites hold pool threads. The same shape as the agent's own pool starvation that afternoon, so the one lead from the flaky-test work that may matter outside the tests. Syd, the same evening, on flaky tests that expose no code problem: "are they really worth it?"
 - **A test that asks the real Photos library: `SourceEndpointTests` "An album identifier that names nothing is refused at the door".** It posts a `photos_collection` source through the endpoint's default providers, which ask PhotoKit on whatever Mac runs the tests, under a time bound. It failed in two full runs while `ServingUnderLoadTests` froze the pool.
 - **Photos albums stay "not responding" for up to five minutes after the agent starts.** *Syd: "is worrying", then "diagnoising startup slowness requires its own sessions, so let's do those items later".* Left open, for its own session. At the 17:46 install both were marked unavailable at 17:46:14; Photos answered in 71 ms by 17:50; the label waits for the next scheduled refresh.
 
-## Audit all documentation against reality
+## Audit all documentation against reality — done 2026-09-19
 
 Syd, 2026-09-19, having just asked what options `photogoroundd` actually takes: "This document is not
-going to be user-visible, so I am going to skip reviewing it for now." So the audit is deferred, not
-the question — nothing here has been read end to end against the code.
+going to be user-visible, so I am going to skip reviewing it for now." **Done later the same day**:
+all six documents read end to end against the code, and `Scripts/audit-docs.sh` now repeats the half
+a script can do — run by `DocumentationTests` under `⌘U`, so it fails when it drifts again.
 
-**1,804 lines across six documents**, none of it verified as a whole:
+**Eleven findings, all fixed.** Five the script catches, six it never could.
 
-| | |
+| what it said | what was true |
 |---|---|
-| `Documentation/photogoroundd.md` | 599 |
-| `app/mac/FEATURES.md` | 482 |
-| `Documentation/pgr_ctl.md` | 384 |
-| `README.md` | 173 |
-| `Documentation/Wallpaper Extension.md` | 85 |
-| `Documentation/Installing.md` | 81 |
+| `README.md`'s opening table: ⌘B installs, all three schemes | ⌘R, since 2026-09-19 — the most visible claim in the project |
+| `README.md`: "the port is whatever the kernel gave the agent at launch", twice | fixed per configuration since 2026-09-17 |
+| `photogoroundd.md`: the same, at length, as the reason for `--port` | as above |
+| `README.md`: System Settings lists "Photo-Go-Round Screensaver" | "(Debug)" for a Debug build — the line beside it already said so for the wallpaper |
+| `Wallpaper Extension.md`: expect `…wallpaper.extension` from a Debug build | `…wallpaper.debug.extension`, since 2026-09-16 |
+| `Wallpaper Extension.md`: `killall "Photo-Go-Round Wallpaper"` | stops every configuration's extension, including another build's |
+| `Wallpaper Extension.md`: log predicate `CONTAINS "wallpaper-extension"` | the hyphenated identifier died in the 2026-09-15 rename, so it matched nothing `pkd` says |
+| `Wallpaper Extension.md`: ⌘B for its install scheme | ⌘R |
+| `pgr_ctl.md`: no mention of `--no-default-values` | `pgr_ctl --help` documents it |
+| `PLAN.md`'s synopsis: `pgr_ctl photos-spike` | no such verb |
+| `FEATURES.md`'s own rule — "the word is 'photo', not 'photograph'" | a tooltip said "photographs" |
 
-- **Two spot checks on 2026-09-19, one clean and one not.** `photogoroundd.md`'s `## OPTIONS` matches
-  `Sources/photogoroundd/Options.swift` exactly — twelve options and four short aliases, nothing
-  documented that does not exist and nothing accepted that is not documented. The same document's
-  resize-budget paragraph was **wrong**: it still said one second after the budget became 1.5 s, and
-  nothing would have caught it, because the test beside it passed its own duration rather than the
-  shipped one. Fixed the same day and pinned by a new test.
-- **That is the shape of the work.** A number repeated in prose drifts silently; the fix is not only
-  to correct it but to leave something that fails when it drifts again. See *Documented means
-  tested* — a man-page claim wants coverage unless it is marked `(_internal testing only_)`.
-- **`FEATURES.md` was audited once**, against the app on 2026-09-10, and has had normal doc rules
-  since. It is the only one of the six with a date on it.
-- **Worth doing before the first user sees any of it**, which is exactly why it can wait now.
+**And one code fix the audit turned up.** `PaneHandler.swift` built its `NSError` with `domain:
+"com.sydpolk.photogoround.wallpaper-extension"` — a bundle identifier that had not existed since
+2026-09-15, in the string somebody would grep a log by. It reads `Bundle.main.bundleIdentifier` now,
+so each configuration answers under its own.
+
+**Verified and sound**, so the next audit can start from here: `photogoroundd.md`'s twelve options
+match `Options.swift` exactly; every documented preference default matches — `repeatWindowFraction`
+0.5, `queueSize` 20, `queueRefreshIntervalSeconds` 5, `serveWaitSeconds` 2, `scanIntervalSeconds`
+300, `downloadConcurrency` 4, `cacheWalkIntervalSeconds` 3600, the three cache byte limits, the
+1500 ms resize budget and the 1 MB body limit; every port matches `BuildVariant`; `pgr_ctl` still
+makes no web request; the app links `PhotoGoRoundAgentAPI` and `PhotoGoRoundDisplay` and not the
+kit; the panel polls at 60 s and retries at 15 s; the gear is 35% at 12 points and was 48.
+
+- **What the script cannot check is the prose**, and six of the eleven lived there — a number or a
+  behaviour in a sentence, matching nothing a parser knows. `Scripts/audit-docs.sh` compares flags,
+  verbs and script names; reading found the rest.
+- **What is left is the next drift, not this one.** The item stays only as the record of how it was
+  done; delete it when that is no longer worth keeping.
 
 ## Examine the cache size
 
@@ -125,21 +160,15 @@ that plan deliberately left as later work, and closing the plan would have burie
   decode fine.*
 - **The agent's retirement stays either way.** Syd, 2026-09-16: "yes, keep the retirement."
 
-## `pgr_ctl` in Xcode
+## Shared schemes for `pgr_ctl` and `pgr_install`
 
 Syd, 2026-09-16: "add a target for pgr_ctl to the Xcode project".
 
 - **The target is already there:** `pgr_ctl` in `app/Photo-Go-Round.xcodeproj`, which `Build Plan.md`, *The targets*, records, and which gained its `PhotoGoRoundDisplay` dependency on 2026-09-16.
-- **What is missing is a shared scheme.** `app/Photo-Go-Round.xcodeproj/xcshareddata/xcschemes/` has Install Agent, Install Screen Saver, Install Wallpaper Extension, Photo-Go-Round, Photo-Go-Round Wallpaper and Photo-Go-Round Wallpaper Host, and no `pgr_ctl`. Whether Syd's Xcode shows an automatic one is not known; `README.md` tells him to `swift run pgr_ctl` instead.
-- *Not decided:* whether it is only a shared scheme to build and run it, or also an install — `Build Plan.md`, *The install phases*, lists `pgr_ctl` among the two products with no dev install yet.
-
-## Build and install as separate steps, so ⌘B builds and ⌘R runs
-
-Syd, 2026-09-16: "we should think about separating build and install for everything, so command-b builds and command-r runs. but that can go in TODO.md; we don't need to do that now".
-
-- **Today a build installs.** The `Install Agent`, `Install Screen Saver` and `Install Wallpaper Extension` schemes build an aggregate target whose script installs, so ⌘B on one of them boots out the agent, replaces the saver, or registers the extension. `Build Plan.md`, *Design Decisions*: "Installing is a build phase, not a script's job" — this would revise it.
-- *Claude's reading, not decided:* ⌘R — a scheme's Run action, or a pre-action on it — does the install and starts what it installed, and ⌘B only builds.
-- **Xcode registers every host app it builds**, install or not, so ⌘B alone still registers the wallpaper extension. `Wallpaper Plan.md`, *Debug builds under their own identity*, is what keeps that from replacing the chosen wallpaper.
+- **Decided 2026-09-19: no install.** Syd: `pgr_ctl` is a copy or a symlink into `~/bin`, and Archive is the route for anything shipped. `Build Plan.md`, *The install phases*.
+- **What is left is one shared scheme each, for `pgr_ctl` and `pgr_install`.** Neither has one, so Xcode autocreates them per user and nobody else gets the settings — which is how the agent's scheme came to launch with `-NSDocumentRevisionsDebugMode` and refuse to start. Every other target has one now, including the three `Install …` schemes.
+- `Package Tests` is the exception to where they live: `.swiftpm/xcode/xcshareddata/xcschemes/`, because a scheme whose targets are the package's is a package scheme. `pgr_ctl` and `pgr_install` are Xcode targets, so theirs go in `app/Photo-Go-Round.xcodeproj/xcshareddata/xcschemes/` with the rest.
+- Set `debugDocumentVersioning = "NO"` in both, as every other scheme now does.
 
 ## A section of our own for the screensaver in System Settings
 
@@ -259,6 +288,16 @@ The agent should answer for its own configuration over HTTP, and its preference 
 Syd, 2026-09-19: *"TODO.md: Reorganize the source code directories"*. Nothing is designed and nothing was discussed; this is the whole of it.
 
 - For whoever picks it up, the layout today: the Swift package's `Sources/` holds `PhotoGoRoundAgentAPI`, `PhotoGoRoundKit`, `PhotoGoRoundDisplay`, `Console`, `photogoroundd` and `pgr_ctl`; the Xcode project's `app/` holds `mac`, `ios` (empty), `common`, `agent`, `saver`, `wallpaper-extension`, `wallpaper-host`, `tests` and `Config`.
+
+## `Photo-Go-RoundTests` is not in the default test run
+
+Carried out of `Plans/Xcode - Separate Build and Run.md` when it closed, 2026-09-19.
+
+`xcodebuild test -scheme "Package Tests"` runs the package's five test targets — 1,001 tests — and not the app's bundle. `Photo-Go-RoundTests` was in the test plan when Xcode created it and was taken out: it is the app's own suite, it wants a running agent, and a plain run of it fills the log with `panel: read failed — Photo-Go-Round's agent is not running`.
+
+- **It is still runnable**, through the `Photo-Go-Round` scheme, which has it as a testable. Nothing is lost except that nobody runs it by habit.
+- **What to decide** is whether it belongs in the same plan behind a filter, in a second plan of its own, or nowhere — Syd skips GUI tests, and this is the suite closest to being one. `TODO.md`, *No GUI testing* is the standing position.
+- `app/Package Tests.xctestplan` is the file, and a test plan can hold more than one configuration if that turns out to be the shape.
 
 ## Settings are the only data a user would miss
 

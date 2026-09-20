@@ -18,6 +18,26 @@ struct WallpaperCommandsTests {
         deinit { discardScratchSuite(name) }
     }
 
+    /// `Documentation/pgr_ctl.md`, `wallpaper get`: "The domain carries the
+    /// build configuration as the library does."
+    ///
+    /// **It did not, until 2026-09-19.** Both call sites took the running
+    /// build's variant, so `--debug` from a Claude-built `pgr_ctl` wrote
+    /// `com.sydpolk.photogoround.claude.wallpaper.dev` and the Debug extension
+    /// never saw the change. Nothing said so: the write succeeded.
+    @Test(
+        "The domain carries both the deployment and the build configuration",
+        arguments: [
+            (BuildVariant.release, "com.sydpolk.photogoround.wallpaper"),
+            (.debug, "com.sydpolk.photogoround.debug.wallpaper"),
+            (.claude, "com.sydpolk.photogoround.claude.wallpaper"),
+        ])
+    func domainCarriesBothAxes(_ pair: (BuildVariant, String)) {
+        let (variant, stem) = pair
+        #expect(WallpaperCommands.domain(deployment: .development, variant: variant) == "\(stem).dev")
+        #expect(WallpaperCommands.domain(deployment: .production, variant: variant) == "\(stem).prod")
+    }
+
     @Test("An unset interval reports what the wallpaper would use")
     func unsetReportsTheDefault() {
         let scratch = Scratch()

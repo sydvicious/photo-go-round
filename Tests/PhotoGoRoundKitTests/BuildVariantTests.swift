@@ -10,8 +10,12 @@ import Testing
 ///
 /// **This suite is the thing that keeps the two halves honest.** Nothing else
 /// notices when they part: a saver would simply install under a name no
-/// uninstall looks for, and an agent would register a label nothing boots out.
-/// It reads the project file and compares.
+/// uninstall looks for, an agent would register a label nothing boots out, and
+/// — measured 2026-09-19 — a sandboxed wallpaper extension would be refused
+/// every preference domain it reads. It reads the project file and compares.
+///
+/// `STORAGE_ID_SUFFIX` is the one the extension's entitlements spell its
+/// domains with; `WallpaperEntitlementsTests` holds the other end of that.
 ///
 /// `Plans/Xcode - Separate Build and Run.md`, *The build variant, compiled in*.
 @Suite("Build identity agrees with the project file")
@@ -68,14 +72,16 @@ struct BuildVariantTests {
         let keys = Set(Self.settings[configuration]?.keys ?? [:].keys)
         #expect(keys.isSuperset(of: [
             "SAVER_ID_SUFFIX", "SAVER_NAME_SUFFIX", "SERVER_LABEL_SUFFIX",
-            "WALLPAPER_ID_SUFFIX", "WALLPAPER_NAME_SUFFIX",
+            "STORAGE_ID_SUFFIX", "WALLPAPER_ID_SUFFIX", "WALLPAPER_NAME_SUFFIX",
         ]), "\(configuration) is missing one: \(keys.sorted())")
     }
 
     @Test("The identifier suffixes match", arguments: configurations)
     func identifierSuffixesMatch(_ pair: (String, BuildVariant)) {
         let (configuration, variant) = pair
-        for key in ["SAVER_ID_SUFFIX", "SERVER_LABEL_SUFFIX", "WALLPAPER_ID_SUFFIX"] {
+        for key in [
+            "SAVER_ID_SUFFIX", "SERVER_LABEL_SUFFIX", "STORAGE_ID_SUFFIX", "WALLPAPER_ID_SUFFIX",
+        ] {
             #expect(
                 Self.settings[configuration]?[key] == variant.identifierSuffix,
                 "\(configuration).\(key) is \(Self.settings[configuration]?[key] ?? "absent"), BuildVariant.\(variant.rawValue) says \(variant.identifierSuffix)")

@@ -1,11 +1,17 @@
 # Summary
 
-Building a product and installing it become separate acts: ⌘B builds, ⌘R
-installs. `Claude` becomes a third build configuration beside Debug and Release
-so every build carries its own identity, the three aggregate targets whose
-script phases install are deleted, the install moves out of shell and into a
-Swift module in the package, and each installable product gets a product scheme
-and an install scheme.
+**All six phases built 2026-09-19.**
+
+Building a product and installing it are separate acts: ⌘B builds, ⌘R installs.
+`Claude` is a third build configuration beside Debug and Release so every build
+carries its own identity — its own port, LaunchAgent label, screensaver name,
+extension identifier and storage — the three aggregate targets whose script
+phases installed are deleted, the install lives in a Swift module in the
+package, and each installable product has a product scheme and an install
+scheme.
+
+The project has no `PBXShellScriptBuildPhase` left in it, and `Scripts/` went
+from nine files to five.
 
 # Rationale
 
@@ -100,10 +106,11 @@ Each phase leaves the tree working, and the products are taken smallest first.
   - `Scripts/install-wallpaper-extension.sh` deleted. **With it went the last
     aggregate target and the last `PBXShellScriptBuildPhase` in the project**,
     which is the plan's central claim made true: no install runs on ⌘B.
-- **Phase 5 — One implementation of every build and every install.** Syd,
-  2026-09-19: "there should not be multiple versions of the build scripts. the
-  targets and the command line builds should share their guts, and behave the
-  same, based on input parameters."
+- **Phase 5 — One implementation of every build and every install. Built
+  2026-09-19.** Syd: "there should not be multiple versions of the build
+  scripts. the targets and the command line builds should share their guts, and
+  behave the same, based on input parameters." `Scripts/` went from nine files
+  to five, and no script knows an install identity by hand any more.
   - `pgr_install uninstall`, with `--agent`, `--saver`, `--wallpaper`. Three
     configurations means three of everything to find.
   - `Scripts/uninstall.sh` becomes a thin call into it.
@@ -117,12 +124,34 @@ Each phase leaves the tree working, and the products are taken smallest first.
     is each target runnable via xcodebuild. If there are shell scripts that get
     called, ok." Every product builds by scheme and configuration; scripts are
     what a target calls, not a second way in.
-  - **Shared test schemes**, so `xcodebuild test` reaches the package's four
-    test targets as well as `Photo-Go-RoundTests`. Syd: "add the test schemes
-    somewhere."
-- **Phase 6 — The documents, and the rules that change.**
-  - `Documentation/pgr_install.md`, and `Documentation/Installing.md` rewritten
-    around it.
+  - **A shared test scheme and plan**, so `xcodebuild test` reaches all five
+    package test targets. Syd: "add the test schemes somewhere." `Package
+    Tests.xctestplan` at the top of the repository, and the scheme in
+    `.swiftpm/xcode/xcshareddata/xcschemes/` where Xcode writes a package
+    scheme. 1,001 tests.
+  - **The third duplication was smaller than this bullet claimed.** The agent's
+    sources do compile twice — as the package target `photogorounddTests` links
+    and as the Xcode target that wraps it in a bundle — and that cannot change
+    while the tests are SwiftPM test targets. What actually hurt was that only
+    the Xcode route carried the build configuration, so `make-agent-bundle.sh`
+    needed an `if` on `$CONFIGURATION` to spell a label by hand; deleting that
+    script removed the harm. `Scripts/photogoroundd` now builds the Xcode
+    target too, so nothing derives an identity from the SwiftPM side.
+  - **`SMAppService` went with it.** `make-agent-bundle.sh` was the only thing
+    that wrote the plist inside the bundle that `SMAppService.agent(plistName:)`
+    needs, so `pgr_ctl register`, `unregister` and `service-status` could no
+    longer work. Syd: "they go too." `ServiceCommand.swift`, their man-page
+    section and their synopsis line are deleted; the test that pinned them now
+    pins that they are refused.
+- **Phase 6 — The documents, and the rules that change. Built 2026-09-19.**
+  - `Documentation/pgr_install.md` written, and `Documentation/Installing.md`
+    rewritten around it: all three steps are ⌘R.
+  - **`CLAUDE.md` states `xcodebuild` as the only route.** `swift build` now
+    appears in it once, in the sentence saying not to use it — it has only
+    `debug` and `release`, so it cannot produce the `Claude` identity.
+  - **No stale build instruction survives anywhere.** `README.md` no longer
+    opens with `swift build`, and `pgr_ctl` is documented as a built product on
+    a `PATH` with the two flags that reach a development agent.
   - `CLAUDE.md`'s *Never build an `Install …` scheme* stops being true in Phase
     1 and is replaced there, not here.
   - `Build Plan.md`'s *Installing is a build phase, not a script's job* is
@@ -508,7 +537,9 @@ scripts. the targets and the command line builds should share their guts, and
 behave the same, based on input parameters." This is the phase that makes that
 true, and it is wider than the install half the plan first described.
 
-#### The three duplications, named
+#### The three duplications, named — all three closed 2026-09-19
+
+Written in the present tense, as they stood when the phase opened.
 
 - **The saver's install exists twice.** `Scripts/install-saver.sh` copies the
   bundle, replaces the previous one and kills `legacyScreenSaver` and
@@ -593,12 +624,21 @@ be done first**, for a reason that is easy to miss:
 - The same is true, less sharply, of `pgr_ctl` and `pgr_install`: each is a
   package target with a package test target, and each is also an Xcode target.
 
-**Still open: `Scripts/photogoroundd`.** Its stated purpose is running the agent
-with no Xcode project open, and it is the one route that exercises the agent
-outside an app bundle at all. Under `xcodebuild`-only it either builds that way
-like everything else — losing that property — or it goes. Not decided;
-`Build Plan.md`'s *One target, one scheme, one script per product* is where the
-answer belongs.
+**`Scripts/photogoroundd`: answered 2026-09-19.** Syd, asked whether it stays as
+the one deliberate exception to `xcodebuild`-only or builds the Xcode target's
+binary instead: "build target's binary." So it does, and it keeps everything
+else about itself — the `screen` framing, the `exec` so `^C` reaches the agent,
+and exporting nothing so the `--prod` safety stays in the program rather than in
+a wrapper.
+
+**It gained something in the move.** Built by `swift build`, that agent got
+`DEBUG` and nothing else — the same port and label as an installed Debug one,
+indistinguishable from it. It now carries its configuration's identity like
+everything else, and takes `--claude` alongside `--release`.
+
+**What it still is, and is not:** the way to run the agent in front of you, in a
+terminal you are watching. ⌘R on **Install Agent** is the other thing — a
+launchd job whose output goes to the unified log.
 
 #### `xcodebuild test` can run the package's test targets — measured 2026-09-19
 
@@ -664,11 +704,14 @@ only existed inside a build phase into a fact the binary carries wherever it is
 run. That is strictly better: `pgr_install` invoked by hand from a terminal is
 governed by it too, which `CONFIGURATION` never was.
 
-**Claude's, for the shape:** promote `ServiceAddress.variant` from a `String`
-used for one startup line into a `BuildVariant` enum in `PhotoGoRoundAgentAPI` —
-`release`, `debug`, `agent` — and have `ServiceAddress.port` and `pgr_install`
-both switch on it. One `#if` in the project rather than a second one written
-alongside the first. The name and the file are Claude's to pick.
+**Built as `BuildVariant`, in `PhotoGoRoundAgentAPI/Host/BuildVariant.swift`:**
+`ServiceAddress.variant` was a `String` used for one startup line; it is an enum
+with cases `release`, `debug` and `claude`, and `ServiceAddress.port` and
+`pgr_install` both switch on it. One `#if` in the project rather than a second
+written alongside the first. It owns the port, the LaunchAgent label, the
+screensaver bundle name and the wallpaper extension identifier, and
+`BuildVariantTests` reads `project.pbxproj` to prove its suffixes still agree
+with the build settings.
 
 What each variant installs is the Phase 1 question. Debug installs where a
 developer wants it. Release has nothing to install into yet, since the app

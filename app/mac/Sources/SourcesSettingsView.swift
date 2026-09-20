@@ -230,7 +230,7 @@ struct SourcesSettingsView: View {
                     Task { await model.removeMissing() }
                 }
                 .disabled(model.isWorking)
-                .help("Remove the missing albums, their photographs, and their cached copies")
+                .help("Remove the missing albums, their photos, and their cached copies")
             }
             .controlSize(.small)
         }
