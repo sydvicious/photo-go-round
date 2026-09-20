@@ -41,6 +41,10 @@ Building the first of them forced a decision that is **not** app-specific: the d
 - *Navigation in the picture window* — say "next" by hand. **Not built.**
   - Chevron on hover at the right edge; keys: space, →, ↓, page down.
   - One rule: no request sooner than `advanceIntervalSeconds` after the current picture was drawn.
+- *The picture's title under it* — **Not built, and not designed.** Syd, 2026-09-19: "show the title of the file underneath the image if there is one set; otherwise render it as before", and "photos asset 'Title'. actually, 'Caption', or 'Title', in that order."
+  - A photograph with one gets it beneath the image; one without is drawn exactly as today. Not the filename, which is always set.
+  - **Worth knowing before this is planned: PhotoKit has `caption` and no per-asset title.** `PHAsset.extendedMetadata`, new in macOS 27, carries `caption`, `originalFilename` and `keywords`; every `title` in the Photos headers belongs to a collection, a collection list or a project. *Read from the MacOSX27.0 SDK headers, 2026-09-19.*
+  - **The screensaver follows, as an option.** Syd, 2026-09-19: "this will prolly become an option for screensaver eventually." The wallpaper was not mentioned.
 - *Sources by kind, in sections* — replaces the single list, and settles what to do about a two-hundred-file selection. **Not built.** The lower panel is still one list, with a `+` menu offering files or a folder.
   - A "Files" section and a "Folders" section, each with its own `+` and `−` beneath it, each showing five rows before it scrolls.
   - `+` is that kind's picker, so the menu that chooses a kind goes away with it.

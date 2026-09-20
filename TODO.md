@@ -6,23 +6,6 @@ Things to look into, deferred out of the phase list. Each one earns its own plan
 
 **When a plan closes, check what it was holding.** Anything it left as later work moves here before the plan is marked done, or it disappears with it.
 
-## The wallpaper extension cannot find the agent in Debug or Claude builds
-
-Measured 2026-09-19, with the Debug agent listening on 9428 and serving the app `200`: the Debug
-wallpaper extension logged `the port in com.sydpolk.photogoround.debug.dev could not be read: The
-file "com.sydpolk.photogoround.debug.dev.plist" couldn't be opened because you don't have permission
-to view it`, then `no port published in com.sydpolk.photogoround.debug`, then `no agent answered; the
-desktop keeps what it has`. The same wake also fell back to the default interval, because
-`com.sydpolk.photogoround.debug.wallpaper.dev` could not be read either.
-
-Both exception arrays in `app/wallpaper-extension/Photo-Go-Round Wallpaper.entitlements` name the
-same four domains, all of them Release spellings: `com.sydpolk.photogoround`,
-`com.sydpolk.photogoround.dev`, `…wallpaper.dev`, `…wallpaper.prod`. But
-`Deployment.storageIdentifier(for:)` appends `BuildVariant.identifierSuffix`, so a Debug extension
-asks for `com.sydpolk.photogoround.debug.dev` and a Claude one for `…claude.dev` — neither entitled,
-so `ServicePort`'s file fallback is refused along with the suite, which is exactly the case that
-fallback exists to cover. Release is unaffected. The lists predate the variant suffix.
-
 ## Passed over on 2026-09-16 — to fix, not to keep
 
 Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't remember any issues you mention and bypass, so let's not bypass them." Every issue Claude mentioned during the agent performance work and did not fix is here. **Delete each one when it is fixed** — Syd, 2026-09-19: "cleaning it up every once in a while keeps me sane." Git has what was removed.
@@ -193,6 +176,16 @@ Syd, 2026-09-16: "put statistics about the cached resized picture where appropri
   - **`pgr_ctl cache status`**: copies held and their bytes, beside originals.
   - **The dashboard's cache panel** and `/v1/dashboard`: the same, and copy hits against resizes since launch — the number that says whether the resize cache is saving the resizer anything.
   - **Evictions**: copies and originals taken, separately.
+- Anything added to the dashboard or `pgr_ctl` is documented in `Documentation/photogoroundd.md` or `pgr_ctl.md`, and tested.
+
+## Cached files broken down by source, in the dashboard
+
+Syd, 2026-09-19: *"add a panel in the dashboard breaking down how many files have been cached broken down by source"*. Nothing is designed.
+
+- **Today it is one number.** *Photos in the cache* and *Cache on disk* both come from `PhotoCache.status()`, which counts resident entries and bytes across the whole cache; `pgr_ctl cache status` shows the same totals. Nothing is per source.
+- **The cache already knows the source.** A cache path is the source, then `.original`, then the photograph's own identity, and every `CACHE:` line names `(source N)` — so the breakdown is there on disk and in the log, and nothing adds it up.
+- **Open, and Syd's:** files, bytes, or both; sources named by title (*Photos › Favorites*) or by id; and whether referenced photos are in it, since they are not copied and not budgeted.
+- **Related:** *Statistics about resized copies, where they belong*, which wants the same panel to split originals from copies. If both land it is one table — a row per source, a column per thing counted — rather than two panels.
 - Anything added to the dashboard or `pgr_ctl` is documented in `Documentation/photogoroundd.md` or `pgr_ctl.md`, and tested.
 
 ## An Options button for the screensaver
