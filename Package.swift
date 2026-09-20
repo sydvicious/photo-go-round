@@ -53,6 +53,15 @@ let package = Package(
         // Internal, and never shipped. It is a product so that `swift run
         // pgr_ctl` works; nothing about that puts it in a distributed bundle.
         .executable(name: "pgr_ctl", targets: ["pgr_ctl"]),
+        // Installing, as code rather than as four shell scripts. The lasting
+        // half: the menu-bar app links this when it becomes the installer, and
+        // `pgr_install` is only the door an Install scheme's ⌘R knocks on until
+        // then. macOS-only by nature — `launchctl`, `pluginkit` and
+        // `~/Library/Screen Savers` mean nothing anywhere else.
+        .library(name: "PhotoGoRoundInstall", targets: ["PhotoGoRoundInstall"]),
+        // Runnable, because an aggregate target is not. Never shipped, and
+        // expected to be replaced by the app that installs on first launch.
+        .executable(name: "pgr_install", targets: ["pgr_install"]),
     ],
     targets: [
         .target(
@@ -111,6 +120,21 @@ let package = Package(
                     "-Xlinker", "Sources/pgr_ctl/Info.plist",
                 ])
             ]
+        ),
+        .target(
+            name: "PhotoGoRoundInstall",
+            dependencies: ["PhotoGoRoundAgentAPI"],
+            swiftSettings: everyTarget
+        ),
+        .executableTarget(
+            name: "pgr_install",
+            dependencies: ["PhotoGoRoundInstall", "Console"],
+            swiftSettings: everyTarget
+        ),
+        .testTarget(
+            name: "PhotoGoRoundInstallTests",
+            dependencies: ["PhotoGoRoundInstall"],
+            swiftSettings: everyTarget
         ),
         .testTarget(
             name: "PhotoGoRoundKitTests",

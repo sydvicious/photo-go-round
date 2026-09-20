@@ -136,15 +136,13 @@ else
     exit 1
 fi
 
-# Photos, which the agent cannot ask for on its own — see
-# `Scripts/ensure-photos-access.sh` for why. The job has just started, so it may
-# not have published its port yet.
-for _ in $(seq 1 20); do
-    [[ -n "$(defaults read com.sydpolk.photogoround.dev servicePort 2>/dev/null || true)" ]] && break
-    sleep 1
-done
-
-"$(dirname "${BASH_SOURCE[0]}")/ensure-photos-access.sh"
+# **Photos access is not asked for here.** A grant is asked for by something with
+# a window — the app — and an installer has none; the agent cannot ask at all,
+# because a status read is a TCC preflight that shows nothing. Syd, 2026-09-19:
+# "all access is controlled either by the toy app I have now, the app we are
+# going to develop, any potential app-store friendly apps, or any potential
+# menubar apps." `Plans/Xcode - Separate Build and Run.md`.
+echo "install-agent: Photos access is granted in the app, not here"
 
 # **The plist points into DerivedData**, which is right for development and wrong
 # for anything left running: a clean build directory takes the agent with it.

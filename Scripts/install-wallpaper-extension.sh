@@ -117,9 +117,7 @@ for attempt in $(seq 1 30); do
         # comes straight back under launchd and re-acquires every surface from
         # the store, which is what `uninstall.sh` relies on too.
         killall WallpaperAgent 2>/dev/null && echo "install-wallpaper-extension: restarted WallpaperAgent" || true
-        # A wallpaper with no library behind it fails the way a saver does, so
-        # the same check runs here. Syd, 2026-09-15, of the saver's install.
-        "$(dirname "${BASH_SOURCE[0]}")/ensure-photos-access.sh"
+        echo "install-wallpaper-extension: Photos access is granted in the app, not here"
         exit 0
     fi
     [[ $((attempt % 5)) -eq 0 ]] && echo "install-wallpaper-extension: waiting for pkd, ${attempt}s"

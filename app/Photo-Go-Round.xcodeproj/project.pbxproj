@@ -31,18 +31,6 @@
 			name = "Install Agent";
 			productName = "Install Agent";
 		};
-		AA0000000000000000000130 /* Install Screen Saver */ = {
-			isa = PBXAggregateTarget;
-			buildConfigurationList = AA0000000000000000000132 /* Build configuration list for PBXAggregateTarget "Install Screen Saver" */;
-			buildPhases = (
-				AA0000000000000000000131 /* Install for development */,
-			);
-			dependencies = (
-				AA0000000000000000000136 /* PBXTargetDependency */,
-			);
-			name = "Install Screen Saver";
-			productName = "Install Screen Saver";
-		};
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
@@ -56,6 +44,8 @@
 		AA00000000000000000000D9 /* PhotoGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000DC /* PhotoGoRoundAgentAPI */; };
 		AA00000000000000000000DA /* PhotoGoRoundKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000DD /* PhotoGoRoundKit */; };
 		AA00000000000000000000DB /* Console in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000DE /* Console */; };
+		AA000000000000000000030A /* PhotoGoRoundInstall in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000030C /* PhotoGoRoundInstall */; };
+		AA000000000000000000030B /* Console in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000030D /* Console */; };
 		AA00000000000000000000E9 /* PhotoGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000EB /* PhotoGoRoundAgentAPI */; };
 		AA00000000000000000000EA /* PhotoGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000EC /* PhotoGoRoundDisplay */; };
 		AA00000000000000000000FE /* Photo-Go-Round Wallpaper.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E1 /* Photo-Go-Round Wallpaper.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -91,13 +81,6 @@
 			remoteGlobalIDString = AA00000000000000000000C0;
 			remoteInfo = "Photo-Go-Round Server";
 		};
-		AA0000000000000000000135 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 000000000000000000000000 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = AA00000000000000000000A0;
-			remoteInfo = "Photo-Go-Round Saver";
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -120,6 +103,7 @@
 		AA00000000000000000000A1 /* Photo-Go-Round Screensaver.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photo-Go-Round Screensaver.saver"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000C1 /* Photo-Go-Round Server.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Photo-Go-Round Server.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000D1 /* pgr_ctl */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = pgr_ctl; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000301 /* pgr_install */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = pgr_install; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000E1 /* Photo-Go-Round Wallpaper.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = "Photo-Go-Round Wallpaper.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000F1 /* Photo-Go-Round Wallpaper Host.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Photo-Go-Round Wallpaper Host.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -152,6 +136,12 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			name = pgr_ctl;
 			path = ../Sources/pgr_ctl;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000305 /* pgr_install */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			name = pgr_install;
+			path = ../Sources/pgr_install;
 			sourceTree = "<group>";
 		};
 		AA00000000000000000000E5 /* Sources */ = {
@@ -200,6 +190,13 @@
 				AA0000000000000000000A02 /* PhotoGoRoundDisplay in Frameworks */,
 			);
 		};
+		AA0000000000000000000303 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				AA000000000000000000030A /* PhotoGoRoundInstall in Frameworks */,
+				AA000000000000000000030B /* Console in Frameworks */,
+			);
+		};
 		AA00000000000000000000E3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
@@ -224,6 +221,7 @@
 				AA00000000000000000000A5 /* Sources */,
 				AA00000000000000000000C5 /* photogoroundd */,
 				AA00000000000000000000D5 /* pgr_ctl */,
+				AA0000000000000000000305 /* pgr_install */,
 				AA00000000000000000000E5 /* Sources */,
 				AA00000000000000000000F5 /* Sources */,
 				AA0000000000000000000061 /* tests */,
@@ -239,6 +237,7 @@
 				AA00000000000000000000A1 /* Photo-Go-Round Screensaver.saver */,
 				AA00000000000000000000C1 /* Photo-Go-Round Server.app */,
 				AA00000000000000000000D1 /* pgr_ctl */,
+				AA0000000000000000000301 /* pgr_install */,
 				AA00000000000000000000E1 /* Photo-Go-Round Wallpaper.appex */,
 				AA00000000000000000000F1 /* Photo-Go-Round Wallpaper Host.app */,
 			);
@@ -350,6 +349,27 @@
 			productReference = AA00000000000000000000C1 /* Photo-Go-Round Server.app */;
 			productType = "com.apple.product-type.application";
 		};
+		AA0000000000000000000300 /* pgr_install */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000000306 /* Build configuration list for PBXNativeTarget "pgr_install" */;
+			buildPhases = (
+				AA0000000000000000000302 /* Sources */,
+				AA0000000000000000000303 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA0000000000000000000305 /* pgr_install */,
+			);
+			name = pgr_install;
+			packageProductDependencies = (
+				AA000000000000000000030C /* PhotoGoRoundInstall */,
+				AA000000000000000000030D /* Console */,
+			);
+			productName = pgr_install;
+			productReference = AA0000000000000000000301 /* pgr_install */;
+			productType = "com.apple.product-type.tool";
+		};
 		AA00000000000000000000D0 /* pgr_ctl */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AA00000000000000000000D6 /* Build configuration list for PBXNativeTarget "pgr_ctl" */;
@@ -448,9 +468,9 @@
 			projectRoot = "";
 			targets = (
 				AA0000000000000000000120 /* Install Agent */,
-				AA0000000000000000000130 /* Install Screen Saver */,
 				AA0000000000000000000110 /* Install Wallpaper Extension */,
 				AA00000000000000000000D0 /* pgr_ctl */,
+				AA0000000000000000000300 /* pgr_install */,
 				000000000000000100000000 /* Photo-Go-Round */,
 				AA00000000000000000000A0 /* Photo-Go-Round Saver */,
 				AA00000000000000000000C0 /* Photo-Go-Round Server */,
@@ -517,22 +537,6 @@
 				"",
 			);
 		};
-		AA0000000000000000000131 /* Install for development */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			name = "Install for development";
-			shellPath = /bin/bash;
-			shellScript = (
-				"# Installs the saver this target depends on into ~/Library/Screen Savers.",
-				"# Debug only: release installs from the app wrapper. See Build Plan.md.",
-				"if [ \"${CONFIGURATION}\" != \"Debug\" ]; then",
-				"    echo \"note: not installing in ${CONFIGURATION}\"",
-				"    exit 0",
-				"fi",
-				"\"${SRCROOT}/../Scripts/install-saver.sh\" \"${BUILT_PRODUCTS_DIR}/Photo-Go-Round Screensaver${SAVER_NAME_SUFFIX}.saver\"",
-				"",
-			);
-		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -557,6 +561,11 @@
 			);
 		};
 		AA00000000000000000000D2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		AA0000000000000000000302 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
 			);
@@ -593,11 +602,6 @@
 			isa = PBXTargetDependency;
 			target = AA00000000000000000000C0 /* Photo-Go-Round Server */;
 			targetProxy = AA0000000000000000000125 /* PBXContainerItemProxy */;
-		};
-		AA0000000000000000000136 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = AA00000000000000000000A0 /* Photo-Go-Round Saver */;
-			targetProxy = AA0000000000000000000135 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1135,6 +1139,51 @@
 			};
 			name = Release;
 		};
+		AA0000000000000000000307 /* Debug configuration for PBXNativeTarget "pgr_install" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				ENABLE_APP_SANDBOX = NO;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_NAME = pgr_install;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		AA0000000000000000000308 /* Claude configuration for PBXNativeTarget "pgr_install" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				ENABLE_APP_SANDBOX = NO;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_NAME = pgr_install;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Claude;
+		};
+		AA0000000000000000000309 /* Release configuration for PBXNativeTarget "pgr_install" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = R5PQPZARC5;
+				ENABLE_APP_SANDBOX = NO;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_NAME = pgr_install;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 		AA00000000000000000000D7 /* Debug configuration for PBXNativeTarget "pgr_ctl" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1375,33 +1424,6 @@
 			};
 			name = Release;
 		};
-		AA0000000000000000000133 /* Debug configuration for PBXAggregateTarget "Install Screen Saver" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = macosx;
-			};
-			name = Debug;
-		};
-		AA000000000000000000020C /* Claude configuration for PBXAggregateTarget "Install Screen Saver" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = macosx;
-			};
-			name = Claude;
-		};
-		AA0000000000000000000134 /* Release configuration for PBXAggregateTarget "Install Screen Saver" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = macosx;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1459,6 +1481,15 @@
 			);
 			defaultConfigurationName = Release;
 		};
+		AA0000000000000000000306 /* Build configuration list for PBXNativeTarget "pgr_install" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000307 /* Debug configuration for PBXNativeTarget "pgr_install" */,
+				AA0000000000000000000308 /* Claude configuration for PBXNativeTarget "pgr_install" */,
+				AA0000000000000000000309 /* Release configuration for PBXNativeTarget "pgr_install" */,
+			);
+			defaultConfigurationName = Release;
+		};
 		AA00000000000000000000E6 /* Build configuration list for PBXNativeTarget "Photo-Go-Round Wallpaper" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -1492,15 +1523,6 @@
 				AA0000000000000000000123 /* Debug configuration for PBXAggregateTarget "Install Agent" */,
 				AA000000000000000000020B /* Claude configuration for PBXAggregateTarget "Install Agent" */,
 				AA0000000000000000000124 /* Release configuration for PBXAggregateTarget "Install Agent" */,
-			);
-			defaultConfigurationName = Release;
-		};
-		AA0000000000000000000132 /* Build configuration list for PBXAggregateTarget "Install Screen Saver" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				AA0000000000000000000133 /* Debug configuration for PBXAggregateTarget "Install Screen Saver" */,
-				AA000000000000000000020C /* Claude configuration for PBXAggregateTarget "Install Screen Saver" */,
-				AA0000000000000000000134 /* Release configuration for PBXAggregateTarget "Install Screen Saver" */,
 			);
 			defaultConfigurationName = Release;
 		};
@@ -1565,6 +1587,14 @@
 		AA0000000000000000000A03 /* PhotoGoRoundDisplay */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PhotoGoRoundDisplay;
+		};
+		AA000000000000000000030C /* PhotoGoRoundInstall */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotoGoRoundInstall;
+		};
+		AA000000000000000000030D /* Console */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Console;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -62,12 +62,18 @@ The suffixes live twice: as build settings at project level in
 `.xcconfig` at runtime. `BuildVariantTests` reads the project file and fails
 when the two disagree. `Plans/Xcode - Separate Build and Run.md`.
 
-## Never build an `Install …` scheme unless Syd asks
+## Never build an `Install …` scheme unless Syd asks — except the saver
 
-Building `Install Agent`, `Install Screen Saver` or `Install Wallpaper
-Extension` still *installs*: the aggregate target's script phase runs on ⌘B.
-`-derivedDataPath` does not make it safe — it only moves the build, and the
-script installs from wherever that is.
+**`Install Screen Saver` is safe to build, since 2026-09-19.** Its aggregate
+target is gone; the scheme builds `Photo-Go-Round Saver` and `pgr_install` and
+installs nothing. ⌘R is what installs, by running `pgr_install saver`, and that
+is still Syd's to press.
+
+**`Install Agent` and `Install Wallpaper Extension` still install on ⌘B**: their
+aggregate targets' script phases run on build. `-derivedDataPath` does not make
+them safe — it only moves the build, and the script installs from wherever that
+is. Phases 3 and 4 of `Plans/Xcode - Separate Build and Run.md` move them to ⌘R
+as the saver has been; until then this rule holds for those two.
 
 In the `Claude` configuration it can no longer replace anything of Syd's, which
 is what it did on 2026-09-17. It still changes the running system: it

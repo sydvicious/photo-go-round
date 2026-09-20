@@ -18,9 +18,20 @@ public enum Console {
 
     private static let reset = "\u{001B}[0m"
 
-    /// Colour only when stdout is a terminal, so redirecting to a file gives
-    /// plain text rather than escape sequences.
-    private static let isTTY = isatty(STDOUT_FILENO) == 1
+    /// Colour only when stdout is a terminal *and* something is there to
+    /// interpret the escapes, so redirecting to a file gives plain text.
+    ///
+    /// **`isatty` alone is not enough.** Xcode runs a command-line tool on a
+    /// pseudo-terminal, so `isatty` answers yes, and then prints the escapes
+    /// literally — measured 2026-09-19, where `pgr_install`'s first error in the
+    /// Xcode console read "[31merror: [0munknown option". Xcode sets no `TERM`,
+    /// and neither does a launchd job, so requiring one separates a person
+    /// watching a terminal from a pane that only looks like one.
+    private static let isTTY: Bool = {
+        guard isatty(STDOUT_FILENO) == 1 else { return false }
+        guard let term = ProcessInfo.processInfo.environment["TERM"] else { return false }
+        return !term.isEmpty && term != "dumb"
+    }()
 
     private static func paint(_ text: String, _ colour: Colour) -> String {
         isTTY ? colour.rawValue + text + reset : text

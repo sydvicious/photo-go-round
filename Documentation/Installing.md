@@ -1,6 +1,8 @@
 # Installing Photo-Go-Round on a Mac
 
-The three products that run outside Xcode — the agent, the wallpaper extension and the screensaver — each have an Install target in `app/Photo-Go-Round.xcodeproj`. Select the scheme and build it (⌘B). The targets are aggregates with no product, so Run (⌘R) does nothing. Each one builds what it installs first. `Build Plan.md`, *The install phases*, holds why they are separate targets and what each script does; this file is only the steps. Written 2026-09-16, revised 2026-09-19 for the build configurations. If the scripts and this file ever disagree, the scripts are right and this file is stale.
+The three products that run outside Xcode — the agent, the wallpaper extension and the screensaver — each have an Install scheme in `app/Photo-Go-Round.xcodeproj`. Each one builds what it installs first.
+
+**The saver installs on ⌘R; the other two still install on ⌘B.** Separating building from installing is being done one product at a time — `Plans/Xcode - Separate Build and Run.md` — and the screensaver went first, on 2026-09-19. For it, ⌘B compiles and changes nothing, and ⌘R runs `pgr_install`. For the agent and the wallpaper extension, ⌘B still installs and ⌘R does nothing, because their targets are still aggregates with no product. `Build Plan.md`, *The install phases*, holds why they are separate targets and what each script does; this file is only the steps. Written 2026-09-16, revised 2026-09-19 for the build configurations. If the scripts and this file ever disagree, the scripts are right and this file is stale.
 
 **The configuration decides the identity of everything you install.** `Debug`, `Release` and `Claude` each install under their own names, so all three can sit on one Mac at once and an install never replaces another configuration's copy. Build in `Debug` unless you mean otherwise; set it in Product → Scheme → Edit Scheme → Run → Info → Build Configuration.
 
@@ -32,7 +34,9 @@ pgr_ctl status --development --debug
 
 ## 1. Install Agent
 
-Scheme **Install Agent**, ⌘B. The script `Scripts/install-agent.sh` boots out any running job and waits for launchd to finish removing it, writes `~/Library/LaunchAgents/<label>.plist` — the label read from the built bundle's `PGRLaunchAgentLabel`, so `com.sydpolk.photogoround.server.debug` for a Debug build — pointing at that bundle, bootstraps it, waits for the port, then asks Photos for access if it has never been asked. Allow the prompt. macOS may also ask for Documents and iCloud Drive if a source lives there.
+Scheme **Install Agent**, ⌘B. The script `Scripts/install-agent.sh` boots out any running job and waits for launchd to finish removing it, writes `~/Library/LaunchAgents/<label>.plist` — the label read from the built bundle's `PGRLaunchAgentLabel`, so `com.sydpolk.photogoround.server.debug` for a Debug build — pointing at that bundle, and bootstraps it. macOS may ask for Documents and iCloud Drive if a source lives there.
+
+**Photos access is granted in the app, not by an install.** Open **Photo-Go-Round** and add a Photos source; the prompt comes from there. No install asks, because a grant is asked for by something with a window and an installer has none — and the agent cannot ask at all, since reading its authorization status is a TCC preflight that shows nothing.
 
 The agent logs to the unified log, subsystem `com.sydpolk.photogoround`. It writes no file:
 
@@ -51,7 +55,7 @@ default.
 
 ## 2. Install Wallpaper Extension
 
-Scheme **Install Wallpaper Extension**, ⌘B. It builds **Photo-Go-Round Wallpaper Host**, the shell app that carries the extension, then `Scripts/install-wallpaper-extension.sh` stops the extension process running from that bundle, removes dead registrations, registers the appex with `pluginkit`, waits for `pkd` to record it, restarts `WallpaperAgent` so the desktop is re-acquired, and checks Photos access.
+Scheme **Install Wallpaper Extension**, ⌘B. It builds **Photo-Go-Round Wallpaper Host**, the shell app that carries the extension, then `Scripts/install-wallpaper-extension.sh` stops the extension process running from that bundle, removes dead registrations, registers the appex with `pluginkit`, waits for `pkd` to record it, and restarts `WallpaperAgent` so the desktop is re-acquired.
 
 A Debug build is `com.sydpolk.photogoround.wallpaper.debug.extension`, named **Photo-Go-Round Wallpaper (Debug)**; Release is `com.sydpolk.photogoround.wallpaper.extension`, **Photo-Go-Round Wallpaper**. Both appear in the same Photo-Go-Round section.
 
@@ -71,7 +75,7 @@ A change to the interval is picked up within ten seconds.
 
 ## 3. Install Screen Saver
 
-Scheme **Install Screen Saver**, ⌘B. `Scripts/install-saver.sh` copies the built bundle — `Photo-Go-Round Screensaver (Debug).saver` in Debug — into `~/Library/Screen Savers`, replacing only the one of its own name, stops the screen saver hosts holding the old copy, and checks Photos access.
+Scheme **Install Screen Saver**, **⌘R** — not ⌘B, which since 2026-09-19 only builds. `pgr_install saver` copies the built bundle — `Photo-Go-Round Screensaver (Debug).saver` in Debug — into `~/Library/Screen Savers`, replacing only the one of its own name, and stops the screen saver hosts holding the old copy — only the ones actually running, which it names.
 
 Then System Settings › Screen Saver › **Photo-Go-Round Screensaver**, under *Other*. Its interval is the screensaver's *Shuffle All* in the app's Settings, ten seconds by default.
 

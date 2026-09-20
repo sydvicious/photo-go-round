@@ -343,6 +343,45 @@ Claude had proposed moving the call into `PhotoGoRoundAgentAPI` so a future iOS
 client could link it. That was solving for a client that does not exist against
 a prompt it would not use.
 
+### What Phase 2 measured
+
+Two things this plan had written down as assumptions. Both turned out to be
+wrong in the direction that is easy to miss: not "it doesn't work", but "it
+works badly enough to look like something else".
+
+#### Xcode expands a launch argument, then re-splits it on whitespace
+
+The `Install Screen Saver` scheme first passed
+`$(BUILT_PRODUCTS_DIR)/Photo-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver` as
+one `<CommandLineArgument>`. Xcode expanded both macros correctly — and then
+tokenised the result, so `pgr_install` received three arguments where one was
+meant, and reported `unknown option Screensaver` and exited 1.
+
+**Environment variables are expanded and not re-split**, so the scheme now
+passes only `saver` as an argument and hands `BUILT_PRODUCTS_DIR` and
+`SAVER_NAME_SUFFIX` through `<EnvironmentVariables>`. `pgr_install` already read
+those as its fallback, so nothing in the tool changed. Every later phase's
+install scheme follows this shape; a product name with a space in it is the
+normal case here, not an edge one.
+
+**This is also the argument for a runnable binary over a Run pre-action, paid
+back on the first try.** The failure announced itself in the console, named the
+offending token, and exited non-zero. A pre-action would have printed the same
+words somewhere nobody reads.
+
+#### `isatty` is not enough to decide whether to colour
+
+`Console` coloured whenever `isatty(STDOUT_FILENO)` was true. Xcode runs a
+command-line tool on a pseudo-terminal, so that is true under Xcode — and
+Xcode's console does not interpret the escapes, so the first error arrived as
+`[31merror: [0munknown option Screensaver`.
+
+`TERM` is the discriminator: Xcode sets none, a launchd job sets none, and a
+terminal sets one. `Console.isTTY` now requires both, and both directions were
+checked — `TERM` unset gives clean text, `TERM=xterm-256color` under a real pty
+still colours. This was never specific to `pgr_install`; `pgr_ctl` and the agent
+have been emitting the same noise into Xcode's console all along.
+
 ### `install-agent.sh` — Phase 3
 
 The most procedural of the three, and the one with the hardest-won details:
@@ -489,12 +528,36 @@ something a target invokes rather than a parallel way in. Three things follow:
   runnable via xcodebuild" true of the tests as well. They could come forward
   from this phase if an earlier one wants them.
 
+#### The package `photogoroundd` target is load-bearing, and gates the rest
+
+The agent's sources are compiled twice, by two build systems: `Photo-Go-Round
+Server` synchronizes `../Sources/photogoroundd` into an app bundle, and the
+package's `photogoroundd` target builds the same directory as a bare executable.
+The obvious cleanup — delete the package target, keep the Xcode one — **cannot
+be done first**, for a reason that is easy to miss:
+
+- **`photogorounddTests` depends on it.** `Package.swift` declares
+  `dependencies: ["PhotoGoRoundAgentAPI", "photogoroundd"]`, and a SwiftPM test
+  target can link a package target but not an Xcode target's sources. Removing
+  the package target leaves the agent's 246 tests with nothing to link.
+- So **the order is forced**: shared test schemes first, so `xcodebuild test`
+  reaches what `swift test` reaches today; only then can the package target go.
+  The test schemes are not a tidy-up at the end of this phase, they are its
+  precondition.
+- The same is true, less sharply, of `pgr_ctl` and `pgr_install`: each is a
+  package target with a package test target, and each is also an Xcode target.
+
 **Still open: `Scripts/photogoroundd`.** Its stated purpose is running the agent
-with no Xcode project open, by `swift build`, and it is the one route that
-exercises the agent outside an app bundle. Under this rule it either builds by
-`xcodebuild` like everything else — losing that property — or it goes. Not
-decided; `Build Plan.md`'s *One target, one scheme, one script per product* is
-where the answer belongs.
+with no Xcode project open, and it is the one route that exercises the agent
+outside an app bundle at all. Under `xcodebuild`-only it either builds that way
+like everything else — losing that property — or it goes. Not decided;
+`Build Plan.md`'s *One target, one scheme, one script per product* is where the
+answer belongs.
+
+**Also not established:** whether an Xcode test scheme can host the package's
+test targets at all, or whether they have to become Xcode test targets of their
+own. That is the first thing this phase measures, because everything above
+depends on the answer.
 
 ## The build variant, compiled in
 
@@ -609,12 +672,10 @@ it can be drawn:
   means removing their target entries, their build-configuration lists, their
   script phases, their dependencies and their `Products` group references —
   five places each, and a miss leaves a project Xcode will not open.
-- **Argument macro expansion is assumed, not measured.** The install schemes
-  pass `$(BUILT_PRODUCTS_DIR)/Photo-Go-Round Saver.saver` as a launch argument,
-  which requires Xcode to expand build settings in scheme arguments against the
-  `MacroExpansion` reference. This is believed to work and is the first thing
-  Phase 2 checks; if it does not, the fallback is an environment variable, and
-  the one after that is `pgr_install` deriving the path from its own location.
+- **Argument macro expansion — measured 2026-09-19, and the answer was the
+  awkward middle one.** See *What Phase 2 measured* above. A path passed as a
+  launch argument is expanded and then re-split on whitespace, so it half-works;
+  every install scheme passes paths through environment variables instead.
 - **`CLAUDE.md` is rewritten in Phase 1, not left to rot.** Its *Never build an
   `Install …` scheme* and its per-product build incantations both stop being
   true there — the first because ⌘B no longer installs, the second because
