@@ -11,33 +11,61 @@
 #
 # It exists so that staging is one command rather than a remembered incantation
 # about bin paths, and so the build never silently runs a stale binary.
+#
+# **It builds the Xcode target, not the package executable.** Syd, 2026-09-19:
+# "what I really want is each target runnable via xcodebuild. If there are shell
+# scripts that get called, ok" — and then, of this script, "build target's
+# binary". The practical difference is identity: the Xcode target gets the build
+# configuration, so the agent this runs binds that configuration's port and
+# carries its label, exactly as one installed by ⌘R does. A `swift build` of the
+# package got `DEBUG` and nothing else, which is how a terminal agent ended up
+# indistinguishable from an installed one.
+#
+# **It is not the same as ⌘R on `Install Agent`.** That installs a launchd job
+# whose output goes to the unified log. This runs the agent in front of you, in
+# a terminal you are watching, and `^C` stops it.
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIGURATION="${PGR_CONFIGURATION:-debug}"
+PROJECT="$REPO/app/Photo-Go-Round.xcodeproj"
+CONFIGURATION="${PGR_CONFIGURATION:-Debug}"
 
 # **Nothing generated goes in the repository.** Syd, 2026-09-19: "I really don't
 # want build artifacts in the repo directory", and "I would prefer ALL generated
-# artifacts to be in DerivedData and not .build directories". SwiftPM writes to
-# `<package>/.build` unless told otherwise, so it is told otherwise.
-SCRATCH="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}/swiftpm"
+# artifacts to be in DerivedData and not .build directories".
+DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}/agent"
 
-if [[ "${1:-}" == "--release" ]]; then
-    CONFIGURATION="release"
-    shift
+case "${1:-}" in
+    --release) CONFIGURATION="Release"; shift ;;
+    --claude)  CONFIGURATION="Claude"; shift ;;
+esac
+
+# Silent when it works, and the whole log when it does not — so stdout stays
+# clean for the agent's own output, which matters when this is read back through
+# a screen scrollback.
+if ! build_log="$(xcodebuild build \
+    -project "$PROJECT" \
+    -scheme "Photo-Go-Round Server" \
+    -destination "generic/platform=macOS" \
+    -configuration "$CONFIGURATION" \
+    -derivedDataPath "$DERIVED_DATA" 2>&1)"; then
+    echo "$build_log" >&2
+    echo "photogoroundd: the agent did not build; nothing was started" >&2
+    exit 1
 fi
 
-# Build to stderr so stdout stays clean for the agent's own output — which
-# matters when this is piped to a file or read back through a screen scrollback.
-swift build --configuration "$CONFIGURATION" --package-path "$REPO" --scratch-path "$SCRATCH" >&2
-
-BIN="$(swift build --configuration "$CONFIGURATION" --package-path "$REPO" --scratch-path "$SCRATCH" --show-bin-path)/photogoroundd"
+BIN="$DERIVED_DATA/Build/Products/$CONFIGURATION/Photo-Go-Round Server.app/Contents/MacOS/photogoroundd"
+if [[ ! -x "$BIN" ]]; then
+    echo "photogoroundd: expected an executable at $BIN and there is none" >&2
+    exit 1
+fi
 
 # Nothing is exported here on purpose. The binary already defaults to its own
-# development container and cache, and reaching the real library takes --prod. Setting
-# it from the wrapper would mean the safety lived in the script rather than in
-# the program, and would evaporate the moment somebody ran the binary directly.
+# development container and cache, and reaching the real library takes --prod.
+# Setting it from the wrapper would mean the safety lived in the script rather
+# than in the program, and would evaporate the moment somebody ran the binary
+# directly.
 
 # exec, so signals reach the agent rather than this script: ^C in screen should
 # stop the server, not orphan it.

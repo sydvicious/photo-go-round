@@ -336,20 +336,6 @@ Observed 2026-09-09, in all three views: on a first launch with no pictures, the
 - **`PLAN.md`'s *The empty state* wants updating when this is built.** It names three cases and asks for the third, the transient cold start, to "say something like *Loading photos*". That is the state now dropped.
 - **What becomes of the `Shuffle` streak** depends on the above: it exists only to turn repeated `204`s into confidence, so an answer that carries its own reason would retire it.
 
-## Build products out of the repo
-
-Syd, 2026-09-10: *"all build products you produce should be in ~/.claude/build, not in the repo"*, and *"any that I am expected to produce should be in DerivedData somewhere."* The first is in effect for Claude already; the second is not met by the scripts.
-
-- **What writes into the checkout today:**
-  - `Scripts/make-saver-bundle.sh` defaults to `./build/xcode`.
-  - `Scripts/make-agent-bundle.sh` defaults to `./build`, and runs `swift build` into `./.build`.
-  - `Scripts/photogoroundd` runs `swift build` into `./.build`.
-- **The catch: `.build` also holds the development library**, which is data, not a build product: `.build/pgr-container` and `.build/pgr-cache`. `MacHostEnvironment.buildDirectory` finds it by walking up from the executable to a directory named `.build`, and a binary with no `.build` above it — anything Xcode built — falls back to the source tree `#filePath` names.
-- **Only the agent and `pgr_ctl` open it.** The app and the saver use `MacHostEnvironment` for the preference domain alone, which does not depend on `.build` — and Syd, 2026-09-10: "the app should not need to see the agent's container." So what can split is the agent and the rig: moving one's build and not the other's would have `pgr_ctl` reading one library while the agent serves another.
-- **What has to be designed**: where development storage lives once no build does, and how every process finds the same place without a `.build` to walk to. `--container` and `PGR_CONTAINER` already exist for moving it by hand; the question is the default.
-- `Scripts/scrub-dev.sh` hardcodes `$REPO/.build/pgr-container`, `$REPO/.build/pgr-cache` and a `pgrep` on `$REPO/.build/…photogoroundd`, and follows whatever is decided.
-- The `build/` and `.build/` lines in `.gitignore` can go once nothing writes there.
-
 ## Build for arm64 only
 
 Syd, 2026-09-15: "don't build arch:x86_64 at all". And the scope of it, the same day: "there is a difference between dev and shipping the product. At this point, macOS 27 supports intel, and if I ever ship this to the public, I will build for it. But for dev purposes, I don't want to waste the time or disk space." **So this is about development builds. Whether a shipping build is universal is Syd's, and undecided.**

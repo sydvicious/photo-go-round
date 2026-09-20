@@ -28,7 +28,6 @@ struct Options {
         case wallpaper(WallpaperAction)
         case notify(topic: String)
         case log
-        case service(ServiceAction)
         case help
     }
 
@@ -65,12 +64,6 @@ struct Options {
         case everything
         case source(Int64)
         case unavailable
-    }
-
-    enum ServiceAction: Equatable {
-        case register
-        case unregister
-        case status
     }
 
     var command: Command = .help
@@ -365,13 +358,6 @@ struct Options {
         case "log":
             return .log
 
-        case "register":
-            return .service(.register)
-        case "unregister":
-            return .service(.unregister)
-        case "service-status":
-            return .service(.status)
-
         case let other:
             throw OptionsError.unknownVerb(other)
         }
@@ -421,9 +407,6 @@ struct Options {
           notify <topic>            Ring a doorbell by hand: prefs, deck,
                                     sources, cache
           log [-f] [--last <time>]  What every process has been logging
-          register | unregister | service-status
-                                    The login item. Needs a built bundle — see
-                                    ./Scripts/make-agent-bundle.sh
 
         OPTIONS
               --production        The real library (the default), and

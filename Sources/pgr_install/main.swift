@@ -26,6 +26,7 @@ USAGE
   pgr_install saver [--from <path>] [--dry-run]
   pgr_install agent [--from <path>] [--dry-run]
   pgr_install wallpaper [--from <path>] [--dry-run]
+  pgr_install uninstall [--agent] [--saver] [--wallpaper] [--dry-run]
 
 OPTIONS
   --from <path>   The built bundle. Defaults to $BUILT_PRODUCTS_DIR's copy.
@@ -34,6 +35,9 @@ OPTIONS
                   a launch argument and then re-splits it on whitespace — and
                   every product here has a space in its name.
   --dry-run       Print what would happen and change nothing.
+  --agent         For uninstall: which parts to remove. With none of the
+  --saver         three, it removes all of them. Every build configuration's
+  --wallpaper     copy is found, not just this one's.
   -h, --help      This.
 
 NOTES
@@ -46,6 +50,7 @@ struct Options {
     var command = "help"
     var from: URL?
     var dryRun = false
+    var parts: Set<Uninstall.Part> = []
 }
 
 func parse(_ arguments: [String]) throws -> Options {
@@ -63,6 +68,12 @@ func parse(_ arguments: [String]) throws -> Options {
             options.from = URL(filePath: arguments[index])
         case "--dry-run":
             options.dryRun = true
+        case "--agent":
+            options.parts.insert(.agent)
+        case "--saver":
+            options.parts.insert(.saver)
+        case "--wallpaper":
+            options.parts.insert(.wallpaper)
         case "-h", "--help":
             options.command = "help"
         case let other:
@@ -151,6 +162,19 @@ do {
         for line in try WallpaperInstall.apply(plan, report: { Console.note($0) }) {
             Console.note(line)
         }
+
+    case "uninstall":
+        // Naming none of the three means all of them, which is what somebody
+        // typing `uninstall` on its own means.
+        let parts = options.parts.isEmpty ? Set(Uninstall.Part.allCases) : options.parts
+        let plan = Uninstall.plan(removing: parts)
+        if options.dryRun {
+            Console.banner("would remove: \(parts.map(\.rawValue).sorted().joined(separator: ", "))")
+            for step in plan.describedSteps { Console.note(step) }
+            break
+        }
+        Console.banner("removing: \(parts.map(\.rawValue).sorted().joined(separator: ", "))")
+        for line in try Uninstall.apply(plan) { Console.note(line) }
 
     case let other:
         throw Fault("unknown command \(other)")

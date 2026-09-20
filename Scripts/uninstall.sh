@@ -5,7 +5,14 @@
 # Syd, 2026-09-15: "we need an uninstall script for all of these agents". Three
 # installs put things in three places — a LaunchAgent, a plug-in registration and
 # a bundle in Screen Savers — and the one you forget is the one that keeps
-# running.
+# running. Three build configurations mean three of each.
+#
+# **It is a wrapper, not an implementation.** Syd, 2026-09-19: "there should not
+# be multiple versions of the build scripts. the targets and the command line
+# builds should share their guts, and behave the same, based on input
+# parameters." Everything this does lives in `PhotoGoRoundInstall` and is driven
+# by `pgr_install uninstall`, which is the same code `Install …` schemes run and
+# the same code the app will link when it becomes the installer.
 #
 # **It removes what was installed, not what was built.** Build directories, the
 # library, the cache and the preferences are left alone: uninstalling is not the
@@ -13,57 +20,35 @@
 # one that clears development storage.
 #
 # **Nothing here needs the checkout that installed it.** Everything is found by
-# label, identifier and name.
+# label, identifier and name — so it removes a Release install as readily as a
+# Debug one, whoever built them.
 
 set -euo pipefail
 
-# **Three of everything, one per build configuration.** Release, Syd's Debug and
-# an agent's Claude build each install under their own label, their own saver
-# name and their own extension identifier, so all three can be on this Mac at
-# once — and an uninstall that knew only one name would leave the other two
-# running. `BuildVariant.swift` is the Swift half of these same three;
-# `Plans/Xcode - Separate Build and Run.md`, *The build variant, compiled in*.
-AGENT_LABELS=(
-    "com.sydpolk.photogoround.server"
-    "com.sydpolk.photogoround.server.debug"
-    "com.sydpolk.photogoround.server.claude"
-)
-EXTENSION_IDS=(
-    "com.sydpolk.photogoround.wallpaper.extension"
-    "com.sydpolk.photogoround.wallpaper.debug.extension"
-    "com.sydpolk.photogoround.wallpaper.claude.extension"
-)
-EXTENSION_PROCESS="Photo-Go-Round Wallpaper"
-SAVERS=(
-    "$HOME/Library/Screen Savers/Photo-Go-Round Screensaver.saver"
-    "$HOME/Library/Screen Savers/Photo-Go-Round Screensaver (Debug).saver"
-    "$HOME/Library/Screen Savers/Photo-Go-Round Screensaver (Claude).saver"
-)
-
-AGENT=0
-WALLPAPER=0
-SAVER_WANTED=0
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT="$REPO/app/Photo-Go-Round.xcodeproj"
+DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}/uninstall"
 
 usage() {
     cat <<'HELPTEXT'
 Removes what Photo-Go-Round's installs put on this Mac.
 
 USAGE
-  ./Scripts/uninstall.sh [--agent] [--wallpaper] [--saver]
+  ./Scripts/uninstall.sh [--agent] [--wallpaper] [--saver] [--dry-run]
 
-  With no options it removes all three.
+  With none of the three, it removes all of them. Every build configuration's
+  copy is found — release, Debug and Claude — not just the one you last built.
 
 WHAT EACH ONE REMOVES
-  --agent       Boots out every LaunchAgent — release, Debug and Claude's —
-                and deletes their plists from ~/Library/LaunchAgents. The built
-                bundles stay where they are.
-  --wallpaper   Unregisters every copy of the wallpaper extension — release,
-                Debug and Claude's builds — and stops the extension processes.
-                If it is the chosen wallpaper, macOS falls back to a default
-                picture.
+  --agent       Boots out every LaunchAgent and deletes its plist from
+                ~/Library/LaunchAgents. An agent somebody started by hand is
+                reported and left alone. The built bundles stay where they are.
+  --wallpaper   Unregisters every copy of the wallpaper extension and stops the
+                extension processes. If it is the chosen wallpaper, macOS falls
+                back to a default picture.
   --saver       Deletes every Photo-Go-Round Screensaver bundle from
-                ~/Library/Screen Savers — release, " (Debug)" and " (Claude)" —
-                and stops the hosts holding them.
+                ~/Library/Screen Savers and stops the hosts holding them.
+  --dry-run     Says what would go and removes nothing.
 
 WHAT IT NEVER TOUCHES
   The library, the cache, preferences, and anything under a build directory. See
@@ -71,86 +56,28 @@ WHAT IT NEVER TOUCHES
 HELPTEXT
 }
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --agent) AGENT=1; shift ;;
-        --wallpaper) WALLPAPER=1; shift ;;
-        --saver) SAVER_WANTED=1; shift ;;
+for argument in "$@"; do
+    case "$argument" in
+        --agent|--wallpaper|--saver|--dry-run) ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+        *) echo "unknown option: $argument" >&2; usage >&2; exit 2 ;;
     esac
 done
 
-if [[ "$AGENT" -eq 0 && "$WALLPAPER" -eq 0 && "$SAVER_WANTED" -eq 0 ]]; then
-    AGENT=1
-    WALLPAPER=1
-    SAVER_WANTED=1
+# Built rather than assumed present: this script is run from a checkout, and the
+# binary it drives is one of that checkout's products.
+# Silent when it works, and the whole log when it does not. xcodebuild warns
+# about matching several macOS destinations whatever is asked for, and that
+# warning is noise in front of an uninstall.
+if ! build_log="$(xcodebuild build \
+    -project "$PROJECT" \
+    -scheme pgr_install \
+    -destination "generic/platform=macOS" \
+    -configuration Debug \
+    -derivedDataPath "$DERIVED_DATA" 2>&1)"; then
+    echo "$build_log" >&2
+    echo "uninstall: could not build pgr_install; nothing was removed" >&2
+    exit 1
 fi
 
-if [[ "$AGENT" -eq 1 ]]; then
-    echo "agent:"
-    found=0
-    for label in "${AGENT_LABELS[@]}"; do
-        if launchctl print "gui/$UID/$label" >/dev/null 2>&1; then
-            launchctl bootout "gui/$UID/$label" 2>/dev/null || true
-            echo "  booted out $label"
-            found=1
-        fi
-        plist="$HOME/Library/LaunchAgents/$label.plist"
-        if [[ -f "$plist" ]]; then
-            rm -f "$plist"
-            echo "  removed $plist"
-            found=1
-        fi
-    done
-    [[ "$found" -eq 0 ]] && echo "  no job and no plist for any configuration"
-    # An agent started by hand is somebody's terminal process, not this script's
-    # to end.
-    others="$(pgrep -f photogoroundd 2>/dev/null || true)"
-    if [[ -n "$others" ]]; then
-        echo "  note: an agent is still running, started outside launchd:"
-        while IFS= read -r pid; do
-            [[ -n "$pid" ]] && echo "    pid $pid — $(ps -o comm= -p "$pid" 2>/dev/null || true)"
-        done <<< "$others"
-    fi
-fi
-
-if [[ "$WALLPAPER" -eq 1 ]]; then
-    echo "wallpaper extension:"
-    found=0
-    for id in "${EXTENSION_IDS[@]}"; do
-        while IFS= read -r path; do
-            [[ -n "$path" ]] || continue
-            found=1
-            pluginkit -r "$path" 2>/dev/null || true
-            echo "  unregistered $id"
-            echo "    $path"
-        done < <(pluginkit -m -D -v -p com.apple.wallpaper 2>/dev/null \
-            | grep -F "$id(" \
-            | sed -n 's|^[^/]*\(/.*\)$|\1|p')
-    done
-    [[ "$found" -eq 0 ]] && echo "  nothing was registered"
-    killall "$EXTENSION_PROCESS" 2>/dev/null && echo "  stopped the extension process" || true
-    # Unregistering a *selected* extension leaves WallpaperAgent failing every
-    # acquire until it is restarted — measured 2026-09-15, desktop stuck on a
-    # fallback picture. It is macOS's own agent and comes back on its own.
-    killall WallpaperAgent 2>/dev/null && echo "  restarted WallpaperAgent" || true
-fi
-
-if [[ "$SAVER_WANTED" -eq 1 ]]; then
-    echo "screensaver:"
-    found=0
-    for saver in "${SAVERS[@]}"; do
-        if [[ -d "$saver" ]]; then
-            rm -rf "$saver"
-            echo "  removed $saver"
-            found=1
-        fi
-    done
-    [[ "$found" -eq 0 ]] && echo "  nothing installed"
-    killall legacyScreenSaver 2>/dev/null && echo "  stopped legacyScreenSaver" || true
-    killall ScreenSaverEngine 2>/dev/null && echo "  stopped ScreenSaverEngine" || true
-fi
-
-echo
-echo "the library, cache and preferences are untouched"
+exec "$DERIVED_DATA/Build/Products/Debug/pgr_install" uninstall "$@"

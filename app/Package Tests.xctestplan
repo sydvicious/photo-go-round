@@ -1,0 +1,48 @@
+{
+  "configurations": [
+    {
+      "id": "D1A1863E-36BE-4CD9-9FAF-861EC0B28900",
+      "name": "Configuration 1",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {},
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:",
+        "identifier": "PhotoGoRoundKitTests",
+        "name": "PhotoGoRoundKitTests"
+      }
+    },
+    {
+      "target": {
+        "containerPath": "container:",
+        "identifier": "PhotoGoRoundDisplayTests",
+        "name": "PhotoGoRoundDisplayTests"
+      }
+    },
+    {
+      "target": {
+        "containerPath": "container:",
+        "identifier": "photogorounddTests",
+        "name": "photogorounddTests"
+      }
+    },
+    {
+      "target": {
+        "containerPath": "container:",
+        "identifier": "pgr_ctlTests",
+        "name": "pgr_ctlTests"
+      }
+    },
+    {
+      "target": {
+        "containerPath": "container:",
+        "identifier": "PhotoGoRoundInstallTests",
+        "name": "PhotoGoRoundInstallTests"
+      }
+    }
+  ],
+  "version": 1
+}

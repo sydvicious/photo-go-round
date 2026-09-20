@@ -19,7 +19,6 @@ pgr_ctl get [<key>] | set <key> <value>
 pgr_ctl wallpaper get [<key>] | wallpaper set <key> <value>
 pgr_ctl notify <topic>
 pgr_ctl log [-f] [--last <time>]
-pgr_ctl register | unregister | service-status
 ```
 
 ## DESCRIPTION
@@ -310,14 +309,6 @@ the agent being watched.
 What this project's processes have recorded. They all write to the system log
 under one subsystem, and this reads back that subsystem and nothing else. `-f`
 follows it as it happens; `--last` bounds how far back to read.
-
-`register`, `unregister`
-Add or remove the agent as a login item, via `SMAppService`. Only works from a
-built bundle — see `./Scripts/make-agent-bundle.sh`.
-
-`service-status`
-What launchd makes of that registration: not registered, enabled, waiting for
-approval in System Settings, or not found.
 
 ## ENVIRONMENT
 

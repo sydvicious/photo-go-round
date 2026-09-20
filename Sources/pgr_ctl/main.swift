@@ -93,9 +93,6 @@ do {
 
     case .log:
         try await LogCommand.run(follow: options.follow, last: options.lastInterval)
-
-    case .service(let action):
-        try ServiceCommand(action: action).run()
     }
 } catch let requested as ExitCode {
     exit(requested.code)

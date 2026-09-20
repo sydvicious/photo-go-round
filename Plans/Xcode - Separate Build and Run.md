@@ -600,10 +600,48 @@ like everything else — losing that property — or it goes. Not decided;
 `Build Plan.md`'s *One target, one scheme, one script per product* is where the
 answer belongs.
 
-**Also not established:** whether an Xcode test scheme can host the package's
-test targets at all, or whether they have to become Xcode test targets of their
-own. That is the first thing this phase measures, because everything above
-depends on the answer.
+#### `xcodebuild test` can run the package's test targets — measured 2026-09-19
+
+The precondition holds. All five run under `xcodebuild`, 994 tests, `TEST
+SUCCEEDED`, with no change to the package and no test target rewritten as an
+Xcode one. **Four things have to be true together**, and each was got wrong on
+the way:
+
+- **The scheme is a *package* scheme**, written by Xcode to
+  `.swiftpm/xcode/xcshareddata/xcschemes/`, not to the project's
+  `xcshareddata`. Searching the `.xcodeproj` for it finds nothing, and
+  `xcodebuild -list -project` reports it all the same, which is a confusing
+  pair of facts to meet in that order.
+- **A package target is referenced with `ReferencedContainer = "container:"`** —
+  empty — and the target's *name* as `BlueprintIdentifier`. Eleven spellings
+  were tried by hand first, all of them assuming the container was a path
+  (`container:..`, `container:../Package.swift`, and so on). None resolved, and
+  the scheme reported no buildables at all.
+- **The scheme has to *build* the test targets**, not only list them in the
+  plan. Listing alone fails with "There are no test bundles available to test",
+  which is what defeated the one hand-written guess that had the container
+  right.
+- **It must be invoked without `-project`.** Through
+  `-project app/Photo-Go-Round.xcodeproj` it still fails with the same message;
+  addressed as a package, `xcodebuild test -scheme "Package Tests"` runs
+  everything.
+
+The test plan's own paths are package-root-relative to match:
+`"containerPath" : "container:"` for a package target, and
+`container:app/Photo-Go-Round.xcodeproj` for the Xcode one.
+
+**How it was found, which is the part worth remembering.** Guessing the syntax
+failed eleven times; the answer came from asking Syd to create one scheme
+through Xcode's UI and then reading the file Xcode wrote. When a format is
+undocumented and a tool will produce it, produce one and read it rather than
+enumerating spellings.
+
+**Two things left as they are.** The plan lives at `app/Package Tests.xctestplan`
+while its paths are package-root-relative, so Xcode's navigator marks its
+entries "(missing)" though `xcodebuild` resolves them; moving it to the
+repository root would settle both. And it no longer lists `Photo-Go-RoundTests`,
+which is the app's bundle and wants a running agent — `TODO.md`, *No GUI
+testing*.
 
 ## The build variant, compiled in
 

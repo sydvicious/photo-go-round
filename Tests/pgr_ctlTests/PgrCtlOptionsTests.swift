@@ -207,11 +207,21 @@ struct OptionsTests {
         #expect(throws: (any Error).self) { try command(["notify"]) }
     }
 
-    @Test("The service verbs survived the move out of the agent")
-    func serviceVerbs() throws {
-        #expect(try command(["register"]) == .service(.register))
-        #expect(try command(["unregister"]) == .service(.unregister))
-        #expect(try command(["service-status"]) == .service(.status))
+    /// **`register`, `unregister` and `service-status` were removed
+    /// 2026-09-19.** They drove `SMAppService`, which needs a plist inside the
+    /// bundle that only `Scripts/make-agent-bundle.sh` ever wrote — and that
+    /// script went when `xcodebuild` became the single build route. Syd:
+    /// "Archive for release, command-R for dev", and then "they go too". The
+    /// agent installs as a per-user plist in `~/Library/LaunchAgents`, which is
+    /// `pgr_install agent`'s job. `Plans/Xcode - Separate Build and Run.md`,
+    /// Phase 5.
+    @Test("The removed service verbs are refused rather than silently accepted")
+    func serviceVerbsAreGone() {
+        for verb in ["register", "unregister", "service-status"] {
+            #expect(throws: (any Error).self, "\(verb) should no longer parse") {
+                try command([verb])
+            }
+        }
     }
 
     // MARK: - Values
@@ -300,7 +310,7 @@ struct OptionsTests {
             "refresh", "pool stats", "queue peek", "queue fill", "deck stats",
             "cache status", "cache evict", "cache clear", "shuffle-test",
             "get", "set",
-            "notify", "log", "register", "unregister", "service-status",
+            "notify", "log",
         ]
         for word in words {
             #expect(Options.usage.contains(word), "\(word) is missing from the usage text")

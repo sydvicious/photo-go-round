@@ -90,6 +90,24 @@ xcodebuild build \
     -derivedDataPath "$BUILD_DIR" \
     >/dev/null
 
+# **One implementation of installing, not two.** Syd, 2026-09-19: "there should
+# not be multiple versions of the build scripts. the targets and the command
+# line builds should share their guts, and behave the same, based on input
+# parameters." This script kept its own copy of the copy-and-kill-the-hosts
+# steps until then, on the grounds that it was the route for a machine with no
+# Xcode project open — which stopped being a reason once the install became a
+# binary, because a binary runs anywhere. `Plans/Xcode - Separate Build and
+# Run.md`, Phase 5.
+if [[ "$INSTALL" -eq 1 ]]; then
+    xcodebuild build \
+        -project "$PROJECT" \
+        -scheme pgr_install \
+        -destination "platform=macOS,arch=arm64" \
+        -configuration "$CONFIGURATION" \
+        -derivedDataPath "$BUILD_DIR" \
+        >/dev/null
+fi
+
 # **The name comes from what was built, not from a constant.** Each
 # configuration produces a differently named bundle — "Photo-Go-Round
 # Screensaver.saver" for Release, " (Debug)" and " (Claude)" for the other two —
@@ -103,16 +121,5 @@ NAME="$(basename "$BUNDLE" .saver)"
 echo "built $BUNDLE"
 
 if [[ "$INSTALL" -eq 1 ]]; then
-    DESTINATION="$HOME/Library/Screen Savers"
-    mkdir -p "$DESTINATION"
-    rm -rf "$DESTINATION/$NAME.saver"
-    cp -R "$BUNDLE" "$DESTINATION/"
-    echo "installed to $DESTINATION"
-
-    # Both hosts cache loaded bundles for the life of the process, and System
-    # Settings caches the list it shows. Without this a rebuild runs the previous
-    # build and looks like a change that did nothing.
-    killall legacyScreenSaver 2>/dev/null || true
-    killall ScreenSaverEngine 2>/dev/null || true
-    echo "stopped the hosts holding the previous build"
+    "$PRODUCTS/pgr_install" saver --from "$BUNDLE"
 fi

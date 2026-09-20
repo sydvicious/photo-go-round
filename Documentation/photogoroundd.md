@@ -47,8 +47,8 @@ and never opens the database or the cache. That is what lets a screensaver insid
 someone else's sandbox and an Apple TV across the network be the same kind of
 client. See **SERVICE**.
 
-**It is meant to run as a LaunchAgent**, registered with `pgr_ctl register` from
-a built bundle so that launchd starts it at login and restarts it if it stops.
+**It is meant to run as a LaunchAgent**, installed by ⌘R on the **Install
+Agent** scheme, so that launchd starts it at login and restarts it if it stops.
 Nothing else has to be running for it to work, and it expects to be there before
 any surface asks for a picture.
 
