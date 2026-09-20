@@ -2,7 +2,7 @@
 
 The three products that run outside Xcode — the agent, the wallpaper extension and the screensaver — each have an Install scheme in `app/Photo-Go-Round.xcodeproj`. Each one builds what it installs first.
 
-**The saver installs on ⌘R; the other two still install on ⌘B.** Separating building from installing is being done one product at a time — `Plans/Xcode - Separate Build and Run.md` — and the screensaver went first, on 2026-09-19. For it, ⌘B compiles and changes nothing, and ⌘R runs `pgr_install`. For the agent and the wallpaper extension, ⌘B still installs and ⌘R does nothing, because their targets are still aggregates with no product. `Build Plan.md`, *The install phases*, holds why they are separate targets and what each script does; this file is only the steps. Written 2026-09-16, revised 2026-09-19 for the build configurations. If the scripts and this file ever disagree, the scripts are right and this file is stale.
+**The agent and the saver install on ⌘R; the wallpaper extension still installs on ⌘B.** Separating building from installing is being done one product at a time — `Plans/Xcode - Separate Build and Run.md` — and on 2026-09-19 the screensaver and the agent moved. For those two, ⌘B compiles and changes nothing, and ⌘R runs `pgr_install`. For the wallpaper extension, ⌘B still installs and ⌘R does nothing, because its target is still an aggregate with no product. `Build Plan.md`, *The install phases*, holds why they are separate targets and what each script does; this file is only the steps. Written 2026-09-16, revised 2026-09-19 for the build configurations. If the scripts and this file ever disagree, the scripts are right and this file is stale.
 
 **The configuration decides the identity of everything you install.** `Debug`, `Release` and `Claude` each install under their own names, so all three can sit on one Mac at once and an install never replaces another configuration's copy. Build in `Debug` unless you mean otherwise; set it in Product → Scheme → Edit Scheme → Run → Info → Build Configuration.
 
@@ -34,7 +34,7 @@ pgr_ctl status --development --debug
 
 ## 1. Install Agent
 
-Scheme **Install Agent**, ⌘B. The script `Scripts/install-agent.sh` boots out any running job and waits for launchd to finish removing it, writes `~/Library/LaunchAgents/<label>.plist` — the label read from the built bundle's `PGRLaunchAgentLabel`, so `com.sydpolk.photogoround.server.debug` for a Debug build — pointing at that bundle, and bootstraps it. macOS may ask for Documents and iCloud Drive if a source lives there.
+Scheme **Install Agent**, **⌘R** — not ⌘B, which since 2026-09-19 only builds. `pgr_install agent` reports any agent running that it did not start and leaves it alone, boots out the job of this configuration's label, waits up to ten seconds for launchd to finish removing it, writes `~/Library/LaunchAgents/<label>.plist` — the label read from the built bundle's `PGRLaunchAgentLabel`, so `com.sydpolk.photogoround.server.debug` for a Debug build — pointing at that bundle, and bootstraps it. `--dry-run` prints all of that and does none of it. macOS may ask for Documents and iCloud Drive if a source lives there.
 
 **Photos access is granted in the app, not by an install.** Open **Photo-Go-Round** and add a Photos source; the prompt comes from there. No install asks, because a grant is asked for by something with a window and an installer has none — and the agent cannot ask at all, since reading its authorization status is a TCC preflight that shows nothing.
 

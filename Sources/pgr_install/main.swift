@@ -24,10 +24,14 @@ Installs a built Photo-Go-Round product for development.
 
 USAGE
   pgr_install saver [--from <path>] [--dry-run]
+  pgr_install agent [--from <path>] [--dry-run]
 
 OPTIONS
-  --from <path>   The built bundle. Defaults to $BUILT_PRODUCTS_DIR's copy,
-                  which is what an Install scheme passes.
+  --from <path>   The built bundle. Defaults to $BUILT_PRODUCTS_DIR's copy.
+                  An Install scheme passes $BUILT_PRODUCTS_DIR through the
+                  environment rather than as an argument, because Xcode expands
+                  a launch argument and then re-splits it on whitespace — and
+                  every product here has a space in its name.
   --dry-run       Print what would happen and change nothing.
   -h, --help      This.
 
@@ -75,11 +79,20 @@ struct Fault: Error, CustomStringConvertible {
 
 /// The scheme's Run action passes `--from`; this is the fallback for a hand run
 /// inside a build environment.
+func builtProducts() -> URL? {
+    let products = ProcessInfo.processInfo.environment["BUILT_PRODUCTS_DIR"] ?? ""
+    return products.isEmpty ? nil : URL(filePath: products)
+}
+
 func defaultSaver() -> URL? {
-    let environment = ProcessInfo.processInfo.environment
-    guard let products = environment["BUILT_PRODUCTS_DIR"], !products.isEmpty else { return nil }
-    let suffix = environment["SAVER_NAME_SUFFIX"] ?? ""
-    return URL(filePath: products).appending(path: "Photo-Go-Round Screensaver\(suffix).saver")
+    let suffix = ProcessInfo.processInfo.environment["SAVER_NAME_SUFFIX"] ?? ""
+    return builtProducts()?.appending(path: "Photo-Go-Round Screensaver\(suffix).saver")
+}
+
+/// The agent's bundle name does not vary by configuration — only the label
+/// inside it does, which the install reads from the bundle rather than guessing.
+func defaultAgent() -> URL? {
+    builtProducts()?.appending(path: "Photo-Go-Round Server.app")
 }
 
 do {
@@ -101,7 +114,19 @@ do {
         }
         Console.banner("installing \(plan.name).saver")
         for line in try SaverInstall.apply(plan) { Console.note(line) }
-        Console.note("Photos access is granted in the app, not here")
+
+    case "agent":
+        guard let source = options.from ?? defaultAgent() else {
+            throw Fault("no bundle named; pass --from <path>")
+        }
+        let plan = try AgentInstall.plan(for: source)
+        if options.dryRun {
+            Console.banner("would install \(plan.label)")
+            for step in plan.describedSteps { Console.note(step) }
+            break
+        }
+        Console.banner("installing \(plan.label)")
+        for line in try AgentInstall.apply(plan) { Console.note(line) }
 
     case let other:
         throw Fault("unknown command \(other)")
