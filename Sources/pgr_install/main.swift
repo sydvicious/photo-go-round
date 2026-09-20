@@ -25,6 +25,7 @@ Installs a built Photo-Go-Round product for development.
 USAGE
   pgr_install saver [--from <path>] [--dry-run]
   pgr_install agent [--from <path>] [--dry-run]
+  pgr_install wallpaper [--from <path>] [--dry-run]
 
 OPTIONS
   --from <path>   The built bundle. Defaults to $BUILT_PRODUCTS_DIR's copy.
@@ -95,6 +96,14 @@ func defaultAgent() -> URL? {
     builtProducts()?.appending(path: "Photo-Go-Round Server.app")
 }
 
+/// The appex, inside the host that carries it. **An appex registers only from
+/// inside a signed app bundle** — measured 2026-09-15 — which is the whole
+/// reason the host target exists.
+func defaultWallpaper() -> URL? {
+    builtProducts()?.appending(
+        path: "Photo-Go-Round Wallpaper Host.app/Contents/Extensions/Photo-Go-Round Wallpaper.appex")
+}
+
 do {
     let options = try parse(Array(CommandLine.arguments.dropFirst()))
 
@@ -127,6 +136,21 @@ do {
         }
         Console.banner("installing \(plan.label)")
         for line in try AgentInstall.apply(plan) { Console.note(line) }
+
+    case "wallpaper":
+        guard let source = options.from ?? defaultWallpaper() else {
+            throw Fault("no bundle named; pass --from <path>")
+        }
+        let plan = try WallpaperInstall.plan(for: source)
+        if options.dryRun {
+            Console.banner("would register \(plan.identifier)")
+            for step in plan.describedSteps { Console.note(step) }
+            break
+        }
+        Console.banner("registering \(plan.identifier)")
+        for line in try WallpaperInstall.apply(plan, report: { Console.note($0) }) {
+            Console.note(line)
+        }
 
     case let other:
         throw Fault("unknown command \(other)")

@@ -2,7 +2,9 @@
 
 The three products that run outside Xcode — the agent, the wallpaper extension and the screensaver — each have an Install scheme in `app/Photo-Go-Round.xcodeproj`. Each one builds what it installs first.
 
-**The agent and the saver install on ⌘R; the wallpaper extension still installs on ⌘B.** Separating building from installing is being done one product at a time — `Plans/Xcode - Separate Build and Run.md` — and on 2026-09-19 the screensaver and the agent moved. For those two, ⌘B compiles and changes nothing, and ⌘R runs `pgr_install`. For the wallpaper extension, ⌘B still installs and ⌘R does nothing, because its target is still an aggregate with no product. `Build Plan.md`, *The install phases*, holds why they are separate targets and what each script does; this file is only the steps. Written 2026-09-16, revised 2026-09-19 for the build configurations. If the scripts and this file ever disagree, the scripts are right and this file is stale.
+**All three install on ⌘R.** ⌘B compiles and installs nothing; ⌘R runs `pgr_install`. That became true on 2026-09-19, when the three aggregate targets were replaced by schemes that build their product alongside `pgr_install` and run it. `--dry-run` on any of them prints what would happen and does none of it.
+
+One thing ⌘B still does, and it is Xcode's doing rather than an install: **building the wallpaper host registers the extension with `pkd`**, because Xcode registers host-app builds by itself. It registers only that build's own identity, so it cannot displace another configuration's. `Build Plan.md`, *The install phases*, holds why they are separate targets and what each script does; this file is only the steps. Written 2026-09-16, revised 2026-09-19 for the build configurations. If the scripts and this file ever disagree, the scripts are right and this file is stale.
 
 **The configuration decides the identity of everything you install.** `Debug`, `Release` and `Claude` each install under their own names, so all three can sit on one Mac at once and an install never replaces another configuration's copy. Build in `Debug` unless you mean otherwise; set it in Product → Scheme → Edit Scheme → Run → Info → Build Configuration.
 
@@ -55,7 +57,7 @@ default.
 
 ## 2. Install Wallpaper Extension
 
-Scheme **Install Wallpaper Extension**, ⌘B. It builds **Photo-Go-Round Wallpaper Host**, the shell app that carries the extension, then `Scripts/install-wallpaper-extension.sh` stops the extension process running from that bundle, removes dead registrations, registers the appex with `pluginkit`, waits for `pkd` to record it, and restarts `WallpaperAgent` so the desktop is re-acquired.
+Scheme **Install Wallpaper Extension**, **⌘R** — not ⌘B, which since 2026-09-19 only builds. It builds **Photo-Go-Round Wallpaper Host**, the shell app that carries the extension, then `pgr_install wallpaper` removes registrations that are dead — the bundle gone, or the bundle now holding a different identifier — while leaving every other configuration's live copy alone, stops only the extension process running from this bundle, registers the appex with `pluginkit`, waits up to thirty seconds for `pkd` to record it, and restarts `WallpaperAgent` so the desktop is re-acquired.
 
 A Debug build is `com.sydpolk.photogoround.wallpaper.debug.extension`, named **Photo-Go-Round Wallpaper (Debug)**; Release is `com.sydpolk.photogoround.wallpaper.extension`, **Photo-Go-Round Wallpaper**. Both appear in the same Photo-Go-Round section.
 

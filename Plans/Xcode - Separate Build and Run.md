@@ -65,8 +65,10 @@ Each phase leaves the tree working, and the products are taken smallest first.
     `…wallpaper.debug.extension`, storage in
     `~/Library/Containers/com.sydpolk.photogoround.debug.dev`, and an agent's
     Claude build registering beside Syd's Debug one without touching it.
-- **Phase 2 — The saver, end to end.** The least dangerous install, and the one
-  that has already gone wrong, proves the whole shape.
+- **Phase 2 — The saver, end to end. Built 2026-09-19.** The least dangerous
+  install, and the one that has already gone wrong, proves the whole shape.
+  Verified on Syd's Mac: ⌘B left `~/Library/Screen Savers` unchanged across a
+  build, and ⌘R replaced the bundle.
   - `Sources/PhotoGoRoundInstall` with the saver's install in it, plan and apply
     separated.
   - `Scripts/ensure-photos-access.sh` is deleted, not translated.
@@ -75,8 +77,10 @@ Each phase leaves the tree working, and the products are taken smallest first.
   - A shared `Photo-Go-Round Saver` scheme; `Install Screen Saver` rewired to
     build the saver and run `pgr_install`.
   - `Scripts/install-saver.sh` deleted.
-- **Phase 3 — The agent.** `launchctl bootout`, the ten-second wait, the plist,
-  `bootstrap`, and the report on an agent the owner started.
+- **Phase 3 — The agent. Built 2026-09-19.** `launchctl bootout`, the
+  ten-second wait, the plist, `bootstrap`, and the report on an agent the owner
+  started. Verified: the plist was rewritten at 19:43:48, the job came back
+  `state = running`, and the agent answered on 9428.
   - **The shared `Photo-Go-Round Server` scheme was done in Phase 1 instead,
     2026-09-19.** Xcode autocreated the scheme with `debugDocumentVersioning`
     on, so ⌘R launched the agent with `-NSDocumentRevisionsDebugMode YES` and
@@ -87,13 +91,15 @@ Each phase leaves the tree working, and the products are taken smallest first.
     shared schemes still carry the same setting; harmless to the app and the
     extension, which eat the flag.
   - `Scripts/install-agent.sh` deleted.
-- **Phase 4 — The wallpaper extension.** The hardest: reading registrations,
-  judging which are dead, killing only this bundle's process, and waiting on
-  `pkd`.
-  - The registration judgement is the unit test this whole plan buys.
-  - Measure whether a Run action sees `pluginkit -m` output that a sandboxed
-    build phase could not.
-  - `Scripts/install-wallpaper-extension.sh` deleted.
+- **Phase 4 — The wallpaper extension. Built 2026-09-19.** The hardest: reading
+  registrations, judging which are dead, killing only this bundle's process, and
+  waiting on `pkd`. Verified: the registration came back under a new UUID and
+  `WallpaperAgent` restarted in the same second.
+  - The registration judgement is the unit test this whole plan buys, and it is
+    written: ten tests over `pluginkit` output captured from Syd's Mac.
+  - `Scripts/install-wallpaper-extension.sh` deleted. **With it went the last
+    aggregate target and the last `PBXShellScriptBuildPhase` in the project**,
+    which is the plan's central claim made true: no install runs on ⌘B.
 - **Phase 5 — One implementation of every build and every install.** Syd,
   2026-09-19: "there should not be multiple versions of the build scripts. the
   targets and the command line builds should share their guts, and behave the
@@ -454,6 +460,46 @@ moving to Swift buys correctness rather than reach.
   leaves the desktop dark grey until a wallpaper is chosen again, because
   `WallpaperAgent` does not re-acquire from the new process by itself. It comes
   straight back under launchd and re-acquires every surface from the store.
+
+### What Phases 3 and 4 measured
+
+#### Xcode registers a host app's extension by itself, so ⌘B is not inert
+
+Deleting the `Install Wallpaper Extension` aggregate target removed the only
+thing *this project* did on build — and building the scheme still registers the
+extension, because Xcode registers host-app builds on its own. **Measured
+2026-09-19:** a `Claude` build of that scheme took the Mac's Photo-Go-Round
+wallpaper registrations from one to two.
+
+It cannot displace anybody: a build registers only its own configuration's
+identifier, so a `Claude` build lands beside Syd's `…wallpaper.debug.extension`
+and touches neither it nor Release. But "⌘B changes nothing" is true of the
+saver and the agent and **not** of the wallpaper, and `CLAUDE.md` says so rather
+than claiming a safety the machine does not provide. An agent that builds it
+unregisters afterwards.
+
+#### Per-variant ports made an old message a guess
+
+`install-agent.sh` reported an agent it had not started with "It holds the port
+this job wants." That was true when there was one fixed port. Since Phase 1 each
+variant binds its own — 9427, 9428, 9429 — so another agent contends only if it
+was built in the same configuration, **and its path does not say which**. Caught
+by reading the first real dry run, which called Syd's running Debug agent a
+conflict for a Claude install that would have bound a different port.
+
+It now reports the process, says it is not this install's to stop, and qualifies
+the contention. A diagnostic that overclaims is worse than one that says less:
+`TODO.md`'s flaky-test lesson in another form.
+
+#### A test that waits out a real timeout is a test nobody wants to run
+
+`AgentInstall.waitForLaunchdToForget` used the ten-second bound that the 2026-09-16
+measurement earned, and the test proving it gives up rather than hangs therefore
+took 10.046 seconds — one test costing more than the other four targets
+together. The bound is a parameter now, defaulted to `bootoutTimeout`, and the
+test passes 120 ms: 0.125 seconds, with a separate assertion pinning that the
+real default is still ten seconds. The measurement is preserved and the suite
+does not pay for it.
 
 ### One implementation of every build and every install — Phase 5
 

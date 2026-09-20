@@ -62,19 +62,30 @@ The suffixes live twice: as build settings at project level in
 `.xcconfig` at runtime. `BuildVariantTests` reads the project file and fails
 when the two disagree. `Plans/Xcode - Separate Build and Run.md`.
 
-## `Install Wallpaper Extension` still installs on ⌘B; the other two do not
+## ⌘R installs; ⌘B does not. Pressing ⌘R is Syd's
 
-**`Install Screen Saver` and `Install Agent` are safe to build, since
-2026-09-19.** Their aggregate targets are gone; each scheme builds its product
-and `pgr_install` and installs nothing. ⌘R is what installs, by running
-`pgr_install saver` or `pgr_install agent`, and pressing it is still Syd's.
+**Since 2026-09-19 no install runs on ⌘B.** All three aggregate targets are
+gone and the project has no shell script build phases at all. Each `Install …`
+scheme builds its product and `pgr_install`, and its Run action does the
+installing — `pgr_install saver`, `agent`, or `wallpaper`. Building one to check
+that it compiles is now an ordinary thing to do.
 
-**`Install Wallpaper Extension` still installs on ⌘B**: its aggregate target's
-script phase runs on build. `-derivedDataPath` does not make it safe — it only
-moves the build, and the script installs from wherever that is. It also restarts
-`WallpaperAgent`, which is visible on Syd's desktop. Phase 4 of `Plans/Xcode -
-Separate Build and Run.md` moves it to ⌘R as the other two have been; until
-then this rule holds for it.
+**One exception, and it is Xcode's rather than ours: building `Install Wallpaper
+Extension` or `Photo-Go-Round Wallpaper Host` registers the extension with
+`pkd`**, because Xcode registers host-app builds by itself. Measured 2026-09-19:
+a Claude build of that scheme took the registration count from one to two. It
+cannot harm Syd — a `Claude` build registers `…wallpaper.claude.extension`
+beside his `…wallpaper.debug.extension` and touches neither his nor Release —
+but ⌘B there is not inert. Unregister afterwards:
+
+```bash
+pluginkit -r "$HOME/.claude/build/photo-go-round/DerivedData/Build/Products/Claude/Photo-Go-Round Wallpaper Host.app/Contents/Extensions/Photo-Go-Round Wallpaper.appex"
+```
+
+**⌘R on an `Install …` scheme is still Syd's to press**, because it changes the
+running system: it bootstraps a job under launchd, restarts his
+`WallpaperAgent`, and replaces an installed bundle. `Scripts/uninstall.sh` is
+his for the same reason.
 
 In the `Claude` configuration it can no longer replace anything of Syd's, which
 is what it did on 2026-09-17. It still changes the running system: it
