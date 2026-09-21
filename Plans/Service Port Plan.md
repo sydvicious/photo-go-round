@@ -12,16 +12,13 @@ The dynamic port is the one piece of the system that changes on every launch, an
   - **Three numbers, one per build variant** — release 9427, Syd's Debug 9428, an agent's build 9429. Syd: "I think each of the three build variants need their own fixed ports."
   - **The variant is a compile-time condition**, not the deployment. Syd: "build-time identity."
   - **A refused port is fallen back from, not failed on**: the agent takes one from the kernel and publishes it, as it always did. Syd: "If the agent can't get the port it wants, it should fall back to what it does now."
-**Status, 2026-09-19.** Phase 1 is built, installed, and did the job it was asked to do: the published value is now correct as soon as the agent starts, so the *waiting for the agent* window Syd complained about is gone without Phases 2 and 3. **This plan stays open for Phase 4 alone** — Syd: "leave it open for the multi-user phase." Phases 2 and 3 are not cancelled, only unscheduled: they remove a discovery mechanism that is no longer load-bearing, which is tidying rather than fixing. `TODO.md`'s pointer to this plan was removed the same day.
+**Status, 2026-09-19.** Phase 1 is built, installed, and did the job it was asked to do: the published value is now correct as soon as the agent starts, so the *waiting for the agent* window Syd complained about is gone without Phases 2 and 3. **This plan stayed open for Phase 4 alone** — Syd: "leave it open for the multi-user phase." *Phase 4 moved to `Multi-user Support.md` on 2026-09-21.* Phases 2 and 3 are not cancelled, only unscheduled: they remove a discovery mechanism that is no longer load-bearing, which is tidying rather than fixing. `TODO.md`'s pointer to this plan was removed the same day.
 
 - **Phase 2 — Clients try the fixed port first.** *Unscheduled 2026-09-19; see the status note above.* The published value becomes the fallback. Syd: "The clients will try the hardcoded port first, and then fall back to what they do now."
   - The app, the screensaver, the wallpaper extension and `pgr_ctl`.
   - Each has its own handling of *no port published* against *unreadable*, so what a failed first attempt means to the surface is the part to get right.
 - **Phase 3 — Retire what the discovery dance needed.** *Unscheduled 2026-09-19, and dependent on Phase 2.* Whatever is left unused after Phase 2 goes: the plist-file read in `ServicePort`, and possibly `servicePort` itself.
-- **Phase 4 — Several users on one Mac. The open phase, and why this plan is still here.** Decide what a second user's agent binds, since two agents cannot hold the same port.
-  - **Nothing breaks today, which is why it has waited:** the loser of the race falls back to a kernel-assigned port and publishes it, so both agents serve. What is lost is the fixed port meaning anything for that user — their clients are back to discovery, and Phases 2 and 3 could not apply to them at all.
-  - **It matters because multi-user is deliberate.** The agent is installed per-user in `~/Library/LaunchAgents` for exactly this reason. Syd, 2026-09-10: "the agent MUST be installed in ~/Library/LaunchAgents; this needs to support multiple users on the same machine."
-  - Nothing is designed. An offset per user, a small range probed in order, and accepting the fallback as the answer are all on the table and none has been argued.
+- **Phase 4 — Several users on one Mac.** *Moved to `Multi-user Support.md`, 2026-09-21.* Syd: "I want multi-user support split out into it's own plan".
 
 # Design Decisions
 
@@ -33,7 +30,7 @@ The dynamic port is the one piece of the system that changes on every launch, an
 - **`--port` stays**, for a scratch agent beside the real one, and for a second user.
 - **Publishing stays**, so a pinned or scratch agent can still be found, and so `pgr_ctl status` keeps working unchanged.
 - **A bind failure is not fatal.** *Proposed as fatal, and reversed by Syd on 2026-09-17: "If the agent can't get the port it wants, it should fall back to what it does now."* The agent names the port and prints what to run to find the holder, then takes one from the kernel and publishes it. The discovery path is still there; it has stopped being the ordinary one. A fixed port the agent could not have is a reason to be findable, not a reason not to start.
-- **Clients try the fixed port first and the published value second**, so an agent told to use another port still answers.
+- **Clients try the fixed port first and the published value second**, so an agent told to use another port still answers. *Open again, 2026-09-21: see `Multi-user Support.md`,* What it does not stop.
 
 # Background
 
@@ -71,22 +68,14 @@ The constraint that matters is macOS's ephemeral range, 49152–65535 on this Ma
 
 ## Several users on one Mac
 
-This is the one place the fixed port is genuinely worse, and it is worth deciding rather than discovering. The agent is per-user by design — Syd, 2026-09-10: "the agent MUST be installed in ~/Library/LaunchAgents; this needs to support multiple users on the same machine" — and two logged-in users each run their own. They cannot both bind 9427 on loopback.
-
-Options, none decided:
-
-- **First come, first served, and the second agent fails loudly.** Simplest, and wrong for a Mac where two people are logged in at once.
-- **A small scan: try the fixed port, then the next few.** Keeps the common case fixed and makes the second user's agent work, at the cost of clients having to try more than one number — which is most of the discovery dance coming back, but bounded and with no preference involved.
-- **The fixed port plus the published value**, which is the Phase 2 shape: the second user's agent binds something else and publishes it, and that user's clients find it the way they do now. The first user never pays the cost.
-
-The third is what the phases above assume, since it keeps discovery as the exception rather than the rule.
+*Moved to `Multi-user Support.md`, 2026-09-21, with the per-user secret.*
 
 ## What can be deleted afterwards
 
 Only after clients default to the fixed port:
 
 - `ServicePort`'s plist-file fallback, if the saver no longer needs a published value.
-- `servicePort` itself, if nothing reads it — but not before Phase 4 is settled, since the multi-user answer above depends on it.
+- `servicePort` itself, if nothing reads it — but not before `Multi-user Support.md` is settled, since clients read the secret the same way.
 - The `--no-publish` option keeps its meaning either way: a scratch agent still must not overwrite what clients read.
 
 ## Testing
@@ -101,4 +90,5 @@ Only after clients default to the fixed port:
 - `Plans/PLAN.md`, *Preferences as a client transport, tried and reversed*, and the preference table in `Documentation/photogoroundd.md`.
 - `Plans/Screensaver Plan.md`, *The question the entitlements do not answer: finding the port* — why the plist read exists.
 - `Sources/PhotoGoRoundDisplay/ServicePort.swift`, `Sources/PhotoGoRoundAgentAPI/Host/Preferences.swift`.
+- `Plans/Multi-user Support.md` — what was Phase 4.
 - `TODO.md`, *A fixed service port*.
