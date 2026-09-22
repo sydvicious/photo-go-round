@@ -379,7 +379,7 @@ The agent prints the dashboard's address when its listener is ready. **The page
 redraws itself every second**, and says `not answering` when the agent stops
 replying.
 
-The page, stylesheet and script are `Sources/photogoroundd/js/dashboard.html`,
+The page, stylesheet and script are `MacOS/Agent/Dashboard/Resources/dashboard.html`,
 `dashboard.css` and `dashboard.js`, read from the agent's app bundle, or from that
 folder when the agent has no bundle. A missing one is `500`, naming where it was looked for.
 

@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$REPO/app/Photo-Go-Round.xcodeproj"
+PROJECT="$REPO/Photo-Go-Round.xcodeproj"
 # **Build artifacts never land in the repository.** Syd, 2026-09-19: "I really
 # don't want build artifacts in the repo directory", and "I would prefer ALL
 # generated artifacts to be in DerivedData and not .build directories". Override

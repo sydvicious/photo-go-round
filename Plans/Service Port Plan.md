@@ -89,6 +89,6 @@ Only after clients default to the fixed port:
 
 - `Plans/PLAN.md`, *Preferences as a client transport, tried and reversed*, and the preference table in `Documentation/photogoroundd.md`.
 - `Plans/Screensaver Plan.md`, *The question the entitlements do not answer: finding the port* — why the plist read exists.
-- `Sources/PhotoGoRoundDisplay/ServicePort.swift`, `Sources/PhotoGoRoundAgentAPI/Host/Preferences.swift`.
+- `Shared/Sources/PhotoGoRoundDisplay/ServicePort.swift`, `Shared/Sources/PhotoGoRoundAgentAPI/Host/Preferences.swift`.
 - `Plans/Multi-user Support.md` — what was Phase 4.
 - `TODO.md`, *A fixed service port*.

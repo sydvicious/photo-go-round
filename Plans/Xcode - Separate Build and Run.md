@@ -75,8 +75,8 @@ Each phase leaves the tree working, and the products are taken smallest first.
   install, and the one that has already gone wrong, proves the whole shape.
   Verified on Syd's Mac: ⌘B left `~/Library/Screen Savers` unchanged across a
   build, and ⌘R replaced the bundle.
-  - `Sources/PhotoGoRoundInstall` with the saver's install in it, plan and apply
-    separated.
+  - `MacOS/Shared/Sources/PhotoGoRoundInstall` with the saver's install in it,
+    plan and apply separated.
   - `Scripts/ensure-photos-access.sh` is deleted, not translated.
   - `pgr_install` as a package executable target and an Xcode target, with
     `saver` and `--dry-run`.
@@ -266,7 +266,7 @@ second and false for the third.
   agent." The port is compiled in, not decided by how the process was started —
   9427 release, 9428 Debug, 9429 Claude — so a Debug run and a Release install
   are two agents on two ports, each publishing its own.
-  `Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift`.
+  `Shared/Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift`.
   - The one collision left is running the same configuration you have installed:
     two Debug agents both want 9428, the second falls back to a kernel port and
     publishes it. That is a deliberate act, not a trap, and it is the case the
@@ -359,8 +359,8 @@ preflight that shows nothing and comes back `.notDetermined`.
 The app has owned this since before the install targets existed:
 `SourceService.postPhotosAuthorization` POSTs `/v2/photos/authorization`, and
 `CollectionPickerView.unauthorized` is the permanent home for the refused state
-that `app/mac/FEATURES.md` describes — "somewhere for authorization to live",
-which a dialog that exists only while it is open cannot have. An install that
+that `MacOS/Desktop/FEATURES.md` describes — "somewhere for authorization to
+live", which a dialog that exists only while it is open cannot have. An install that
 asks as well is a second implementation of the same prompt, and this plan's
 whole argument is against those.
 
@@ -668,7 +668,7 @@ the way:
 
 The test plan's own paths are package-root-relative to match:
 `"containerPath" : "container:"` for a package target, and
-`container:app/Photo-Go-Round.xcodeproj` for the Xcode one.
+`container:Photo-Go-Round.xcodeproj` for the Xcode one.
 
 **How it was found, which is the part worth remembering.** Guessing the syntax
 failed eleven times; the answer came from asking Syd to create one scheme
@@ -683,7 +683,8 @@ repository root would settle both. *It moved to the repository root later on
 2026-09-19, and to `Tests/Package Tests.xctestplan` on 2026-09-21 — Syd: "I
 think it should actually live in Tests/ for now." Xcode's saved window state
 still named `app/`, which is what "Failed to open “Package Tests.xctestplan”"
-was on 2026-09-21's first open.* And it no longer lists `Photo-Go-RoundTests`,
+was on 2026-09-21's first open. Back at the repository root on 2026-09-22,
+in `Project Source Reorg.md`.* And it no longer lists `Photo-Go-RoundTests`,
 which is the app's bundle and wants a running agent — `TODO.md`, *No GUI
 testing*.
 
@@ -830,5 +831,5 @@ it can be drawn:
 - `Documentation/Installing.md`, `Documentation/pgr_ctl.md`.
 - `Scripts/install-agent.sh`, `install-saver.sh`,
   `install-wallpaper-extension.sh`, `ensure-photos-access.sh`, `uninstall.sh`.
-- `app/Photo-Go-Round.xcodeproj/project.pbxproj`, aggregate targets
+- `Photo-Go-Round.xcodeproj/project.pbxproj`, aggregate targets
   `AA0000000000000000000110`, `…0120`, `…0130`.

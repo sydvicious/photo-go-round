@@ -16,7 +16,7 @@ This project exists because Apple's screensaver has the display half solved and 
   - **`startAnimation()` fired twice inside one host process**, 32 seconds apart under two activity ids. Carried into Phase 3; see *The host outlives the session*.
   - **No `isPreview: true` instance ever appeared**, through selecting the saver and browsing the pane. Carried into Phase 4, and suggestive rather than proven.
   - **Exit gate: a stub inside `legacyScreenSaver` reports a 200 and a byte count from the running agent.** Met. *One correction to the gate as written: `ScreenSaverEngine` runs the saver that is selected, so the bundle has to be chosen in System Settings before the engine will load it at all. The first run produced an empty log for that reason and nothing else.*
-- **Phase 2 — complete, 2026-09-08. The display code moves.** `Shuffle` and `PictureLayerView` are in `PhotoGoRoundDisplay`, so the saver will link the same code the window runs rather than a second copy of it. The Xcode project needed no edit: it uses synchronized root groups, so taking files out of `app/mac/Sources` is the whole of it.
+- **Phase 2 — complete, 2026-09-08. The display code moves.** `Shuffle` and `PictureLayerView` are in `PhotoGoRoundDisplay`, so the saver will link the same code the window runs rather than a second copy of it. The Xcode project needed no edit: it uses synchronized root groups, so taking files out of `MacOS/Desktop/Sources` is the whole of it.
   - `consumer` is a parameter. It was hardcoded `"app"`, and the deck keys a consumer's history on the string, so two surfaces sharing it would leave neither readable.
   - The deployment is a parameter, still defaulting to `.development`.
   - `app/tests/ShuffleTests.swift` moved to `Tests/PhotoGoRoundDisplayTests`, where `swift test` reaches it and Xcode is not required to run the rule it defends.
@@ -68,7 +68,7 @@ This project exists because Apple's screensaver has the display half solved and 
 
 `PLAN.md` puts the screensaver at Phase 6 and opens it with a spike, because *The screensaver sandbox problem* is named there as the largest technical risk in the plan. Phase 1.5 shrank that risk considerably: since the agent became the interface, the saver needs no file access to the container and no write access to the deck, so the spike went from "can it read the cache and write the deck" to "can it make an HTTP request."
 
-What exists to build on: `PhotoGoRoundDisplay` was carved out precisely so this phase would link the same fit and the same pan as the window rather than reimplementing them. It holds `AspectFit`, `Pan`, `PictureClient`, `PictureSource`, and `ServedPicture`, all tested. `Shuffle` and `PictureLayerView` — the loop that asks for a picture and the layer that draws it — are still in `app/mac/Sources`, where the saver cannot reach them.
+What exists to build on: `PhotoGoRoundDisplay` was carved out precisely so this phase would link the same fit and the same pan as the window rather than reimplementing them. It holds `AspectFit`, `Pan`, `PictureClient`, `PictureSource`, and `ServedPicture`, all tested. `Shuffle` and `PictureLayerView` — the loop that asks for a picture and the layer that draws it — are still in `MacOS/Desktop/Sources`, where the saver cannot reach them.
 
 What `PLAN.md` assumed would be built by now and is not: it makes the Phase 3 full-screen window "the screensaver's rehearsal space", where the pan, the cross-fade, and the bouncing empty state are all tuned before Phase 6 has to make them work inside someone else's sandbox. None of the three landed. `Pan` has no callers at all. That was going to be this plan's opening question; the answer above — v1 is photo display only — dissolves it rather than settling it, and the motion work stays unbuilt in both places until it is argued on its own terms.
 
@@ -258,7 +258,7 @@ Worth noting what this does *not* imply: the two instances were both `preview: f
 
 This supersedes the earlier decision to assemble the saver with `swiftc` from a script. That was defensible when the saver linked nothing; it stopped being defensible once the point was to debug the real thing.
 
-**The package is untouched and `swift test` remains the test story.** The executables' Xcode targets read straight out of `Sources/photogoroundd` and `Sources/pgr_ctl` through synchronized folders, so there is one copy of every source file and two ways to build it. `Console` had to become a library product — an Xcode target can link a package's *products* and cannot see a bare target.
+**The package is untouched and `swift test` remains the test story.** The executables' Xcode targets read straight out of `MacOS/Agent/Sources` and `MacOS/Tools/pgr_ctl/Sources` through synchronized folders, so there is one copy of every source file and two ways to build it. `Console` had to become a library product — an Xcode target can link a package's *products* and cannot see a bare target.
 
 **The scripts stay, and their job narrowed to deployment.** *"Scripts are nice for deployment"*, and *"real terminals are better than xcode's console for non-gui stuff"* — both true, and both name work Xcode does not do: copying into `~/Library/Screen Savers`, clearing the two caches that otherwise run the previous build, writing the LaunchAgent plist, running the agent where its stdout is readable. `make-saver-bundle.sh` now drives `xcodebuild` and then does that half.
 
@@ -268,7 +268,7 @@ This supersedes the earlier decision to assemble the saver with `swiftc` from a 
 
 ## Building, installing, and reloading
 
-The `.saver` is a new bundle target in `app/Photo-Go-Round.xcodeproj`, alongside the app and its test bundle. Four settings carry the whole configuration risk, and `PLAN.md`'s *Swift everywhere, including the screensaver* names three of them because the failure mode for each is identical and maximally unhelpful — the saver silently does not appear in System Settings, with no error anywhere:
+The `.saver` is a new bundle target in `Photo-Go-Round.xcodeproj`, alongside the app and its test bundle. Four settings carry the whole configuration risk, and `PLAN.md`'s *Swift everywhere, including the screensaver* names three of them because the failure mode for each is identical and maximally unhelpful — the saver silently does not appear in System Settings, with no error anywhere:
 
 - `WRAPPER_EXTENSION = saver`, on a bundle target rather than a framework or app target.
 - `NSPrincipalClass` set to exactly the string in `@objc(PGRScreenSaverView)`, so Swift's name mangling never reaches the plist.
@@ -315,16 +315,16 @@ The six from the first round, as they stood:
 - **Phase 6's line** — "can a saver inside `legacyScreenSaver` make an HTTP request? That is the whole question now" — is not the whole question, and 2026-09-07 measured both halves. It can make the request; it cannot read the preference domain that says where to send it. The second half is absent from `PLAN.md` entirely.
 - ***Screensaver v1: one photo, fit, with a slow pan*** describes a v1 that includes the pan, the cross-fade, and the bouncing empty state. This plan's v1 is the photograph and nothing else, by decision on 2026-09-07.
 - **"Preview peeks at the queue without draining it, which the queue supports directly"** predates *The service is the interface*. The queue supports it; the wire does not expose it.
-- **The empty state has two owners and no builder.** `app/mac/FEATURES.md` lists *The empty state moves* as the app's, "built here so Phase 6 inherits it", while `Shuffle.swift:59` parks the bouncing letters as "Phase 6's treatment". Each document points at the other.
+- **The empty state has two owners and no builder.** `MacOS/Desktop/FEATURES.md` lists *The empty state moves* as the app's, "built here so Phase 6 inherits it", while `Shuffle.swift:59` parks the bouncing letters as "Phase 6's treatment". Each document points at the other.
 - ***The Mac app as instrument panel*** calls full screen "the screensaver's rehearsal space" where the fit, the pan, the transitions, and the empty state get tuned before Phase 6. Only the fit was.
 
 # References
 
 - `PLAN.md` — *The screensaver sandbox problem*, *Screensaver v1: one photo, fit, with a slow pan*, *The empty state*, *Swift everywhere, including the screensaver*, *The service is the interface*, *The database is private to the service*, *The Mac app as instrument panel*, Phase 6.
-- `app/mac/FEATURES.md` — *The empty state moves*, *Saying the agent is not there*, *The app brings its own agent*.
-- `Sources/PhotoGoRoundDisplay/` — `PictureClient.swift`, `AspectFit.swift`, `Pan.swift`, `ServedPicture.swift`.
+- `MacOS/Desktop/FEATURES.md` — *The empty state moves*, *Saying the agent is not there*, *The app brings its own agent*.
+- `Shared/Sources/PhotoGoRoundDisplay/` — `PictureClient.swift`, `AspectFit.swift`, `Pan.swift`, `ServedPicture.swift`.
 - `app/mac/Sources/Shuffle.swift` and `app/mac/Sources/PictureLayerView.swift` — the two files Phase 2 moves.
-- `app/saver/Sources/PGRScreenSaverView.swift` and `app/saver/Sources/DisplayShuffles.swift` — the saver and the per-display registry. `app/saver/Spike/` keeps Phase 1's stub, which still links nothing.
+- `MacOS/Screensaver/Sources/PGRScreenSaverView.swift` and `MacOS/Screensaver/Sources/DisplayShuffles.swift` — the saver and the per-display registry. `app/saver/Spike/` keeps Phase 1's stub, which still links nothing.
 - `Scripts/make-saver-bundle.sh` — drives `xcodebuild` and then installs; `--spike` builds the probe.
 - `/System/Library/Frameworks/ScreenSaver.framework/PlugIns/legacyScreenSaver.appex` — the host, and the entitlements read from it on 2026-09-07 against macOS 27.0.
 - `~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/` — the host's container, present on this machine, along with an `.x86-64` sibling carrying identical entitlements.

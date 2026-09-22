@@ -54,7 +54,7 @@ the step that never happens unless the plan says so.
     changes are `.notice` in every build. **Built as `QueueEventLevelTests`**, six tests.
     `level(chatter:)` takes the rung rather than reading `Log.chatter`, because a test run is a Debug
     build where the rung is `.default` and every case would otherwise look identical.
-  - **No test pins the screensaver's floor.** `app/saver` is an Xcode target, not a package one, so
+  - **No test pins the screensaver's floor.** `MacOS/Screensaver` is an Xcode target, not a package one, so
     the package suite cannot reach it. Open.
 - **Phase 3 — The file goes away. Built 2026-09-19.** Remove `StandardOutPath` and
   `StandardErrorPath` from
@@ -367,7 +367,7 @@ grep "▸" /tmp/com.sydpolk.photogoround.server.log | tail -10
 ```
 
 to see which consumer got which picture — `system-wallpaper` for the extension, `screensaver` for the
-saver. That line is emitted at `Sources/photogoroundd/Service/PictureEndpoint.swift:245` by
+saver. That line is emitted at `MacOS/Agent/Endpoints/Sources/PictureEndpoint.swift:245` by
 `Console.change` and by nothing else. It has no unified-log twin.
 
 So if Phase 3 were done first, the single most useful diagnostic in the system would disappear, and
@@ -422,7 +422,7 @@ What is worth pinning:
   `ProcessType` — so a `StandardOutPath` could not appear without someone adding the property. No
   grep, and no script to run.
 
-`Tests/PhotoGoRoundKitTests/TestLoggingTests.swift` already exists and pins the test-subsystem split,
+`MacOS/Shared/Tests/PhotoGoRoundKitTests/TestLoggingTests.swift` already exists and pins the test-subsystem split,
 so there is a home for the first two.
 
 ## What this does not touch
@@ -439,18 +439,18 @@ so there is a home for the first two.
 
 - `TODO.md`, *Next: the agent's own log file grows without bound* — the 2026-09-19 measurement this
   plan is answering.
-- `Sources/PhotoGoRoundAgentAPI/Support/Log.swift` — the subsystem, the categories, and the existing
+- `Shared/Sources/PhotoGoRoundAgentAPI/Support/Log.swift` — the subsystem, the categories, and the existing
   statement that unified logging is the only mechanism.
-- `Sources/Console/Console.swift` — `recordAlerts(to:)` and `redirectFailures(to:)`, the pattern the
+- `MacOS/Shared/Sources/Console/Console.swift` — `recordAlerts(to:)` and `redirectFailures(to:)`, the pattern the
   mirror follows.
-- `Sources/PhotoGoRoundKit/Cache/QueueEvent.swift` — the sixteen cases and `report()`.
-- `Sources/photogoroundd/RunCommand.swift`, `speak` — the console routing the mirror has to avoid
+- `MacOS/Shared/Sources/PhotoGoRoundKit/Cache/QueueEvent.swift` — the sixteen cases and `report()`.
+- `MacOS/Agent/Sources/RunCommand.swift`, `speak` — the console routing the mirror has to avoid
   double-logging.
-- `Sources/photogoroundd/Service/PictureEndpoint.swift:245` — the `▸` line.
+- `MacOS/Agent/Endpoints/Sources/PictureEndpoint.swift:245` — the `▸` line.
 - `Scripts/install-agent.sh`, `Scripts/make-agent-bundle.sh` — the two `StandardOutPath` writers.
-  Both deleted 2026-09-19; `Sources/PhotoGoRoundInstall/JobDescription.swift` is the one writer now.
+  Both deleted 2026-09-19; `MacOS/Shared/Sources/PhotoGoRoundInstall/JobDescription.swift` is the one writer now.
 - `Documentation/Installing.md` — three references to the file.
-- `Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift` — the `PGR_AGENT_CLAUDE` / `DEBUG` /
+- `Shared/Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift` — the `PGR_AGENT_CLAUDE` / `DEBUG` /
   release conditions Phase 2 reuses.
 - `Plans/Service Port Plan.md`, *Three numbers, one per build variant* — where build-time identity
   was decided.

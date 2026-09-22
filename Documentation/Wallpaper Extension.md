@@ -1,6 +1,6 @@
 # Running the wallpaper extension
 
-The steps for the real extension: `app/wallpaper-extension`, target **Photo-Go-Round Wallpaper**, which in development is carried by the shell app `app/wallpaper-host`, target **Photo-Go-Round Wallpaper Host**. `Wallpaper Plan.md`, *The real extension, inside the app*, holds what it is and why, and `Build Plan.md` holds why the shell app exists; this file is only the steps. Written 2026-09-15; the install steps moved to `Documentation/Installing.md` on 2026-09-16. If the code and this file ever disagree, the code is right and this file is stale.
+The steps for the real extension: `MacOS/Wallpaper`, target **Photo-Go-Round Wallpaper**, which in development is carried by the shell app in the same folder, target **Photo-Go-Round Wallpaper Host**. `Wallpaper Plan.md`, *The real extension, inside the app*, holds what it is and why, and `Build Plan.md` holds why the shell app exists; this file is only the steps. Written 2026-09-15; the install steps moved to `Documentation/Installing.md` on 2026-09-16. If the code and this file ever disagree, the code is right and this file is stale.
 
 The four probes that came before it were built by `Scripts/make-wallpaper-extension-probe.sh`, retired on 2026-09-15 once the real extension did everything they had proved. Git holds it, and `Wallpaper Plan.md` holds what each probe found.
 
@@ -11,7 +11,7 @@ The four probes that came before it were built by `Scripts/make-wallpaper-extens
 Scheme **Install Wallpaper Extension**, **⌘R** — `Documentation/Installing.md`. ⌘B only builds, since 2026-09-19. It builds the host, registers the appex and restarts `WallpaperAgent`. The manual route it replaced, kept for when the script is what is broken:
 
 ```bash
-xcodebuild build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Wallpaper Host" -destination "platform=macOS,arch=arm64" -configuration Debug
+xcodebuild build -project Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Wallpaper Host" -destination "platform=macOS,arch=arm64" -configuration Debug
 ```
 
 ```bash

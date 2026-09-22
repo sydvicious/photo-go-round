@@ -26,7 +26,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$REPO/app/Photo-Go-Round.xcodeproj"
+PROJECT="$REPO/Photo-Go-Round.xcodeproj"
 DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}/uninstall"
 
 usage() {

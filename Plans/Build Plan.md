@@ -165,5 +165,5 @@ Syd, 2026-09-15: "and also maintain separate scripts as well". A build phase ser
 - `Scripts/make-saver-bundle.sh`, `Scripts/photogoroundd`, `Scripts/scrub-dev.sh`, `Scripts/uninstall.sh`. `make-agent-bundle.sh` was deleted 2026-09-19.
 - `Documentation/pgr_install.md` — the binary every install runs now.
 - `Plans/Xcode - Separate Build and Run.md` — the plan that separated building from installing, and the measurements behind it.
-- `app/Photo-Go-Round.xcodeproj` — targets `Photo-Go-Round`, `Photo-Go-Round Wallpaper`, `Photo-Go-Round Saver`, `Photo-Go-Round Saver Spike`, `Photo-Go-Round Server`, `pgr_ctl`.
+- `Photo-Go-Round.xcodeproj` — targets `Photo-Go-Round`, `Photo-Go-Round Wallpaper`, `Photo-Go-Round Saver`, `Photo-Go-Round Saver Spike`, `Photo-Go-Round Server`, `pgr_ctl`.
 - `pluginkit(8)` — `-a`, `-r`, `-m -D -v`, and `-e use|ignore|default`.

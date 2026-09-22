@@ -324,7 +324,7 @@ All three are the **HEIC decode**, not the encode, and all of it is inside Apple
 - Tests: `ServingUnderLoadTests` "A request whose resize stalls gets the original, and the resize queued behind it is skipped" failed first — both requests waited out the 60-second hang and got resized bytes — and passes; `ShuffleDecodeTests` failed on a rotated 40×20 JPEG decoding as 40×20, and passes; `RequestLogTests` pins the `RESIZE:` wording.
 - `Documentation/photogoroundd.md`, *`w` and `h` are maximums*, says a resize over a second returns the original.
 - **The dashboard's thumbnail got the same budget**, after it waited 38.9 s behind the picture requests' resizes and the page's image fell behind its filename. Syd chose it over a resizer of its own. On expiry it answers `503` with `Retry-After: 1` — a browser cannot be handed a HEIC original — and the page keeps its image, fetches one thumbnail at a time, and asks for the newest picture on a later redraw. `DashboardEndpointTests` "A thumbnail whose resize stalls answers 503 inside the budget" waited 60 s before, and passes.
-- **The page moved to `Sources/photogoroundd/js/`** on the way — `dashboard.html`, `dashboard.css`, `dashboard.js` — copied into the agent's bundle by the `Photo-Go-Round Server` target's synced `photogoroundd` folder, excluded from the Swift package, and read from that folder when there is no bundle. Syd first said "put the files in app/js/", then: "these files should go in the same directory the agent sources are in, with a subdirectory /js".
+- **The page moved to `Sources/photogoroundd/js/`** on the way *(in `MacOS/Agent/Dashboard/Resources/` since 2026-09-22; `Project Source Reorg.md`)* — `dashboard.html`, `dashboard.css`, `dashboard.js` — copied into the agent's bundle by the `Photo-Go-Round Server` target's synced `photogoroundd` folder, excluded from the Swift package, and read from that folder when there is no bundle. Syd first said "put the files in app/js/", then: "these files should go in the same directory the agent sources are in, with a subdirectory /js".
 
 ## Clients stop asking for a size
 
@@ -861,12 +861,12 @@ with roughly twenty minutes to spare.
 # References
 
 - `PLAN.md` — Phase 1.5.2 (the renderer), *The resize cache is removed*, and the decode measurement at line 194.
-- `Sources/PhotoGoRoundAgentAPI/Support/Deadline.swift` — the TODO listing every `NSLock`.
-- `Sources/PhotoGoRoundAgentAPI/Support/PoolWait.swift` — the probe that answered Phase 7, and `Tests/PhotoGoRoundDisplayTests/PoolWaitTests.swift`.
-- `Sources/PhotoGoRoundAgentAPI/Host/ServiceTiming.swift` — `resizeBudget` and `pictureReadLimit`, each carrying the measurement it was set from.
-- `Tests/photogorounddTests/BoundOrderingTests.swift` — the sum that keeps the budget honest, and what forced `pictureReadLimit` to move with it.
+- `Shared/Sources/PhotoGoRoundAgentAPI/Support/Deadline.swift` — the TODO listing every `NSLock`.
+- `Shared/Sources/PhotoGoRoundAgentAPI/Support/PoolWait.swift` — the probe that answered Phase 7, and `Shared/Tests/PhotoGoRoundDisplayTests/PoolWaitTests.swift`.
+- `Shared/Sources/PhotoGoRoundAgentAPI/Host/ServiceTiming.swift` — `resizeBudget` and `pictureReadLimit`, each carrying the measurement it was set from.
+- `MacOS/Agent/Tests/BoundOrderingTests.swift` — the sum that keeps the budget honest, and what forced `pictureReadLimit` to move with it.
 - `TODO.md`, *Next: the agent's own log file grows without bound* — found while deciding where `RENDER:` should write.
-- `Sources/photogoroundd/ConfinedDatabase.swift` and `SystemPhotoLibrary.Album` — the existing pattern for keeping blocking work off the pool.
-- `Tests/PhotoGoRoundKitTests/RefreshWhileServingTests.swift` — the test that did not reproduce, and why.
-- `Tests/PhotoGoRoundKitTests/SilentLibraryServingTests.swift` — the one-second check budget.
+- `MacOS/Agent/Sources/ConfinedDatabase.swift` and `SystemPhotoLibrary.Album` — the existing pattern for keeping blocking work off the pool.
+- `MacOS/Shared/Tests/PhotoGoRoundKitTests/RefreshWhileServingTests.swift` — the test that did not reproduce, and why.
+- `MacOS/Shared/Tests/PhotoGoRoundKitTests/SilentLibraryServingTests.swift` — the one-second check budget.
 - The thread sample, 2026-09-16 13:31:39, saved only in the session's scratchpad.

@@ -64,8 +64,8 @@ a page you can open.
 - **The handlers call `PhotoGoRoundKit`, which the agent already links.**
   *Claude's.* Not `pgr_ctl`, which is a binary; the Kit is where the operation
   lives and is what makes the CLI and the page the same behaviour.
-- **The page, stylesheet and script are files in `Sources/photogoroundd/js/`.**
-  *Claude's*, following the dashboard — Syd, 2026-09-16: "these files should go
+- **The page, stylesheet and script are files in
+  `MacOS/Agent/Dashboard/Resources/`.** *Claude's*, following the dashboard — Syd, 2026-09-16: "these files should go
   in the same directory the agent sources are in, with a subdirectory /js."
   Same two-place lookup: the app bundle's `Contents/Resources` first, the source
   folder second.
@@ -196,8 +196,8 @@ always have.
 `PhotoGoRoundKit` holds the operations, and both the agent and `pgr_ctl` already
 link it — so the page and the CLI are the same behaviour by construction, not by
 being kept in step. Anything a `/private` handler needs that is only in
-`Sources/pgr_ctl/` moves down into the Kit as part of the phase that needs it,
-which is the one real refactor in this plan.
+`MacOS/Tools/pgr_ctl/Sources/` moves down into the Kit as part of the phase
+that needs it, which is the one real refactor in this plan.
 
 `status` is the likely example: it is a composite of six things the Kit already
 knows separately, assembled in `InspectCommands.swift`. That assembly moves; the
@@ -209,9 +209,9 @@ shapes and neither should pretend otherwise.
 `/private` answers `text/html`, because the reader is a person with a browser
 and a support instruction cannot include "pipe it through `jq`". The dashboard
 already establishes the pattern — page, stylesheet and script as files in
-`Sources/photogoroundd/js/`, read on every request so an edit shows on reload,
-found in the app bundle's `Contents/Resources` first and the source folder
-second.
+`MacOS/Agent/Dashboard/Resources/`, read on every request so an edit shows on
+reload, found in the app bundle's `Contents/Resources` first and the source
+folder second.
 
 The one place this bites is that a command's answer is a table, and eleven
 commands means eleven table shapes. The cheapest honest thing is one renderer
@@ -258,15 +258,15 @@ Tests log under `com.sydpolk.photogoround.tests`, as everything else does.
 
 - `Documentation/pgr_ctl.md` — the command surface this mirrors, and the source
   of every behaviour described above.
-- `Sources/photogoroundd/Service/Router.swift` — prefix dispatch, and the
+- `MacOS/Agent/Sources/Router.swift` — prefix dispatch, and the
   fallback to the pictures that makes a missed claim silent.
-- `Sources/photogoroundd/Service/DashboardEndpoint.swift`,
-  `DashboardPage.swift`, `Sources/photogoroundd/js/` — the precedent for
+- `MacOS/Agent/Dashboard/Sources/DashboardEndpoint.swift`,
+  `DashboardPage.swift`, `MacOS/Agent/Dashboard/Resources/` — the precedent for
   serving a page from the agent.
-- `Sources/photogoroundd/Service/SourceEndpoint.swift` — the existing write
+- `MacOS/Agent/Endpoints/Sources/SourceEndpoint.swift` — the existing write
   routes, and the versioned-path handling.
-- `Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift`, `Plans/Service Port
-  Plan.md` — which port a variant binds.
+- `Shared/Sources/PhotoGoRoundAgentAPI/Host/ServiceAddress.swift`,
+  `Plans/Service Port Plan.md` — which port a variant binds.
 - `Plans/Build Plan.md` — *What "install" means, per product*, and the Release
   story this assumes.
 - `TODO.md` — *Installing by launching the app*, *A menu-bar app for shipping*,

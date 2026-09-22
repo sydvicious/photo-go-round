@@ -72,16 +72,16 @@ check_pair() {
         [[ " $UNIVERSAL " == *" $flag "* ]] && continue
         # A man page names the flags of the scripts it points at, too. It is
         # only drift if no tool of ours accepts it and no script does either.
-        grep -qh "\"$flag\"" Sources/pgr_ctl/PgrCtlOptions.swift \
-            Sources/photogoroundd/Options.swift Sources/pgr_install/main.swift 2>/dev/null && continue
+        grep -qh "\"$flag\"" MacOS/Tools/pgr_ctl/Sources/PgrCtlOptions.swift \
+            MacOS/Agent/Sources/Options.swift MacOS/Tools/pgr_install/Sources/main.swift 2>/dev/null && continue
         grep -qh -- "$flag" Scripts/*.sh 2>/dev/null && continue
         fail "$(basename "$doc") documents $flag and nothing accepts it"
     done < <(documented_flags "$doc")
 }
 
-check_pair "pgr_ctl" Sources/pgr_ctl/PgrCtlOptions.swift Documentation/pgr_ctl.md
-check_pair "photogoroundd" Sources/photogoroundd/Options.swift Documentation/photogoroundd.md
-check_pair "pgr_install" Sources/pgr_install/main.swift Documentation/pgr_install.md
+check_pair "pgr_ctl" MacOS/Tools/pgr_ctl/Sources/PgrCtlOptions.swift Documentation/pgr_ctl.md
+check_pair "photogoroundd" MacOS/Agent/Sources/Options.swift Documentation/photogoroundd.md
+check_pair "pgr_install" MacOS/Tools/pgr_install/Sources/main.swift Documentation/pgr_install.md
 
 echo "scripts named in documents"
 while IFS=: read -r file line text; do
@@ -91,7 +91,7 @@ while IFS=: read -r file line text; do
         echo "$text" | grep -qiE 'deleted|retired|went on|no longer' && continue
         fail "$file:$line names $script, which does not exist"
     done
-done < <(grep -rn "Scripts/" README.md Documentation/*.md app/mac/FEATURES.md 2>/dev/null)
+done < <(grep -rn "Scripts/" README.md Documentation/*.md MacOS/Desktop/FEATURES.md 2>/dev/null)
 
 echo
 if (( FAILURES )); then

@@ -20,7 +20,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$REPO/app/Photo-Go-Round.xcodeproj"
+PROJECT="$REPO/Photo-Go-Round.xcodeproj"
 DERIVED_DATA="$HOME/.claude/build/photo-go-round/DerivedData"
 PRODUCTS="$DERIVED_DATA/Build/Products/Claude"
 SERVER="$PRODUCTS/Photo-Go-Round.app/Contents/Helpers/Photo-Go-Round Server.app"

@@ -12,7 +12,7 @@ agent builds uses `-configuration Claude`, and lands under
 `~/.claude/build/photo-go-round`:
 
 ```bash
-xcodebuild build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Server" \
+xcodebuild build -project Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Server" \
     -destination "platform=macOS" -configuration Claude \
     -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData"
 ```
@@ -23,14 +23,15 @@ called, ok." Not `swift build`: it has only `debug` and `release`, so it cannot
 produce the `Claude` identity, and an agent built that way binds Syd's Debug
 port and carries his label.
 
-The tests run the same way, through the package's own scheme — note that this
-one takes no `-project`, because it is a package scheme:
+The tests run the same way, through the package's own scheme. It is a package
+scheme, so it takes the package's workspace rather than `-project`; through the
+project it finds no test bundles:
 
 ```bash
-xcodebuild test -scheme "Package Tests" -destination "platform=macOS,arch=arm64" -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData"
+xcodebuild test -workspace .swiftpm/xcode/package.xcworkspace -scheme "Package Tests" -destination "platform=macOS,arch=arm64" -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData"
 ```
 
-That covers all five package test targets. `Tests/Package Tests.xctestplan` is
+That covers all five package test targets. `Package Tests.xctestplan` is
 what lists them.
 
 **Nothing generated goes in the repository.** Syd, 2026-09-19: "I really don't
@@ -136,7 +137,7 @@ pluginkit -r "$HOME/.claude/build/photo-go-round/DerivedData/Build/Products/Clau
 Fix the cause rather than silencing it, and verify with a clean build:
 
 ```bash
-xcodebuild clean build -project app/Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Server" \
+xcodebuild clean build -project Photo-Go-Round.xcodeproj -scheme "Photo-Go-Round Server" \
     -destination "platform=macOS" -configuration Claude \
     -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData" 2>&1 \
     | sed 's/\x1b\[[0-9;]*m//g' | grep -E "warning:|error:"

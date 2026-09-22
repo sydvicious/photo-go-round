@@ -28,7 +28,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$REPO/app/Photo-Go-Round.xcodeproj"
+PROJECT="$REPO/Photo-Go-Round.xcodeproj"
 CONFIGURATION="${PGR_CONFIGURATION:-Debug}"
 
 # **Nothing generated goes in the repository.** Syd, 2026-09-19: "I really don't

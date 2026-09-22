@@ -1,6 +1,6 @@
 # Installing Photo-Go-Round on a Mac
 
-Three products run outside the app: the agent, the wallpaper extension and the screensaver. **Every build of `Photo-Go-Round.app` carries all three inside its bundle and installs them itself** — at launch, and from its Help menu. That is the route this file starts with. Each product also has an `Install …` scheme in `app/Photo-Go-Round.xcodeproj`, the development route, further down.
+Three products run outside the app: the agent, the wallpaper extension and the screensaver. **Every build of `Photo-Go-Round.app` carries all three inside its bundle and installs them itself** — at launch, and from its Help menu. That is the route this file starts with. Each product also has an `Install …` scheme in `Photo-Go-Round.xcodeproj`, the development route, further down.
 
 ## Installing from the app
 

@@ -66,17 +66,20 @@ let package = Package(
     targets: [
         .target(
             name: "PhotoGoRoundAgentAPI",
+            path: "Shared/Sources/PhotoGoRoundAgentAPI",
             swiftSettings: everyTarget
         ),
         .target(
             name: "PhotoGoRoundKit",
             dependencies: ["PhotoGoRoundAgentAPI"],
+            path: "MacOS/Shared/Sources/PhotoGoRoundKit",
             swiftSettings: everyTarget
         ),
         .target(
             name: "PhotoGoRoundDisplay",
             // The client, not the kit: all it wants is the published port.
             dependencies: ["PhotoGoRoundAgentAPI"],
+            path: "Shared/Sources/PhotoGoRoundDisplay",
             swiftSettings: everyTarget
         ),
         // Terminal output, shared by the two executables and by nothing else.
@@ -85,15 +88,14 @@ let package = Package(
         // while this is for a person with a terminal open.
         .target(
             name: "Console",
+            path: "MacOS/Shared/Sources/Console",
             swiftSettings: everyTarget
         ),
         .executableTarget(
             name: "photogoroundd",
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit", "Console"],
-            // The dashboard's page, stylesheet and script. Not package
-            // resources: the Xcode target copies them into the app bundle, and
-            // `DashboardPage` reads them from here when there is no bundle.
-            exclude: ["js"],
+            path: "MacOS/Agent",
+            sources: ["Sources", "Dashboard/Sources", "Endpoints/Sources"],
             swiftSettings: everyTarget
         ),
         // The rig. A separate binary because the service has exactly one job
@@ -104,6 +106,7 @@ let package = Package(
             // wallpaper's domain and `ShuffleInterval` — so `wallpaper set`
             // cannot disagree with what the app writes and the extension reads.
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit", "PhotoGoRoundDisplay", "Console"],
+            path: "MacOS/Tools/pgr_ctl/Sources",
             // Consumed by the linker below, not copied into a bundle.
             exclude: ["Info.plist"],
             swiftSettings: everyTarget,
@@ -117,43 +120,51 @@ let package = Package(
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",
                     "-Xlinker", "__info_plist",
-                    "-Xlinker", "Sources/pgr_ctl/Info.plist",
+                    "-Xlinker", "MacOS/Tools/pgr_ctl/Sources/Info.plist",
                 ])
             ]
         ),
         .target(
             name: "PhotoGoRoundInstall",
             dependencies: ["PhotoGoRoundAgentAPI"],
+            path: "MacOS/Shared/Sources/PhotoGoRoundInstall",
             swiftSettings: everyTarget
         ),
         .executableTarget(
             name: "pgr_install",
             dependencies: ["PhotoGoRoundInstall", "PhotoGoRoundAgentAPI", "Console"],
+            path: "MacOS/Tools/pgr_install/Sources",
             swiftSettings: everyTarget
         ),
         .testTarget(
             name: "PhotoGoRoundInstallTests",
             dependencies: ["PhotoGoRoundInstall"],
+            path: "MacOS/Shared/Tests/PhotoGoRoundInstallTests",
             swiftSettings: everyTarget
         ),
         .testTarget(
             name: "PhotoGoRoundKitTests",
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundKit"],
+            path: "MacOS/Shared/Tests/PhotoGoRoundKitTests",
             swiftSettings: everyTarget
         ),
         .testTarget(
             name: "PhotoGoRoundDisplayTests",
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundDisplay"],
+            path: "Shared/Tests/PhotoGoRoundDisplayTests",
             swiftSettings: everyTarget
         ),
         .testTarget(
             name: "photogorounddTests",
             dependencies: ["PhotoGoRoundAgentAPI", "photogoroundd"],
+            path: "MacOS/Agent",
+            sources: ["Tests", "Dashboard/Tests", "Endpoints/Tests"],
             swiftSettings: everyTarget
         ),
         .testTarget(
             name: "pgr_ctlTests",
             dependencies: ["PhotoGoRoundAgentAPI", "PhotoGoRoundDisplay", "pgr_ctl"],
+            path: "MacOS/Tools/pgr_ctl/Tests",
             swiftSettings: everyTarget
         ),
     ]

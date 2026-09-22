@@ -21,11 +21,12 @@ Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't r
 - **The test run stalls the cooperative pool for up to two seconds.** Measured 2026-09-16 while fixing `RequestBodyTests`: a 10 ms `Task.sleep` resumed 1.2–1.96 s late in full parallel runs of the agent's tests. Not traced to which suites hold pool threads. The same shape as the agent's own pool starvation that afternoon, so the one lead from the flaky-test work that may matter outside the tests. Syd, the same evening, on flaky tests that expose no code problem: "are they really worth it?"
 - **A test that asks the real Photos library: `SourceEndpointTests` "An album identifier that names nothing is refused at the door".** It posts a `photos_collection` source through the endpoint's default providers, which ask PhotoKit on whatever Mac runs the tests, under a time bound. It failed in two full runs while `ServingUnderLoadTests` froze the pool.
 - **`PhotosSourceEditingTests` fails under machine load, against a fake library.** 2026-09-21, load average 21–28 from something else on the Mac: five of its tests failed in each of three full runs (seven in one, with two walk-stall tests), each taking ~11 s, and all 18 passed alone in 5 s. They fail because `SourceStore.validationLimit` (5 s) expires, so the source is recorded rather than refused. An untouched copy of `HEAD` passed once and failed `SourceEndpointTests` once in the same window, so it is load, not a change. A test that races a wall clock against the pool — the same shape as the item above.
-- **Every configuration's screensaver has the same principal class, `PGRScreenSaverView`.** Found 2026-09-21: with the Debug saver loaded, a `(Claude)` saver shown in the same host ran Debug's code, on Debug's port, against Syd's running agent — the Objective-C runtime keeps the first class of a name in a process. So the three configurations' savers install side by side but cannot run side by side, which `CLAUDE.md`'s table implies they can. The class is named by `@objc(PGRScreenSaverView)` in `app/saver/Sources/PGRScreenSaverView.swift` and `NSPrincipalClass` in the saver's `Info.plist`; each configuration needs its own.
+- **Every configuration's screensaver has the same principal class, `PGRScreenSaverView`.** Found 2026-09-21: with the Debug saver loaded, a `(Claude)` saver shown in the same host ran Debug's code, on Debug's port, against Syd's running agent — the Objective-C runtime keeps the first class of a name in a process. So the three configurations' savers install side by side but cannot run side by side, which `CLAUDE.md`'s table implies they can. The class is named by `@objc(PGRScreenSaverView)` in `MacOS/Screensaver/Sources/PGRScreenSaverView.swift` and `NSPrincipalClass` in the saver's `Info.plist`; each configuration needs its own.
 - **Restructure the tests so none fails on wall-clock time.** Syd, 2026-09-21: "some of the tests need to be restructured not to fail on wall clock time." Started and set aside the same day; nothing changed yet.
   - **Why they lose under load:** `Deadline.run` times on a `DispatchSourceTimer` since 2026-09-18, so its limit expires on time even when the pool is starved — while the work it bounds, a fake that would answer at once, waits for a pool thread. The timer was made robust for the agent; for a test that expects the answer, that is what makes it lose.
   - **The likely shape of the fix:** production bounds such as `SourceStore.validationLimit` become injectable, so a test expecting an answer passes a bound it cannot reach, and a test about silence uses a fake that never answers — which then fails only one way whatever the clock does. The "await the work, don't race it" idea above is the same thing.
-  - **Scope:** about 55 test files mention a sleep, a clock, a `Duration` or a timeout (`grep -E "Task\.sleep|ContinuousClock|Deadline|\.seconds\(|\.milliseconds\(|timeout|within:"` over `Tests` and `app/tests`). Many test the bounds themselves (`DeadlineTests`, `ServeWaitTests`, `PoolWaitTests`) and need a different treatment from those that only happen to sit behind one. Classify first; known losers so far are `PhotosSourceEditingTests` (five tests), the two walk-stall tests, and `SourceEndpointTests` above.
+  - **Scope:** about 55 test files mention a sleep, a clock, a `Duration` or a timeout (`grep -E "Task\.sleep|ContinuousClock|Deadline|\.seconds\(|\.milliseconds\(|timeout|within:"` over every `Tests` folder). Many test the bounds themselves (`DeadlineTests`, `ServeWaitTests`, `PoolWaitTests`) and need a different treatment from those that only happen to sit behind one. Classify first; known losers so far are `PhotosSourceEditingTests` (five tests), the two walk-stall tests, and `SourceEndpointTests` above.
+  - **Another, 2026-09-22:** `SilentLibraryTests`, *A stalled walk leaves the source unavailable, not emptied* and *A walk that stalls part way is bounded, and keeps what it received*, failed once in a full `Package Tests` run, the suite taking 10 seconds. The suite alone passed three times out of three in 5 seconds, and the next full run passed.
 - **Photos albums stay "not responding" for up to five minutes after the agent starts.** *Syd: "is worrying", then "diagnoising startup slowness requires its own sessions, so let's do those items later".* Left open, for its own session. At the 17:46 install both were marked unavailable at 17:46:14; Photos answered in 71 ms by 17:50; the label waits for the next scheduled refresh.
   - **The same shape, 2026-09-21:** adding 26 albums to a Release agent about a minute old took more than fifteen seconds — `201 POST /v2/sources` at 23:46:42, the panel's session having given up first. The session is fixed (`AgentSession.make(above:)`); why the add was that slow is not looked into.
 
@@ -116,10 +117,10 @@ Syd, 2026-09-17: "I flatout don't want NSLocks." Phase 5 of the agent performanc
 agent and the kit from sixteen to **zero**, with four documented exceptions that could not be actors.
 What it did not touch is everything else, and the plan closed 2026-09-19 still holding this.
 
-- **One in shipping code:** `app/wallpaper-extension/Sources/PaneHandler.swift:524`, a `static let
+- **One in shipping code:** `MacOS/Wallpaper/Sources/PaneHandler.swift:524`, a `static let
   lock`. The only one left in anything that runs on a person's Mac.
-- **Twenty-eight in test doubles**, across `Tests/PhotoGoRoundKitTests`, `Tests/photogorounddTests`,
-  `Tests/PhotoGoRoundDisplayTests` and `app/tests` — the recording spies that collect what a
+- **Twenty-eight in test doubles**, across `MacOS/Shared/Tests/PhotoGoRoundKitTests`, `MacOS/Agent/Tests`,
+  `Shared/Tests/PhotoGoRoundDisplayTests` and `MacOS/Desktop/Tests` — the recording spies that collect what a
   `@Sendable` closure was called with. `Mutex` is the like-for-like replacement; most are four-line
   classes.
 - **Not urgent, and worth saying why it is here at all:** none of these is a measured problem. The
@@ -154,10 +155,10 @@ that plan deliberately left as later work, and closing the plan would have burie
 
 Syd, 2026-09-16: "add a target for pgr_ctl to the Xcode project".
 
-- **The target is already there:** `pgr_ctl` in `app/Photo-Go-Round.xcodeproj`, which `Build Plan.md`, *The targets*, records, and which gained its `PhotoGoRoundDisplay` dependency on 2026-09-16.
+- **The target is already there:** `pgr_ctl` in `Photo-Go-Round.xcodeproj`, which `Build Plan.md`, *The targets*, records, and which gained its `PhotoGoRoundDisplay` dependency on 2026-09-16.
 - **Decided 2026-09-19: no install.** Syd: `pgr_ctl` is a copy or a symlink into `~/bin`, and Archive is the route for anything shipped. `Build Plan.md`, *The install phases*.
 - **What is left is one shared scheme each, for `pgr_ctl` and `pgr_install`.** Neither has one, so Xcode autocreates them per user and nobody else gets the settings — which is how the agent's scheme came to launch with `-NSDocumentRevisionsDebugMode` and refuse to start. Every other target has one now, including the three `Install …` schemes.
-- `Package Tests` is the exception to where they live: `.swiftpm/xcode/xcshareddata/xcschemes/`, because a scheme whose targets are the package's is a package scheme. `pgr_ctl` and `pgr_install` are Xcode targets, so theirs go in `app/Photo-Go-Round.xcodeproj/xcshareddata/xcschemes/` with the rest.
+- `Package Tests` is the exception to where they live: `.swiftpm/xcode/xcshareddata/xcschemes/`, because a scheme whose targets are the package's is a package scheme. `pgr_ctl` and `pgr_install` are Xcode targets, so theirs go in `Photo-Go-Round.xcodeproj/xcshareddata/xcschemes/` with the rest.
 - Set `debugDocumentVersioning = "NO"` in both, as every other scheme now does.
 
 ## A section of our own for the screensaver in System Settings
@@ -171,8 +172,8 @@ Syd, 2026-09-16: "Is there a way to have a custom section for our screensaver?" 
 
 Syd, 2026-09-16: "change the tag lines for both wallpaper and screensaver to "Your photos, shuffled"."
 
-- **The wallpaper's** is the pane item's `localizedDescription` in `app/wallpaper-extension/Sources/PaneModels.swift`, now "Photographs from your library, shuffled".
-- **The screensaver has none in its sources.** A search for the wallpaper's wording and for "your library" and "your photo" under `app/` finds no description for the `.saver`; where System Settings would show one for it is not known.
+- **The wallpaper's** is the pane item's `localizedDescription` in `MacOS/Wallpaper/Sources/PaneModels.swift`, now "Photographs from your library, shuffled".
+- **The screensaver has none in its sources.** A search for the wallpaper's wording and for "your library" and "your photo" under `MacOS/` finds no description for the `.saver`; where System Settings would show one for it is not known.
 
 ## Statistics about resized copies, where they belong
 
@@ -231,7 +232,7 @@ The saver's tile in the Screen Saver pane is the system's generic placeholder �
 
 Syd, 2026-09-21, after a `(Claude)` screensaver with no agent anywhere showed "Waiting for Photos": show **"No agent running"** when there is no agent running, **"No Photos available"** when there are zero photos in the database, and **"Waiting for Photos"** otherwise. **Capitalized as a sentence, except "Photos"**, which keeps its capital everywhere — Syd, the same day: "Initial capitals, small everywhere else, except for 'Photos'". So today's "No Photos Available" becomes "No Photos available".
 
-- **Today `Shuffle.Trouble.words` maps `.noAgent` and `.silent` both to "Waiting for Photos"**, `Sources/PhotoGoRoundDisplay/Shuffle.swift`. That follows two earlier decisions, which this one revises: 2026-09-09, "to the user, 'no agent' and 'stuck agent' are the same thing", and 2026-09-16, when "Open the Photo-Go-Round application to start it" became "Waiting for Photos". So `.noAgent` gets its own words; `.silent` — accepted the connection, never answered — stays "Waiting for Photos".
+- **Today `Shuffle.Trouble.words` maps `.noAgent` and `.silent` both to "Waiting for Photos"**, `Shared/Sources/PhotoGoRoundDisplay/Shuffle.swift`. That follows two earlier decisions, which this one revises: 2026-09-09, "to the user, 'no agent' and 'stuck agent' are the same thing", and 2026-09-16, when "Open the Photo-Go-Round application to start it" became "Waiting for Photos". So `.noAgent` gets its own words; `.silent` — accepted the connection, never answered — stays "Waiting for Photos".
 - **"No Photos Available" is not "zero photos in the database" today.** `.noPhotos` is said after three empty answers in a row (`emptyAnswersBeforeSaying`), which a library with photos but nothing servable yet also produces. Saying it only for an empty database needs the agent to tell the client its count, which no endpoint the surfaces use does now.
 - The words appear in the window, the screensaver and the About box; all three read `Trouble.words`.
 
@@ -255,7 +256,7 @@ Syd, 2026-09-10: *"make a menubar app for final shipping of this. The full deskt
 - **The empty state's wording points at "the Photo-Go-Round application"**, which would then mean the menu-bar item.
 - **It may be the wallpaper's host, or sit beside a separate wallpaper binary.** `Wallpaper Plan.md` Phase 2 expects the wallpaper to be its own binary, installed per user in `~/Library/LaunchAgents`; a menu-bar app is the other common shape for a rotator. Which one runs the wallpaper is decided there.
 - How it starts at login — a login item, or a per-user LaunchAgent like the agent — is open.
-- `app/mac/FEATURES.md` already sketches *A menu bar app* — a status item, and an item that brings the window up — and is where this starts.
+- `MacOS/Desktop/FEATURES.md` already sketches *A menu bar app* — a status item, and an item that brings the window up — and is where this starts.
 
 ## Metrics in the database
 
@@ -287,12 +288,6 @@ The agent should answer for its own configuration over HTTP, and its preference 
 - `pgr_ctl` keeps its direct access, as the rig rather than a client. Same exception it already holds for the database.
 - The screensaver's Options sheet is the first thing that needs this, and the reason it is parked above.
 
-## Reorganize the source code directories
-
-Syd, 2026-09-19: *"TODO.md: Reorganize the source code directories"*. Nothing is designed and nothing was discussed; this is the whole of it.
-
-- For whoever picks it up, the layout today: the Swift package's `Sources/` holds `PhotoGoRoundAgentAPI`, `PhotoGoRoundKit`, `PhotoGoRoundDisplay`, `Console`, `photogoroundd` and `pgr_ctl`; the Xcode project's `app/` holds `mac`, `ios` (empty), `common`, `agent`, `saver`, `wallpaper-extension`, `wallpaper-host`, `tests` and `Config`.
-
 ## `Photo-Go-RoundTests` is not in the default test run
 
 Carried out of `Plans/Xcode - Separate Build and Run.md` when it closed, 2026-09-19.
@@ -301,7 +296,7 @@ Carried out of `Plans/Xcode - Separate Build and Run.md` when it closed, 2026-09
 
 - **It is still runnable**, through the `Photo-Go-Round` scheme, which has it as a testable. Nothing is lost except that nobody runs it by habit.
 - **What to decide** is whether it belongs in the same plan behind a filter, in a second plan of its own, or nowhere — Syd skips GUI tests, and this is the suite closest to being one. `TODO.md`, *No GUI testing* is the standing position.
-- `Tests/Package Tests.xctestplan` is the file, and a test plan can hold more than one configuration if that turns out to be the shape.
+- `Package Tests.xctestplan` is the file, and a test plan can hold more than one configuration if that turns out to be the shape.
 
 ## Settings are the only data a user would miss
 
@@ -397,3 +392,31 @@ Syd, 2026-09-15: "don't build arch:x86_64 at all". And the scope of it, the same
   - `ARCHS = arm64` in the project's build settings — not set, since it would follow a release build too;
   - the wallpaper probe script's `$(uname -m)`, which would build x86_64 on an Intel Mac, and is the right answer for a dev build there.
 - **Check the local packages too.** The C++ hardening setting in the project did not reach the local package targets (`PLAN.md`, *Builds with no warnings*), so an architecture setting may not either. Verify with `lipo -archs` on every product after a clean build, not by reading settings.
+
+## Rename the product to "Photos-Go-Round"
+
+Syd, 2026-09-22: change the name of the app to "Photos-Go-Round". The repository keeps its name. Every user-visible name says "Photos-Go-Round", and every identifier string — preferences and the like — says `photosgoround`.
+
+- *Claude's reading, not decided:* "the like" covers bundle identifiers (`com.sydpolk.photogoround.*`), the LaunchAgent labels, the unified-log subsystem, and the storage paths. Changing a bundle identifier or storage path orphans what is already installed under the old one, so the change needs a migration or a clean uninstall first.
+
+## Retire the `photogoroundd` name
+
+Syd, 2026-09-22: ditch it as a target and as a name; the agent has a better name now — `Photos-Go-Round Server`.
+
+- *Claude's reading:* this is the package's `photogoroundd` executable product and target, its `.swiftpm` scheme, `photogorounddTests`, and `EXECUTABLE_NAME = photogoroundd` in the Server target. The documentation uses the name too: `Documentation/photogoroundd.md`, and mentions in `Installing.md`, `pgr_ctl.md`, `pgr_install.md` and `README.md`.
+
+## The screensaver preview is black when first selected
+
+Syd, 2026-09-22: the preview in System Settings is black when the screensaver is first selected.
+
+## An option in `uninstall.sh` to delete the user data
+
+Syd, 2026-09-22: add an option to `uninstall.sh` that deletes all of the user data — the database, the preferences, and the like. It deletes them only when the option is given.
+
+- *Claude's note:* `Scripts/scrub-dev.sh` already deletes the development libraries and, with `--preferences`, their preferences, and it refuses production on purpose. This option would reach production storage too, which is what separates it from the scrub.
+
+## Tests for the wallpaper extension's and screensaver's own code
+
+Syd, 2026-09-22: yes, add it. Nothing tests the code in `MacOS/Wallpaper/Sources` or `MacOS/Screensaver/Sources` — `Rotation`, `LastPicture`, `AgentPicture`, the pane models, `DisplayShuffles`, the saver view. What is tested is around them: `PhotoGoRoundDisplay`, the wallpaper's entitlements, the installs, and `pgr_ctl`'s wallpaper commands.
+
+- *Claude's note:* that code is compiled only into the extension and saver targets, so the package tests cannot reach it. Either the logic moves into a library the package tests link, or the two get Xcode test targets of their own. Not GUI tests.

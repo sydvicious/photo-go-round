@@ -212,9 +212,9 @@ Recorded in order, because one step of it was a wrong turn of a kind this projec
 
 **In the app, for now.** The obvious cost is that the wallpaper changes only while the app is open. That is accepted because Phase 2 removes it.
 
-**Why the code goes in the display library rather than the app target.** The loop needs `PictureClient`, `PixelSize` and the display identifier, all of which are already in `PhotoGoRoundDisplay`. If the loop lived in `app/mac/Sources`, Phase 2 would begin by moving it, which is what Phase 2 of `Screensaver Plan.md` had to do for `Shuffle` and `PictureLayerView`. That library already has one AppKit file behind `#if canImport(AppKit)`; the wallpaper's `NSScreen` and `NSWorkspace` code would be a second, and the loop above it would compile anywhere.
+**Why the code goes in the display library rather than the app target.** The loop needs `PictureClient`, `PixelSize` and the display identifier, all of which are already in `PhotoGoRoundDisplay`. If the loop lived in `MacOS/Desktop/Sources`, Phase 2 would begin by moving it, which is what Phase 2 of `Screensaver Plan.md` had to do for `Shuffle` and `PictureLayerView`. That library already has one AppKit file behind `#if canImport(AppKit)`; the wallpaper's `NSScreen` and `NSWorkspace` code would be a second, and the loop above it would compile anywhere.
 
-**How the app hosts it.** It needs a place that runs once the application has finished launching and lives as long as the app. The app is a SwiftUI `App` with no delegate today, so the smallest host is an `@NSApplicationDelegateAdaptor` whose `applicationDidFinishLaunching` starts the wallpaper. A property on the `App` struct would work but gives no clean moment at which `NSScreen.screens` is known to be ready. **Built that way:** `app/mac/Sources/AppDelegate.swift`, which `PhotoGoRoundApp` also uses to hand the wallpaper to the Settings window.
+**How the app hosts it.** It needs a place that runs once the application has finished launching and lives as long as the app. The app is a SwiftUI `App` with no delegate today, so the smallest host is an `@NSApplicationDelegateAdaptor` whose `applicationDidFinishLaunching` starts the wallpaper. A property on the `App` struct would work but gives no clean moment at which `NSScreen.screens` is known to be ready. **Built that way:** `MacOS/Desktop/Sources/AppDelegate.swift`, which `PhotoGoRoundApp` also uses to hand the wallpaper to the Settings window.
 
 **Nowhere, since 2026-09-16.** The loop is removed; the wallpaper is the extension. See *The app's loop, removed*.
 
@@ -225,7 +225,7 @@ Syd, 2026-09-10: "add an option to the app: a checkbox which says 'Also set wall
 - **Ticked, the wallpaper runs; unticked, it does not.** Unticking stops the loop and leaves the desktop showing whatever it has — the same rule as an empty library, since taking our picture down would mean choosing a replacement for the user. Ticking starts it, and the due rule decides what happens: a display whose stored time is under the interval old gets its stored file back and nothing new.
 - **It was the plan's first preference**, and `intervalSeconds` joined it the same day. Everything else waits for "options … later".
 - **Where it is stored — Claude's proposal, built that way:** the key `enabled` in the wallpaper's own domain, `com.sydpolk.photogoround.wallpaper.{dev|prod}`, beside the change times. The agent does not read it, and the Phase 2 binary would read the same key, so moving the wallpaper out of the app does not move the setting.
-- **Where it sits — Claude's proposal, built that way:** the Settings window, under its two panels, which is the app's one existing place for options, until the menu-bar app exists. It is listed in `app/mac/FEATURES.md` as an app feature.
+- **Where it sits — Claude's proposal, built that way:** the Settings window, under its two panels, which is the app's one existing place for options, until the menu-bar app exists. It is listed in `MacOS/Desktop/FEATURES.md` as an app feature.
 - **What it defaults to is open.** "Also" reads as opt-in, which is off; on means nobody has to find it. Listed under *Not yet decided*. **Built off**, Claude's pick while building: a development build then does not change anybody's desktop just by launching.
 - **It is the first way to stop the wallpaper**, which is what the pause control was for. Whether a separate pause is still wanted is folded into that item below.
 
@@ -706,7 +706,7 @@ Claude's draft, 2026-09-15, at Syd's "Let's build the real extension". **Not bui
 - **In development it is embedded in a shell app of its own**, `Photo-Go-Round Wallpaper Host`, and **not** in the main app. *Until 2026-09-15 this read "embedded in the main app, at `Photo-Go-Round.app/Contents/Extensions/`"; Syd: "I don't want the wallpaper extension installed every time I run the app even if there is no source change in it", then "for dev, we can make a shell app to put it in".* An appex registers only from inside a signed app bundle, so it needs some container; the shell app is that container, and building or running `Photo-Go-Round` now touches the extension not at all. In release every bundle goes inside the app wrapper and the app installs them — later work. See `Build Plan.md`.
 - **The app stays unsandboxed** — `ENABLE_APP_SANDBOX = NO` in both configurations, measured 2026-09-15 — and the appex carries its own sandbox, inheriting nothing. So does the shell app. That is the probes' arrangement, which ran four times.
 - **Registration is `pluginkit -a` on the shell app's embedded appex**, with nothing launched — measured 2026-09-15, along with the two ways that fail: a bare `.appex`, and an unsigned bundle holding only an `Info.plist`. Launching a containing app also registers it, which is how the four probes did it. No `lsregister` step, no LaunchAgent, no `launchctl`.
-- **Its sources are `app/wallpaper-extension/Sources`**, and it links `PhotoGoRoundDisplay` and `PhotoGoRoundAgentAPI`, rather than carrying the probe's private copies of `ServicePort` and the picture request.
+- **Its sources are `MacOS/Wallpaper/Sources`**, and it links `PhotoGoRoundDisplay` and `PhotoGoRoundAgentAPI`, rather than carrying the probe's private copies of `ServicePort` and the picture request.
 - **Entitlements, as the fourth probe measured them:** `com.apple.security.app-sandbox`, `com.apple.security.network.client`, and read-only temporary exceptions for the preference domains and their plists — the agent's, for the port, and the wallpaper's, for the interval.
 
 **What moves in from the probe**, unchanged in shape: the pane's section and item; the remote `CAContext` and `AVSampleBufferDisplayLayer`; `snapshot`; and the request to the agent as `system-wallpaper` with the display's UUID at the desktop's pixel size.
@@ -951,7 +951,7 @@ Syd, 2026-09-10: "the agent needs to log when a card is served to a wallpaper, a
 
 The change is small and sits entirely in the agent: a `display` field on `Served`, filled from the query, printed as `display=` in the log line and after the consumer on the console. The UUID is public for the same reason the source id is — a structural value somebody reads.
 
-**It is documented, so it is tested and the man page changes with it.** `Documentation/photogoroundd.md` says "Every request is logged to the console with the consumer, the size asked for, the deal ordinal, the bytes, and the latency"; the display joins that list. The assertion goes beside *A record carries who asked and what they asked for* in `Tests/photogorounddTests/RequestLogTests.swift`, which already checks the consumer.
+**It is documented, so it is tested and the man page changes with it.** `Documentation/photogoroundd.md` says "Every request is logged to the console with the consumer, the size asked for, the deal ordinal, the bytes, and the latency"; the display joins that list. The assertion goes beside *A record carries who asked and what they asked for* in `MacOS/Agent/Tests/RequestLogTests.swift`, which already checks the consumer.
 
 It is the one change this plan makes to the agent, and it is logging, not a new job.
 
@@ -963,7 +963,7 @@ Two cards an hour per display, against the screensaver's 341 an hour. **At sixty
 
 ## Testing
 
-**This section describes the app's own wallpaper loop, which went on 2026-09-16; `Tests/PhotoGoRoundDisplayTests/WallpaperTests.swift` went with it.** Left as written, like the probe entries above. What the extension is held to instead is in *The entitlements that did not follow* and in `Tests/PhotoGoRoundDisplayTests/WallpaperEntitlementsTests.swift`.
+**This section describes the app's own wallpaper loop, which went on 2026-09-16; `Tests/PhotoGoRoundDisplayTests/WallpaperTests.swift` went with it.** Left as written, like the probe entries above. What the extension is held to instead is in *The entitlements that did not follow* and in `Shared/Tests/PhotoGoRoundDisplayTests/WallpaperEntitlementsTests.swift`.
 
 The loop is written so a test drives it without touching anybody's desktop: the list of displays, the call that sets a desktop, and the clock are all passed in as closures. In `Tests/PhotoGoRoundDisplayTests`:
 
@@ -984,7 +984,7 @@ The loop is written so a test drives it without touching anybody's desktop: the 
 - a launch that is not due sets each display's stored file without asking the agent
 - unticking the checkbox stops the asking and sets nothing; ticking it again changes only displays that are due, and puts the others' stored files back
 - the extension follows the content type
-- in `Tests/photogorounddTests/RequestLogTests.swift`: a served request records its consumer and its display, and a request that names no display records none
+- in `MacOS/Agent/Tests/RequestLogTests.swift`: a served request records its consumer and its display, and a request that names no display records none
 - each deployment resolves its own directory and domain, and neither names the agent's container
 - `intervalSeconds` is thirty minutes when unset — sixty seconds until 2026-09-13 — a changed value applies without a restart, nonsense is ignored or clamped, and the loop looks again at least every thirty seconds — and every other test sets its interval through the preference, the way `defaults write` would
 
@@ -1000,12 +1000,12 @@ What no test can reach is whether the desktop actually changes, whether the same
 
 - `Sources/PhotoGoRoundDisplay/Wallpaper.swift` — `WallpaperDisplay`; `WallpaperHome`, the domain and directory per deployment; `Wallpaper`, the loop, driven by closures and `@Observable` so the checkbox can bind to it; and an AppKit extension holding `Wallpaper.desktop()`, `fitOptions()`, the `NSWorkspace` calls and `watchTheSystem()`.
 - `Tests/PhotoGoRoundDisplayTests/WallpaperTests.swift` — 22 tests.
-- `app/mac/Sources/AppDelegate.swift` starts it after launch; `PhotoGoRoundApp` hands it to the Settings window; `SourcesSettingsView` has the checkbox under its two panels.
+- `MacOS/Desktop/Sources/AppDelegate.swift` starts it after launch; `PhotoGoRoundApp` hands it to the Settings window; `SourcesSettingsView` has the checkbox under its two panels.
 
 **Removed 2026-09-16.** All of the above is in git at the commit before the removal; see *The app's loop, removed*.
-- `Sources/photogoroundd/Service/PictureEndpoint.swift` — `display=`, with two tests in `RequestLogTests` and the sentence in `Documentation/photogoroundd.md`.
-- `Sources/PhotoGoRoundDisplay/Shuffle.swift` — `trouble(from:)` is no longer `private`.
-- `Sources/PhotoGoRoundAgentAPI/Host/HostEnvironment.swift` — `Deployment.identifier` is public, so the wallpaper's domains are spelled from it rather than from a second copy.
+- `MacOS/Agent/Endpoints/Sources/PictureEndpoint.swift` — `display=`, with two tests in `RequestLogTests` and the sentence in `Documentation/photogoroundd.md`.
+- `Shared/Sources/PhotoGoRoundDisplay/Shuffle.swift` — `trouble(from:)` is no longer `private`.
+- `Shared/Sources/PhotoGoRoundAgentAPI/Host/HostEnvironment.swift` — `Deployment.identifier` is public, so the wallpaper's domains are spelled from it rather than from a second copy.
 - `Scripts/wallpaper-probe.swift` — kept, as the saver's spike was.
 
 **Choices made while building, all Claude's and all open to Syd:** the checkbox is off until ticked; `intervalSeconds` is clamped to between ten seconds and seven days; the loop looks again at least every thirty seconds.
@@ -1049,7 +1049,7 @@ Named here first, then brought into line on 2026-09-10 at Syd's request — "ple
 - **`PLAN.md` Phase 7** says "scheduled by the server". The app runs it now, and later its own binary.
 - **`PLAN.md`, *Wallpaper mechanics and their limits***, says "the practical mitigation is for the agent to re-apply", and *Wallpaper is asserted continuously* lists "agent launch" among the events. Both mean whatever runs the wallpaper, not the agent.
 - **`PLAN.md`, *Alternatives considered and rejected*,** says "The agent is what makes the wallpaper schedule real." Only in the sense that it serves the pictures.
-- **`Sources/pgr_ctl/ServiceCommand.swift`** and **`app/mac/FEATURES.md`, *The app brings its own agent***, describe `SMAppService.agent` with the plist inside the bundle — "no writing into `~/Library/LaunchAgents`". That is the opposite of the per-user plist Syd specified on 2026-09-10.
+- **`Sources/pgr_ctl/ServiceCommand.swift`** and **`MacOS/Desktop/FEATURES.md`, *The app brings its own agent***, describe `SMAppService.agent` with the plist inside the bundle — "no writing into `~/Library/LaunchAgents`". That is the opposite of the per-user plist Syd specified on 2026-09-10.
 - **TODO.md, *Design the wallpaper***, lists "Who owns the loop" as open. It is answered. Its "Decided, 2026-09-09" entry puts the files in `<container>/wallpapers/` and says `HostEnvironment` should give the path out; both are reversed by "the app should not need to see the agent's container."
 - **TODO.md, *Sandboxing, and whether the App Store is reachable***, does not mention the wallpaper. *2026-09-14: Syd's "reverse-engineering the wallpaper extension API will mean we can't sandbox this" — corrected to "you are right about the App Store; that is what I meant" — belongs there too, as does "We will continue to support both until I decide on trying to sandbox or not."; see* Getting into System Settings › Wallpaper. Sandboxing it would move its files out of `Application Support` and into a real container — Syd: "we will probably have to move it if we want to sandbox."
 - **TODO.md, *A wallpaper bundle, so the wallpaper runs without the app***, written earlier on 2026-09-14, does not know that the bundle is meant for the Wallpaper pane, that the probe comes first, or that the saver's script is the model Syd expects. Not changed; Syd asked for this file only.
@@ -1188,11 +1188,11 @@ The gates:
 - `PLAN.md` — Phase 7; *One display mode in v1*; *Every surface has a defined empty state*; *Wallpaper mechanics and their limits*; *Wallpaper is asserted continuously, never set once*; *Consequences of one shared queue*; *The empty state*; *Beyond 0.1* (*Display styles*, *Timing and transitions*, *TODO: separate pools of sources*).
 - `TODO.md` — *Design the wallpaper*; *Sandboxing, and whether the App Store is reachable*; *Installing by launching the app*; *A menu-bar app for shipping*; *What System Settings › Wallpaper needs from us*.
 - `Scripts/wallpaper-probe.swift` — the Phase 1 probe: `show`, `fill`, `redraw`, `restore`.
-- `Sources/PhotoGoRoundDisplay/Wallpaper.swift`, `Tests/PhotoGoRoundDisplayTests/WallpaperTests.swift`, `app/mac/Sources/AppDelegate.swift` — Phase 1 as built. *Removed 2026-09-16; `Sources/PhotoGoRoundDisplay/WallpaperPreferences.swift` and its tests are what remain.*
+- `Sources/PhotoGoRoundDisplay/Wallpaper.swift`, `Tests/PhotoGoRoundDisplayTests/WallpaperTests.swift`, `MacOS/Desktop/Sources/AppDelegate.swift` — Phase 1 as built. *Removed 2026-09-16; `Shared/Sources/PhotoGoRoundDisplay/WallpaperPreferences.swift` and its tests are what remain.*
 - `Screensaver Plan.md` — the surface this one follows, and *Moving Shuffle and PictureLayerView* for why shared code goes in the display library.
-- `app/mac/FEATURES.md` — *The app brings its own agent*.
-- `Sources/PhotoGoRoundDisplay/` — `PictureClient.swift`, `PictureLayerView.swift` (`identifier(of:)`), `Shuffle.swift`, `AspectFit.swift`.
-- `Sources/PhotoGoRoundAgentAPI/` — `Host/HostEnvironment.swift`, `Model/Consumer.swift` (`ConsumerKind.wallpaper`), `Support/Log.swift` (`Log.wallpaper`).
+- `MacOS/Desktop/FEATURES.md` — *The app brings its own agent*.
+- `Shared/Sources/PhotoGoRoundDisplay/` — `PictureClient.swift`, `PictureLayerView.swift` (`identifier(of:)`), `Shuffle.swift`, `AspectFit.swift`.
+- `Shared/Sources/PhotoGoRoundAgentAPI/` — `Host/HostEnvironment.swift`, `Model/Consumer.swift` (`ConsumerKind.wallpaper`), `Support/Log.swift` (`Log.wallpaper`).
 - `Sources/pgr_ctl/ServiceCommand.swift` and `Scripts/make-agent-bundle.sh` — both deleted 2026-09-19. The agent is installed by `pgr_install agent`, run by ⌘R on the **Install Agent** scheme; `Documentation/pgr_install.md`.
 - Apple: `NSWorkspace.setDesktopImageURL(_:for:options:)`, `desktopImageURL(for:)`, `NSWorkspace.DesktopImageOptionKey`; `launchd.plist(5)` (`LimitLoadToSessionType`); `SMAppService`.
 - `/System/Library/ExtensionKit/ExtensionPoints/com.apple.wallpaper.appexpt` and `/System/Library/ExtensionKit/Extensions/Wallpaper*.appex` — the extension point and Apple's extensions, read 2026-09-14; `pluginkit -m -v -p com.apple.wallpaper`, `codesign -d --entitlements`, `otool -L`.
@@ -1209,7 +1209,7 @@ The gates:
 - `Scripts/wallpaper-extension-probe/PaneHandler.swift`, `PaneModels.swift`, `ProbePicture.swift` — the second extension probe.
 - `Documentation/Wallpaper Extension.md` — the steps for building, registering and running the real extension, 2026-09-15. *Named `Wallpaper Extension Probe.md` until that day, when it stopped describing a probe.*
 - `/System/Library/PrivateFrameworks/WallpaperExtensionKit.framework` — `WallpaperSnapshotXPC`'s `encodeWithCoder:` and `initWithCoder:`, disassembled 2026-09-15 for *What the third probe found*, from a harness that loaded the framework; and the same harness sending a snapshot through an anonymous `NSXPCListener`. Both harnesses were built under `~/.claude/build/photo-go-round/`, not kept in the repository.
-- Read for *The fourth probe*: `Screensaver Plan.md`, Phase 1 and *The question the entitlements do not answer: finding the port*; `Sources/PhotoGoRoundDisplay/ServicePort.swift` and `PictureClient.swift`; `Sources/photogoroundd/Service/PictureEndpoint.swift`; `Sources/PhotoGoRoundAgentAPI/Model/Consumer.swift`; and the entitlements of `/System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex`, 2026-09-15.
+- Read for *The fourth probe*: `Screensaver Plan.md`, Phase 1 and *The question the entitlements do not answer: finding the port*; `Shared/Sources/PhotoGoRoundDisplay/ServicePort.swift` and `PictureClient.swift`; `MacOS/Agent/Endpoints/Sources/PictureEndpoint.swift`; `Shared/Sources/PhotoGoRoundAgentAPI/Model/Consumer.swift`; and the entitlements of `/System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex`, 2026-09-15.
 - Phosphene, read for *The third probe*: `PhospheneExtension/SnapshotCreation.swift`, `createSnapshotXPC` in `RuntimeHelpers.swift`, `BMPCache.swift`, the `invalidateSnapshots` calls in `WallpaperXPCHandler.swift`, and the README's *Quirks worth knowing*.
 - Phosphene, read for *The second probe*: `PhospheneExtension/WallpaperExtension-Bridging-Header.h`, `WallpaperXPCHandler.swift`, `CodableShims.swift`, `SettingsProvider.swift`, `RuntimeHelpers.swift`, `StillFrame.swift`, `SnapshotCreation.swift`.
 - Xcode's `DarwinProductTypes.xcspec`, in Swift Build's `SWBApplePlatform` plugin — the `app-extension` and `extensionkit-extension` product types.

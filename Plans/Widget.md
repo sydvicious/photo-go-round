@@ -185,8 +185,8 @@ Two consequences worth settling before Phase 2 rather than discovering in Phase 
 - `Plans/Wallpaper Plan.md` — per-build identity, `pluginkit`, and the install-script pattern.
 - `Plans/Screensaver Plan.md` — a sandboxed surface reaching the agent, and reading the port as a
   file.
-- `Sources/PhotoGoRoundAgentAPI/Model/Consumer.swift` — `ConsumerKind.widget`, and why a family is a
+- `Shared/Sources/PhotoGoRoundAgentAPI/Model/Consumer.swift` — `ConsumerKind.widget`, and why a family is a
   consumer.
-- `Sources/PhotoGoRoundAgentAPI/Support/Log.swift` — `Log.widget`, defined and unused.
+- `Shared/Sources/PhotoGoRoundAgentAPI/Support/Log.swift` — `Log.widget`, defined and unused.
 - `CLAUDE.md`, *Wallpaper builds carry their own identity* — what a Claude build of an extension must
   do differently.

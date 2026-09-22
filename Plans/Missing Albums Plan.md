@@ -140,7 +140,7 @@ The panel's colour rule holds: the line reads in the secondary style with the or
 
 **Built 2026-09-07.** The line sits under the chosen collections on the left, in caption size and the folder list's orange. The two buttons sit under Select Collections… on the right, small, with a spinner beside them while a removal is in flight. One missing album is asked about in the singular — "There is a missing album: Kids 2019. Do you want to remove its reference?" — and the message is built in the model rather than the view, so the wording is under test. Remove sends one delete per missing album inside a single change, which is what makes it one spinner and one lockout and lets a second press be ignored.
 
-`app/mac/FEATURES.md` owns what the panel looks like and will need this added when it is next audited. Not edited here.
+`MacOS/Desktop/FEATURES.md` owns what the panel looks like and will need this added when it is next audited. Not edited here.
 
 ## Reconnect
 
@@ -231,7 +231,7 @@ Amended 2026-09-07 for Phases 1 to 3:
 
 Still to amend:
 
-- `app/mac/FEATURES.md` — the Apple Photos group box's missing-albums line and its two buttons. Deferred to the Mac app audit, which is where every other drift in that file is waiting.
+- `MacOS/Desktop/FEATURES.md` — the Apple Photos group box's missing-albums line and its two buttons. Deferred to the Mac app audit, which is where every other drift in that file is waiting.
 
 # References
 
@@ -239,10 +239,10 @@ Still to amend:
 - `Apple Photos Plan.md` — Design Decisions on `.offline` never `.gone`; the `.gone` discussion at its end.
 - `Deck and Queue v2.md` — residency in the database; `cached_at` as the residency column.
 - Agent log, 2026-09-07 12:40, sources 110 and 111 — the excerpt in this conversation.
-- `Sources/PhotoGoRoundKit/Photos/PhotosCollectionSourceProvider.swift` — `existence`, `availability`, `enumerate`.
-- `Sources/PhotoGoRoundKit/Cache/PhotoCache.swift` — `serve`'s existence check; `handleFailedDownload`.
-- `Sources/PhotoGoRoundKit/Deck/Deck.swift` — `availablePredicate`.
-- `Sources/PhotoGoRoundKit/Sources/SourceStore.swift` — `reconcile(specs:)`, `markUnavailable`, `markAvailable`.
-- `Sources/PhotoGoRoundAgentAPI/Model/SourceSpec.swift` — the preference dictionary.
-- `Sources/photogoroundd/Service/SourceEndpoint.swift` — `Wire`, `wire(_:store:version:)`.
-- `app/mac/Sources/SourcesSettingsView.swift`, `SourcesModel.swift`, `CollectionsModel.swift` — the panel and the picker.
+- `MacOS/Shared/Sources/PhotoGoRoundKit/Photos/PhotosCollectionSourceProvider.swift` — `existence`, `availability`, `enumerate`.
+- `MacOS/Shared/Sources/PhotoGoRoundKit/Cache/PhotoCache.swift` — `serve`'s existence check; `handleFailedDownload`.
+- `MacOS/Shared/Sources/PhotoGoRoundKit/Deck/Deck.swift` — `availablePredicate`.
+- `MacOS/Shared/Sources/PhotoGoRoundKit/Sources/SourceStore.swift` — `reconcile(specs:)`, `markUnavailable`, `markAvailable`.
+- `Shared/Sources/PhotoGoRoundAgentAPI/Model/SourceSpec.swift` — the preference dictionary.
+- `MacOS/Agent/Endpoints/Sources/SourceEndpoint.swift` — `Wire`, `wire(_:store:version:)`.
+- `MacOS/Desktop/Sources/SourcesSettingsView.swift`, `SourcesModel.swift`, `CollectionsModel.swift` — the panel and the picker.
