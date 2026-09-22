@@ -1,7 +1,6 @@
 # Summary
 
-**Phases 1–5 built 2026-09-21; Phase 6 under way** — a Debug
-run on Syd's Mac the same night.
+**All six phases built and run on Syd's Mac, 2026-09-21 to 22.**
 
 Every build of `Photo-Go-Round.app` carries the agent, the wallpaper extension
 and the screensaver inside its wrapper. At every launch it installs and restarts
@@ -53,8 +52,8 @@ for Photos.
     route. Its rebuild section records the grey desktop and the re-register.
   - `README.md`'s install table leads with the app; its test count, which had
     drifted from 1,001, is gone rather than updated.
-- **Phase 6 — On Syd's Mac.** A Debug run from Xcode, then a Release archive in
-  `/Applications`, launched fresh and over itself. Syd's to run.
+- **Phase 6 — On Syd's Mac.** *Done 2026-09-22.* A Debug run from Xcode, then a
+  Release archive in `/Applications`, launched fresh and over itself.
   - *Debug launch, 2026-09-21 22:48, from a clean uninstall:* agent not
     installed → bootstrapped from the app's `Contents/Helpers`, answering 1.2 s
     later on 23172, which is 23000 plus the hash of Syd's short name. Wallpaper
@@ -96,8 +95,47 @@ for Photos.
   - *Confirmed on the next ⌘R, 23:09:17:* "not installed", then "not
     registered, but it is the chosen wallpaper", registered in 0.14 s,
     `WallpaperAgent` restarted. Syd: "wallpaper came back on its own".
-  - *Still to run:* a Release archive in `/Applications`, launched on a clean
-    Mac and again over itself.
+  - *Debug taken off by the Help menu, 23:44:* Uninstall Screensaver removed
+    the link and stopped `legacyScreenSaver`; Uninstall Wallpaper unregistered
+    `…wallpaper.debug.extension` and restarted `WallpaperAgent`; Uninstall
+    Agent booted out `….server.debug` and removed its plist.
+  - *Release archive, first launch from `/Applications`, 23:45:19:* agent not
+    installed → bootstrapped from `/Applications/Photo-Go-Round.app/Contents/
+    Helpers`, answering 2 s later; wallpaper not installed → registered from
+    `Contents/Library/Wallpaper` in 0.1 s, `WallpaperAgent` restarted; saver
+    not installed → linked into `/Applications/…/Contents/Resources`.
+  - **Adding 26 albums from the Release app said "The request timed out",
+    23:46; the agent added all 26 anyway** — `201 POST /v2/sources` at 23:46:42,
+    then "nothing new; 26 already listed" on the second Done. The panel's
+    session had `AgentSession`'s defaults: a 15-second gap between packets,
+    under its 20-, 30- and 120-second limits, and a 60-second whole answer
+    under the 120. The agent sends nothing until it is done, so the gap was
+    the bound. **Fixed:** `AgentSession.make(above:)`, used by the panel with
+    its longest limit; `AgentSessionTests` failed first, then passed. A
+    transport failure now logs a `panel:` line; it had logged nothing.
+    *Not fixed:* why the add took more than fifteen seconds on an agent a
+    minute old — `TODO.md`'s slow-Photos-after-startup item.
+  - *No Photos prompt for the Release app*, Syd noticed. Its designated
+    requirement is the Debug app's — identifier `com.sydpolk.photogoround`,
+    the same Apple Development certificate — so the grant from the Debug run
+    applies; the add reading all 26 albums is consistent with that.
+  - *Release archive replaced in `/Applications` and launched over the first
+    install, 23:56:30:* agent same → restarted, answering in 1 s; saver same,
+    left alone — the link into `/Applications` survived the app being replaced;
+    wallpaper "not installed" → registered, `WallpaperAgent` restarted.
+    **Replacing the app dropped the extension's registration, as a rebuild
+    does**, so a Release launch over itself always re-registers — Syd's
+    "unregister, re-register, tickle", by the "not installed" rule.
+  - *Confirmed, 2026-09-22:* Syd, "app, screensaver, wallpaper, and dashboard
+    all show the pics" from the Release app in `/Applications`.
+  - *Clean install, 2026-09-22 00:09:* every agent uninstalled, the app moved
+    out, Release storage moved to the Trash, both Photos grants reset with
+    `tccutil`. First launch: agent bootstrapped and answering in 1.5 s;
+    wallpaper "not registered, but it is the chosen wallpaper" → registered;
+    saver linked. System Settings, open across the install, listed the saver
+    only once reopened — now in `Installing.md`. Allow Access raised the
+    prompt, naming the app; after choosing albums the app, the wallpaper and
+    the screensaver all showed photos.
 
 # Design Decisions
 

@@ -27,6 +27,7 @@ Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't r
   - **The likely shape of the fix:** production bounds such as `SourceStore.validationLimit` become injectable, so a test expecting an answer passes a bound it cannot reach, and a test about silence uses a fake that never answers — which then fails only one way whatever the clock does. The "await the work, don't race it" idea above is the same thing.
   - **Scope:** about 55 test files mention a sleep, a clock, a `Duration` or a timeout (`grep -E "Task\.sleep|ContinuousClock|Deadline|\.seconds\(|\.milliseconds\(|timeout|within:"` over `Tests` and `app/tests`). Many test the bounds themselves (`DeadlineTests`, `ServeWaitTests`, `PoolWaitTests`) and need a different treatment from those that only happen to sit behind one. Classify first; known losers so far are `PhotosSourceEditingTests` (five tests), the two walk-stall tests, and `SourceEndpointTests` above.
 - **Photos albums stay "not responding" for up to five minutes after the agent starts.** *Syd: "is worrying", then "diagnoising startup slowness requires its own sessions, so let's do those items later".* Left open, for its own session. At the 17:46 install both were marked unavailable at 17:46:14; Photos answered in 71 ms by 17:50; the label waits for the next scheduled refresh.
+  - **The same shape, 2026-09-21:** adding 26 albums to a Release agent about a minute old took more than fifteen seconds — `201 POST /v2/sources` at 23:46:42, the panel's session having given up first. The session is fixed (`AgentSession.make(above:)`); why the add was that slow is not looked into.
 
 ## Audit all documentation against reality — done 2026-09-19
 
@@ -236,12 +237,8 @@ Syd, 2026-09-21, after a `(Claude)` screensaver with no agent anywhere showed "W
 
 ## Installing by launching the app
 
-Installing Photo-Go-Round should be the whole of installing Photo-Go-Round. **Needs its own plan document.**
+What is left after `Plans/Release App Installer.md`, which built the app as the installer on 2026-09-21: every build carries the agent, the extension and the screensaver, installs and restarts its agent at launch, and a Release launch registers the wallpaper and links the saver.
 
-- **The agent half is already designed** and not built: `app/mac/FEATURES.md`, *The app brings its own agent* — `photogoroundd` inside the app bundle at `Contents/Library/LoginItems/`, registered with `SMAppService.agent(plistName:)`. See also `PLAN.md`, *An installer is probably unnecessary*. **Changed 2026-09-10:** the agent installs as a per-user plist in `~/Library/LaunchAgents`, with the binary left in the app bundle — "this needs to support multiple users on the same machine."
-- **The saver half is not designed at all.** An unsandboxed Developer ID app can copy `Photo-Go-Round Screensaver.saver` into `~/Library/Screen Savers` itself, which is what `Scripts/make-saver-bundle.sh --install` does today by hand. *The bundle was `Photo-Go-Round.saver` until 2026-09-15.*
-- **Selecting it is probably not ours to do.** Installing a screensaver and making it the user's screensaver are different acts, and the second one is theirs.
-- **Updating is the part that bites.** `legacyScreenSaver` caches the loaded bundle for the life of its process and System Settings caches its list, so replacing an installed saver means killing both — the script already does this, and an app doing it silently to a running screensaver needs thought.
 - **Decide which deployment a shipped app runs in.** The app and the saver both ask for `.development` today; a shipped one must not.
 - **The window needs Install Agent and Launch Agent buttons.** Syd, 2026-09-09. They are what the empty state should offer when nothing is being served, rather than words.
 - **The empty state's agent wording is a placeholder that is wrong in one of the two places it appears.** It reads "Open the Photo-Go-Round application to start it", which is right on the screensaver and absurd in the window, because the window *is* the application. The buttons above are what the window should show instead. Until then the text stands, knowingly.

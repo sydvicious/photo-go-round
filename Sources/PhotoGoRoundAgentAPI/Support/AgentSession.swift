@@ -45,14 +45,31 @@ public enum AgentSession {
         return URLSession(configuration: configuration)
     }
 
+    /// A session for a client whose longest `Deadline` is `limit`: both
+    /// timeouts ten seconds above it, so the deadline is always the one that
+    /// fires.
+    ///
+    /// **Why the defaults will not do for everybody.** The agent sends nothing
+    /// until it has an answer, so `timeoutIntervalForRequest` — the gap between
+    /// packets — is in effect a bound on the whole answer too. Measured
+    /// 2026-09-21: adding 26 albums took the agent more than fifteen seconds,
+    /// and the settings panel's 30-second write limit never got to fire; the
+    /// session reported "The request timed out" first, while the agent went on
+    /// to add all 26.
+    public static func make(above limit: Duration) -> URLSession {
+        make(request: limit + .seconds(10), resource: limit + .seconds(10))
+    }
+
     /// The gap between packets. Generous, because it is the weaker of the two
     /// bounds and the one that a healthy-but-busy agent is most likely to brush
     /// against.
     public static let requestTimeout = Duration.seconds(15)
 
-    /// The whole answer, end to end. Above every `Deadline` a client applies,
+    /// The whole answer, end to end. Above the picture clients' `Deadline`,
     /// deliberately: the caller's bound is the one that decides what a person
     /// is told, and a transport that fired first would report the same silence
-    /// as a `URLError` with different words.
+    /// as a `URLError` with different words. **A client with a longer deadline
+    /// uses `make(above:)`** — both of these defaults sit below the settings
+    /// panel's.
     public static let resourceTimeout = Duration.seconds(60)
 }

@@ -35,7 +35,10 @@ struct SourceService {
         write: Duration = SourceService.defaultWriteLimit,
         consent: Duration = SourceService.defaultConsentLimit,
         transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse) = {
-            [session = AgentSession.make()] in try await session.data(for: $0)
+            // Above the longest of the three limits, so each is the one that
+            // fires: the defaults' fifteen-second gap cut a 26-album add short.
+            [session = AgentSession.make(above: SourceService.defaultConsentLimit)] in
+            try await session.data(for: $0)
         }
     ) {
         self.preferences = preferences
@@ -70,7 +73,7 @@ struct SourceService {
     /// fire while that dialog was still on screen and report a failure against
     /// an agent behaving perfectly. Bounded all the same: a prompt nobody ever
     /// answers must not lock the panel for the rest of the session.
-    static let defaultConsentLimit = Duration.seconds(120)
+    nonisolated static let defaultConsentLimit = Duration.seconds(120)
 
     // MARK: - What comes back
 
@@ -333,9 +336,10 @@ struct SourceService {
         request.httpMethod = method
         // **No `timeoutInterval`.** It used to be 15, which is the gap between
         // packets rather than a bound on the answer — see `AgentSession`. The
-        // session carries both of `URLSession`'s own timeouts, and both sit
-        // above the deadline below so that the deadline is always the one that
-        // fires and a silence is always reported as a silence.
+        // session carries both of `URLSession`'s own timeouts, made above the
+        // longest limit here with `make(above:)`, so that the deadline is always
+        // the one that fires and a silence is always reported as a silence.
+        // Until 2026-09-21 it used the defaults, and they sat below all three.
         if let body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -359,6 +363,14 @@ struct SourceService {
             )
             throw Failure.silent(limit: limit)
         } catch let error as URLError {
+            // Logged, since it is what the person was told: until 2026-09-21 a
+            // transport failure left the panel's side of the log empty.
+            Log.sources.error(
+                """
+                panel: \(method, privacy: .public) \(path, privacy: .public) \
+                failed: \(error.localizedDescription, privacy: .public)
+                """
+            )
             throw Failure.unreachable(error.localizedDescription)
         }
         guard let http = response as? HTTPURLResponse else { throw Failure.unreadable }

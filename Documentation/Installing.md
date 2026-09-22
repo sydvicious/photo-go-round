@@ -31,6 +31,8 @@ The appex is in `Contents/Library/Wallpaper`, not `Contents/Extensions`, so that
 
 **A Release build** is an archive, copied into `/Applications` and launched.
 
+**System Settings reads the list of screensavers once, when it opens.** One left open across an install does not show the new saver until it is quit and opened again. Seen 2026-09-22.
+
 **Photos access** is asked for in the app: Settings › Choose Collections › **Allow Access…**. An agent inside the app asks on the app's behalf, so the grant is the app's — `com.sydpolk.photogoround`, the same in every configuration.
 
 What each launch did, a line per product:
