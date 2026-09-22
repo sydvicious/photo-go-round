@@ -108,6 +108,22 @@ Host`. Hand Syd the Install scheme to run from his own Xcode.
 
 `Scripts/install-*.sh` and `Scripts/uninstall.sh` are his for the same reason.
 
+## Launching a built app installs. Never launch one
+
+**Since 2026-09-21 every launch of `Photo-Go-Round.app`, in every
+configuration, installs and restarts its own agent**, and may register the
+wallpaper extension and restart `WallpaperAgent`. So launching an app you built
+— `open`, a ⌘R of the `Photo-Go-Round` scheme, a test host — changes Syd's
+running system. Build it; do not run it.
+
+The `Claude` agent is Syd's to install, start, stop and remove, when you ask:
+
+```bash
+./Scripts/claude-agent.sh install
+```
+
+`Plans/Release App Installer.md`.
+
 After building `Photo-Go-Round Wallpaper Host`, unregister the copy and delete
 the host app, so nothing of yours is left in the Wallpaper pane:
 
