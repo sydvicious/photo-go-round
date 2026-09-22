@@ -53,16 +53,35 @@ public final class PictureLayerView: NSView {
         // No implicit animation on the swap: the cross-fade is its own thing
         // and arrives with the pan, and Core Animation's default half-second
         // dissolve is not it.
-        withoutAnimation { pictureLayer.contents = frame.image }
-        needsLayout = true
+        //
+        // **The rectangle is set here, with the contents, and not left to
+        // `layout()`.** Deferring it drew photographs at the wrong aspect
+        // ratio: `report()` calls `draws`, a surface that attaches in response
+        // calls straight back into `show`, and a `needsLayout` set from inside
+        // the layout pass is dropped rather than honoured — measured
+        // 2026-09-22, and the next `layoutSubtreeIfNeeded` does not bring it
+        // back. The new photograph kept the previous one's rectangle and
+        // `.resize` stretched it to fill, until something unrelated dirtied
+        // layout. Setting both together means they can never disagree.
+        withoutAnimation {
+            pictureLayer.contents = frame.image
+            position()
+        }
     }
 
     public override func layout() {
         super.layout()
-        withoutAnimation {
-            pictureLayer.frame = AspectFit.rect(of: photoSize, in: bounds.size)
-        }
+        withoutAnimation { position() }
         report()
+    }
+
+    /// Where the photograph goes, from its size and the view's.
+    ///
+    /// Called for a new photograph and for new bounds, because either one
+    /// changes the answer and `.resize` distorts whenever the rectangle and the
+    /// contents disagree.
+    private func position() {
+        pictureLayer.frame = AspectFit.rect(of: photoSize, in: bounds.size)
     }
 
     /// A backing-scale change is a resolution change even when the view's size

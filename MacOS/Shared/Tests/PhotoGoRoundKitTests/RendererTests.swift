@@ -207,15 +207,21 @@ struct RendererTests {
         let source = directory.appending(path: "sideways.jpg")
         try write(width: 400, height: 200, orientation: 6, to: source)
 
-        // A 200×400 photograph into a 100×100 box is width-limited at 100×200
-        // if the rotation were ignored, and height-limited at 50×100 once it is
-        // honoured. **No image returned may exceed either bound**, which is the
-        // claim the man page makes and the one a sideways photograph breaks
-        // when orientation is applied after the fit rather than before it.
+        // **The box has to be non-square, or this proves nothing.** Until
+        // 2026-09-22 it was 100×100, and a square box is the one shape where
+        // the bug cannot appear: the fit's longer edge is the same number
+        // whichever way round the photograph is, so the wrong input reached the
+        // decoder and produced the right answer. The real boxes are screens.
+        //
+        // A 200×400 photograph into a 300×150 box is height-limited at 75×150.
+        // Fitting the stored 400×200 instead gives 300×150, whose longer edge
+        // is 300, and the decoder turns that into a 150×300 portrait — twice
+        // the height the box allows. **No image returned may exceed either
+        // bound**, which is the claim the man page makes.
         let rendered = try PhotoRenderer.render(
-            contentsOf: source, fitting: 100, by: 100, as: .jpeg)
-        #expect(rendered.width <= 100)
-        #expect(rendered.height <= 100)
+            contentsOf: source, fitting: 300, by: 150, as: .jpeg)
+        #expect(rendered.width <= 300)
+        #expect(rendered.height <= 150)
         #expect(rendered.height > rendered.width)
     }
 

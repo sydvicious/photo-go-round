@@ -72,6 +72,9 @@ public enum PhotoRenderer {
 
     /// Renders the file at `url` to fit inside `width` × `height`.
     ///
+    /// **The box bounds the photograph as it will be drawn**, after its EXIF
+    /// orientation is honoured, rather than the pixels as they are stored.
+    ///
     /// **Never upscaled.** A client asking for a box larger than the original
     /// gets the original's pixels; enlarging them here would spend bytes on a
     /// connection to deliver no more detail than the display layer could invent
@@ -95,8 +98,21 @@ public enum PhotoRenderer {
             sourceWidth > 0, sourceHeight > 0
         else { throw Failure.noDimensions }
 
+        // **The fit is of the upright photograph, not the stored pixels.**
+        // `kCGImageSourceCreateThumbnailWithTransform` below turns the image a
+        // quarter for orientations 5 to 8, so the edge the decoder caps is the
+        // upright one; fitting the stored pixels caps the wrong edge. Measured
+        // 2026-09-22 against the resize cache: 84 of 680 copies were larger
+        // than the box that asked for them, every one of them a rotated
+        // photograph — a 4032×3024-with-orientation-6 original fitted to
+        // 3600×2338 came back 2338×3117, a third taller than the box allows.
+        // The aspect ratio was never wrong, so nothing was drawn distorted;
+        // what it cost was bytes on the wire and a decode at the client.
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        let turned = (5...8).contains(orientation)
         let fitted = fit(
-            sourceWidth: sourceWidth, sourceHeight: sourceHeight,
+            sourceWidth: turned ? sourceHeight : sourceWidth,
+            sourceHeight: turned ? sourceWidth : sourceHeight,
             intoWidth: width, byHeight: height)
 
         // One number, because that is the knob the decoder has: the longest edge
