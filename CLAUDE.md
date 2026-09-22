@@ -30,8 +30,8 @@ one takes no `-project`, because it is a package scheme:
 xcodebuild test -scheme "Package Tests" -destination "platform=macOS,arch=arm64" -derivedDataPath "$HOME/.claude/build/photo-go-round/DerivedData"
 ```
 
-That covers all five package test targets. `Package Tests.xctestplan` at the top
-of the repository is what lists them.
+That covers all five package test targets. `Tests/Package Tests.xctestplan` is
+what lists them.
 
 **Nothing generated goes in the repository.** Syd, 2026-09-19: "I really don't
 want build artifacts in the repo directory", and "I would prefer ALL generated
@@ -56,7 +56,7 @@ installed on one Mac at once and none can be mistaken for another:
 
 | | Release | Debug | Claude |
 |---|---|---|---|
-| Agent port | 9427 | 9428 | 9429 |
+| Agent port | 20000 + hash of user name | 23000 + hash | 26000 + hash |
 | LaunchAgent label | `…photogoround.server` | `….server.debug` | `….server.claude` |
 | Screensaver bundle | `Photo-Go-Round Screensaver.saver` | `… (Debug).saver` | `… (Claude).saver` |
 | Wallpaper extension | `…wallpaper.extension` | `…wallpaper.debug.extension` | `…wallpaper.claude.extension` |
@@ -139,4 +139,5 @@ a clean build succeeded. `Plans/Build Plan.md`.
   builtin. No binary writes a log file. Test runs log under
   `com.sydpolk.photogoround.tests` instead. Categories: `console` is everything
   the agent prints on standard output, `cache` the queue's own lines,
-  `system-wallpaper` the extension, `saver` the screensaver.
+  `system-wallpaper` the extension, `saver` the screensaver, `install` what the
+  app installs at launch and from its Help menu.

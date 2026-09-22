@@ -83,9 +83,11 @@ type by hand, a client with a hard-coded URL.
 
 By default the agent binds a fixed port and publishes it to preferences under
 `servicePort`, where every process on the machine can read it. **There is one
-port per build configuration** — 9427 release, 9428 Debug, 9429 Claude — so two
-agents can run side by side without either being told about the other, and a
-client can hold a number rather than chase one.
+port per build configuration and per user**: a base of 20000 release, 23000
+Debug, 26000 Claude, plus the FNV-1a hash of the user's short name modulo 3000.
+So two agents can run side by side without either being told about the other,
+two people on one Mac get different ports, and a client can compute the number
+rather than chase one. Per user since 2026-09-21.
 
 It was whatever the kernel gave at launch until 2026-09-17. Syd, that day:
 "Perhaps we had better actually pick a port and hardcode it. this dynamic port

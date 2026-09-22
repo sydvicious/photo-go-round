@@ -1,5 +1,6 @@
 import Console
 import Foundation
+import PhotoGoRoundAgentAPI
 import PhotoGoRoundInstall
 
 // Installs what this project builds, for development.
@@ -26,7 +27,9 @@ USAGE
   pgr_install saver [--from <path>] [--dry-run]
   pgr_install agent [--from <path>] [--dry-run]
   pgr_install wallpaper [--from <path>] [--dry-run]
-  pgr_install uninstall [--agent] [--saver] [--wallpaper] [--dry-run]
+  pgr_install start [--variant <name>]
+  pgr_install stop [--variant <name>]
+  pgr_install uninstall [--agent] [--saver] [--wallpaper] [--variant <name>] [--dry-run]
 
 OPTIONS
   --from <path>   The built bundle. Defaults to $BUILT_PRODUCTS_DIR's copy.
@@ -36,8 +39,13 @@ OPTIONS
                   every product here has a space in its name.
   --dry-run       Print what would happen and change nothing.
   --agent         For uninstall: which parts to remove. With none of the
-  --saver         three, it removes all of them. Every build configuration's
-  --wallpaper     copy is found, not just this one's.
+  --saver         three, it removes all of them.
+  --wallpaper
+  --variant <name>
+                  release, debug or claude: whose agent start and stop act on,
+                  and whose copies uninstall removes. start and stop default to
+                  the configuration this pgr_install was built as; uninstall
+                  defaults to every configuration's.
   -h, --help      This.
 
 NOTES
@@ -51,6 +59,7 @@ struct Options {
     var from: URL?
     var dryRun = false
     var parts: Set<Uninstall.Part> = []
+    var variant: BuildVariant?
 }
 
 func parse(_ arguments: [String]) throws -> Options {
@@ -68,6 +77,11 @@ func parse(_ arguments: [String]) throws -> Options {
             options.from = URL(filePath: arguments[index])
         case "--dry-run":
             options.dryRun = true
+        case "--variant":
+            index += 1
+            guard index < arguments.endIndex, let variant = BuildVariant(rawValue: arguments[index])
+            else { throw Fault("--variant needs release, debug or claude") }
+            options.variant = variant
         case "--agent":
             options.parts.insert(.agent)
         case "--saver":
@@ -167,7 +181,8 @@ do {
         // Naming none of the three means all of them, which is what somebody
         // typing `uninstall` on its own means.
         let parts = options.parts.isEmpty ? Set(Uninstall.Part.allCases) : options.parts
-        let plan = Uninstall.plan(removing: parts)
+        let plan = Uninstall.plan(
+            removing: parts, variants: options.variant.map { [$0] } ?? BuildVariant.allCases)
         if options.dryRun {
             Console.banner("would remove: \(parts.map(\.rawValue).sorted().joined(separator: ", "))")
             for step in plan.describedSteps { Console.note(step) }
@@ -175,6 +190,16 @@ do {
         }
         Console.banner("removing: \(parts.map(\.rawValue).sorted().joined(separator: ", "))")
         for line in try Uninstall.apply(plan) { Console.note(line) }
+
+    case "start":
+        let variant = options.variant ?? .current
+        Console.banner("starting \(variant.agentLabel)")
+        for line in try AgentInstall.start(variant) { Console.note(line) }
+
+    case "stop":
+        let variant = options.variant ?? .current
+        Console.banner("stopping \(variant.agentLabel)")
+        for line in try AgentInstall.stop(variant) { Console.note(line) }
 
     case let other:
         throw Fault("unknown command \(other)")

@@ -108,6 +108,42 @@ struct BuildVariantTests {
                 == BuildVariant.allCases.count)
     }
 
+    // MARK: - The port
+
+    /// The published FNV-1a test vectors, so the hash is the one every surface
+    /// computes and not merely one that agrees with itself.
+    @Test("The user-name hash is FNV-1a")
+    func hashIsFNV1a() {
+        #expect(BuildVariant.fnv1a("") == 0x811C_9DC5)
+        #expect(BuildVariant.fnv1a("a") == 0xE40C_292C)
+        #expect(BuildVariant.fnv1a("foobar") == 0xBF9C_F968)
+    }
+
+    @Test(
+        "Each variant's port stays inside its own span, below the ephemeral range",
+        arguments: BuildVariant.allCases)
+    func portStaysInItsSpan(_ variant: BuildVariant) {
+        for user in ["jazzman", "guest", "a", "", "someone.with.a.long.name"] {
+            let port = variant.port(forUser: user)
+            #expect(port >= variant.portBase && port < variant.portBase + BuildVariant.portSpan)
+            #expect(port < 49152)
+        }
+    }
+
+    /// One user never gets the same port from two builds, whatever the name.
+    @Test("The spans do not overlap")
+    func spansAreDisjoint() {
+        let spans = BuildVariant.allCases.map { $0.portBase..<($0.portBase + BuildVariant.portSpan) }
+        for (i, a) in spans.enumerated() {
+            for b in spans.dropFirst(i + 1) { #expect(!a.overlaps(b)) }
+        }
+    }
+
+    @Test("Two users get different ports from the same build, as a rule")
+    func usersDiffer() {
+        #expect(BuildVariant.release.port(forUser: "jazzman") != BuildVariant.release.port(forUser: "guest"))
+    }
+
     @Test("Release carries no suffix at all, so it is the plain name everywhere")
     func releaseIsUnadorned() {
         #expect(BuildVariant.release.agentLabel == "com.sydpolk.photogoround.server")

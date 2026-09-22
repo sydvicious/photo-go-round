@@ -53,6 +53,11 @@ struct SourcesSettingsView: View {
             wallpaperPanel
         }
         .padding(12)
+        // Everything here goes to the agent, which an install may be restarting.
+        .disabled(Installer.shared.isBusy)
+        .overlay(alignment: .bottomTrailing) {
+            InstallingBadge()
+        }
         // The width floor is what this was pinned at. The height floor grew
         // with the second panel: 360 was the list on its own, and keeping it
         // would have let the window shrink until the list it encloses was a

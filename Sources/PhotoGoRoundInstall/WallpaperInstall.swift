@@ -22,9 +22,15 @@ public enum WallpaperInstall {
     public struct Registration: Equatable, Sendable {
         public var identifier: String
         public var path: String
-        public init(identifier: String, path: String) {
+        /// When `pkd` recorded it. **The registration's own time, not the
+        /// bundle's** — measured 2026-09-21: an appex last changed at 03:02:50
+        /// read 03:16:48 when registered at 03:16:48, and a later `pluginkit
+        /// -a` moved it on. Nil when the line carried none that parsed.
+        public var registered: Date?
+        public init(identifier: String, path: String, registered: Date? = nil) {
             self.identifier = identifier
             self.path = path
+            self.registered = registered
         }
     }
 
@@ -110,15 +116,20 @@ public enum WallpaperInstall {
         /// What the bundle at this path says its identifier is, now.
         public var identifierAt: @Sendable (String) -> String?
         public var registrations: @Sendable () -> [Registration]
+        /// When the appex's executable last changed — its `ctime`, which a copy
+        /// of the app into place always moves. `CodeIdentity.changedAt`.
+        public var changedAt: @Sendable (URL) -> Date?
 
         public init(
             directoryExists: @escaping @Sendable (URL) -> Bool,
             identifierAt: @escaping @Sendable (String) -> String?,
-            registrations: @escaping @Sendable () -> [Registration]
+            registrations: @escaping @Sendable () -> [Registration],
+            changedAt: @escaping @Sendable (URL) -> Date? = { _ in nil }
         ) {
             self.directoryExists = directoryExists
             self.identifierAt = identifierAt
             self.registrations = registrations
+            self.changedAt = changedAt
         }
 
         public static let live = Surroundings(
@@ -129,7 +140,10 @@ public enum WallpaperInstall {
                 return there && isDirectory.boolValue
             },
             identifierAt: { path in PluginKit.identifier(ofBundleAt: path) },
-            registrations: { PluginKit.registrations(for: extensionPoint) }
+            registrations: { PluginKit.registrations(for: extensionPoint) },
+            changedAt: { appex in
+                (Bundle(url: appex)?.executableURL).flatMap(CodeIdentity.changedAt)
+            }
         )
     }
 
@@ -137,6 +151,7 @@ public enum WallpaperInstall {
         case noBundle(URL)
         case notOurExtension(URL, read: String?)
         case didNotRegister(String, at: URL)
+        case didNotUnregister(String, at: URL)
 
         public var description: String {
             switch self {
@@ -152,6 +167,8 @@ public enum WallpaperInstall {
                 \(identifier) did not register from \(url.path(percentEncoded: false)) in time
                   pkd logs the reason: /usr/bin/log show --last 5m --predicate 'process == "pkd"'
                 """
+            case .didNotUnregister(let identifier, let url):
+                "\(identifier) was still registered from \(url.path(percentEncoded: false)) after pluginkit -r"
             }
         }
     }
@@ -186,6 +203,140 @@ public enum WallpaperInstall {
         return Plan(appex: appex, identifier: identifier, judged: judged)
     }
 
+    /// Whether this appex is the one registered for its identifier.
+    ///
+    /// **Current only when registered from this very path, since the appex
+    /// last changed.** The app carries it in `Contents/Library/Wallpaper`,
+    /// where LaunchServices does not look, so nothing registers it but an
+    /// install. Registered from anywhere else is another copy of the app, or a
+    /// dead one, and `plan` already knows which of those to remove.
+    ///
+    /// **An app replaced at the same path leaves the registration pointing at
+    /// the right place and describing the old bundle.** Syd, 2026-09-21, for
+    /// an install over an existing one: "unregister the extension, re-register
+    /// the extension, tickle Wallpaper agent". A registration older than the
+    /// appex's executable is that case. One whose date or `ctime` cannot be
+    /// read is taken as current: re-registering restarts `WallpaperAgent`,
+    /// which is visible, and doing it on every launch would be worse.
+    public static func standing(
+        of appex: URL,
+        surroundings: Surroundings = .live
+    ) throws -> Standing {
+        let plan = try plan(for: appex, surroundings: surroundings)
+        if let ours = plan.judged.first(where: { $0.verdict == .ours }) {
+            if let registered = ours.registration.registered,
+                let changed = surroundings.changedAt(appex), changed > registered
+            {
+                return .stale("replaced since it was registered")
+            }
+            return .current
+        }
+        let elsewhere = plan.judged.map(\.registration)
+            .filter { $0.identifier == plan.identifier }
+        guard let other = elsewhere.first else { return .missing }
+        return .differs("registered from \(other.path)")
+    }
+
+    /// Where `WallpaperAgent` keeps what each display and space shows.
+    public static let store = URL.homeDirectory
+        .appending(path: "Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+
+    /// Whether the wallpaper somebody chose is this extension.
+    ///
+    /// **Why a launch needs to know.** Measured 2026-09-21: rebuilding the app
+    /// made `pkd` drop the extension's registration altogether, and
+    /// `WallpaperAgent` kept the choice and showed grey. Syd: "yes, re-register
+    /// it in any build" — so a launch registers again when the registration is
+    /// gone but the choice is still this extension.
+    ///
+    /// **The store's format is private.** Read that day, the choice sat at
+    /// `AllSpacesAndDisplays / Desktop / Content / Choices / [n] / Provider`
+    /// and the same under `SystemDefault`; `Spaces` and `Displays` hold
+    /// per-space and per-display choices. So any `Provider` equal to the
+    /// identifier, anywhere in it, counts. A store that cannot be read or parsed
+    /// counts as not chosen: a registration nobody asked for is the worse
+    /// mistake.
+    public static func isChosen(_ identifier: String, store data: Data?) -> Bool {
+        guard let data,
+            let root = try? PropertyListSerialization.propertyList(from: data, format: nil)
+        else { return false }
+        func names(_ value: Any) -> Bool {
+            if let dictionary = value as? [String: Any] {
+                if dictionary["Provider"] as? String == identifier { return true }
+                return dictionary.values.contains(where: names)
+            }
+            if let array = value as? [Any] { return array.contains(where: names) }
+            return false
+        }
+        return names(root)
+    }
+
+    /// A wallpaper extension process that is running, and what it runs.
+    public struct Running: Equatable, Sendable {
+        public var pid: Int32
+        /// The appex its executable sits in.
+        public var appex: String
+        public var started: Date?
+
+        public init(pid: Int32, appex: String, started: Date?) {
+            self.pid = pid
+            self.appex = appex
+            self.started = started
+        }
+    }
+
+    /// The executable inside the appex, and the name every configuration's
+    /// extension process has.
+    static let executableName = "Photo-Go-Round Wallpaper"
+
+    /// Every Photo-Go-Round wallpaper extension process on the Mac, of any
+    /// configuration, with the appex it runs from.
+    public static func runningExtensions() -> [Running] {
+        let marker = ".appex/Contents/MacOS/\(executableName)"
+        let found = Shell.run("/usr/bin/pgrep", ["-f", marker])
+        guard found.status == 0 else { return [] }
+        return found.output.split(separator: "\n").compactMap { line in
+            guard let pid = Int32(line.trimmingCharacters(in: .whitespaces)) else { return nil }
+            let path = Shell.run("/bin/ps", ["-o", "comm=", "-p", String(pid)]).output
+            guard let end = path.range(of: ".appex/Contents/MacOS/") else { return nil }
+            let appex = String(path[path.startIndex..<end.lowerBound]) + ".appex"
+            return Running(pid: pid, appex: appex, started: CodeIdentity.startedAt(pid))
+        }
+    }
+
+    /// Why a running extension of this appex's identifier is not this appex,
+    /// or nil when every one that is running is.
+    ///
+    /// Syd, 2026-09-21: "we are going to have to detect whether or not the
+    /// wallpaper agent that is running matches the one in the app bundle". Two
+    /// ways not to: it runs from somewhere else — another copy of the app — or
+    /// it runs from here and started before the appex last changed, which is an
+    /// app replaced under a running extension. **Another configuration's
+    /// process is not this one's business** and is passed over.
+    ///
+    /// A start or change time that cannot be read counts as a mismatch: the
+    /// cost is one re-registration, which Syd called "not a disaster".
+    public static func mismatch(
+        of appex: URL,
+        running: [Running],
+        surroundings: Surroundings = .live
+    ) -> String? {
+        let ourPath = appex.path(percentEncoded: false)
+        guard let ours = surroundings.identifierAt(ourPath) else { return nil }
+        for process in running where surroundings.identifierAt(process.appex) == ours {
+            if process.appex != ourPath {
+                return "pid \(process.pid) runs from \(process.appex)"
+            }
+            guard let started = process.started, let changed = surroundings.changedAt(appex) else {
+                return "could not tell when pid \(process.pid) started or its appex changed"
+            }
+            if changed > started {
+                return "pid \(process.pid) started before its appex was replaced"
+            }
+        }
+        return nil
+    }
+
     /// Whether an identifier is one of this project's wallpaper extensions,
     /// whichever build configuration made it.
     static func isOurs(_ identifier: String) -> Bool {
@@ -213,6 +364,14 @@ public enum WallpaperInstall {
     /// the first `(` and the path is everything from the first `/`, which is
     /// unambiguous because a bundle path is absolute and nothing before it
     /// contains a slash.
+    /// `2026-09-19 22:07:04 +0000`, as `pluginkit -v` prints it.
+    static let registrationDate: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+        return formatter
+    }()
+
     public static func parseRegistrations(_ output: String) -> [Registration] {
         output.split(separator: "\n").compactMap { line in
             guard let openParen = line.firstIndex(of: "("),
@@ -223,7 +382,12 @@ public enum WallpaperInstall {
                 .trimmingCharacters(in: .whitespaces)
             let path = String(line[firstSlash...]).trimmingCharacters(in: .whitespaces)
             guard !identifier.isEmpty, !path.isEmpty else { return nil }
-            return Registration(identifier: identifier, path: path)
+            // The date is the tab-separated field just before the path.
+            let date = line[line.startIndex..<firstSlash]
+                .split(separator: "\t").last
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .flatMap { registrationDate.date(from: $0) }
+            return Registration(identifier: identifier, path: path, registered: date)
         }
     }
 
@@ -259,9 +423,22 @@ public enum WallpaperInstall {
         // would stop another build's wallpaper too.
         Shell.run("/usr/bin/pkill", ["-f", plan.appex.path(percentEncoded: false) + "/Contents/MacOS/"])
 
+        // **Over an existing registration of this very bundle, unregister
+        // first.** Syd, 2026-09-21: "unregister the extension, re-register the
+        // extension, tickle Wallpaper agent". And wait for the record to go:
+        // `pluginkit -r` returns before `pkd` acts, just as `-a` does, and the
+        // check below would otherwise find the old record and call it done.
+        if plan.judged.contains(where: { $0.verdict == .ours }) {
+            PluginKit.remove(plan.appex.path(percentEncoded: false))
+            guard try waitForRegistration(plan, toBe: false, timeout: timeout, report: report) else {
+                throw Failure.didNotUnregister(plan.identifier, at: plan.appex)
+            }
+            done.append("unregistered \(plan.identifier), to register it again")
+        }
+
         PluginKit.add(plan.appex)
 
-        guard try waitForRegistration(plan, timeout: timeout, report: report) else {
+        guard try waitForRegistration(plan, toBe: true, timeout: timeout, report: report) else {
             throw Failure.didNotRegister(plan.identifier, at: plan.appex)
         }
         done.append("registered \(plan.identifier)")
@@ -276,26 +453,26 @@ public enum WallpaperInstall {
         return done
     }
 
+    /// Polls until `pkd` has, or no longer has, this bundle's record.
     static func waitForRegistration(
         _ plan: Plan,
+        toBe wanted: Bool,
         timeout: Duration,
         report: (String) -> Void,
         registrations: () -> [Registration] = { PluginKit.registrations(for: extensionPoint) }
     ) throws -> Bool {
         let ourPath = plan.appex.path(percentEncoded: false)
+        func isThere() -> Bool {
+            registrations().contains(where: { $0.identifier == plan.identifier && $0.path == ourPath })
+        }
         let deadline = ContinuousClock.now + timeout
         var seconds = 0
         while ContinuousClock.now < deadline {
-            if registrations().contains(
-                where: { $0.identifier == plan.identifier && $0.path == ourPath })
-            {
-                return true
-            }
+            if isThere() == wanted { return true }
             Thread.sleep(forTimeInterval: 1)
             seconds += 1
             if seconds % 5 == 0 { report("waiting for pkd, \(seconds)s") }
         }
-        return registrations().contains(
-            where: { $0.identifier == plan.identifier && $0.path == ourPath })
+        return isThere() == wanted
     }
 }

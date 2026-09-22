@@ -679,7 +679,11 @@ enumerating spellings.
 **Two things left as they are.** The plan lives at `app/Package Tests.xctestplan`
 while its paths are package-root-relative, so Xcode's navigator marks its
 entries "(missing)" though `xcodebuild` resolves them; moving it to the
-repository root would settle both. And it no longer lists `Photo-Go-RoundTests`,
+repository root would settle both. *It moved to the repository root later on
+2026-09-19, and to `Tests/Package Tests.xctestplan` on 2026-09-21 — Syd: "I
+think it should actually live in Tests/ for now." Xcode's saved window state
+still named `app/`, which is what "Failed to open “Package Tests.xctestplan”"
+was on 2026-09-21's first open.* And it no longer lists `Photo-Go-RoundTests`,
 which is the app's bundle and wants a running agent — `TODO.md`, *No GUI
 testing*.
 

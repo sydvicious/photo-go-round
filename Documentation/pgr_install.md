@@ -10,7 +10,9 @@
 pgr_install saver     [--from <path>] [--dry-run]
 pgr_install agent     [--from <path>] [--dry-run]
 pgr_install wallpaper [--from <path>] [--dry-run]
-pgr_install uninstall [--agent] [--saver] [--wallpaper] [--dry-run]
+pgr_install start     [--variant <name>]
+pgr_install stop      [--variant <name>]
+pgr_install uninstall [--agent] [--saver] [--wallpaper] [--variant <name>] [--dry-run]
 ```
 
 ## DESCRIPTION
@@ -24,10 +26,11 @@ run one, so a scheme that installs on ⌘R needs something to launch. Each
 `Install …` scheme builds its product alongside this and passes
 `BUILT_PRODUCTS_DIR` through the environment.
 
-**It is scaffolding.** The work lives in `PhotoGoRoundInstall`, which the
-menu-bar app will link when it becomes the installer — Syd, 2026-09-19: "the
-application which installs on first launch will eventually replace
-pgr_install." This binary ships in nothing and carries no compatibility promise.
+**It is the development installer.** The work lives in `PhotoGoRoundInstall`,
+which the app links too: an app installs the pieces it carries at launch and
+from its Help menu, as symlinks and registrations pointing into itself.
+`pgr_install` installs from a build directory, and copies the saver. It ships in
+nothing and carries no compatibility promise.
 
 **It asks for no access to anything.** A grant is asked for by something with a
 window, and an installer has none. Photos is answered in the app.
@@ -55,6 +58,11 @@ Print what would happen and change nothing.
 
 `--agent`, `--saver`, `--wallpaper`
 For `uninstall`, which parts to remove. With none of them, all three.
+
+`--variant` *name*
+`release`, `debug` or `claude`. Whose agent `start` and `stop` act on — by
+default the configuration this `pgr_install` was built as — and whose copies
+`uninstall` removes, by default every configuration's.
 
 ## COMMANDS
 
@@ -90,8 +98,18 @@ restarts `WallpaperAgent` so the desktop is re-acquired.
 and now holds a different identifier.** Anything else is another build's live
 copy and is left alone, whichever configuration made it.
 
+`start`
+Starts an installed agent: loads its plist if launchd has not, then
+`launchctl kickstart -k`, which restarts one already running. Fails when there
+is no plist.
+
+`stop`
+Boots the agent out and leaves its plist, so `start` can bring it back. A kill
+would not do: `KeepAlive` restarts a job whose process dies.
+
 `uninstall`
-Removes what the three installs put on this Mac, in every configuration: every
+Removes what the three installs put on this Mac, in every configuration unless
+`--variant` names one: every
 LaunchAgent and its plist, every registration of the extension, every installed
 saver. It reports any agent still running outside launchd afterwards and leaves
 it alone.
@@ -123,8 +141,8 @@ Per user, both of them, so two people on one Mac never share an install.
 
 `0` on success. `1` on a bundle that is not there, a bundle that is not the kind
 asked for, an agent bundle carrying no `PGRLaunchAgentLabel`, a job still loaded
-ten seconds after `bootout`, or an extension that `pkd` did not record in
-thirty.
+ten seconds after `bootout`, an extension that `pkd` did not record in
+thirty, or a `start` with no plist installed.
 
 ## EXAMPLES
 

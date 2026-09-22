@@ -41,6 +41,8 @@ struct PhotoGoRoundApp: App {
             }
             // Window Settings, in the View menu, for the key window.
             WindowCommands()
+            // Install and uninstall each piece, under Help.
+            InstallCommands()
         }
         // An ordinary title bar, and the photograph strictly below it. **One
         // control sits on the picture, since 2026-09-14:** the Window Settings

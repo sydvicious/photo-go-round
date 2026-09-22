@@ -42,19 +42,51 @@ public enum BuildVariant: String, Sendable, CaseIterable {
         #endif
     }()
 
-    /// What the agent binds, and what a client tries first.
+    /// What the agent binds, and what a client tries first: this build's base
+    /// plus a hash of the user's short name.
     ///
-    /// **9427, and the constraint that picked it is the ephemeral range.** macOS
-    /// hands out 49152–65535 to outgoing connections, so a fixed port inside it
-    /// can be held by another program's socket at the moment the agent starts.
-    /// Below 1024 needs privilege. 9427 is in neither and is not in
-    /// `/etc/services`; 9428 and 9429 follow it. `Plans/Service Port Plan.md`.
-    public var port: UInt16 {
+    /// **Per user, since 2026-09-21.** Syd: "use three different base addresses
+    /// based on build variants, and then add a hash of the user name to it to
+    /// come up with the port. If there is a collision, let the agent pick one,
+    /// and we fall back to the existing mechanim." Two people logged in to one
+    /// Mac each run an agent, and a fixed 9427 went to whoever started first.
+    /// The fallback is the one `Plans/Service Port Plan.md` built: a port the
+    /// agent cannot have is taken from the kernel and published.
+    ///
+    /// **Below the ephemeral range.** macOS hands out 49152–65535 to outgoing
+    /// connections, so a port inside it can be held by another program's socket
+    /// at the moment the agent starts. The three spans — 20000, 23000 and
+    /// 26000, each 3000 wide — never overlap, so no two builds share a port for
+    /// one user. `/etc/services` lists names across all of them, as it does
+    /// across any span that wide; none is a service a Mac runs.
+    public var port: UInt16 { port(forUser: NSUserName()) }
+
+    public func port(forUser user: String) -> UInt16 {
+        portBase + UInt16(Self.fnv1a(user) % UInt32(Self.portSpan))
+    }
+
+    static let portSpan: UInt16 = 3000
+
+    var portBase: UInt16 {
         switch self {
-        case .release: 9427
-        case .debug: 9428
-        case .claude: 9429
+        case .release: 20000
+        case .debug: 23000
+        case .claude: 26000
         }
+    }
+
+    /// FNV-1a, 32 bits, over the name's UTF-8.
+    ///
+    /// **Not Swift's `Hasher`, which is seeded afresh in every process**: the
+    /// agent, the app, the screensaver and the wallpaper extension each compute
+    /// this for themselves and must all get the same number.
+    static func fnv1a(_ text: String) -> UInt32 {
+        var hash: UInt32 = 2_166_136_261
+        for byte in text.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 16_777_619
+        }
+        return hash
     }
 
     /// What launchd knows this build's agent by, and the name of its plist in

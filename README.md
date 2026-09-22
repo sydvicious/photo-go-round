@@ -13,18 +13,21 @@ screensaver, widgets, and apps across Apple's platforms. The library problem
 
 Open `app/Photo-Go-Round.xcodeproj`. Everything below is the Debug configuration; Release is Archive, moved to `/Applications` by hand.
 
+**The app installs the rest.** Every build carries the agent, the wallpaper extension and the screensaver in its bundle. Each launch installs and restarts its agent; a Release launch also registers the wallpaper and links the screensaver. The Help menu installs or uninstalls any of the three, in any build. Nothing is copied out of the app.
+
 **⌘B builds, ⌘R installs**, since 2026-09-19. Building an install scheme changes nothing.
 
 | To | Scheme | Key |
 |---|---|---|
+| Run the app, which installs and restarts its agent | **Photo-Go-Round** | ⌘R |
+| Install the wallpaper or the screensaver from it | Help › Install Wallpaper, Install Screensaver | |
 | Install the agent, and restart it | **Install Agent** | ⌘R |
 | Install the wallpaper extension | **Install Wallpaper Extension** | ⌘R |
 | Install the screensaver | **Install Screen Saver** | ⌘R |
-| Run the app | **Photo-Go-Round** | ⌘R |
 | Run the agent under the debugger | **Photo-Go-Round Server** | ⌘R |
 | Run every test | **Package Tests** | ⌘U |
 
-`Package Tests` covers the package's five test targets — 1,001 tests. From a terminal, note that it takes no `-project`, because a scheme whose targets are the package's is a package scheme:
+`Package Tests` covers the package's five test targets. From a terminal, note that it takes no `-project`, because a scheme whose targets are the package's is a package scheme:
 
 ```
 xcodebuild test -scheme "Package Tests" -destination "platform=macOS,arch=arm64"
@@ -34,7 +37,7 @@ The app's own bundle, `Photo-Go-RoundTests`, is not in it: it wants a running ag
 
 `pgr_ctl` has no shared scheme. Build its target and put the product on your `PATH` — a copy or a symlink into `~/bin`. Not `swift run pgr_ctl`: that writes a `.build` directory into the checkout, and nothing generated belongs there.
 
-Install the agent first; the wallpaper and the screensaver get their pictures from it. Each install scheme builds its product and `pgr_install`, and ⌘R runs it — so ⌘R is the whole step, and ⌘R again reinstalls.
+The `Install …` schemes are the development route. Install the agent first; the wallpaper and the screensaver get their pictures from it. Each builds its product and `pgr_install`, and ⌘R runs it — so ⌘R is the whole step, and ⌘R again reinstalls. Launching the app afterwards points the agent at the app's own copy.
 
 Each build configuration installs under its own names, so Debug, Release and an agent's `Claude` build can sit on one Mac at once without displacing each other. `Documentation/Installing.md` has the table.
 
@@ -102,12 +105,12 @@ The agent serves pictures over HTTP. Clients ask it for one and are handed the
 bytes; they never open the database or the cache. From a terminal that means
 `curl`.
 
-**The port is fixed, and there is one per build configuration** — 9427 release,
-9428 Debug, 9429 Claude — so two of them can run at once and neither has to
-chase the other. It was whatever the kernel gave the agent at launch until
-2026-09-17; Syd: "this dynamic port stuff is causing problems." A port already
-held by something else is still fallen back from and published, so `pgr_ctl
-status` remains the way to be certain.
+**The port is fixed per build configuration and per user** — a base of 20000
+release, 23000 Debug, 26000 Claude, plus a hash of the user's short name under
+3000 — so two builds, or two people on one Mac, can run at once and neither has
+to chase the other. Fixed per configuration since 2026-09-17, per user since
+2026-09-21. A port already held by something else is still fallen back from
+and published, so `pgr_ctl status` remains the way to be certain.
 
 The examples below pin one with `--port` anyway, so they are copy-pasteable
 whichever configuration you are running.

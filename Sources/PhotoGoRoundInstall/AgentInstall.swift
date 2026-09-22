@@ -1,4 +1,5 @@
 import Foundation
+import PhotoGoRoundAgentAPI
 
 /// Installing the agent as a per-user LaunchAgent: what would happen, and then
 /// it happening.
@@ -130,6 +131,8 @@ public enum AgentInstall {
         case noLabel(URL)
         case stillLoaded(String)
         case didNotBootstrap(String)
+        case didNotRestart(String)
+        case notInstalled(String)
 
         public var description: String {
             switch self {
@@ -146,6 +149,10 @@ public enum AgentInstall {
                 "\(label) is still loaded ten seconds after bootout"
             case .didNotBootstrap(let label):
                 "\(label) did not bootstrap"
+            case .didNotRestart(let label):
+                "\(label) did not restart"
+            case .notInstalled(let label):
+                "\(label) is not installed: no plist in ~/Library/LaunchAgents"
             }
         }
     }
@@ -171,6 +178,96 @@ public enum AgentInstall {
             foreignAgents: surroundings.runningAgents().filter { $0.path != path },
             pointsIntoBuildDirectory: path.contains("/DerivedData/") || path.contains("/.build/")
         )
+    }
+
+    /// What is installed now, as far as deciding whether it is current needs.
+    public struct Installed: Sendable {
+        /// The job description at this path, or nil when there is none.
+        public var job: @Sendable (URL) -> JobDescription?
+        public var isJobLoaded: @Sendable (String) -> Bool
+
+        public init(
+            job: @escaping @Sendable (URL) -> JobDescription?,
+            isJobLoaded: @escaping @Sendable (String) -> Bool
+        ) {
+            self.job = job
+            self.isJobLoaded = isJobLoaded
+        }
+
+        public static let live = Installed(
+            job: { plist in
+                guard let data = try? Data(contentsOf: plist) else { return nil }
+                return try? PropertyListDecoder().decode(JobDescription.self, from: data)
+            },
+            isJobLoaded: { Launchctl.isLoaded($0) }
+        )
+    }
+
+    /// Whether this bundle's agent is the one installed.
+    ///
+    /// **Current when the job description is the one this bundle would write
+    /// and launchd has it loaded.** Anything else is installed again: a
+    /// different binary is another copy of the app, and anything else in the
+    /// description is an older app's idea of the job.
+    ///
+    /// **Whether the running process is up to date is not asked**, because
+    /// every launch restarts it. Syd, 2026-09-21: "yes, restart the agent on
+    /// every app launch". An app replaced at the same path leaves the plist
+    /// exactly right, and the restart is what puts the new binary to work.
+    public static func standing(
+        of bundle: URL,
+        launchAgents: URL = URL.homeDirectory.appending(path: "Library/LaunchAgents"),
+        surroundings: Surroundings = .live,
+        installed: Installed = .live
+    ) throws -> Standing {
+        let plan = try plan(for: bundle, launchAgents: launchAgents, surroundings: surroundings)
+        guard let job = installed.job(plan.plist) else { return .missing }
+
+        let wanted = JobDescription(label: plan.label, program: plan.binary)
+        if job != wanted {
+            if job.programArguments != wanted.programArguments {
+                return .differs("the job runs \(job.programArguments.first ?? "nothing")")
+            }
+            return .differs("the job description is an older one")
+        }
+        guard installed.isJobLoaded(plan.label) else { return .differs("the job is not loaded") }
+        return .current
+    }
+
+    /// Starts an installed job: loads its plist if launchd has not, and starts
+    /// it either way.
+    @discardableResult
+    public static func start(
+        _ variant: BuildVariant,
+        launchAgents: URL = URL.homeDirectory.appending(path: "Library/LaunchAgents")
+    ) throws -> [String] {
+        let label = variant.agentLabel
+        let plist = launchAgents.appending(path: "\(label).plist")
+        guard FileManager.default.fileExists(atPath: plist.path(percentEncoded: false)) else {
+            throw Failure.notInstalled(label)
+        }
+        if !Launchctl.isLoaded(label) { Launchctl.bootstrap(plist) }
+        guard Launchctl.kickstart(label) else { throw Failure.didNotRestart(label) }
+        return ["\(label) started"]
+    }
+
+    /// Stops a job and unloads it, leaving its plist, so `start` can bring it
+    /// back. **Unloaded rather than signalled**: `KeepAlive` restarts a job
+    /// whose process is killed, so a kill is not a stop.
+    @discardableResult
+    public static func stop(_ variant: BuildVariant) throws -> [String] {
+        let label = variant.agentLabel
+        guard Launchctl.isLoaded(label) else { return ["\(label) was not running"] }
+        Launchctl.bootout(label)
+        if try waitForLaunchdToForget(label) == false { throw Failure.stillLoaded(label) }
+        return ["\(label) stopped; its plist is still installed"]
+    }
+
+    /// Restarts an installed job: stops its process and starts it again.
+    @discardableResult
+    public static func restart(_ plan: Plan) throws -> [String] {
+        guard Launchctl.kickstart(plan.label) else { throw Failure.didNotRestart(plan.label) }
+        return ["\(plan.label) restarted", "  \(plan.binary.path(percentEncoded: false))"]
     }
 
     /// Performs a plan, returning what it did, a line at a time.

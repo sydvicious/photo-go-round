@@ -128,7 +128,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "pgr_install",
-            dependencies: ["PhotoGoRoundInstall", "Console"],
+            dependencies: ["PhotoGoRoundInstall", "PhotoGoRoundAgentAPI", "Console"],
             swiftSettings: everyTarget
         ),
         .testTarget(

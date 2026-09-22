@@ -66,5 +66,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         watchTheViewMenu()
+        // Whatever this app's wrapper carries and the Mac does not yet have —
+        // in a Release build. Debug and Claude install from the Help menu.
+        MainActor.assumeIsolated { Installer.shared.startAtLaunch() }
     }
 }

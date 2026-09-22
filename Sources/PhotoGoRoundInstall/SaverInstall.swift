@@ -102,7 +102,7 @@ public enum SaverInstall {
             case .notASaverBundle(let url):
                 "\(url.lastPathComponent) is not a .saver bundle"
             case .copyDidNotArrive(let url):
-                "the copy did not arrive at \(url.path(percentEncoded: false))"
+                "nothing usable arrived at \(url.path(percentEncoded: false))"
             }
         }
     }
@@ -127,6 +127,86 @@ public enum SaverInstall {
         )
     }
 
+    /// What is at an installed saver's path, without following a link.
+    public enum Installed: Equatable, Sendable {
+        case nothing
+        /// A symlink, and the path it names.
+        case link(to: String)
+        /// A real bundle — a copy, as `pgr_install saver` lays down.
+        case bundle
+    }
+
+    public static func installed(at url: URL) -> Installed {
+        let path = url.path(percentEncoded: false)
+        let manager = FileManager.default
+        guard let type = (try? manager.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
+        else { return .nothing }
+        if type == .typeSymbolicLink {
+            return .link(to: (try? manager.destinationOfSymbolicLink(atPath: path)) ?? "")
+        }
+        return .bundle
+    }
+
+    /// Whether this saver is the one installed, as a link to it.
+    ///
+    /// **An app installs its saver as a symlink back into itself**, never a
+    /// copy — Syd, 2026-09-21: "the binaries should NOT be copied out of the
+    /// app bundle", and the saver and wallpaper "should lay down symlinks back
+    /// to the app bundle". So current means exactly that: a link at this
+    /// saver's name, naming this saver. A copy of the same name — what
+    /// `pgr_install saver` lays down from a build directory — differs.
+    ///
+    /// **Measured 2026-09-21: a symlinked saver loads.** Linked from
+    /// `~/Library/Screen Savers` into a Claude-built app, it was listed in
+    /// System Settings and its preview ran.
+    public static func standing(
+        of source: URL,
+        into directory: URL = destinationDirectory,
+        surroundings: Surroundings = .live,
+        installed: @Sendable (URL) -> Installed = { SaverInstall.installed(at: $0) }
+    ) throws -> Standing {
+        let plan = try plan(for: source, into: directory, surroundings: surroundings)
+        switch installed(plan.destination) {
+        case .nothing:
+            return .missing
+        case .link(let target) where target == plan.source.path(percentEncoded: false):
+            return .current
+        case .link(let target):
+            return .differs("linked to \(target)")
+        case .bundle:
+            return .differs("a copy is installed, not a link")
+        }
+    }
+
+    /// Installs a plan as a symlink to its source, for an app installing the
+    /// saver it carries.
+    ///
+    /// Whatever is at the name goes first — a copy, or a link to another copy
+    /// of the app — and **is looked for without following a link**, since a
+    /// link into a deleted app dangles and reads as absent to anything that
+    /// follows it, and then the new link cannot be made.
+    @discardableResult
+    public static func applyLink(_ plan: Plan) throws -> [String] {
+        var done: [String] = []
+        let manager = FileManager.default
+
+        try manager.createDirectory(
+            at: plan.destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if installed(at: plan.destination) != .nothing {
+            try manager.removeItem(at: plan.destination)
+        }
+        try manager.createSymbolicLink(at: plan.destination, withDestinationURL: plan.source)
+        guard installed(at: plan.destination) == .link(to: plan.source.path(percentEncoded: false))
+        else { throw Failure.copyDidNotArrive(plan.destination) }
+        done.append("linked \(plan.name).saver")
+        done.append("  \(plan.destination.path(percentEncoded: false)) → \(plan.source.path(percentEncoded: false))")
+
+        for host in plan.hostsToStop where Shell.killall(host) {
+            done.append("stopped \(host), which was holding a previous build")
+        }
+        return done
+    }
+
     /// Performs a plan, returning what it did, a line at a time.
     ///
     /// The copy is verified rather than assumed: a `cp` that silently produced
@@ -138,7 +218,9 @@ public enum SaverInstall {
 
         try manager.createDirectory(
             at: plan.destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if manager.fileExists(atPath: plan.destination.path(percentEncoded: false)) {
+        // Not `fileExists`: it follows a link, and a link the app laid down
+        // into a since-deleted app would read as absent and block the copy.
+        if installed(at: plan.destination) != .nothing {
             try manager.removeItem(at: plan.destination)
         }
         try manager.copyItem(at: plan.source, to: plan.destination)

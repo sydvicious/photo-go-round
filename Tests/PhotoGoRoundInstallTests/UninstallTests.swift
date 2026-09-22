@@ -120,4 +120,23 @@ struct UninstallTests {
             #expect(!said.contains(forbidden), "an uninstall should never name \(forbidden)")
         }
     }
+
+    /// **The Help menu removes its own build's pieces and nothing else.** A
+    /// Claude build's Uninstall must not take Syd's Debug agent down with it.
+    @Test("Naming one configuration leaves the others' agents, savers and registrations alone")
+    func oneConfigurationOnly() {
+        let launchAgents = URL(filePath: "/tmp/pgr-test/LaunchAgents")
+        let savers = URL(filePath: "/tmp/pgr-test/Screen Savers")
+        let registrations = BuildVariant.allCases.map {
+            WallpaperInstall.Registration(identifier: $0.wallpaperExtensionIdentifier, path: "/x/\($0.rawValue).appex")
+        }
+        let plan = Uninstall.plan(
+            variants: [.claude], launchAgents: launchAgents, screenSavers: savers,
+            surroundings: Uninstall.Surroundings(
+                isJobLoaded: { _ in true }, fileExists: { _ in true },
+                registrations: { registrations }, runningAgents: { [] }))
+        #expect(plan.agents.map(\.label) == [BuildVariant.claude.agentLabel])
+        #expect(plan.savers == [savers.appending(path: "\(BuildVariant.claude.saverBundleName).saver")])
+        #expect(plan.registrations.map(\.identifier) == [BuildVariant.claude.wallpaperExtensionIdentifier])
+    }
 }

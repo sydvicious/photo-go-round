@@ -14,6 +14,15 @@ public enum Launchctl {
         Shell.run("/bin/launchctl", ["print", "\(userDomain)/\(label)"]).status == 0
     }
 
+    /// Stops the job's process, if it has one, and starts it again.
+    ///
+    /// `-k` is what makes it a restart: without it `kickstart` leaves a
+    /// running job alone.
+    @discardableResult
+    public static func kickstart(_ label: String) -> Bool {
+        Shell.run("/bin/launchctl", ["kickstart", "-k", "\(userDomain)/\(label)"]).status == 0
+    }
+
     /// Removes the job. Failing is ordinary — there may be no job yet — so the
     /// status is deliberately ignored; `AgentInstall` waits for the label to go
     /// rather than trusting this to have finished.

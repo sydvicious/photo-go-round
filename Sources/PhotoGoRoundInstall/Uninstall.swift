@@ -37,13 +37,20 @@ public enum Uninstall {
         public var foreignAgents: [AgentInstall.ForeignAgent]
         public var registrations: [WallpaperInstall.Registration]
         public var savers: [URL]
+        /// Whose copies were looked for.
+        public var variants: [BuildVariant] = BuildVariant.allCases
+
+        /// "any configuration", or the one that was asked about.
+        var whose: String {
+            variants.count == 1 ? "the \(variants[0].description)" : "any configuration"
+        }
 
         public var describedSteps: [String] {
             var steps: [String] = []
             if parts.contains(.agent) {
                 let present = agents.filter(\.isPresent)
                 if present.isEmpty {
-                    steps.append("agent: no job and no plist for any configuration")
+                    steps.append("agent: no job and no plist for \(whose)")
                 }
                 for agent in present {
                     if agent.jobIsLoaded { steps.append("agent: boot out \(agent.label)") }
@@ -93,19 +100,29 @@ public enum Uninstall {
 
         public static let live = Surroundings(
             isJobLoaded: { Launchctl.isLoaded($0) },
-            fileExists: { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) },
+            // **Not following a link.** An installed saver is a symlink into
+            // the app since 2026-09-21, and once the app is deleted the link
+            // dangles: `fileExists(atPath:)` follows it, answers false, and the
+            // link would never be removed.
+            fileExists: {
+                (try? FileManager.default.attributesOfItem(atPath: $0.path(percentEncoded: false))) != nil
+            },
             registrations: { PluginKit.registrations(for: WallpaperInstall.extensionPoint) },
             runningAgents: { Launchctl.agentsOutsideLaunchd(named: AgentInstall.executableName) })
     }
 
+    /// `variants` is whose to remove: every configuration's for
+    /// `Scripts/uninstall.sh`, only its own for the app's Help menu, which must
+    /// not take another build's agent down with it.
     public static func plan(
         removing parts: Set<Part> = Set(Part.allCases),
+        variants: [BuildVariant] = BuildVariant.allCases,
         launchAgents: URL = URL.homeDirectory.appending(path: "Library/LaunchAgents"),
         screenSavers: URL = SaverInstall.destinationDirectory,
         surroundings: Surroundings = .live
     ) -> Plan {
         let agents = parts.contains(.agent)
-            ? BuildVariant.allCases.map { variant -> InstalledAgent in
+            ? variants.map { variant -> InstalledAgent in
                 let plist = launchAgents.appending(path: "\(variant.agentLabel).plist")
                 return InstalledAgent(
                     label: variant.agentLabel,
@@ -116,11 +133,13 @@ public enum Uninstall {
             : []
 
         let registrations = parts.contains(.wallpaper)
-            ? surroundings.registrations().filter { WallpaperInstall.isOurs($0.identifier) }
+            ? surroundings.registrations().filter {
+                variants.map(\.wallpaperExtensionIdentifier).contains($0.identifier)
+            }
             : []
 
         let savers = parts.contains(.saver)
-            ? BuildVariant.allCases
+            ? variants
                 .map { screenSavers.appending(path: "\($0.saverBundleName).saver") }
                 .filter(surroundings.fileExists)
             : []
@@ -130,7 +149,8 @@ public enum Uninstall {
             agents: agents,
             foreignAgents: parts.contains(.agent) ? surroundings.runningAgents() : [],
             registrations: registrations,
-            savers: savers)
+            savers: savers,
+            variants: variants)
     }
 
     @discardableResult
@@ -151,7 +171,7 @@ public enum Uninstall {
                     found = true
                 }
             }
-            if !found { done.append("agent: no job and no plist for any configuration") }
+            if !found { done.append("agent: no job and no plist for \(plan.whose)") }
             // **Asked again, after the bootouts.** An agent somebody started by
             // hand is a terminal process and not this command's to end — but
             // the job's own process is, and it has just gone. Reporting the
@@ -171,8 +191,13 @@ public enum Uninstall {
                 done.append("  \(registration.path)")
             }
             if plan.registrations.isEmpty { done.append("wallpaper: nothing was registered") }
-            if Shell.killall("Photo-Go-Round Wallpaper") {
-                done.append("wallpaper: stopped the extension process")
+            // **By its bundle's path, not its name.** Every configuration's
+            // extension process has the same name, so a kill by name would stop
+            // another build's wallpaper — the reason `WallpaperInstall.apply`
+            // does it this way too.
+            for registration in plan.registrations
+            where Shell.run("/usr/bin/pkill", ["-f", registration.path + "/Contents/MacOS/"]).status == 0 {
+                done.append("wallpaper: stopped the extension process of \(registration.identifier)")
             }
             // Unregistering a *selected* extension leaves WallpaperAgent failing
             // every acquire until it is restarted — measured 2026-09-15, the

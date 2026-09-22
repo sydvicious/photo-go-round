@@ -84,6 +84,11 @@ struct ContentView: View {
         }
         .overlay(alignment: .topTrailing) {
             SettingsGear { showingSettings = true }
+                .disabled(Installer.shared.isBusy)
+        }
+        // While the app installs what it carries, which may restart the agent.
+        .overlay(alignment: .topLeading) {
+            InstallingBadge()
         }
         // After the gear, so the gear has the menu too. Syd, 2026-09-14:
         // "Right click anywhere in the window will invoke context menu, even
@@ -96,6 +101,7 @@ struct ContentView: View {
             }
             Button("Window Settings…") { showingSettings = true }
         }
+        .disabled(Installer.shared.isBusy)
         .sheet(isPresented: $showingSettings) {
             WindowSettingsSheet(interval: $interval)
         }
@@ -112,6 +118,7 @@ struct ContentView: View {
         // own background and costs the window no chrome it did not already have.
         .navigationTitle(title)
         .animation(.easeInOut(duration: 0.25), value: shuffle.trouble)
+        .animation(.easeInOut(duration: 0.25), value: Installer.shared.isBusy)
     }
 }
 

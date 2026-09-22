@@ -63,6 +63,9 @@ public enum Log {
     public static let prefs = Logger(subsystem: subsystem, category: "prefs")
     public static let saver = Logger(subsystem: subsystem, category: "saver")
     public static let widget = Logger(subsystem: subsystem, category: "widget")
+    /// What an archived app found in its wrapper at launch and did about it —
+    /// a line per product whether or not it installed. `LaunchInstall`.
+    public static let install = Logger(subsystem: subsystem, category: "install")
 
     /// The level a line that happens on every request is logged at.
     ///

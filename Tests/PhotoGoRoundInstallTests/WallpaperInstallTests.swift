@@ -32,8 +32,24 @@ struct WallpaperInstallTests {
     func parsesCapturedOutput() {
         let read = WallpaperInstall.parseRegistrations(captured)
         #expect(read.count == 2)
-        #expect(read[0] == .init(identifier: "com.sydpolk.photogoround.wallpaper.claude.extension", path: claude))
-        #expect(read[1] == .init(identifier: "com.sydpolk.photogoround.wallpaper.debug.extension", path: debug))
+        #expect(
+            read[0] == .init(
+                identifier: "com.sydpolk.photogoround.wallpaper.claude.extension", path: claude,
+                registered: Date(timeIntervalSince1970: 1_789_855_624)))
+        #expect(
+            read[1] == .init(
+                identifier: "com.sydpolk.photogoround.wallpaper.debug.extension", path: debug,
+                registered: Date(timeIntervalSince1970: 1_789_838_805)))
+    }
+
+    /// The date is what says an app was replaced after its extension was
+    /// registered, so a line whose date will not parse must still be read.
+    @Test("A record whose date does not parse is still read, undated")
+    func unparsableDateIsUndated() {
+        let line = "     com.sydpolk.photogoround.wallpaper.extension(0.1)\tUUID\tyesterday\t/Applications/Photo-Go-Round.app/Contents/Library/Wallpaper/Photo-Go-Round Wallpaper.appex"
+        let read = WallpaperInstall.parseRegistrations(line)
+        #expect(read.count == 1)
+        #expect(read.first?.registered == nil)
     }
 
     /// **The bug the `sed` was written around.** Counting fields put `+0000 ` on

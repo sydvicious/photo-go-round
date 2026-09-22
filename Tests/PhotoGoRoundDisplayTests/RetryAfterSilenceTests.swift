@@ -16,7 +16,7 @@ struct RetryAfterSilenceTests {
 
     @Test("While the agent answers, the wait is the rotation interval")
     func answeringIsTheOrdinaryWait() {
-        var retry = RetryAfterSilence()
+        let retry = RetryAfterSilence()
         #expect(retry.wait(interval: interval) == interval)
         #expect(retry.waiting == nil)
     }
