@@ -1,5 +1,7 @@
 # Source code organization
 
+**Status, 2026-09-22: complete.** Syd: "this effort is complete." Every move in *Where things go* is made, the build is warning-free in the `Claude` configuration, and the package tests pass. The rename pass and the kit's possible move to `Shared` are carried into `TODO.md`, *Rename the product to "Photos-Go-Round"*.
+
 I want to normalize the source code layout for this project. Each binary delivery gets its own folder, separated by platform. Each one has `Plans`, `Resources`, `Sources` and `Tests`,
 when appropriate. Sources shared within the Mac sphere would be in a Shared folder, unless they are big enough to justify their own folder.
 

@@ -398,6 +398,7 @@ Syd, 2026-09-15: "don't build arch:x86_64 at all". And the scope of it, the same
 Syd, 2026-09-22: change the name of the app to "Photos-Go-Round". The repository keeps its name. Every user-visible name says "Photos-Go-Round", and every identifier string — preferences and the like — says `photosgoround`.
 
 - *Claude's reading, not decided:* "the like" covers bundle identifiers (`com.sydpolk.photogoround.*`), the LaunchAgent labels, the unified-log subsystem, and the storage paths. Changing a bundle identifier or storage path orphans what is already installed under the old one, so the change needs a migration or a clean uninstall first.
+- **`PhotoGoRoundKit` becomes `PhotosGoRoundKit`**, from `Project Source Reorg.md`, closed 2026-09-22. It stays in `MacOS/Shared` until another platform needs it, and then moves to `Shared`.
 
 ## Retire the `photogoroundd` name
 
@@ -420,3 +421,16 @@ Syd, 2026-09-22: add an option to `uninstall.sh` that deletes all of the user da
 Syd, 2026-09-22: yes, add it. Nothing tests the code in `MacOS/Wallpaper/Sources` or `MacOS/Screensaver/Sources` — `Rotation`, `LastPicture`, `AgentPicture`, the pane models, `DisplayShuffles`, the saver view. What is tested is around them: `PhotoGoRoundDisplay`, the wallpaper's entitlements, the installs, and `pgr_ctl`'s wallpaper commands.
 
 - *Claude's note:* that code is compiled only into the extension and saver targets, so the package tests cannot reach it. Either the logic moves into a library the package tests link, or the two get Xcode test targets of their own. Not GUI tests.
+
+## Removing a wallpaper build leaves its Launch Services record
+
+Syd, 2026-09-22: add it. A deleted build of the wallpaper extension stays listed in System Settings › Wallpaper, because Launch Services keeps a record of it after its files are gone. Found that day: "Photo-Go-Round Wallpaper (Claude)" was listed with no `pkd` registration and no process, from an archive build under `~/.claude/build` that no longer existed; about 40 more such records turned up, one of them from Syd's DerivedData. `lsregister -u` on each missing path cleared them, and the pane entry went.
+
+- **`CLAUDE.md`'s cleanup after building `Photo-Go-Round Wallpaper Host`** runs `pluginkit -r` and deletes the host app. It needs `lsregister -u` on the host app before deleting it.
+- **`Scripts/uninstall.sh --wallpaper`**, through `pgr_install uninstall`, unregisters from `pkd` and stops the extension, but leaves Launch Services records behind.
+
+## The package test command needs a workspace git does not track
+
+Syd, 2026-09-22: add it. Since the reorganization put `Photo-Go-Round.xcodeproj` beside `Package.swift`, `xcodebuild test -scheme "Package Tests"` picks the project, and through the project the scheme finds no test bundles — "There are no test bundles available to test", with or without `-project`. Pointing the test plan's targets at `container:.` did not help. What works is `-workspace .swiftpm/xcode/package.xcworkspace`, now the command in `CLAUDE.md`.
+
+- **That workspace is generated and ignored.** `.gitignore` excludes both `.swiftpm/xcode/package.xcworkspace/` and `*.xcworkspacedata`, so a fresh clone does not have it. *Claude's reading, not tested:* Xcode writes it when it opens the package, so the documented command would fail on a fresh clone until that has happened once.
