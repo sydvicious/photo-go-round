@@ -110,10 +110,23 @@ release, 23000 Debug, 26000 Claude, plus a hash of the user's short name under
 3000 — so two builds, or two people on one Mac, can run at once and neither has
 to chase the other. Fixed per configuration since 2026-09-17, per user since
 2026-09-21. A port already held by something else is still fallen back from
-and published, so `pgr_ctl status` remains the way to be certain.
+and published, so the published value is the one to use.
 
-The examples below pin one with `--port` anyway, so they are copy-pasteable
-whichever configuration you are running.
+**Every request carries your secret.** The agent keeps one in its preference
+domain beside the port, and answers `401` to anything without it — loopback is
+shared by every account on the Mac, and this is what keeps another account's
+requests out. Only you can read that domain. So set these three once per
+terminal; every example below uses them:
+
+```
+DOMAIN=com.sydpolk.photosgoround.debug.dev
+PORT=$(defaults read "$DOMAIN" servicePort)
+AUTH="Authorization: Bearer $(defaults read "$DOMAIN" serviceSecret)"
+```
+
+`DOMAIN` is `com.sydpolk.photosgoround.dev` for a Release build,
+`….debug.dev` for Debug and `….claude.dev` for Claude; drop `.dev` for an agent
+started with `--prod`. See `Documentation/Photos-Go-Round Server.md`, *SERVICE*.
 
 Start the agent in one terminal and leave it running — it prints the URL once the
 listener is up, then a line for every request it answers:
@@ -125,7 +138,7 @@ listener is up, then a line for every request it answers:
 In another terminal, take a picture:
 
 ```
-curl -sS -D - -o /tmp/pgr.bin "http://localhost:9000/v1/next?consumer=cli&w=3840&h=2160"
+curl -sS -H "$AUTH" -D - -o /tmp/pgr.bin "http://localhost:$PORT/v1/next?consumer=cli&w=3840&h=2160"
 
 ```
 
@@ -140,7 +153,7 @@ bytes, untouched. Either way the extension matters if
 you want Preview to open it, so save it with the one the `Content-Type` implies:
 
 ```
-curl -sS -D /tmp/pgr.head -o /tmp/pgr.body "http://localhost:9000/v1/next?w=3840&h=2160" && ext=$(awk -F/ 'tolower($0) ~ /^content-type/ {gsub(/\r/,""); print $2}' /tmp/pgr.head) && mv /tmp/pgr.body "/tmp/pgr.$ext" && open "/tmp/pgr.$ext"
+curl -sS -H "$AUTH" -D /tmp/pgr.head -o /tmp/pgr.body "http://localhost:$PORT/v1/next?w=3840&h=2160" && ext=$(awk -F/ 'tolower($0) ~ /^content-type/ {gsub(/\r/,""); print $2}' /tmp/pgr.head) && mv /tmp/pgr.body "/tmp/pgr.$ext" && open "/tmp/pgr.$ext"
 ```
 
 Two answers that are not errors. **`204 No Content`** means the queue is empty —
@@ -149,7 +162,7 @@ does a small library asked faster than it can refill. And four requests at once
 never hand out the same picture, because serving removes the queue entry:
 
 ```
-for c in a b c d; do curl -sS -D - -o /dev/null "http://localhost:9000/v1/next?consumer=display-$c&w=1920&h=1080" & done; wait
+for c in a b c d; do curl -sS -H "$AUTH" -D - -o /dev/null "http://localhost:$PORT/v1/next?consumer=display-$c&w=1920&h=1080" & done; wait
 ```
 
 ## Managing sources over HTTP
@@ -161,14 +174,14 @@ this without the agent running; this is the path a shipping client takes.
 List what is configured, with counts and availability:
 
 ```
-curl -sS "http://localhost:9000/v1/sources"
+curl -sS -H "$AUTH" "http://localhost:$PORT/v1/sources"
 ```
 
 Add one or more. The body is an array, `kind` defaults to `folder`, and the batch
 is all-or-none — one path that does not resolve refuses the lot and names it:
 
 ```
-curl -sS -X POST "http://localhost:9000/v1/sources" -H 'Content-Type: application/json' -d '[{"path": "/Users/me/Pictures/Sunsets", "recursive": true}]'
+curl -sS -H "$AUTH" -X POST "http://localhost:$PORT/v1/sources" -H 'Content-Type: application/json' -d '[{"path": "/Users/me/Pictures/Sunsets", "recursive": true}]'
 ```
 
 The answer carries each new source's `uuid`, which is what names it afterwards —
@@ -176,8 +189,8 @@ the row id `pgr_ctl` prints belongs to a disposable database. It does **not** wa
 for the folder to be scanned, so `photos` is zero until a later request:
 
 ```
-curl -sS "http://localhost:9000/v1/sources/<uuid>"
-curl -sS -X DELETE -D - "http://localhost:9000/v1/sources/<uuid>"
+curl -sS -H "$AUTH" "http://localhost:$PORT/v1/sources/<uuid>"
+curl -sS -H "$AUTH" -X DELETE -D - "http://localhost:$PORT/v1/sources/<uuid>"
 ```
 
 `DELETE` answers `204` and takes the source's photographs — and their cached
@@ -188,7 +201,7 @@ Change what a folder was added with, keeping its identity and its shuffle
 position:
 
 ```
-curl -sS -X PATCH "http://localhost:9000/v1/sources/<uuid>" -H 'Content-Type: application/json' -d '{"recursive": false}'
+curl -sS -H "$AUTH" -X PATCH "http://localhost:$PORT/v1/sources/<uuid>" -H 'Content-Type: application/json' -d '{"recursive": false}'
 ```
 
 ## Documentation

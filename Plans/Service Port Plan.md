@@ -17,7 +17,9 @@ The dynamic port is the one piece of the system that changes on every launch, an
 - **Phase 2 — Clients try the fixed port first.** *Unscheduled 2026-09-19; see the status note above.* The published value becomes the fallback. Syd: "The clients will try the hardcoded port first, and then fall back to what they do now."
   - The app, the screensaver, the wallpaper extension and `pgr_ctl`.
   - Each has its own handling of *no port published* against *unreadable*, so what a failed first attempt means to the surface is the part to get right.
+  - **Never with the secret.** *Syd's, 2026-09-23, in `Multi-user Support.md`.* Since that plan every request carries the user's secret, and the hashed port is the one another account can hold on purpose. A first try there goes without it, and so can only learn that something answers — every agent says `401` to a request without the secret — never that it is this user's. The request that matters still goes to the published port.
 - **Phase 3 — Retire what the discovery dance needed.** *Unscheduled 2026-09-19, and dependent on Phase 2.* Whatever is left unused after Phase 2 goes: the plist-file read in `ServicePort`, and possibly `servicePort` itself.
+  - **Neither can go now.** *2026-09-23.* The secret from `Multi-user Support.md` is published beside `servicePort` and read the same two ways, the saver through the plist file; and the published port is the only one a client may send the secret to. This phase has nothing left to retire unless that plan changes.
 - **Phase 4 — Several users on one Mac.** *Moved to `Multi-user Support.md`, 2026-09-21.* Syd: "I want multi-user support split out into it's own plan".
 
 # Design Decisions

@@ -116,6 +116,10 @@ silently captures the app's window, serving it from a different library. Pair it
 with `--port` and reach the agent at the number you chose; the bound port is
 printed at startup either way.
 
+It still keeps its domain's `serviceSecret`, and makes one there if there is
+none: a secret names the user, not the process, so sharing it confuses nothing.
+Its startup line names the domain to read it from, never the value.
+
 The value is withdrawn when the agent stops. A crash leaves it behind, and a
 client that tries it finds nothing listening — the same answer it gets when no
 agent is running.
@@ -212,6 +216,27 @@ The agent listens on localhost, on the port `pgr_ctl status` prints — see
 `--port` — and answers one request that matters:
 
     GET /v1/next?consumer=<name>&display=<id>&w=<pixels>&h=<pixels>
+
+**Every request carries this user's secret**, as
+
+    Authorization: Bearer <serviceSecret>
+
+and anything without it — or with someone else's — is answered `401
+Unauthorized`, `WWW-Authenticate: Bearer`, and one line of text that every agent
+says alike: *Open the dashboard from Photos-Go-Round's About box.* Loopback keeps
+other machines out, not other accounts on this Mac, and the port is worked out
+from the user name; the secret is what keeps another account's requests out. The
+agent makes it on first launch and keeps it in its preference domain beside
+`servicePort`, where only this user can read it — see *PREFERENCES*. Each
+refusal is a console line, `401 <method> <path> · absent` or `· wrong`, with no
+query and never the value. From a terminal:
+
+    DOMAIN=com.sydpolk.photosgoround.debug.dev
+    PORT=$(defaults read "$DOMAIN" servicePort)
+    AUTH="Authorization: Bearer $(defaults read "$DOMAIN" serviceSecret)"
+    curl -sS -H "$AUTH" -o /tmp/pgr.bin "http://localhost:$PORT/v1/next?consumer=cli"
+
+`README.md`, *Testing the picture endpoint*, has each configuration's domain.
 
 `200` returns the picture, with `Content-Type` describing the format,
 `X-PGR-Pixels` the size produced when a box was asked for — original bytes
@@ -378,10 +403,23 @@ keeps the database and preferences and never makes a web request.
     GET /dashboard/dashboard.js                its script
     GET /v1/dashboard                          what the page shows, as JSON
     GET /v1/dashboard/thumbnail?photo=<id>     a small JPEG of one photograph
+    POST /v1/dashboard/code                    a one-time code, for the secret
 
 The agent prints the dashboard's address when its listener is ready. **The page
 redraws itself every second**, and says `not answering` when the agent stops
 replying.
+
+**A browser cannot send the secret, so it is let in by a code.** The About box's
+link asks `POST /v1/dashboard/code`, with the secret, and is answered
+`{"code": "…"}` — good once, and for sixty seconds. It opens
+`/dashboard?code=<code>` in the browser, and the agent answers `303 See Other` to
+`/dashboard` with a cookie, so the code does not stay in the address bar. The
+secret never reaches the browser: the cookie's name and value are both derived
+from it, so it survives the agent's restarts, ends when the secret is rotated,
+and two agents' cookies in one browser do not overwrite each other. It is kept
+for 400 days, the most a browser allows, and **admits the `GET`s above and
+nothing else** — every other request still needs the secret. A page that loses
+it stops polling and says to open the dashboard again from the About box.
 
 The page, stylesheet and script are `MacOS/Agent/Dashboard/Resources/dashboard.html`,
 `dashboard.css` and `dashboard.js`, read from the agent's app bundle, or from that
@@ -559,6 +597,17 @@ without restarting it and without any cooperation:
 
 Every read is a parse with a default and a clamp, because `defaults write` accepts
 anything. An out-of-range value is logged and clamped rather than honoured.
+
+**Two keys are the agent's to write, and not preferences at all.** `servicePort`
+is where it is listening, published when its listener is ready and withdrawn when
+it stops. `serviceSecret` is what every request must carry: 64 hex digits, made
+on first launch and kept, and never withdrawn — it names the user, not the
+process. A value the agent could not have made is replaced. Neither is listed by
+`pgr_ctl get`. Only this user can read the domain, which is the whole of why the
+secret works. **To rotate it**, delete it and restart the agent, which the next
+launch of the app does anyway; every client reads it again on its next request:
+
+    defaults delete com.sydpolk.photosgoround.debug.dev serviceSecret
 
 ## FILES
 

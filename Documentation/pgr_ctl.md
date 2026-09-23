@@ -142,7 +142,9 @@ collected first and interpreted last, so `sources add --folder /a -r` and
 `status`
 Sources, pool, queue, cache, shuffle position, and the preferences in force.
 The one command to run when something is wrong and you do not yet know what. It
-prints which rung supplied the roots, so that is never a guess.
+prints which rung supplied the roots, so that is never a guess. Its `service`
+line is the published address and whether the secret every request needs is
+published beside it — never the secret itself.
 
 `sources add`
 Adds one or more sources. `--folder <path>` enumerates a folder's contents;
@@ -368,13 +370,17 @@ pgr_ctl sources add --folder --recursive ~/Pictures/Wallpaper
 pgr_ctl status
 ```
 
-Prove the queue pop serialises across clients. The port floats, so ask `status`
-where the agent is rather than assuming a number:
+Prove the queue pop serialises across clients. Read the port and the secret the
+agent published — every request has to carry the secret, and `pgr_ctl` never
+prints it. `DOMAIN` is the agent's preference domain; see `README.md`, *Testing
+the picture endpoint*, for each configuration's:
 
 ```
-PORT=$(pgr_ctl status | grep -o "localhost:[0-9]*" | cut -d: -f2)
+DOMAIN=com.sydpolk.photosgoround.dev
+PORT=$(defaults read "$DOMAIN" servicePort)
+AUTH="Authorization: Bearer $(defaults read "$DOMAIN" serviceSecret)"
 for c in a b c d; do
-  curl -sS -D - -o /dev/null "http://localhost:$PORT/v1/next?consumer=display-$c&w=1920&h=1080" &
+  curl -sS -H "$AUTH" -D - -o /dev/null "http://localhost:$PORT/v1/next?consumer=display-$c&w=1920&h=1080" &
 done; wait
 ```
 

@@ -23,10 +23,11 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
   - `POST /v1/dashboard/code`, sent with the secret, returns a code good once for sixty seconds.
   - `GET /dashboard?code=…` sets a cookie and redirects to `/dashboard`; the cookie admits the dashboard's `GET`s and nothing else.
   - The About box's link fetches a code, then opens the browser.
-- **Phase 5 — Documentation.**
+- **Phase 5 — Documentation.** *Done 2026-09-23.*
   - `README.md`'s and `Documentation/pgr_ctl.md`'s `curl` examples read the port and the secret from preferences, and each is run by a test.
   - `Documentation/Photos-Go-Round Server.md` lists `serviceSecret` and says what a `401` means.
 - **Phase 6 — Two users at once.** Syd logs in as a second user with the first still logged in; both agents serve, and each user sees only their own pictures.
+  - Syd's way, 2026-09-23: uninstall everything in his own account, archive the app, put it in `/Applications`, run it there; then switch to `randyarbuckle` and run it again. See *Phase 6, by hand*.
 
 # Design Decisions
 
@@ -197,7 +198,7 @@ The code is in one URL, and so in the browser's history. That is the point of it
 
 ## Documentation
 
-**Where the examples actually are.** This plan used to say `Documentation/photogoroundd.md`'s `curl` examples; that man page has none. They are in `README.md`, *Testing the picture endpoint* and *Managing sources over HTTP*, and one in `Documentation/pgr_ctl.md`. The README's all use port 9000, which has been wrong since the port became per user, and it says they pin one with `--port` while its start command does not.
+**Where the examples actually are.** This plan used to say `Documentation/photogoroundd.md`'s `curl` examples; that man page had none. They are in `README.md`, *Testing the picture endpoint* and *Managing sources over HTTP*, and one in `Documentation/pgr_ctl.md`. The README's all used port 9000, which had been wrong since the port became per user. *Done 2026-09-23:* every example now reads `$PORT` from the setup block, and the man page's *SERVICE* gained one of its own.
 
 **One setup block, then the examples:**
 
@@ -213,7 +214,7 @@ curl -sS -H "$AUTH" -D - -o /tmp/pgr.bin "http://localhost:$PORT/v1/next?consume
 
 with a line on which domain each configuration uses. That fixes the stale port as well, and gives the test one thing to look for.
 
-**`Documentation/Photos-Go-Round Server.md`** gains `serviceSecret` in its preferences, a paragraph on the `401` and the dashboard's code, and how to rotate.
+**`Documentation/Photos-Go-Round Server.md`** gains `serviceSecret` in its preferences, a paragraph on the `401` and the dashboard's code, and how to rotate. *Done 2026-09-23*: *SERVICE* for the secret and the refusal, *Dashboard* for the code and the cookie, *PREFERENCES* for the two keys the agent writes and rotating, and `--no-publish` for the secret such an agent keeps. `Documentation/pgr_ctl.md`'s `status` says its service line shows whether a secret is published, never the value.
 
 **The test does both halves.** *Syd's, 2026-09-23*, over only running them or only reading them. It starts `/bin/zsh` and `/usr/bin/curl` as child processes, as `AgentLifecycleTests` already starts the built agent.
 
@@ -233,6 +234,17 @@ It finds every fenced block in `README.md` and `Documentation/*.md` that calls `
 
 **One thing seen on the way, and it is the upgrade, not a fault.** A dashboard tab left open from before the install went on asking `/v1/dashboard` once a second, and the agent logged `401 GET /v1/dashboard · absent` for each, across the agent's restart. That tab was still running the old script, which has no cookie and never stops asking. The new script stops at its first `401` and says to reopen from the About box. Closing the tab ended it. Anyone upgrading with a dashboard open will see the same, once.
 
+## Phase 6, by hand
+
+*Planned 2026-09-23.* Syd, on `randyarbuckle`: "That account has a lot of sensitive pictures, so I won't be taking screenshots or movies, and I won't be giving you log snippets." So every check prints a status code, a count or a permission error, and nothing about the pictures leaves that account. An archived app is a Release build, so both agents use the domain `com.sydpolk.photosgoround.dev`.
+
+1. **Another account cannot read this one's preferences**, measured for real this time: from `randyarbuckle`, `cat /Users/jazzman/Library/Preferences/com.sydpolk.photosgoround.dev.plist` says *Permission denied*.
+2. **Each agent made its own secret**: `defaults read … serviceSecret | wc -l` is `1` in each account.
+3. **Each agent serves its own user**: `/v1/dashboard` with the account's own secret, `-o /dev/null`, is `200`.
+4. **Neither serves the other**: each account's secret sent to the other's port is `401`, both ways.
+5. **Each sees only their own pictures**: window, wallpaper, screensaver — yes or no, by eye.
+6. **The two ports differ**, being hashes of different names. A match is a collision, and worth knowing.
+
 ## Testing
 
 - The gate answers `401` to a request with no secret, with a wrong one, and with a right one of a different length; and passes one with the right secret.
@@ -243,6 +255,8 @@ It finds every fenced block in `README.md` and `Documentation/*.md` that calls `
 - The launch check asks the published port, sends the secret, and does not count a `401` as its agent.
 - Each documented `curl` example gets through the gate as written.
 - Phase 6 is Syd's, by hand: two accounts logged in, each seeing only their own pictures.
+
+**Found on the way, 2026-09-23: a test that could hang the whole run.** `AgentLifecycleTests`, *SIGTERM withdraws the published port on the way out*, launches the built agent, signals it, and called `waitUntilExit()`. That spins the *current* thread's run loop, while `Process` delivers the exit to the run loop of the thread that launched it — and after the test's `await`, it is usually on a different pool thread. The first full run with `DocumentedExamplesTests` beside it sat at 0% CPU for seven minutes, the agent long gone and reaped. It passed every run before that, so it was a latent race, not a new fault; more work in parallel made the thread switch likelier. The test now awaits the exit from the process's `terminationHandler`; three full runs passed, about 40 seconds each. `DocumentationTests` also calls `waitUntilExit`, but synchronously, on one thread, and is safe.
 
 # References
 
