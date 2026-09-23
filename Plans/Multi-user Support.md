@@ -19,7 +19,7 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
   - `PictureClient` (the app's window, the saver), the wallpaper extension's own request in `AgentPicture`, the app's `SourceService`.
   - The launch check, `AgentProbe`: the published port, the secret, and a `401` is not its agent.
   - `pgr_ctl status` says whether a secret is published, never what it is. It makes no requests, so it sends nothing.
-- **Phase 4 — The dashboard, by one-time code.** *Syd's choice, 2026-09-22.*
+- **Phase 4 — The dashboard, by one-time code.** *Syd's choice, 2026-09-22. Done 2026-09-23*, and checked by hand on Syd's Debug install; see *Checked by hand*.
   - `POST /v1/dashboard/code`, sent with the secret, returns a code good once for sixty seconds.
   - `GET /dashboard?code=…` sets a cookie and redirects to `/dashboard`; the cookie admits the dashboard's `GET`s and nothing else.
   - The About box's link fetches a code, then opens the browser.
@@ -58,7 +58,7 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
 - **The agent checks nothing about who is asking.** Loopback keeps other machines out, not other accounts on this one.
 - **Since 2026-09-21 the port is per user:** 20000, 23000 or 26000 by build, plus FNV-1a of the short name modulo 3000 (`BuildVariant.port`). Syd's Debug agent is on 23172.
 - **The saver, the wallpaper extension and the app's windows read the published `servicePort`**, so they reach their own user's agent even after a collision.
-- **The app's launch check does not.** `AgentProbe.answers(on: BuildVariant.current.port)` polls the hashed port and counts any HTTP answer, a `404` included, as its agent (`LaunchInstall.swift`).
+- **The app's launch check did not, until Phase 3.** `AgentProbe.answers(on: BuildVariant.current.port)` polled the hashed port and counted any HTTP answer, a `404` included, as its agent (`LaunchInstall.swift`).
 - **The saver reads preferences as a file**, because its sandbox hands back an empty suite; see `ServicePort`. **The wallpaper extension reads the suite**, and makes its own request rather than using `PictureClient`.
 - **The dashboard opens in the person's browser**; `AboutView` builds the link.
 - **The agent was renamed on 2026-09-22**: `photogoroundd` is now `Photos-Go-Round Server`, and its man page `Documentation/Photos-Go-Round Server.md`.
@@ -218,6 +218,20 @@ with a line on which domain each configuration uses. That fixes the stale port a
 **The test does both halves.** *Syd's, 2026-09-23*, over only running them or only reading them. It starts `/bin/zsh` and `/usr/bin/curl` as child processes, as `AgentLifecycleTests` already starts the built agent.
 
 It finds every fenced block in `README.md` and `Documentation/*.md` that calls `curl` and requires `-H "$AUTH"` on each call. Then it runs the README's and `pgr_ctl.md`'s examples through `zsh` against a gated listener on a kernel port, with `DOMAIN` pointed at a scratch preference file holding that listener's port and a secret, `/tmp/` pointed at a scratch directory, and anything after `&& open` dropped, so nothing opens Preview. The route behind the gate answers every request, so what is tested is that each example gets through the gate as written. Each has to be admitted; the same example without the header has to be refused.
+
+## Checked by hand
+
+*2026-09-23, Syd's Debug build, installed after uninstalling the old one; domain `com.sydpolk.photosgoround.debug.dev`, port 23172.*
+
+- **The secret was made and published:** `defaults read … serviceSecret` has one line.
+- **Without it, refused:** `curl` of `/v1/dashboard` answered `401 Unauthorized`, `WWW-Authenticate: Bearer`, and *Open the dashboard from Photos-Go-Round's About box.*
+- **With it, served:** the same request with `-H "Authorization: Bearer …"` answered `200`.
+- **The saver found both through the file:** `saver: agent on port 23172 via file`, then `saver: secret via file`.
+- **The wallpaper was served:** after the new agent started at 08:26:14, both of its requests came back `200` with a picture.
+- **The dashboard link works**, from the About box. Syd.
+- **Not reported:** the picture window and Settings › Sources, which send the secret through the same code the tests cover.
+
+**One thing seen on the way, and it is the upgrade, not a fault.** A dashboard tab left open from before the install went on asking `/v1/dashboard` once a second, and the agent logged `401 GET /v1/dashboard · absent` for each, across the agent's restart. That tab was still running the old script, which has no cookie and never stops asking. The new script stops at its first `401` and says to reopen from the About box. Closing the tab ended it. Anyone upgrading with a dashboard open will see the same, once.
 
 ## Testing
 

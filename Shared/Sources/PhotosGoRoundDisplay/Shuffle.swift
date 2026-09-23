@@ -445,7 +445,12 @@ public final class Shuffle {
     /// photograph would have gone up sideways. The thumbnail call does both, and
     /// for a picture the agent already resized it changes nothing.
     static func decode(_ data: Data, fitting box: PixelSize) async -> CGImage? {
-        await Task.detached(priority: .userInitiated) { () -> Decoded? in
+        // **`.medium`, not `.userInitiated`.** ImageIO hands part of a decode
+        // to a thread of its own at Default QoS and waits on it, so a
+        // user-initiated task here was a priority inversion — Xcode's Thread
+        // Performance Checker, 2026-09-23. The decode is for the next picture,
+        // made during this one's dwell; nothing waits on it at a higher class.
+        await Task.detached(priority: .medium) { () -> Decoded? in
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                 let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                 let width = properties[kCGImagePropertyPixelWidth] as? Int,
