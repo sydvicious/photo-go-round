@@ -85,6 +85,9 @@ public struct Preferences: @unchecked Sendable {
         /// Where the service is listening. Written by the agent, read by every
         /// local client.
         public static let servicePort = Key("servicePort")
+        /// What a request has to carry. Made by the agent, read by every
+        /// local client of this user's. See `ServiceSecret`.
+        public static let serviceSecret = Key("serviceSecret")
     }
 
     // MARK: - Reading, with a default and a clamp
@@ -504,6 +507,47 @@ public struct Preferences: @unchecked Sendable {
     public func withdrawServicePort() {
         defaults.removeObject(forKey: Key.servicePort.rawValue)
         doorbells?.post(.preferencesChanged)
+    }
+
+    /// What every request to the agent has to carry, or nil when none is kept
+    /// or what is kept is not one the agent could have made.
+    ///
+    /// **Beside the port, in the same domain, for the same reason.** Every
+    /// client that can find the port can find this, by the same route —
+    /// including the saver, which reads the domain's `.plist` as a file. And
+    /// only this user can read that domain: measured 2026-09-22,
+    /// `Plans/Multi-user Support.md`, *Where it is readable*.
+    ///
+    /// **Not in `allKeys`**, so `all()` — which `pgr_ctl get` prints and the
+    /// agent logs at launch — never shows it.
+    public var serviceSecret: String? {
+        guard let raw = defaults.string(forKey: Key.serviceSecret.rawValue),
+            ServiceSecret.isWellFormed(raw)
+        else { return nil }
+        return raw
+    }
+
+    /// The secret the agent checks for: the one kept, or a new one kept from
+    /// now on. The agent's to call, nobody else's.
+    ///
+    /// **Kept across launches.** The app restarts the agent on every launch of
+    /// its own, and a new secret each time would send every running client back
+    /// to re-read it. **A malformed one is replaced** — a `defaults write` gone
+    /// wrong is not a secret. Nil only when no secret could be made, and the
+    /// agent does not serve without one.
+    public func establishServiceSecret(
+        making make: () -> String? = ServiceSecret.make
+    ) -> String? {
+        if let kept = serviceSecret { return kept }
+        if defaults.object(forKey: Key.serviceSecret.rawValue) != nil {
+            Log.prefs.error(
+                kind: "preferences.malformed-service-secret",
+                "serviceSecret is not one the agent could have made; replacing it")
+        }
+        guard let made = make() else { return nil }
+        defaults.set(made, forKey: Key.serviceSecret.rawValue)
+        doorbells?.post(.preferencesChanged)
+        return made
     }
 
     // MARK: - Writing

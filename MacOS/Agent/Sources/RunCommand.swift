@@ -24,6 +24,9 @@ struct RunCommand {
     /// Whether to announce the bound port. False for a scratch agent — see
     /// `Options.publishesPort`.
     var publishesPort = true
+    /// Where a new secret comes from, when none is kept. A hook so a test can
+    /// prove the agent will not serve when none can be made.
+    var makeSecret: @Sendable () -> String? = ServiceSecret.make
 
     /// Filling is policy and lives in the kit; what stays here is the two facts
     /// it needs — is the queue short, and produce one picture — each of which
@@ -326,6 +329,16 @@ struct RunCommand {
         // it isolates storage and the preference domain is shared, which is
         // exactly where the port lives.
         let publishes = publishesPort
+        // **No secret, no agent.** Every request has to carry this user's, and
+        // an agent that served without one would be the failure
+        // `Plans/Multi-user Support.md` exists to prevent. A `--no-publish`
+        // agent keeps its domain's too: a secret names the user rather than
+        // the process, so there is nothing to confuse by sharing it.
+        guard let secret = environment.preferences.establishServiceSecret(making: makeSecret) else {
+            throw NoServiceSecret()
+        }
+        let gate = ServiceGate(secret: secret)
+        let secretDomain = environment.preferences.domain ?? "standard defaults"
         // **The fixed port for this build**, unless `--port` said otherwise.
         // Syd, 2026-09-17: "Perhaps we had better actually pick a port and
         // hardcode it. this dynamic port stuff is causing problems", and "each
@@ -342,7 +355,10 @@ struct RunCommand {
                 Console.event("dashboard at http://localhost:\(port)\(DashboardEndpoint.pagePath)")
                 guard publishes else {
                     // Nothing can discover it, so say it plainly enough to copy.
-                    Console.event("not published — reach this agent at http://localhost:\(port)")
+                    // Where the secret is, never what it is.
+                    Console.event(
+                        "not published — reach this agent at http://localhost:\(port), "
+                            + "with the serviceSecret in \(secretDomain)")
                     return
                 }
                 environment.preferences.publishServicePort(port)
@@ -353,7 +369,9 @@ struct RunCommand {
                 // listener. Nothing can be served without a socket.
                 Console.failure(words)
             }
-        ) { await router.route($0) }
+        ) { request in
+            await gate.handle(request) { await router.route($0) }
+        }
         // A one-pass run configures and fills; it does not serve. Its listener
         // would publish a port that only a signal withdraws, so `--once` would
         // leave a stale address behind — or overwrite a running agent's, since
