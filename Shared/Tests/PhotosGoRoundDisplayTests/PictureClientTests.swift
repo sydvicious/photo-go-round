@@ -24,7 +24,7 @@ struct PictureClientTests {
     @Test("A published port with nothing listening is unreachable, not empty")
     func stalePort() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9999)
+        suite.publish(port: 9999)
         let client = PictureClient(
             preferences: suite.preferences,
             session: Stub.session { _ in .failure(URLError(.cannotConnectToHost)) })
@@ -48,7 +48,7 @@ struct PictureClientTests {
     @Test("An agent that accepts the connection and says nothing is silent, not unreachable")
     func silentAgent() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9000)
+        suite.publish(port: 9000)
         let client = PictureClient(
             preferences: suite.preferences,
             limit: .milliseconds(50),
@@ -75,7 +75,7 @@ struct PictureClientTests {
     @Test("A silent agent costs one wait each time, not a growing one")
     func silenceDoesNotAccumulate() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9000)
+        suite.publish(port: 9000)
         let client = PictureClient(
             preferences: suite.preferences,
             limit: .milliseconds(50),
@@ -94,7 +94,7 @@ struct PictureClientTests {
     @Test("204 is an empty queue, which is an ordinary answer")
     func emptyQueue() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9000)
+        suite.publish(port: 9000)
         let client = PictureClient(
             preferences: suite.preferences,
             session: Stub.session { _ in .success((204, [:], Data())) })
@@ -106,7 +106,7 @@ struct PictureClientTests {
     @Test("A picture arrives with its bytes and everything the service said about it")
     func served() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9000)
+        suite.publish(port: 9000)
         let client = PictureClient(
             preferences: suite.preferences,
             session: Stub.session { _ in
@@ -133,7 +133,7 @@ struct PictureClientTests {
     @Test("Anything else the service says is a refusal")
     func refused() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9000)
+        suite.publish(port: 9000)
         let client = PictureClient(
             preferences: suite.preferences,
             session: Stub.session { _ in .success((503, [:], Data())) })
@@ -148,7 +148,7 @@ struct PictureClientTests {
     @Test("The box and the consumer's identity are the query")
     func requestQuery() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9000)
+        suite.publish(port: 9000)
         let seen = Mutex<URLRequest?>(nil)
         let client = PictureClient(
             preferences: suite.preferences,
@@ -177,7 +177,7 @@ struct PictureClientTests {
     @Test("Asking for no size sends no size")
     func originalRequest() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9000)
+        suite.publish(port: 9000)
         let seen = Mutex<URLRequest?>(nil)
         let client = PictureClient(
             preferences: suite.preferences,
@@ -200,7 +200,7 @@ struct PictureClientTests {
     @Test("The port is read again for every picture")
     func portIsReadEachTime() async throws {
         let suite = DefaultsSuite()
-        suite.preferences.publishServicePort(9000)
+        suite.publish(port: 9000)
         let ports = Mutex<[Int?]>([])
         let client = PictureClient(
             preferences: suite.preferences,
@@ -210,10 +210,108 @@ struct PictureClientTests {
             })
 
         _ = try await client.next(consumer: "app", displayID: nil, fitting: nil)
-        suite.preferences.publishServicePort(9100)
+        suite.publish(port: 9100)
         _ = try await client.next(consumer: "app", displayID: nil, fitting: nil)
 
         #expect(ports.withLock { $0 } == [9000, 9100])
+    }
+
+    // MARK: - The secret
+
+    @Test("A port with no secret beside it sends nothing")
+    func noSecret() async {
+        let suite = DefaultsSuite()
+        suite.preferences.publishServicePort(9000)
+        let asked = Mutex(0)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            session: Stub.session { _ in
+                asked.withLock { $0 += 1 }
+                return .success((204, [:], Data()))
+            })
+
+        await #expect(throws: PictureClient.Failure.noSecret) {
+            try await client.next(consumer: "app", displayID: nil, fitting: nil)
+        }
+        #expect(asked.withLock { $0 } == 0)
+    }
+
+    @Test("Every request carries the secret as a Bearer header")
+    func secretIsSent() async throws {
+        let suite = DefaultsSuite()
+        suite.publish(port: 9000)
+        let secret = try #require(suite.secret)
+        let seen = Mutex<String?>(nil)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            session: Stub.session { request in
+                seen.withLock { $0 = request.value(forHTTPHeaderField: "Authorization") }
+                return .success((204, [:], Data()))
+            })
+
+        _ = try await client.next(consumer: "app", displayID: nil, fitting: nil)
+        #expect(seen.withLock { $0 } == "Bearer \(secret)")
+    }
+
+    /// Asked once more only if there is something new to offer: the same
+    /// secret sent again would be refused again.
+    @Test("A 401 with the secret unchanged is not this user's agent, and is asked once")
+    func refusedSecretIsNotOurs() async throws {
+        let suite = DefaultsSuite()
+        suite.publish(port: 9000)
+        let asked = Mutex(0)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            session: Stub.session { _ in
+                asked.withLock { $0 += 1 }
+                return .success((401, [:], Data()))
+            })
+
+        await #expect(throws: PictureClient.Failure.notOurs(port: 9000)) {
+            try await client.next(consumer: "app", displayID: nil, fitting: nil)
+        }
+        #expect(asked.withLock { $0 } == 1)
+    }
+
+    @Test("A 401 after the secret changed is asked again with the new one")
+    func changedSecretIsRetried() async throws {
+        let suite = DefaultsSuite()
+        suite.publish(port: 9000)
+        let old = try #require(suite.secret)
+        let offered = Mutex<[String]>([])
+        let client = PictureClient(
+            preferences: suite.preferences,
+            session: Stub.session { request in
+                let header = request.value(forHTTPHeaderField: "Authorization") ?? ""
+                let count = offered.withLock { $0.append(header); return $0.count }
+                guard count == 1 else { return .success((204, [:], Data())) }
+                // The agent's secret was rotated before this request arrived.
+                suite.replaceSecret()
+                return .success((401, [:], Data()))
+            })
+
+        let picture = try await client.next(consumer: "app", displayID: nil, fitting: nil)
+        #expect(picture == nil)
+        let new = try #require(suite.secret)
+        #expect(offered.withLock { $0 } == ["Bearer \(old)", "Bearer \(new)"])
+    }
+
+    @Test("A 401 to the new secret too is not this user's agent")
+    func refusedTwiceIsNotOurs() async throws {
+        let suite = DefaultsSuite()
+        suite.publish(port: 9000)
+        let asked = Mutex(0)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            session: Stub.session { _ in
+                if asked.withLock({ $0 += 1; return $0 }) == 1 { suite.replaceSecret() }
+                return .success((401, [:], Data()))
+            })
+
+        await #expect(throws: PictureClient.Failure.notOurs(port: 9000)) {
+            try await client.next(consumer: "app", displayID: nil, fitting: nil)
+        }
+        #expect(asked.withLock { $0 } == 2)
     }
 }
 
@@ -287,10 +385,23 @@ private enum Stub {
 /// The same shape as `HostTests.Suite`. Teardown is `discardScratchSuite`, which
 /// is the whole of it — see that function for why the obvious companions to it
 /// are what used to leave the plists behind.
-private final class DefaultsSuite {
+private final class DefaultsSuite: Sendable {
     let name = scratchSuiteName("picture-client")
     var defaults: UserDefaults { UserDefaults(suiteName: name)! }
     var preferences: Preferences { Preferences(defaults: defaults) }
+
+    /// A port, and the secret an agent keeps beside it.
+    func publish(port: UInt16) {
+        preferences.publishServicePort(port)
+        _ = preferences.establishServiceSecret()
+    }
+
+    var secret: String? { preferences.serviceSecret }
+
+    /// What the agent would do when its secret is rotated.
+    func replaceSecret() {
+        defaults.set(ServiceSecret.make(), forKey: Preferences.Key.serviceSecret.rawValue)
+    }
 
     deinit { discardScratchSuite(name) }
 }

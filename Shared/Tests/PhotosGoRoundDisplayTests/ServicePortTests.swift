@@ -117,6 +117,69 @@ struct ServicePortTests {
         }
     }
 
+    // MARK: - The secret beside the port
+
+    static let secret = String(repeating: "0123456789abcdef", count: 4)
+
+    @Test("A secret in the suite is used, and reported as coming from the suite")
+    func secretFromTheSuite() throws {
+        let name = scratchSuiteName("service-secret-suite")
+        defer { discardScratchSuite(name) }
+        let preferences = Preferences(suiteName: name)
+        let made = try #require(preferences.establishServiceSecret())
+
+        #expect(ServicePort.readSecret(preferences) == .published(made, from: .suite))
+    }
+
+    /// The saver's route: its sandbox hands back an empty suite, and the secret
+    /// is a second key in the same file as the port.
+    @Test("A secret in the file is used, and reported as coming from the file")
+    func secretFromTheFile() throws {
+        let url = try Self.plist(["servicePort": 51234, "serviceSecret": Self.secret])
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        #expect(ServicePort.readSecretFile(at: url) == .published(Self.secret, from: .file))
+    }
+
+    @Test("A file with a port and no secret is none")
+    func fileWithoutASecret() throws {
+        let url = try Self.plist(["servicePort": 51234])
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        #expect(ServicePort.readSecretFile(at: url) == .none)
+    }
+
+    /// `defaults write` accepts anything, and a secret the agent could not have
+    /// made is not one — the agent would replace it, so it cannot be current.
+    @Test("A malformed secret in the file is none")
+    func malformedSecretInTheFile() throws {
+        let url = try Self.plist(["serviceSecret": "hunter2"])
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        #expect(ServicePort.readSecretFile(at: url) == .none)
+    }
+
+    @Test("A file that will not parse leaves the secret unreadable, not absent")
+    func unparseableSecretIsUnreadable() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "junk.plist")
+        try Data("this is not a property list".utf8).write(to: url)
+
+        guard case .unreadable = ServicePort.readSecretFile(at: url) else {
+            Issue.record("a file of junk read as \(ServicePort.readSecretFile(at: url))")
+            return
+        }
+    }
+
+    @Test("No file at all is none")
+    func noFileNoSecret() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(ServicePort.readSecretFile(at: directory.appending(path: "never.plist")) == .none)
+    }
+
     // MARK: - Support
 
     private static func temporaryDirectory() throws -> URL {

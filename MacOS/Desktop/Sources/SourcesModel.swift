@@ -454,6 +454,12 @@ final class SourcesModel {
             reason
         case SourceService.Failure.unreadable:
             "The agent's answer could not be read."
+        case SourceService.Failure.noSecret:
+            "The agent has published an address but not its secret yet. It may still be starting."
+        // Not "the agent is not running": something is answering on the port,
+        // and it is not this account's.
+        case SourceService.Failure.notOurs:
+            "The agent on this port refused this account's secret. It is not this account's agent."
         default:
             error.localizedDescription
         }

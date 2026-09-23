@@ -22,12 +22,12 @@
 		AA00000000000000000000FE /* Photos-Go-Round Wallpaper.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E1 /* Photos-Go-Round Wallpaper.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA000000000000000000030A /* PhotosGoRoundInstall in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000030C /* PhotosGoRoundInstall */; };
 		AA000000000000000000030B /* Console in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000030D /* Console */; };
-		AA0000000000000000000A02 /* PhotosGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000A03 /* PhotosGoRoundDisplay */; };
 		AA0000000000000000000401 /* Photos-Go-Round Server.app in Embed Agent */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000C1 /* Photos-Go-Round Server.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AA0000000000000000000402 /* Photos-Go-Round Wallpaper.appex in Embed Wallpaper Extension */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000442 /* Photos-Go-Round Wallpaper.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		AA0000000000000000000403 /* Photos-Go-Round Screensaver.saver in Embed Screensaver */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000441 /* Photos-Go-Round Screensaver.saver */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		AA0000000000000000000403 /* Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver in Embed Screensaver */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000441 /* Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		AA0000000000000000000451 /* PhotosGoRoundInstall in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000452 /* PhotosGoRoundInstall */; };
 		AA0000000000000000000461 /* PhotosGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000462 /* PhotosGoRoundAgentAPI */; };
+		AA0000000000000000000A02 /* PhotosGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000A03 /* PhotosGoRoundDisplay */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,7 +100,7 @@
 			isa = PBXCopyFilesBuildPhase;
 			dstSubfolder = Resources;
 			files = (
-				AA0000000000000000000403 /* Photos-Go-Round Screensaver.saver in Embed Screensaver */,
+				AA0000000000000000000403 /* Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver in Embed Screensaver */,
 			);
 			name = "Embed Screensaver";
 		};
@@ -108,7 +108,7 @@
 
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Photos-Go-Round.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Photos-Go-Round.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		6221C1AA305F67C900B4B65D /* Package Tests.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Package Tests.xctestplan"; sourceTree = "<group>"; };
+		6221C1AA305F67C900B4B65D /* Package Tests.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Package Tests.xctestplan"; sourceTree = "<group>"; };
 		AA0000000000000000000030 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		AA0000000000000000000060 /* Photos-Go-RoundTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photos-Go-RoundTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000082 /* FEATURES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FEATURES.md; sourceTree = "<group>"; };
@@ -118,7 +118,7 @@
 		AA00000000000000000000E1 /* Photos-Go-Round Wallpaper.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = "Photos-Go-Round Wallpaper.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000000F1 /* Photos-Go-Round Wallpaper Host.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Photos-Go-Round Wallpaper Host.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000301 /* pgr_install */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = pgr_install; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA0000000000000000000441 /* Photos-Go-Round Screensaver.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000441 /* Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000442 /* Photos-Go-Round Wallpaper.appex */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Photos-Go-Round Wallpaper.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000618 /* CLAUDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CLAUDE.md; sourceTree = "<group>"; };
 		AA0000000000000000000619 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
@@ -246,14 +246,14 @@
 			path = Shared;
 			sourceTree = "<group>";
 		};
-		AA0000000000000000000702 /* Resources */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Resources;
-			sourceTree = "<group>";
-		};
 		AA0000000000000000000701 /* Sources */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000702 /* Resources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		AA0000000000000000000703 /* Tests */ = {
@@ -360,10 +360,20 @@
 				AA0000000000000000000301 /* pgr_install */,
 				AA00000000000000000000E1 /* Photos-Go-Round Wallpaper.appex */,
 				AA00000000000000000000F1 /* Photos-Go-Round Wallpaper Host.app */,
-				AA0000000000000000000441 /* Photos-Go-Round Screensaver.saver */,
+				AA0000000000000000000441 /* Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver */,
 				AA0000000000000000000442 /* Photos-Go-Round Wallpaper.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		62C4AE00303557B800A88363 /* Desktop */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000082 /* FEATURES.md */,
+				AA0000000000000000000081 /* Sources */,
+				AA0000000000000000000061 /* Tests */,
+			);
+			path = Desktop;
 			sourceTree = "<group>";
 		};
 		AA0000000000000000000031 /* Config */ = {
@@ -384,16 +394,6 @@
 				AA0000000000000000000601 /* Tests */,
 			);
 			path = Agent;
-			sourceTree = "<group>";
-		};
-		62C4AE00303557B800A88363 /* Desktop */ = {
-			isa = PBXGroup;
-			children = (
-				AA0000000000000000000082 /* FEATURES.md */,
-				AA0000000000000000000081 /* Sources */,
-				AA0000000000000000000061 /* Tests */,
-			);
-			path = Desktop;
 			sourceTree = "<group>";
 		};
 		AA0000000000000000000604 /* Screensaver */ = {
@@ -1122,8 +1122,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photosgoround.server;
 				PRODUCT_NAME = "Photos-Go-Round Server";
-				SKIP_INSTALL = YES;
 				SDKROOT = auto;
+				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
@@ -1142,8 +1142,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photosgoround.server;
 				PRODUCT_NAME = "Photos-Go-Round Server";
-				SKIP_INSTALL = YES;
 				SDKROOT = auto;
+				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
@@ -1159,8 +1159,8 @@
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Tools/pgr_ctl/Sources/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.pgr-ctl";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.pgr-ctl";
 				PRODUCT_NAME = pgr_ctl;
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = macosx;
@@ -1178,8 +1178,8 @@
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Tools/pgr_ctl/Sources/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.pgr-ctl";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.pgr-ctl";
 				PRODUCT_NAME = pgr_ctl;
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = macosx;
@@ -1195,7 +1195,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = MacOS/Wallpaper/Resources/Extension-Info.plist;
+				INFOPLIST_FILE = "MacOS/Wallpaper/Resources/Extension-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.wallpaper$(WALLPAPER_ID_SUFFIX).extension";
@@ -1217,7 +1217,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = MacOS/Wallpaper/Resources/Extension-Info.plist;
+				INFOPLIST_FILE = "MacOS/Wallpaper/Resources/Extension-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.wallpaper$(WALLPAPER_ID_SUFFIX).extension";
@@ -1239,7 +1239,7 @@
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = MacOS/Wallpaper/Resources/Host-Info.plist;
+				INFOPLIST_FILE = "MacOS/Wallpaper/Resources/Host-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.wallpaper$(WALLPAPER_ID_SUFFIX)";
@@ -1261,7 +1261,7 @@
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = MacOS/Wallpaper/Resources/Host-Info.plist;
+				INFOPLIST_FILE = "MacOS/Wallpaper/Resources/Host-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.wallpaper$(WALLPAPER_ID_SUFFIX)";
@@ -1451,8 +1451,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sydpolk.photosgoround.server;
 				PRODUCT_NAME = "Photos-Go-Round Server";
-				SKIP_INSTALL = YES;
 				SDKROOT = auto;
+				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 6.0;
@@ -1468,8 +1468,8 @@
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Tools/pgr_ctl/Sources/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.pgr-ctl";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.pgr-ctl";
 				PRODUCT_NAME = pgr_ctl;
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = macosx;
@@ -1485,7 +1485,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = MacOS/Wallpaper/Resources/Extension-Info.plist;
+				INFOPLIST_FILE = "MacOS/Wallpaper/Resources/Extension-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../../../../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.wallpaper$(WALLPAPER_ID_SUFFIX).extension";
@@ -1507,7 +1507,7 @@
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				ENABLE_APP_SANDBOX = NO;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = MacOS/Wallpaper/Resources/Host-Info.plist;
+				INFOPLIST_FILE = "MacOS/Wallpaper/Resources/Host-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.sydpolk.photosgoround.wallpaper$(WALLPAPER_ID_SUFFIX)";
@@ -1717,10 +1717,6 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = Console;
 		};
-		AA0000000000000000000A03 /* PhotosGoRoundDisplay */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = PhotosGoRoundDisplay;
-		};
 		AA0000000000000000000452 /* PhotosGoRoundInstall */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PhotosGoRoundInstall;
@@ -1728,6 +1724,10 @@
 		AA0000000000000000000462 /* PhotosGoRoundAgentAPI */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PhotosGoRoundAgentAPI;
+		};
+		AA0000000000000000000A03 /* PhotosGoRoundDisplay */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhotosGoRoundDisplay;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

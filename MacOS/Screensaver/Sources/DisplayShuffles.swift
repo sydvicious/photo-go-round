@@ -158,5 +158,16 @@ enum DisplayShuffles {
         case .unreadable(let reason):
             log.error("saver: the port could not be read — \(reason, privacy: .public)")
         }
+        // **The secret, by the same route, and never its value.** The saver is
+        // the one reader that goes through the file, so this is where a secret
+        // written but not yet on disk would show. `Plans/Multi-user Support.md`.
+        switch ServicePort.readSecret(preferences) {
+        case .published(_, let origin):
+            log.notice("saver: secret via \(origin.rawValue, privacy: .public)")
+        case .none:
+            log.notice("saver: no secret published beside the port")
+        case .unreadable(let reason):
+            log.error("saver: the secret could not be read — \(reason, privacy: .public)")
+        }
     }
 }

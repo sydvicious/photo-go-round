@@ -1,8 +1,9 @@
 import Foundation
+import Synchronization
 import PhotosGoRoundAgentAPI
 import Testing
 
-@testable import Photo_Go_Round
+@testable import Photos_Go_Round
 
 /// What the app sends, and what it makes of what comes back.
 ///
@@ -24,13 +25,19 @@ struct SourceServiceTests {
     /// That is how the `removePersistentDomain` teardown that used to be here
     /// lost its race and left one plist per test behind, until a later
     /// `swift test` failed on them. See `ScratchPreferences`.
-    private nonisolated final class Scratch {
+    private nonisolated final class Scratch: Sendable {
         let name = scratchSuiteName("source-service")
         var defaults: UserDefaults { UserDefaults(suiteName: name)! }
         var preferences: Preferences { Preferences(defaults: defaults) }
 
-        init(port: UInt16? = 9999) {
+        init(port: UInt16? = 9999, secret: Bool = true) {
             if let port { preferences.publishServicePort(port) }
+            if secret { _ = preferences.establishServiceSecret() }
+        }
+
+        /// What the agent would do when its secret is rotated.
+        func replaceSecret() {
+            defaults.set(ServiceSecret.make(), forKey: Preferences.Key.serviceSecret.rawValue)
         }
 
         deinit { discardScratchSuite(name) }
@@ -103,6 +110,85 @@ struct SourceServiceTests {
         SourceService(
             preferences: scratch.preferences, read: read, write: write,
             transport: wire.transport())
+    }
+
+    // MARK: - The secret
+
+    @Test("Every request carries the secret as a Bearer header")
+    func secretIsSent() async throws {
+        let scratch = Scratch()
+        let wire = Wire()
+        let secret = try #require(scratch.preferences.serviceSecret)
+
+        _ = try await service(wire, scratch).list()
+        #expect(wire.requests.first?.value(forHTTPHeaderField: "Authorization") == "Bearer \(secret)")
+    }
+
+    @Test("A port with no secret beside it sends nothing")
+    func noSecret() async throws {
+        let scratch = Scratch(secret: false)
+        let wire = Wire()
+
+        await #expect(throws: SourceService.Failure.noSecret) {
+            try await service(wire, scratch).list()
+        }
+        #expect(wire.requests.isEmpty)
+    }
+
+    @Test("A 401 with the secret unchanged is not this account's agent, and is asked once")
+    func refusedSecretIsNotOurs() async throws {
+        let scratch = Scratch()
+        let wire = Wire()
+        wire.answersNothing(status: 401)
+
+        await #expect(throws: SourceService.Failure.notOurs) {
+            try await service(wire, scratch).list()
+        }
+        #expect(wire.requests.count == 1)
+    }
+
+    /// A refusal never reached the agent's router, so even a change is safe to
+    /// send twice.
+    @Test("A 401 after the secret changed is asked again with the new one")
+    func changedSecretIsRetried() async throws {
+        let scratch = Scratch()
+        let old = try #require(scratch.preferences.serviceSecret)
+        let offered = Mutex<[String]>([])
+        let service = SourceService(
+            preferences: scratch.preferences,
+            transport: { request in
+                let header = request.value(forHTTPHeaderField: "Authorization") ?? ""
+                let count = offered.withLock { $0.append(header); return $0.count }
+                if count == 1 { scratch.replaceSecret() }
+                return (
+                    Data("[]".utf8),
+                    HTTPURLResponse(
+                        url: request.url!, statusCode: count == 1 ? 401 : 200, httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"])!
+                )
+            })
+
+        _ = try await service.remove("abc")
+        let new = try #require(scratch.preferences.serviceSecret)
+        #expect(offered.withLock { $0 } == ["Bearer \(old)", "Bearer \(new)"])
+    }
+
+    // MARK: - The dashboard
+
+    @Test("A dashboard code is a POST carrying the secret, and the code comes back")
+    func dashboardCode() async throws {
+        let scratch = Scratch()
+        let wire = Wire()
+        wire.answers(body: #"{"code": "0123456789abcdef0123456789abcdef"}"#)
+        let secret = try #require(scratch.preferences.serviceSecret)
+
+        let code = try await service(wire, scratch).dashboardCode()
+
+        #expect(code == "0123456789abcdef0123456789abcdef")
+        let request = try #require(wire.requests.first)
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.path() == "/v1/dashboard/code")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(secret)")
     }
 
     // MARK: - An agent that is running and stuck

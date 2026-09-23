@@ -7,7 +7,7 @@ Three products run outside the app: the agent, the wallpaper extension and the s
 **At every launch, every build:**
 
 1. **The agent** — installed if it is not, then restarted.
-2. Nothing more until it answers, up to thirty seconds.
+2. Nothing more until it answers, up to ninety seconds — a first launch in a fresh account builds its storage from nothing, and took over twenty seconds in one. While it waits, the install log says why, once per change: no port published yet, no secret yet, a refused secret, a timeout, or a refused connection.
 3. **The wallpaper** — registered again if the extension running is not this app's, if this app's registration is older than its appex, or if it is not registered but is still the chosen wallpaper.
 
 **A Release build also**, at launch:

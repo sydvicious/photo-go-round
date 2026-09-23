@@ -386,8 +386,43 @@ public struct PhotoCache {
     }
 
     func freeBytesOnVolume() -> Int64 {
-        let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        return values?.volumeAvailableCapacityForImportantUsage ?? .max
+        Self.freeBytes(onVolumeOf: root)
+    }
+
+    /// The bytes an ordinary process may still write on `url`'s volume, from
+    /// `statfs(2)`; `.max` when no ancestor of `url` will say.
+    ///
+    /// **`statfs`, not `volumeAvailableCapacityForImportantUsageKey`, since
+    /// 2026-09-23.** That key asks CacheDelete, the system service that counts
+    /// purgeable space, and waits for its answer — *inside* the process-wide
+    /// lock CoreServices takes for every URL property. Sampled in a freshly
+    /// logged-in account on a Mac at load 130, the agent's main thread sat
+    /// there for the whole sample while four request lanes and the evictor
+    /// queued behind it for that lock, and every request hung. `statfs` is one
+    /// system call: it never leaves this process for another, so it cannot be
+    /// held up by one. Syd: "make the statfs change". `Plans/Multi-user
+    /// Support.md`, *Phase 6*.
+    ///
+    /// **It counts less than the old key did**: purgeable space is free to
+    /// CacheDelete and not to `statfs`. On a nearly full disk holding a lot of
+    /// purgeable data, fetching stops a little sooner — the safe side to be
+    /// wrong on.
+    ///
+    /// **The nearest ancestor that exists**, because the cache root may not
+    /// have been made yet, and it is on the same volume as its parent.
+    static func freeBytes(onVolumeOf url: URL) -> Int64 {
+        var path = url.standardizedFileURL.path(percentEncoded: false)
+        while true {
+            var info = statfs()
+            if statfs(path, &info) == 0 {
+                let bytes = UInt64(info.f_bavail).multipliedReportingOverflow(by: UInt64(info.f_bsize))
+                return bytes.overflow || bytes.partialValue > UInt64(Int64.max)
+                    ? .max : Int64(bytes.partialValue)
+            }
+            let parent = (path as NSString).deletingLastPathComponent
+            guard parent != path, !parent.isEmpty else { return .max }
+            path = parent
+        }
     }
 
     // MARK: - Dealing one card

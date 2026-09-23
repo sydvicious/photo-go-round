@@ -177,6 +177,12 @@ struct SourceService {
         /// needs to answer anything. The panel says that rather than claiming
         /// the agent is not running.
         case silent(limit: Duration)
+        /// A port is published and no secret beside it: an agent from before
+        /// the secret, or one still starting. Nothing is sent without one.
+        case noSecret
+        /// The agent on the published port refused this account's secret, and
+        /// still did once it was read again. `Plans/Multi-user Support.md`.
+        case notOurs
     }
 
     /// What is in the photo library, as the picker needs it.
@@ -311,6 +317,25 @@ struct SourceService {
         _ = try await send("DELETE", "/v2/sources/\(uuid)", body: nil, within: writeLimit)
     }
 
+    // MARK: - The dashboard
+
+    /// A one-time code for the dashboard, which the agent trades for a cookie
+    /// when the browser brings it back.
+    ///
+    /// **Here because this is the app's one client of the agent's JSON**, and
+    /// the code is asked for with the secret like everything else. The secret
+    /// itself never goes to the browser. `Plans/Multi-user Support.md`, *The
+    /// dashboard*.
+    func dashboardCode() async throws -> String {
+        struct Code: Decodable { var code: String }
+        return try await send(
+            decoding: Code.self, "POST", Self.dashboardCodePath, body: nil, within: readLimit
+        ).code
+    }
+
+    /// Served by the agent's `ServiceGate.codePath`.
+    nonisolated static let dashboardCodePath = "/v1/dashboard/code"
+
     // MARK: - The one request shape
 
     @discardableResult
@@ -331,9 +356,11 @@ struct SourceService {
         guard let port = preferences.servicePort,
             let url = URL(string: "http://localhost:\(port)\(path)")
         else { throw Failure.noAgent }
+        guard let secret = preferences.serviceSecret else { throw Failure.noSecret }
 
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.setValue(ServiceSecret.authorization(secret), forHTTPHeaderField: ServiceSecret.headerField)
         // **No `timeoutInterval`.** It used to be 15, which is the gap between
         // packets rather than a bound on the answer — see `AgentSession`. The
         // session carries both of `URLSession`'s own timeouts, made above the
@@ -345,8 +372,37 @@ struct SourceService {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
-        // Built by now, and captured as a constant: a `var` cannot cross into
-        // a `@Sendable` closure.
+        var (data, http) = try await exchange(request, method, path, within: limit)
+
+        // **A `401` is read again once before it is believed**, as the picture
+        // client does: the secret may have changed underneath this process and
+        // `cfprefsd` may still be handing back the old one. A refusal never
+        // reached the agent's router, so even a `POST` is safe to send again.
+        if http.statusCode == 401 {
+            preferences.reload()
+            if let fresh = preferences.serviceSecret, fresh != secret {
+                request.setValue(
+                    ServiceSecret.authorization(fresh), forHTTPHeaderField: ServiceSecret.headerField)
+                (data, http) = try await exchange(request, method, path, within: limit)
+            }
+            guard http.statusCode != 401 else {
+                Log.sources.error(
+                    "panel: \(method, privacy: .public) \(path, privacy: .public) refused this account's secret")
+                throw Failure.notOurs
+            }
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw Self.refusal(status: http.statusCode, body: data)
+        }
+        return data
+    }
+
+    /// One request under the bound, with its failures named and logged.
+    private func exchange(
+        _ request: URLRequest, _ method: String, _ path: String, within limit: Duration
+    ) async throws -> (Data, HTTPURLResponse) {
+        // Captured as a constant: a `var` cannot cross into a `@Sendable`
+        // closure.
         let sending = request
         let data: Data
         let response: URLResponse
@@ -374,10 +430,7 @@ struct SourceService {
             throw Failure.unreachable(error.localizedDescription)
         }
         guard let http = response as? HTTPURLResponse else { throw Failure.unreadable }
-        guard (200...299).contains(http.statusCode) else {
-            throw Self.refusal(status: http.statusCode, body: data)
-        }
-        return data
+        return (data, http)
     }
 
     /// The service answers every refusal in one shape, so this reads one field

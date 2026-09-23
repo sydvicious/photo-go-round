@@ -2,7 +2,7 @@ import Foundation
 import PhotosGoRoundAgentAPI
 import Testing
 
-@testable import Photo_Go_Round
+@testable import Photos_Go_Round
 
 /// A row that looks selected must *be* selected.
 ///
@@ -27,7 +27,10 @@ struct SelectionFollowsTests {
     private nonisolated final class Scratch {
         let name = scratchSuiteName("selection-follows")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
-        init() { preferences.publishServicePort(9999) }
+        init() {
+            preferences.publishServicePort(9999)
+            _ = preferences.establishServiceSecret()
+        }
         deinit { discardScratchSuite(name) }
     }
 

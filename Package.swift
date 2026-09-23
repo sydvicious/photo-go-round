@@ -138,7 +138,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PhotosGoRoundInstallTests",
-            dependencies: ["PhotosGoRoundInstall"],
+            dependencies: ["PhotosGoRoundInstall", "PhotosGoRoundAgentAPI"],
             path: "MacOS/Shared/Tests/PhotosGoRoundInstallTests",
             swiftSettings: everyTarget
         ),

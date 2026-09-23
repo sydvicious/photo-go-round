@@ -66,7 +66,18 @@ enum InspectCommands {
         guard let port = preferences.servicePort else {
             return "no port published — the agent is not running, or has not started listening"
         }
-        return "http://localhost:\(port)"
+        return "http://localhost:\(port)" + describeSecret(preferences)
+    }
+
+    /// Whether the secret every request needs is published beside the port.
+    ///
+    /// **Never what it is.** A tool that printed it would put it in terminal
+    /// scrollback and shell history; `defaults read <domain> serviceSecret` is
+    /// there for anyone who needs it. `Plans/Multi-user Support.md`.
+    static func describeSecret(_ preferences: Preferences) -> String {
+        preferences.serviceSecret == nil
+            ? " — no secret published beside it, so every request will be refused"
+            : " — secret published"
     }
 
     /// A cap some libraries can never approach reads like a stalled fetch, so

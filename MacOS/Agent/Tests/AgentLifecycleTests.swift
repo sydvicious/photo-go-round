@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import PhotosGoRoundKit
@@ -85,6 +86,9 @@ struct AgentLifecycleTests {
         ]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
+        // Before `run()`, so an exit can never be missed.
+        let exit = Exit()
+        process.terminationHandler = { exit.set($0.terminationStatus) }
         try process.run()
 
         // The agent publishes once its listener is ready; wait for that fact to
@@ -98,14 +102,13 @@ struct AgentLifecycleTests {
         }
         guard published != nil else {
             process.terminate()
-            process.waitUntilExit()
+            _ = await exit.status
             Issue.record("the agent never published a port")
             return
         }
 
         process.terminate()  // SIGTERM
-        process.waitUntilExit()
-        #expect(process.terminationStatus == 0)
+        #expect(await exit.status == 0)
 
         preferences.reload()
         #expect(preferences.servicePort == nil, "the published port outlived the agent")
@@ -113,4 +116,38 @@ struct AgentLifecycleTests {
 
     /// Only here so the test bundle can be located on disk.
     private final class Marker {}
+
+    /// A child's exit status, awaited from its `terminationHandler`.
+    ///
+    /// **Not `waitUntilExit()`, which hung this suite on 2026-09-23.** It spins
+    /// the *current* thread's run loop, and `Process` delivers the exit to the
+    /// run loop of the thread that launched it — after an `await`, a test is
+    /// usually on a different thread, and the wait never ends though the agent
+    /// is long gone. Awaited here, the exit arrives whichever thread is asking.
+    private final class Exit: Sendable {
+        private let state = Mutex<(status: Int32?, waiting: CheckedContinuation<Int32, Never>?)>(
+            (nil, nil))
+
+        func set(_ status: Int32) {
+            let waiting = state.withLock { state in
+                state.status = status
+                defer { state.waiting = nil }
+                return state.waiting
+            }
+            waiting?.resume(returning: status)
+        }
+
+        var status: Int32 {
+            get async {
+                await withCheckedContinuation { continuation in
+                    let status = state.withLock { state -> Int32? in
+                        if let status = state.status { return status }
+                        state.waiting = continuation
+                        return nil
+                    }
+                    if let status { continuation.resume(returning: status) }
+                }
+            }
+        }
+    }
 }
