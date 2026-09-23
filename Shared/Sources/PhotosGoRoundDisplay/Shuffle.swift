@@ -410,6 +410,13 @@ public final class Shuffle {
             .noAgent("nothing is listening on \(port) — \(reason)")
         case .refused(let status):
             .noAgent("the service answered \(status)")
+        // **Still `noAgent`, and deliberately.** Syd, 2026-09-23, asked whether
+        // a refused secret earns words of its own: no — the person at the glass
+        // can do nothing about either. The log line is where they differ.
+        case .noSecret:
+            .noAgent("a port is published and no secret beside it — the agent is older, or still starting")
+        case .notOurs(let port):
+            .noAgent("the agent on \(port) refused this user's secret — it is not this user's agent")
         // **The one that is not `noAgent`.** Something is listening on the port
         // and did not answer inside the limit, which is a running agent that is
         // stuck rather than one that is gone.

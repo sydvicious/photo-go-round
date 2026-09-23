@@ -2,7 +2,7 @@ import Foundation
 import PhotosGoRoundAgentAPI
 import Testing
 
-@testable import Photo_Go_Round
+@testable import Photos_Go_Round
 
 /// The collection picker's behaviour, without the picker.
 ///
@@ -25,7 +25,10 @@ struct CollectionsModelTests {
         let name = scratchSuiteName("collections-model")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
 
-        init() { preferences.publishServicePort(9999) }
+        init() {
+            preferences.publishServicePort(9999)
+            _ = preferences.establishServiceSecret()
+        }
 
         deinit { discardScratchSuite(name) }
     }

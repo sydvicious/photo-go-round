@@ -59,6 +59,37 @@ public enum ServicePort {
         return readFile(at: url)
     }
 
+    /// What could be learned about the secret published beside the port: the
+    /// same three things, for the same reasons.
+    public enum SecretReading: Equatable, Sendable {
+        case published(String, from: Origin)
+        /// Nothing kept, or nothing the agent could have made. An agent from
+        /// before the secret, or one whose first write is not on disk yet.
+        case none
+        case unreadable(reason: String)
+    }
+
+    /// The suite first, the file underneath it — the port's own route, since
+    /// the secret is a second key in the same domain. Whatever can read the
+    /// port can read this. `Plans/Multi-user Support.md`, *Where it is readable*.
+    public static func readSecret(_ preferences: Preferences) -> SecretReading {
+        if let secret = preferences.serviceSecret { return .published(secret, from: .suite) }
+        guard let url = plistURL(for: preferences) else { return .none }
+        return readSecretFile(at: url)
+    }
+
+    static func readSecretFile(at url: URL) -> SecretReading {
+        switch contents(at: url) {
+        case .missing: return .none
+        case .unreadable(let reason): return .unreadable(reason: reason)
+        case .contents(let dictionary):
+            guard let raw = dictionary[Preferences.Key.serviceSecret.rawValue] as? String,
+                ServiceSecret.isWellFormed(raw)
+            else { return .none }
+            return .published(raw, from: .file)
+        }
+    }
+
     /// `<path>.plist` for a path-named suite, `~/Library/Preferences/<domain>.plist`
     /// for a dotted one.
     ///

@@ -2,7 +2,7 @@ import Foundation
 import PhotosGoRoundAgentAPI
 import Testing
 
-@testable import Photo_Go_Round
+@testable import Photos_Go_Round
 
 /// Where a source stands, decided by the app rather than reported to it.
 ///

@@ -2,7 +2,7 @@ import Foundation
 import PhotosGoRoundAgentAPI
 import Testing
 
-@testable import Photo_Go_Round
+@testable import Photos_Go_Round
 
 /// The panel's behaviour, without the panel.
 ///
@@ -26,7 +26,10 @@ struct SourcesModelTests {
         let name = scratchSuiteName("sources-model")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
 
-        init() { preferences.publishServicePort(9999) }
+        init() {
+            preferences.publishServicePort(9999)
+            _ = preferences.establishServiceSecret()
+        }
 
         deinit { discardScratchSuite(name) }
     }
@@ -946,7 +949,10 @@ struct InFlightTests {
     private nonisolated final class Scratch {
         let name = scratchSuiteName("in-flight")
         var preferences: Preferences { Preferences(defaults: UserDefaults(suiteName: name)!) }
-        init() { preferences.publishServicePort(9999) }
+        init() {
+            preferences.publishServicePort(9999)
+            _ = preferences.establishServiceSecret()
+        }
         deinit { discardScratchSuite(name) }
     }
 

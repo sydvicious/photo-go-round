@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import Photo_Go_Round
+@testable import Photos_Go_Round
 
 /// What a collection's row says about where it stands.
 ///

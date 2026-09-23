@@ -76,6 +76,15 @@ public struct PictureClient: PictureSource {
         /// running while its process is right there in Activity Monitor sends
         /// them looking in the wrong place.
         case silent(port: UInt16, limit: Duration)
+        /// A port is published and no secret beside it: an agent from before
+        /// the secret, or one whose first write has not reached the file yet.
+        /// **Nothing is sent without one** — a request without the secret is
+        /// refused anyway, and waiting is what fixes this.
+        case noSecret
+        /// The agent on the port refused this user's secret, and still did once
+        /// the secret was read again. Whoever holds the port is not this
+        /// user's agent. `Plans/Multi-user Support.md`.
+        case notOurs(port: UInt16)
     }
 
     /// The published address, or `nil` when there is none.
@@ -100,6 +109,13 @@ public struct PictureClient: PictureSource {
         case .none: throw Failure.noPortPublished
         case .unreadable(let reason): throw Failure.portUnreadable(reason: reason)
         }
+        // Beside the port, by the same route. Read fresh for the same reason.
+        let secret: String
+        switch ServicePort.readSecret(preferences) {
+        case .published(let found, _): secret = found
+        case .none: throw Failure.noSecret
+        case .unreadable(let reason): throw Failure.portUnreadable(reason: reason)
+        }
 
         var components = URLComponents()
         components.scheme = "http"
@@ -114,7 +130,8 @@ public struct PictureClient: PictureSource {
         }
         components.queryItems = query
 
-        let request = URLRequest(url: components.url!)
+        var request = URLRequest(url: components.url!)
+        request.setValue(ServiceSecret.authorization(secret), forHTTPHeaderField: ServiceSecret.headerField)
         // No `Accept`, which the service reads as *HEIC is fine* — it is roughly
         // half the bytes of JPEG and everything on this machine decodes it.
         // Saying so explicitly would mean re-stating the service's default in a
@@ -129,6 +146,37 @@ public struct PictureClient: PictureSource {
         // The session's bounds sit above the deadline so that the deadline is
         // always the one that fires.
 
+        var (data, http) = try await send(request, port: port)
+
+        // **A `401` is read again once before it is believed.** From this
+        // user's own published port it most likely means the secret changed
+        // underneath the client — rotated, or replaced — and `cfprefsd` can
+        // hand back the old one for a while. A refusal never reached the
+        // agent's router, so nothing was dealt and asking again costs nothing.
+        if http.statusCode == 401 {
+            preferences.reload()
+            if case .published(let fresh, _) = ServicePort.readSecret(preferences), fresh != secret {
+                request.setValue(
+                    ServiceSecret.authorization(fresh), forHTTPHeaderField: ServiceSecret.headerField)
+                (data, http) = try await send(request, port: port)
+            }
+            guard http.statusCode != 401 else { throw Failure.notOurs(port: port) }
+        }
+
+        switch http.statusCode {
+        case 200:
+            return ServedPicture.from(data: data, headers: Self.headers(of: http))
+        // Ordinary rather than an error: the queue is empty, which a fresh
+        // library answers until the agent has produced something.
+        case 204:
+            return nil
+        default:
+            throw Failure.refused(status: http.statusCode)
+        }
+    }
+
+    /// One request under the bound, with its failures named.
+    private func send(_ request: URLRequest, port: UInt16) async throws -> (Data, HTTPURLResponse) {
         let data: Data
         let response: URLResponse
         do {
@@ -140,20 +188,10 @@ public struct PictureClient: PictureSource {
         } catch let error as URLError {
             throw Failure.unreachable(port: port, reason: error.localizedDescription)
         }
-
         guard let http = response as? HTTPURLResponse else {
             throw Failure.unreachable(port: port, reason: "not an HTTP response")
         }
-        switch http.statusCode {
-        case 200:
-            return ServedPicture.from(data: data, headers: Self.headers(of: http))
-        // Ordinary rather than an error: the queue is empty, which a fresh
-        // library answers until the agent has produced something.
-        case 204:
-            return nil
-        default:
-            throw Failure.refused(status: http.statusCode)
-        }
+        return (data, http)
     }
 
     private static func headers(of response: HTTPURLResponse) -> [String: String] {

@@ -2,7 +2,7 @@ import Foundation
 import PhotosGoRoundDisplay
 import Testing
 
-@testable import Photo_Go_Round
+@testable import Photos_Go_Round
 
 /// What the About box offers for each reading of the agent's port.
 ///

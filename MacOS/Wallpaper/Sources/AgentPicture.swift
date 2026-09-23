@@ -77,8 +77,9 @@ enum AgentPicture {
         return URLSession(configuration: configuration)
     }()
 
-    /// Asks each deployment's agent in turn. A transport failure moves on; any
-    /// HTTP answer is final, since it came from an agent.
+    /// Asks each deployment's agent in turn. A transport failure moves on, and
+    /// so does a `401`, which is an agent that is not this user's; any other
+    /// HTTP answer is final, since it came from this user's agent.
     static func fetch(display: UInt32?, pixels: CGSize, slot: Slot, done: @escaping @Sendable (Answer?) -> Void) {
         ask(deployments, at: 0, uuid: displayUUID(display), pixels: pixels, slot: slot, done: done)
     }
@@ -103,8 +104,9 @@ enum AgentPicture {
 
         // The suite first, the plist underneath — `ServicePort`'s own route, and
         // the sandbox is permitted both by the entitlements.
+        let preferences = Preferences(suiteName: domain)
         let port: UInt16
-        switch ServicePort.read(Preferences(suiteName: domain)) {
+        switch ServicePort.read(preferences) {
         case .published(let found, let origin):
             port = found
             // A standing fact, so it is said when it changes. It used to be
@@ -116,6 +118,23 @@ enum AgentPicture {
             return
         case .unreadable(let reason):
             wallpaperLog("the port in \(domain) could not be read: \(reason)")
+            next()
+            return
+        }
+
+        // **Beside the port, by the same route.** Every request carries this
+        // user's secret, and an agent refuses one that does not.
+        // `Plans/Multi-user Support.md`.
+        let secret: String
+        switch ServicePort.readSecret(preferences) {
+        case .published(let found, _):
+            secret = found
+        case .none:
+            wallpaperLog("a port but no secret is published in \(domain)")
+            next()
+            return
+        case .unreadable(let reason):
+            wallpaperLog("the secret in \(domain) could not be read: \(reason)")
             next()
             return
         }
@@ -138,8 +157,11 @@ enum AgentPicture {
             return
         }
 
+        var request = URLRequest(url: url)
+        request.setValue(ServiceSecret.authorization(secret), forHTTPHeaderField: ServiceSecret.headerField)
+
         let started = ContinuousClock.now
-        session.dataTask(with: url) { data, response, error in
+        session.dataTask(with: request) { data, response, error in
             let elapsed = started.duration(to: .now)
             let milliseconds = elapsed.components.seconds * 1000
                 + elapsed.components.attoseconds / 1_000_000_000_000_000
@@ -152,6 +174,14 @@ enum AgentPicture {
             let bytes = data?.count ?? 0
             wallpaperLog(
                 "asked \(domain) on \(port) for \(width)x\(height): \(status), \(bytes) bytes, \(milliseconds) ms")
+            // **Not an answer from this user's agent**, so not final: whoever
+            // holds that port refused this user's secret. Ask the next domain,
+            // as for a port nothing answers on.
+            guard status != 401 else {
+                wallpaperLog("the agent on \(port) refused \(domain)'s secret; it is not this user's")
+                next()
+                return
+            }
             guard status == 200, let data else {
                 // 204 is an empty library or a queue turning over, and is an
                 // answer: the desktop keeps the picture it has.
