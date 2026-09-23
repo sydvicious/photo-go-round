@@ -37,11 +37,18 @@ struct AgentProbeTests {
     /// Short enough that a probe that never succeeds costs a fraction of a
     /// second, and long enough for several attempts.
     private static func probe(
-        _ suite: Suite, ask: (URLRequest) -> Int?
+        _ suite: Suite, said: Said = Said(), ask: (URLRequest) -> AgentProbe.Reply
     ) -> Bool {
         AgentProbe.answers(
             preferences: suite.preferences, patience: .milliseconds(100),
-            interval: .milliseconds(10), ask: ask)
+            interval: .milliseconds(10), ask: ask, say: { said.record($0) })
+    }
+
+    /// What the probe said, in order.
+    private final class Said: Sendable {
+        private let lines = Mutex<[String]>([])
+        var all: [String] { lines.withLock { $0 } }
+        func record(_ line: String) { lines.withLock { $0.append(line) } }
     }
 
     @Test("It asks the published port, not the hashed one, and carries the secret")
@@ -51,7 +58,7 @@ struct AgentProbeTests {
         suite.publish(port: published)
         let asked = Asked()
 
-        #expect(Self.probe(suite) { asked.record($0); return 200 })
+        #expect(Self.probe(suite) { asked.record($0); return .status(200) })
 
         let request = try #require(asked.all.first)
         #expect(request.url?.port == Int(published))
@@ -64,7 +71,7 @@ struct AgentProbeTests {
         for status in [200, 204, 404, 500, 503] {
             let suite = Suite()
             suite.publish(port: 41_234)
-            #expect(Self.probe(suite) { _ in status }, "status \(status)")
+            #expect(Self.probe(suite) { _ in .status(status) }, "status \(status)")
         }
     }
 
@@ -74,7 +81,7 @@ struct AgentProbeTests {
         suite.publish(port: 41_234)
         let asked = Asked()
 
-        #expect(!Self.probe(suite) { asked.record($0); return 401 })
+        #expect(!Self.probe(suite) { asked.record($0); return .status(401) })
         #expect(asked.all.count > 1)
     }
 
@@ -82,7 +89,7 @@ struct AgentProbeTests {
     func noPortNothingAsked() {
         let suite = Suite()
         let asked = Asked()
-        #expect(!Self.probe(suite) { asked.record($0); return 200 })
+        #expect(!Self.probe(suite) { asked.record($0); return .status(200) })
         #expect(asked.all.isEmpty)
     }
 
@@ -93,8 +100,66 @@ struct AgentProbeTests {
         let suite = Suite()
         suite.publish(port: 41_234, secret: nil)
         let asked = Asked()
-        #expect(!Self.probe(suite) { asked.record($0); return 200 })
+        #expect(!Self.probe(suite) { asked.record($0); return .status(200) })
         #expect(asked.all.isEmpty)
+    }
+
+    // MARK: - Saying why
+
+    /// Once per reason, not once per attempt: at two a second for ninety
+    /// seconds, every attempt would be 180 lines.
+    @Test("Each change of reason is said once, and so is giving up")
+    func saysWhyOncePerReason() {
+        let suite = Suite()
+        let said = Said()
+
+        #expect(!Self.probe(suite, said: said) { _ in .status(200) })
+
+        #expect(said.all.first == "waiting — no port published yet")
+        #expect(said.all.filter { $0.hasPrefix("waiting") }.count == 1)
+        #expect(said.all.last?.hasPrefix("gave up after ") == true)
+        #expect(said.all.last?.hasSuffix("no port published yet") == true)
+    }
+
+    @Test("A slow agent, a refused secret and a refused connection are each named")
+    func reasonsAreNamed() {
+        let cases: [(AgentProbe.Reply, String)] = [
+            (.timedOut, "waiting — nothing from 41234 within 5 s"),
+            (.status(401), "waiting — the agent on 41234 refused this user's secret"),
+            (.failed("Could not connect to the server."),
+             "waiting — 41234 did not take the request: Could not connect to the server."),
+        ]
+        for (reply, words) in cases {
+            let suite = Suite()
+            suite.publish(port: 41_234)
+            let said = Said()
+            #expect(!Self.probe(suite, said: said) { _ in reply })
+            #expect(said.all.first == words)
+        }
+    }
+
+    @Test("A port with no secret beside it is named as that")
+    func noSecretIsNamed() {
+        let suite = Suite()
+        suite.publish(port: 41_234, secret: nil)
+        let said = Said()
+        #expect(!Self.probe(suite, said: said) { _ in .status(200) })
+        #expect(said.all.first == "waiting — a port but no secret published yet")
+    }
+
+    @Test("An answer on the first attempt says nothing")
+    func answeringSaysNothing() {
+        let suite = Suite()
+        suite.publish(port: 41_234)
+        let said = Said()
+        #expect(Self.probe(suite, said: said) { _ in .status(200) })
+        #expect(said.all.isEmpty)
+    }
+
+    @Test("A first launch has ninety seconds, and each attempt five")
+    func boundsAreRoomy() {
+        #expect(AgentProbe.patience == .seconds(90))
+        #expect(AgentProbe.requestLimit == 5)
     }
 
     /// The agent it follows was just restarted: the old one's port goes, the
@@ -110,9 +175,9 @@ struct AgentProbeTests {
             guard request.url?.port == 41_235 else {
                 // Nothing on the old port; the new agent publishes its own.
                 suite.publish(port: 41_235)
-                return nil
+                return .failed("Could not connect to the server.")
             }
-            return 200
+            return .status(200)
         }
 
         #expect(answered)

@@ -72,7 +72,7 @@ final class Installer {
     ///
     /// **On a Dispatch thread, not the cooperative pool.** The installs block —
     /// up to ten seconds for launchd to forget a job, thirty for `pkd` to write
-    /// a record, thirty for the agent to answer — and a pool thread held that
+    /// a record, ninety for the agent to answer — and a pool thread held that
     /// long is one the app's own work cannot have.
     private func perform(
         _ words: String, _ work: @escaping @Sendable (_ report: (String) -> Void) -> Void

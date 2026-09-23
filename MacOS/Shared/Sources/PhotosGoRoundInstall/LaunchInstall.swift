@@ -209,8 +209,9 @@ public enum LaunchInstall {
     /// 4. **The screensaver, Release only**: linked "if not there". A link or
     ///    copy already at its name is left, and said so.
     ///
-    /// **Blocks** — ten seconds on launchd, thirty on `pkd`, thirty for the
-    /// agent to answer — so the caller runs it off the cooperative pool. `report`
+    /// **Blocks** — ten seconds on launchd, thirty on `pkd`, ninety for the
+    /// agent to answer (`AgentProbe.patience`) — so the caller runs it off the
+    /// cooperative pool. `report`
     /// gets a line per product at least, whatever was done: "saver: already
     /// there, left alone" answers "did the app touch my saver?" later.
     @discardableResult

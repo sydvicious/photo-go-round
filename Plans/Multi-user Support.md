@@ -28,6 +28,9 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
   - `Documentation/Photos-Go-Round Server.md` lists `serviceSecret` and says what a `401` means.
 - **Phase 6 — Two users at once.** Syd logs in as a second user with the first still logged in; both agents serve, and each user sees only their own pictures.
   - Syd's way, 2026-09-23: uninstall everything in his own account, archive the app, put it in `/Applications`, run it there; then switch to `randyarbuckle` and run it again. See *Phase 6, by hand*.
+  - *In progress 2026-09-23.* The ports differ (20172 and 21458). The first run found two faults that are not the secret's, both fixed and waiting for a new archive; see *What Phase 6 found*:
+    - A first launch in a fresh account missed the launch check, so the wallpaper and the screensaver were not installed. The check now waits 90 s, allows 5 s per attempt, and logs why it is waiting.
+    - The agent stopped answering altogether while CacheDelete was slow: its free-space query held a process-wide lock. Free space now comes from `statfs(2)`.
 
 # Design Decisions
 
@@ -52,6 +55,8 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
 - **A `--no-publish` agent uses its domain's secret too.** It prints where the secret is, never the value.
 - **Documented examples share one setup block**, `DOMAIN`, `PORT` and `AUTH`, and each example uses `$PORT` and `-H "$AUTH"`. One place to get right, and one shape for the test to check.
 - **The documented examples are read and run.** *Syd's, 2026-09-23.* Every `curl` in the docs must carry the header, and the README's and `pgr_ctl.md`'s examples are run through `zsh` against a gated listener.
+- **The launch check waits 90 s, allows 5 s per attempt, and says why it is waiting.** *Syd's, 2026-09-23: "do 1 and 2".* A first launch in a fresh account took 21.6 s to publish its port and was slow to answer after it.
+- **Free space comes from `statfs(2)`, not `volumeAvailableCapacityForImportantUsageKey`.** *Syd's, 2026-09-23: "make the statfs change".* The old key waits on CacheDelete inside a lock every URL lookup in the process needs; `statfs` waits on nobody. It counts no purgeable space, so fetching stops a little sooner on a nearly full disk.
 
 # Background
 
@@ -272,28 +277,76 @@ An archived app is a Release build, so both agents use the domain `com.sydpolk.p
    defaults read com.sydpolk.photosgoround.dev servicePort
    ```
 
-9. **This account's agent serves this account.** Expect `200`; `-o /dev/null` keeps the answer off the screen:
+9. **This account's agent serves this account.** Expect `200`; `-o /dev/null` keeps the answer off the screen, and `--max-time 20` turns a hang into `000`:
 
    ```
-   curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:$(defaults read com.sydpolk.photosgoround.dev servicePort)/v1/dashboard"
+   curl -s --max-time 20 -o /dev/null -w "%{http_code} %{time_total}s\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:$(defaults read com.sydpolk.photosgoround.dev servicePort)/v1/dashboard"
    ```
 
 10. **By eye:** the window, the wallpaper and the screensaver show this account's pictures and none of `jazzman`'s.
-11. **This account's secret, sent to `jazzman`'s agent, is refused.** Put step 4's port in place of `PORT`. Expect `401`:
+11. **This account's secret, sent to `jazzman`'s agent, is refused.** Expect `401`. The first line is `jazzman`'s port — 20172 on 2026-09-23; change it if step 4 said otherwise. (Pasted with the word `PORT` in the URL, as the first version of this step had it, `curl` never connects and prints `000`.)
 
     ```
-    curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:PORT/v1/next?consumer=test"
+    OTHER_PORT=20172
+    curl -s --max-time 20 -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:$OTHER_PORT/v1/next?consumer=test"
     ```
 
 **Back in `jazzman`:**
 
-12. **And the other way.** Put step 8's port in place of `PORT`. Expect `401`:
+12. **And the other way.** Expect `401`. The first line is `randyarbuckle`'s port — 21458 on 2026-09-23; change it if step 8 said otherwise.
 
     ```
-    curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:PORT/v1/next?consumer=test"
+    OTHER_PORT=21458
+    curl -s --max-time 20 -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:$OTHER_PORT/v1/next?consumer=test"
     ```
 
 13. **By eye:** this account still shows its own pictures, and none of `randyarbuckle`'s.
+
+## What Phase 6 found
+
+*The first run, 2026-09-23.* Everything here came back as timestamps, status codes, process states and a stack sample — nothing about `randyarbuckle`'s pictures. Settled so far: step 8, the ports differ (`jazzman` 20172, `randyarbuckle` 21458). Steps 6, 7, 9 and 10 to 13 wait for a new archive.
+
+**The unified log is shared by every account on the Mac.** `log show` in one account prints the other's lines too — and the agent's served lines name photographs — so every log command in this plan filters to lines that cannot. Claude reads no agent lines from `randyarbuckle`'s account.
+
+### 1. A first launch in a fresh account missed the launch check
+
+In `randyarbuckle`'s account the app bootstrapped the agent, waited, logged `agent: not answering`, and skipped the wallpaper and the screensaver — so neither appeared in System Settings. In `jazzman`'s, three minutes earlier, the same archive installed all three with the agent answering in 1.2 s.
+
+| `randyarbuckle`, first launch | time | since bootstrap |
+|---|---|---|
+| agent bootstrapped | 08:57:49.97 | 0 |
+| `serving on port 21458`, before the listener | 08:58:08.04 | 18 s |
+| listener ready, port published (`dashboard at …`) | 08:58:11.58 | 21.6 s |
+| the app's check gives up | 08:58:24.21 | 34 s |
+
+`jazzman`'s agent took 0.2 s from bootstrap to `serving on port`. Randy's built its container, cache and database from nothing, on a Mac at load 85–160 (see 3). Once it was listening, the check still failed for nine seconds: each attempt had 2 s, the agent was too busy to answer `/v1/dashboard` in that, and the last attempt ended in a timeout three seconds past the deadline.
+
+Installing both from the Help menu afterwards worked, and both then appeared.
+
+**Fixed** (`AgentProbe`): patience 30 s → 90 s, each attempt 2 s → 5 s, and the install log says why it is still waiting whenever the reason changes — no port published yet, no secret yet, a refused secret, a timeout, a refused connection — and why it gave up. A reason, never the secret and never anything served. *Not changed:* the wallpaper and the screensaver still wait for the agent, Syd's rule of 2026-09-21 ("the agent has to be up and running first"); installing them regardless was offered and not chosen.
+
+### 2. The agent stopped answering while CacheDelete was slow
+
+Minutes later `randyarbuckle`'s agent answered nothing at all — step 9's `curl` hung — while `ps` showed it runnable at 0% CPU. Syd took a stack sample in that account into `/Users/Shared` (function names and library paths only). Every one of the agent's threads that mattered was waiting on one thing:
+
+- **The main thread**, for the whole sample: `URL.resourceValues(forKeys:)` for `volumeAvailableCapacityForImportantUsageKey` → CoreServices → `CacheDeleteCopyAvailableSpaceForVolume` → a synchronous XPC call to CacheDelete that never answered.
+- **Four request lanes and the evictor**, for the whole sample: `-[NSURL resourceValuesForKeys:error:]` → `_FileCacheLock` → waiting on an `os_unfair_lock`.
+
+CacheDelete is the system service that counts purgeable space. The free-space query waits on it while holding CoreServices' process-wide file cache lock, so one slow answer stops every URL property lookup in the agent — requests, eviction, the refresh walk. The agent asks for free space in four places (`PhotoCache.freeBytesOnVolume()`): the dashboard's status, dealing, fetching and eviction.
+
+**Not the secret's, and older than this plan.** It needs CacheDelete to be slow, which a fresh login on a loaded Mac made it; it could happen in any account.
+
+**Fixed:** `PhotoCache.freeBytes(onVolumeOf:)` reads `statfs(2)` — one system call, no other process — at the nearest existing ancestor of the cache root. It counts no purgeable space, so on a nearly full disk with much purgeable data fetching stops a little sooner. `FreeSpaceTests`.
+
+### 3. The Mac was saturated by Shortcuts indexing both accounts
+
+Load average reached 162 on ten cores, with 67 processes runnable. The biggest users were `BackgroundShortcutRunner` (up to 78%, relaunching every minute or so in both accounts), `coreaudiod`, `SecurityAgent`, `WindowServer`, `storagekitd` and `opendirectoryd`. `BackgroundShortcutRunner` wrote about 48,000 log lines in three minutes across uid 501 and 502, almost all under `com.apple.shortcuts` `ToolKitDatabase`, `ToolKitExecution` and `AppIntentsMetadata` — Shortcuts rebuilding its catalogue of every app's actions, apparently for the app newly in `/Applications`. Counted by category; no message was read. Syd: `randyarbuckle` has no shortcuts and no dialog was showing, and Photos-Go-Round declares no App Intents. It is macOS's, and it settled by itself (load 62 by 09:24).
+
+It is the likely reason both 1 and 2 surfaced: the first launch was slow because everything was, and CacheDelete was slow for the same reason. The same load failed 18 kit tests in one run — `PhotosSourceEditingTests` and `SilentLibraryTests`, the load-sensitive suites `TODO.md` already holds — which passed once it fell.
+
+### 4. A step that could be pasted unchanged
+
+Step 11's first version had `PORT` in the URL for the reader to replace; pasted as written it printed `000`, `curl` never connecting. Steps 11 and 12 now set `OTHER_PORT` on a line of its own, holding the port seen that day, and the `curl` commands carry `--max-time 20` so a hang comes back as `000` rather than never.
 
 ## Testing
 
