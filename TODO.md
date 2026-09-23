@@ -256,6 +256,12 @@ Carried out of `Plans/Xcode - Separate Build and Run.md` when it closed, 2026-09
 - **What to decide** is whether it belongs in the same plan behind a filter, in a second plan of its own, or nowhere — Syd skips GUI tests, and this is the suite closest to being one. `TODO.md`, *No GUI testing* is the standing position.
 - `Package Tests.xctestplan` is the file, and a test plan can hold more than one configuration if that turns out to be the shape.
 
+## The wallpaper goes grey after switching users
+
+Found in Phase 6 of `Plans/Multi-user Support.md`, 2026-09-23. Switching from `jazzman` to `randyarbuckle` with fast user switching terminated `jazzman`'s wallpaper extension (SIGTERM, ten seconds into the switch, before Randy's app launched). Back in `jazzman`, WallpaperAgent tried to reach it six times, failed each time with `NSCocoaErrorDomain` 4099, and never relaunched it — a grey desktop, the Golden Gate as the preview. Help › Install Wallpaper brings it back. The screensaver after a switch is not checked yet.
+
+Syd: "I really want the wallpapers and screensavers to survive user switching without the app running if possible."
+
 ## Audit every test for the product rename
 
 Syd, 2026-09-23: "audit ALL of the tests for the product rename." Photo-Go-Round became Photos-Go-Round on 2026-09-22.

@@ -7,8 +7,12 @@ import Synchronization
 /// **An answer, not an open port.** A socket that accepts and says nothing is
 /// an agent the surfaces cannot use either — `Deadline`'s whole reason for
 /// being — so the question is an HTTP request that has to come back.
-/// `/v1/dashboard` because it reads what the agent already holds and asks
-/// nothing of the photo library.
+///
+/// **`/v1/alive`, since 2026-09-23**, which the agent answers with `204` and
+/// nothing else. It was `/v1/dashboard`, chosen because it asks nothing of the
+/// photo library — but it is the heaviest read the agent serves, and just
+/// after a restart on a loaded Mac it missed every attempt for over a minute
+/// while the agent was plainly up. See `Router.alive`.
 ///
 /// **The published port, carrying the secret, and a `401` is not an answer.**
 /// Until 2026-09-23 this polled the hashed port and counted any status as its
@@ -32,6 +36,11 @@ enum AgentProbe {
     /// (`ServiceTiming.pictureReadLimit`), where it was two: an agent on its
     /// first launch answers, but slowly.
     static let requestLimit: TimeInterval = 5
+
+    /// Served by the agent's `Router.alivePath`. An agent from before it
+    /// answers `404` from its picture endpoint — still past the gate, so still
+    /// this user's agent, and counted as answering.
+    static let path = "/v1/alive"
 
     /// What one request came back with.
     enum Reply: Equatable, Sendable {
@@ -115,7 +124,7 @@ enum AgentProbe {
     static func attempt(_ preferences: Preferences, ask: (URLRequest) -> Reply) -> Outcome {
         preferences.reload()
         guard let port = preferences.servicePort,
-            let url = URL(string: "http://localhost:\(port)/v1/dashboard")
+            let url = URL(string: "http://localhost:\(port)\(Self.path)")
         else { return .noPort }
         guard let secret = preferences.serviceSecret else { return .noSecret }
 

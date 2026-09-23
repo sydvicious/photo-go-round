@@ -238,6 +238,13 @@ query and never the value. From a terminal:
 
 `README.md`, *Testing the picture endpoint*, has each configuration's domain.
 
+    GET /v1/alive
+
+answers `204` and nothing else, touching no database, cache or library: whether
+this user's agent is up. It is what the app's launch check asks before it
+installs the wallpaper and the screensaver. It still needs the secret, so
+another account's agent answers it `401`.
+
 `200` returns the picture, with `Content-Type` describing the format,
 `X-PGR-Pixels` the size produced when a box was asked for — original bytes
 carry no such header, since nothing was decoded to measure — and `X-PGR-Card`,

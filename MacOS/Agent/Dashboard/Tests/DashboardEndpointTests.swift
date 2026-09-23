@@ -265,6 +265,8 @@ struct DashboardEndpointTests {
 
         #expect(await router.route(try get("/dashboard")).status == 200)
         #expect(await router.route(try get("/v1/dashboard")).status == 200)
+        // The launch check's question, answered without a database.
+        #expect(await router.route(try get("/v1/alive")).status == 204)
         #expect(await router.route(try get("/v1/dashboard/nope")).status == 404)
         let photo = try #require(try library.cache.queue.peek().first).id
         #expect(await router.route(try get("/v1/dashboard/thumbnail?photo=\(photo)")).status == 200)

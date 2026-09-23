@@ -28,9 +28,11 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
   - `Documentation/Photos-Go-Round Server.md` lists `serviceSecret` and says what a `401` means.
 - **Phase 6 — Two users at once.** Syd logs in as a second user with the first still logged in; both agents serve, and each user sees only their own pictures.
   - Syd's way, 2026-09-23: uninstall everything in his own account, archive the app, put it in `/Applications`, run it there; then switch to `randyarbuckle` and run it again. See *Phase 6, by hand*.
-  - *In progress 2026-09-23.* The ports differ (20172 and 21458). The first run found two faults that are not the secret's, both fixed and waiting for a new archive; see *What Phase 6 found*:
+  - *In progress 2026-09-23.* The ports differ (20172 and 21458). The runs so far found three faults that are not the secret's, all fixed, the last waiting for a new archive; see *What Phase 6 found*:
     - A first launch in a fresh account missed the launch check, so the wallpaper and the screensaver were not installed. The check now waits 90 s, allows 5 s per attempt, and logs why it is waiting.
     - The agent stopped answering altogether while CacheDelete was slow: its free-space query held a process-wide lock. Free space now comes from `statfs(2)`.
+    - With both fixes installed, the check still missed on Randy's next launch: it asked `/v1/dashboard`, the heaviest read there is. It now asks `GET /v1/alive`, which answers `204` and touches nothing.
+  - **Open:** switching users leaves the other account's wallpaper grey when it comes back. Not fixed; in `TODO.md`, *The wallpaper goes grey after switching users*.
 
 # Design Decisions
 
@@ -56,6 +58,7 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
 - **Documented examples share one setup block**, `DOMAIN`, `PORT` and `AUTH`, and each example uses `$PORT` and `-H "$AUTH"`. One place to get right, and one shape for the test to check.
 - **The documented examples are read and run.** *Syd's, 2026-09-23.* Every `curl` in the docs must carry the header, and the README's and `pgr_ctl.md`'s examples are run through `zsh` against a gated listener.
 - **The launch check waits 90 s, allows 5 s per attempt, and says why it is waiting.** *Syd's, 2026-09-23: "do 1 and 2".* A first launch in a fresh account took 21.6 s to publish its port and was slow to answer after it.
+- **The launch check asks `GET /v1/alive`, which the agent answers `204` without touching anything.** *Syd's, 2026-09-23: "add /v1/alive and point the probe at it".* The question is whether the agent is up; `/v1/dashboard` answered a much bigger one. It stays behind the gate, so a `401` still means someone else's agent.
 - **Free space comes from `statfs(2)`, not `volumeAvailableCapacityForImportantUsageKey`.** *Syd's, 2026-09-23: "make the statfs change".* The old key waits on CacheDelete inside a lock every URL lookup in the process needs; `statfs` waits on nobody. It counts no purgeable space, so fetching stops a little sooner on a nearly full disk.
 
 # Background
@@ -304,7 +307,7 @@ An archived app is a Release build, so both agents use the domain `com.sydpolk.p
 
 ## What Phase 6 found
 
-*The first run, 2026-09-23.* Everything here came back as timestamps, status codes, process states and a stack sample — nothing about `randyarbuckle`'s pictures. Settled so far: step 8, the ports differ (`jazzman` 20172, `randyarbuckle` 21458). Steps 6, 7, 9 and 10 to 13 wait for a new archive.
+*The first run, 2026-09-23.* Everything here came back as timestamps, status codes, process states and a stack sample — nothing about `randyarbuckle`'s pictures. Settled so far: step 8, the ports differ (`jazzman` 20172, `randyarbuckle` 21458); and with the Help menu's installs, the wallpaper and the screensaver appear in `randyarbuckle`'s System Settings. Steps 6, 7, 9 and 10 to 13 wait for an archive with `/v1/alive` in it.
 
 **The unified log is shared by every account on the Mac.** `log show` in one account prints the other's lines too — and the agent's served lines name photographs — so every log command in this plan filters to lines that cannot. Claude reads no agent lines from `randyarbuckle`'s account.
 
@@ -344,9 +347,33 @@ Load average reached 162 on ten cores, with 67 processes runnable. The biggest u
 
 It is the likely reason both 1 and 2 surfaced: the first launch was slow because everything was, and CacheDelete was slow for the same reason. The same load failed 18 kit tests in one run — `PhotosSourceEditingTests` and `SilentLibraryTests`, the load-sensitive suites `TODO.md` already holds — which passed once it fell.
 
-### 4. A step that could be pasted unchanged
+### 4. With both fixes installed, the check still asked too big a question
+
+*11:07, the same day.* The first attempt at a retest ran this morning's 08:52 build: a 09:27 archive existed but had not replaced the copy in `/Applications`, so neither fix was in it. Checking the build's date first — and a string only the new build carries — is now part of retesting. With an 11:01 build installed, `jazzman`'s launch answered in 0.7 s. `randyarbuckle`'s did not, and the new log said why:
+
+```
+11:07:29  agent restarted — waiting — no port published yet
+11:07:56  waiting — nothing from 21458 within 5 s      (port published after ~27 s)
+11:09:08  gave up after 98 s — nothing from 21458 within 5 s
+11:10:47  (next launch) waiting — no port published yet
+11:10:48  answering                                     (1.5 s)
+```
+
+The agent was up and listening, and `/v1/dashboard` missed its five seconds on every attempt for 72 seconds. That route was chosen because it asks nothing of the photo library, but it is the heaviest read the agent serves — counts over the whole photo table, the cache's totals, changes by source — and just after a restart the agent was walking its cache and refreshing a large library on the same database, on a Mac still at load 60–150. The Help menu installed both without waiting, and the next launch answered in 1.5 s.
+
+**Fixed:** `Router.alive` answers `GET /v1/alive` with `204` before any endpoint is consulted — no database, cache or library, no request line — and `AgentProbe` asks it. It is behind the gate like everything else. An agent from before it answers `404` from its picture endpoint, which has still passed the gate and so still counts. `AliveTests`; `Documentation/Photos-Go-Round Server.md`, *SERVICE*.
+
+### 5. A step that could be pasted unchanged
 
 Step 11's first version had `PORT` in the URL for the reader to replace; pasted as written it printed `000`, `curl` never connecting. Steps 11 and 12 now set `OTHER_PORT` on a line of its own, holding the port seen that day, and the `curl` commands carry `--max-time 20` so a hang comes back as `000` rather than never.
+
+### 6. Switching users leaves the other account's wallpaper grey
+
+*11:22, with the 11:19 build in both accounts.* `jazzman`'s wallpaper was showing a picture at 11:19. At 11:22:41 Syd switched to the login window from Control Center; at 11:22:51 `randyarbuckle`'s session started; at 11:22:52 `jazzman`'s wallpaper extension exited on SIGTERM. Back in `jazzman`, WallpaperAgent — the same process as at 11:19, never restarted — tried six times between 11:24:47 and 11:25:38 to reach the extension, failed every time with `NSCocoaErrorDomain` 4099, and never relaunched it: a grey desktop, the Golden Gate as the preview. Help › Install Wallpaper registers it again and restarts WallpaperAgent, which brings it back.
+
+**Not the installer's.** Randy's app did not launch until 11:23:22, and what it installs acts on its own session. **Not a leak either:** for a moment the log looked like `jazzman`'s extension reading Randy's port 21458; by user ID it was Randy's extension reading his own. Every agent and extension in the day's logs used its own account's port.
+
+**Open, and it matters here:** switching accounts is how several users share a Mac, so every switch can leave the account switched away from grey. Syd, 2026-09-23: "I really want the wallpapers and screensavers to survive user switching without the app running if possible." Two ways were weighed and neither chosen: the app watching for its session becoming active again (only while it runs), or the agent doing it (it runs whenever the user is logged in, but restarting WallpaperAgent is installing, which the agent does not do). The screensaver after a switch is not checked yet. `TODO.md`, *The wallpaper goes grey after switching users*.
 
 ## Testing
 

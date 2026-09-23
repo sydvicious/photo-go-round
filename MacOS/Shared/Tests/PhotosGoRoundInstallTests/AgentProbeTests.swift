@@ -62,7 +62,7 @@ struct AgentProbeTests {
 
         let request = try #require(asked.all.first)
         #expect(request.url?.port == Int(published))
-        #expect(request.url?.path() == "/v1/dashboard")
+        #expect(request.url?.path() == "/v1/alive")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(Self.secret)")
     }
 
