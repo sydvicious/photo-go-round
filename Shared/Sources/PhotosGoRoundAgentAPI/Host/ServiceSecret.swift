@@ -26,8 +26,14 @@ public enum ServiceSecret {
     /// which the agent treats as a reason not to start, since serving
     /// unguarded is the one outcome this exists to prevent.
     public static func make() -> String? {
-        var bytes = [UInt8](repeating: 0, count: byteCount)
-        guard SecRandomCopyBytes(kSecRandomDefault, byteCount, &bytes) == errSecSuccess else {
+        random(bytes: byteCount)
+    }
+
+    /// `count` random bytes as lowercase hex, or nil when the system would not
+    /// produce them. The dashboard's one-time codes are made the same way.
+    public static func random(bytes count: Int) -> String? {
+        var bytes = [UInt8](repeating: 0, count: count)
+        guard SecRandomCopyBytes(kSecRandomDefault, count, &bytes) == errSecSuccess else {
             return nil
         }
         return hex(bytes)

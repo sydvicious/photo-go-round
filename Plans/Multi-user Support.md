@@ -15,7 +15,7 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
 - **Phase 2 — The agent keeps a secret and checks it.** *Done 2026-09-23*: `ServiceSecret`, `Preferences.establishServiceSecret()`, `ServiceGate`.
   - Made on first launch, kept across launches, published as `serviceSecret` beside `servicePort`. No secret, no agent.
   - A `ServiceGate` in front of the `Router` answers `401` to any request without it.
-- **Phase 3 — Every client sends it.**
+- **Phase 3 — Every client sends it.** *Done 2026-09-23.* The app's own test bundle compiles and has not been run: its host app installs when launched.
   - `PictureClient` (the app's window, the saver), the wallpaper extension's own request in `AgentPicture`, the app's `SourceService`.
   - The launch check, `AgentProbe`: the published port, the secret, and a `401` is not its agent.
   - `pgr_ctl status` says whether a secret is published, never what it is. It makes no requests, so it sends nothing.

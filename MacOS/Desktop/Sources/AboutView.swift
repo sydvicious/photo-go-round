@@ -36,7 +36,9 @@ struct AboutView: View {
             // launch, and this window can stay open across a restart — a link
             // read when it opened would point at nothing.
             TimelineView(.periodic(from: .now, by: 2)) { _ in
-                DashboardLinkLine(link: DashboardLink(ServicePort.read(preferences)))
+                DashboardLinkLine(
+                    link: DashboardLink(ServicePort.read(preferences)),
+                    service: SourceService(preferences: preferences))
             }
             .padding(.top, 8)
         }
@@ -61,6 +63,15 @@ enum DashboardLink: Equatable {
     /// Served by the agent's `DashboardEndpoint.pagePath`.
     static let path = "/dashboard"
 
+    /// The page's address with a one-time code the agent will trade for its
+    /// cookie. What the browser is handed; the text on the button stays the
+    /// plain address, which is where to find the port.
+    static func url(_ page: URL, code: String) -> URL {
+        var components = URLComponents(url: page, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "code", value: code)]
+        return components.url!
+    }
+
     init(_ reading: ServicePort.Reading) {
         switch reading {
         case .published(let port, _):
@@ -75,6 +86,11 @@ enum DashboardLink: Equatable {
 
 private struct DashboardLinkLine: View {
     let link: DashboardLink
+    let service: SourceService
+
+    @Environment(\.openURL) private var openURL
+    /// Why the last click did not open the page, until the next one.
+    @State private var failure: String?
 
     var body: some View {
         VStack(spacing: 2) {
@@ -84,11 +100,21 @@ private struct DashboardLinkLine: View {
 
             switch link {
             case .open(let url):
-                // `Link` hands the URL to the system, so the dashboard opens in
-                // the default browser — never in a web view of the app's own.
-                Link(url.absoluteString, destination: url)
+                // **A button now, not a `Link`.** The browser cannot send the
+                // secret, so a click first asks the agent for a one-time code
+                // and hands the browser the page with that; the agent trades it
+                // for a cookie. `openURL` gives the address to the system, so
+                // the dashboard opens in the default browser — never in a web
+                // view of the app's own. `Plans/Multi-user Support.md`.
+                Button(url.absoluteString) { open(url) }
+                    .buttonStyle(.link)
                     .font(.callout)
                     .monospacedDigit()
+                if let failure {
+                    Text(failure)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             case .notRunning:
                 // The words the picture window uses for the same condition.
                 Text("Waiting for Photos")
@@ -96,6 +122,18 @@ private struct DashboardLinkLine: View {
             case .unreadable(let reason):
                 Text("The agent's port could not be read: \(reason)")
                     .font(.callout)
+            }
+        }
+    }
+
+    private func open(_ page: URL) {
+        Task {
+            do {
+                let code = try await service.dashboardCode()
+                failure = nil
+                openURL(DashboardLink.url(page, code: code))
+            } catch {
+                failure = SourcesModel.explain(error)
             }
         }
     }

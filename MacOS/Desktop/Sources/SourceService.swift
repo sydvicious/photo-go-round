@@ -317,6 +317,25 @@ struct SourceService {
         _ = try await send("DELETE", "/v2/sources/\(uuid)", body: nil, within: writeLimit)
     }
 
+    // MARK: - The dashboard
+
+    /// A one-time code for the dashboard, which the agent trades for a cookie
+    /// when the browser brings it back.
+    ///
+    /// **Here because this is the app's one client of the agent's JSON**, and
+    /// the code is asked for with the secret like everything else. The secret
+    /// itself never goes to the browser. `Plans/Multi-user Support.md`, *The
+    /// dashboard*.
+    func dashboardCode() async throws -> String {
+        struct Code: Decodable { var code: String }
+        return try await send(
+            decoding: Code.self, "POST", Self.dashboardCodePath, body: nil, within: readLimit
+        ).code
+    }
+
+    /// Served by the agent's `ServiceGate.codePath`.
+    nonisolated static let dashboardCodePath = "/v1/dashboard/code"
+
     // MARK: - The one request shape
 
     @discardableResult

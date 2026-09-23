@@ -249,6 +249,15 @@ function draw(s) {
 async function poll() {
   try {
     const response = await fetch("/v1/dashboard", { cache: "no-store" });
+    // Refused: the cookie is gone, or was never this agent's. Asking again
+    // every second would be refused every second, so stop and say how to get
+    // back in. `Plans/Multi-user Support.md`, *The dashboard*.
+    if (response.status === 401) {
+      $("state").textContent = "not allowed — open the dashboard again from Photos-Go-Round's About box";
+      $("state").className = "stale";
+      $("main").className = "stale";
+      return;
+    }
     if (!response.ok) throw new Error(response.status + " " + response.statusText);
     draw(await response.json());
     lastAnswer = new Date();

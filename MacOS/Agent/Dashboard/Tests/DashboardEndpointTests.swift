@@ -202,6 +202,9 @@ struct DashboardEndpointTests {
         #expect(js.contains("/v1/dashboard/thumbnail?photo="))
         // A busy resizer is "not yet": the page keeps the image it has.
         #expect(js.contains("response.status === 503"))
+        // Refused is "stop asking": the cookie is gone, and every later poll
+        // would be refused too.
+        #expect(js.contains("response.status === 401"))
     }
 
     /// The app bundle first, so an installed agent never reads a source folder

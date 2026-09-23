@@ -173,6 +173,24 @@ struct SourceServiceTests {
         #expect(offered.withLock { $0 } == ["Bearer \(old)", "Bearer \(new)"])
     }
 
+    // MARK: - The dashboard
+
+    @Test("A dashboard code is a POST carrying the secret, and the code comes back")
+    func dashboardCode() async throws {
+        let scratch = Scratch()
+        let wire = Wire()
+        wire.answers(body: #"{"code": "0123456789abcdef0123456789abcdef"}"#)
+        let secret = try #require(scratch.preferences.serviceSecret)
+
+        let code = try await service(wire, scratch).dashboardCode()
+
+        #expect(code == "0123456789abcdef0123456789abcdef")
+        let request = try #require(wire.requests.first)
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.path() == "/v1/dashboard/code")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(secret)")
+    }
+
     // MARK: - An agent that is running and stuck
 
     /// **The fault the bounds exist for.** A wedged photo library costs the
