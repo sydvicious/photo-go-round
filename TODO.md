@@ -349,15 +349,15 @@ Syd, 2026-09-15: "don't build arch:x86_64 at all". And the scope of it, the same
   - the wallpaper probe script's `$(uname -m)`, which would build x86_64 on an Intel Mac, and is the right answer for a dev build there.
 - **Check the local packages too.** The C++ hardening setting in the project did not reach the local package targets (`PLAN.md`, *Builds with no warnings*), so an architecture setting may not either. Verify with `lipo -archs` on every product after a clean build, not by reading settings.
 
-## Retire the `photogoroundd` name
-
-Syd, 2026-09-22: ditch it as a target and as a name; the agent has a better name now — `Photos-Go-Round Server`.
-
-- *Claude's reading:* this is the package's `photogoroundd` executable product and target, its `.swiftpm` scheme, `photogorounddTests`, and `EXECUTABLE_NAME = photogoroundd` in the Server target. The documentation uses the name too: `Documentation/photogoroundd.md`, and mentions in `Installing.md`, `pgr_ctl.md`, `pgr_install.md` and `README.md`.
-
 ## The screensaver preview is black when first selected
 
 Syd, 2026-09-22: the preview in System Settings is black when the screensaver is first selected.
+
+## Why the screensaver preview takes so long to show a picture
+
+Syd, 2026-09-22: investigate why the screen saver preview takes so long to show a picture.
+
+- *Claude's note:* this may be the same thing as the item above, seen from the other end — black at first, then a picture once it arrives. Worth checking first.
 
 ## An option in `uninstall.sh` to delete the user data
 

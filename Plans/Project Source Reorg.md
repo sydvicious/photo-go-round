@@ -1,6 +1,6 @@
 # Source code organization
 
-**Status, 2026-09-22: complete.** Syd: "this effort is complete." Every move in *Where things go* is made, the build is warning-free in the `Claude` configuration, and the package tests pass. The rename pass and the kit's possible move to `Shared` are carried into `TODO.md`, *Rename the product to "Photos-Go-Round"*.
+**Status, 2026-09-22: complete.** Syd: "this effort is complete." Every move in *Where things go* is made, the build is warning-free in the `Claude` configuration, and the package tests pass. The rename pass and the kit's possible move to `Shared` are carried into `TODO.md`, *Rename the product to "Photos-Go-Round"*. **The rename pass is done, 2026-09-22**: the product is Photos-Go-Round, identifiers are `photosgoround`, the kit is `PhotosGoRoundKit`, and `photogoroundd` is retired for `Photos-Go-Round Server`. The kit is still in `MacOS/Shared`.
 
 I want to normalize the source code layout for this project. Each binary delivery gets its own folder, separated by platform. Each one has `Plans`, `Resources`, `Sources` and `Tests`,
 when appropriate. Sources shared within the Mac sphere would be in a Shared folder, unless they are big enough to justify their own folder.
@@ -87,7 +87,7 @@ Decided 2026-09-22.
 | `audits` | `Audits` |
 
 - **Two passes: move, then rename.** The reorganization only moves files; the build and tests pass, and Syd commits. The product rename is a separate change after it.
-- **`PhotoGoRoundKit` becomes `PhotosGoRoundKit`**, in the rename pass. It stays in `MacOS/Shared` until another platform needs it; then it moves to `Shared`.
+- **`PhotoGoRoundKit` becomes `PhotosGoRoundKit`**, in the rename pass. *Done 2026-09-22.* It stays in `MacOS/Shared` until another platform needs it; then it moves to `Shared`.
 - **The extension and its host share `MacOS/Wallpaper/Sources`.** All nine files in one folder; each target's membership exceptions exclude the other's files. The two plists are `Resources/Extension-Info.plist` and `Resources/Host-Info.plist`, beside `Photo-Go-Round Wallpaper.entitlements`.
 - **`Scripts` stays at the top level.**
 - **The agent.** Decided 2026-09-22, after the first move. `Service` is gone.

@@ -13,7 +13,7 @@ Installing was a fifth thing again — a copy for the saver, a plist for the age
 # Phases
 
 - *The targets* — every product builds independently from its own scheme.
-  - The agent moves from `swift build` to its `Photo-Go-Round Server` target. **Done.** `Scripts/photogoroundd` builds that target too, since 2026-09-19, so a terminal agent carries its configuration's port and label.
+  - The agent moves from `swift build` to its `Photo-Go-Round Server` target. **Done.** `Scripts/photogoroundd` builds that target too, since 2026-09-19, so a terminal agent carries its configuration's port and label. *It is `Scripts/run-server.sh` since 2026-09-22, and the binary it runs is `Photos-Go-Round Server`.*
   - `pgr_ctl` likewise, from `swift run` to its own target. **Done.** It is built and copied onto a `PATH`; `swift run` is no longer the documented route.
   - **No target extracts App Intents metadata. `LM_SKIP_METADATA_EXTRACTION = YES` at project level, 2026-09-16.** Xcode ran `ExtractAppIntentsMetadata` on every app, extension and bundle target, and each printed "warning: Metadata extraction skipped, no AppIntents.framework dependency found" — the app, the saver, the saver spike, the agent, the wallpaper host and the wallpaper extension. Nothing here uses App Intents. Syd: "fix that warning". Verified from a clean build of each scheme: no warning, and no extraction step on the project's own targets. If App Intents is ever adopted, that target turns it back on.
   - **Every module a target imports is declared as its package product dependency. Fixed 2026-09-16 for `pgr_ctl`.** Its sources import `PhotoGoRoundDisplay` (`WallpaperCommands.swift`, `main.swift`) and the target did not declare it. Built alone, Xcode found the import and linked the module anyway; built after `Photo-Go-Round Server` in the same build folder it did not, and the link failed on `ShuffleInterval` and `WallpaperPreferences`. Reproduced in a fresh folder, fixed by declaring the product, and the same order then built. Every other target was checked the same way; `Photo-Go-RoundTests` declares nothing it imports and needs nothing, since it is hosted by the app (`BUNDLE_LOADER`).
@@ -65,7 +65,7 @@ Written 2026-09-17, at Syd's "I guess I need to put build hygene into this proje
 
 # Background
 
-- The project is one Swift package plus one Xcode project. The package holds `PhotoGoRoundAgentAPI`, `PhotoGoRoundKit`, `PhotoGoRoundDisplay`, `Console`, `photogoroundd` and `pgr_ctl`; the Xcode project holds the app, the saver, the saver spike, the agent, `pgr_ctl` and, since 2026-09-15, the wallpaper extension.
+- The project is one Swift package plus one Xcode project. The package holds `PhotoGoRoundAgentAPI`, `PhotoGoRoundKit`, `PhotoGoRoundDisplay`, `Console`, `photogoroundd` and `pgr_ctl`; the Xcode project holds the app, the saver, the saver spike, the agent, `pgr_ctl` and, since 2026-09-15, the wallpaper extension. *Renamed 2026-09-22: the modules are `PhotosGoRound…`, and `photogoroundd` is `PhotosGoRoundServer`.*
 - `Scripts/make-saver-bundle.sh` and `Scripts/make-agent-bundle.sh` already existed and were the model the rest were to follow — options, an `--install` that is the owner's call, and output under DerivedData. **That model was overtaken on 2026-09-19**: a product is built by its scheme, and the only script left that builds one is the saver's.
 - The wallpaper extension is an appex embedded in the app. `Wallpaper Plan.md`, *The real extension, inside the app*.
 - Syd, 2026-09-15, on what prompted this: "I don't want the wallpaper extension installed every time I run the app even if there is no source change in it."
@@ -162,7 +162,7 @@ Syd, 2026-09-15: "and also maintain separate scripts as well". A build phase ser
 - `TODO.md` — *Build products out of the repo*; *Build for arm64 only*; *Installing by launching the app*.
 - `Wallpaper Plan.md` — *The real extension, inside the app*; *What the fourth probe found*.
 - `Screensaver Plan.md` — how the saver is built and installed today.
-- `Scripts/make-saver-bundle.sh`, `Scripts/photogoroundd`, `Scripts/scrub-dev.sh`, `Scripts/uninstall.sh`. `make-agent-bundle.sh` was deleted 2026-09-19.
+- `Scripts/make-saver-bundle.sh`, `Scripts/run-server.sh` (`Scripts/photogoroundd` until 2026-09-22), `Scripts/scrub-dev.sh`, `Scripts/uninstall.sh`. `make-agent-bundle.sh` was deleted 2026-09-19.
 - `Documentation/pgr_install.md` — the binary every install runs now.
 - `Plans/Xcode - Separate Build and Run.md` — the plan that separated building from installing, and the measurements behind it.
 - `Photo-Go-Round.xcodeproj` — targets `Photo-Go-Round`, `Photo-Go-Round Wallpaper`, `Photo-Go-Round Saver`, `Photo-Go-Round Saver Spike`, `Photo-Go-Round Server`, `pgr_ctl`.

@@ -1,22 +1,22 @@
 # Summary
 
-Photo-Go-Round is a personal photo-shuffle system: a background agent maintains a SQLite "deck" of photos drawn from Apple Photos albums, arbitrary disk folders, and eventually Google Photos, caches them on disk at full resolution, and hands them to whatever wants to display them — desktop wallpaper, screensaver, widgets, and apps across Apple's platforms.
+Photos-Go-Round is a personal photo-shuffle system: a background agent maintains a SQLite "deck" of photos drawn from Apple Photos albums, arbitrary disk folders, and eventually Google Photos, caches them on disk at full resolution, and hands them to whatever wants to display them — desktop wallpaper, screensaver, widgets, and apps across Apple's platforms.
 
 # Running it
 
 ## The agent
 
 ```
-./Scripts/photogoroundd
+./Scripts/run-server.sh
 ```
 
-Builds first, so a stale binary is never run. Development deployment: everything under `.build`, preference domain `com.sydpolk.photogoround.dev`. `--prod` for the real library, typed on purpose.
+Builds first, so a stale binary is never run. Development deployment: everything under `.build`, preference domain `com.sydpolk.photosgoround.dev`. `--prod` for the real library, typed on purpose.
 
 The kernel assigns the port and the agent publishes it; `--port 9000` pins one instead. The agent prints its dashboard's address when the listener is ready — `http://localhost:<port>/dashboard` — and the app's About box links to it. Sources are named once and written through to preferences:
 
 ```
-./Scripts/photogoroundd --add-folder ~/Pictures/Wallpaper
-./Scripts/photogoroundd --add-folder --recursive ~/Pictures/Trips
+./Scripts/run-server.sh --add-folder ~/Pictures/Wallpaper
+./Scripts/run-server.sh --add-folder --recursive ~/Pictures/Trips
 ```
 
 Inspecting and configuring, with or without the agent running:
@@ -57,7 +57,7 @@ Runs the selected saver without waiting for the idle timer. Move the mouse to di
 
 ```
 /usr/bin/log show --info --last 10m \
-    --predicate 'subsystem == "com.sydpolk.photogoround" AND category == "saver"'
+    --predicate 'subsystem == "com.sydpolk.photosgoround" AND category == "saver"'
 ```
 
 `log` is a zsh builtin, hence the full path; `--info` is required or the per-photograph lines are filtered out.
@@ -73,7 +73,7 @@ Counting an overnight run — **from the agent, not the saver**. The saver's per
 
 ```
 /usr/bin/log show --last 12h \
-    --predicate 'subsystem == "com.sydpolk.photogoround" AND category == "deck"' \
+    --predicate 'subsystem == "com.sydpolk.photosgoround" AND category == "deck"' \
     | grep -c "consumer=screensaver"
 ```
 
@@ -81,7 +81,7 @@ A healthy night is a flat rate: a ten-second dwell is about 341 an hour, and rou
 
 ## Xcode
 
-Every product is a target in `Photo-Go-Round.xcodeproj` — app, tests, `Photo-Go-Round Saver`, `Photo-Go-Round Server`, `pgr_ctl`, `pgr_install`, `Photo-Go-Round Wallpaper` and its host — so anything can be run under the debugger.
+Every product is a target in `Photos-Go-Round.xcodeproj` — app, tests, `Photos-Go-Round Saver`, `Photos-Go-Round Server`, `pgr_ctl`, `pgr_install`, `Photos-Go-Round Wallpaper` and its host — so anything can be run under the debugger.
 
 **`xcodebuild` is the only build route since 2026-09-19.** Syd: "what I really want is each target runnable via xcodebuild." Not `swift build`, which has only `debug` and `release` and so cannot produce the `Claude` identity; the suites run by `xcodebuild test -scheme "Package Tests"`, which reaches all five package test targets. The `Photo-Go-Round Saver Spike` target was deleted the same day. `Plans/Xcode - Separate Build and Run.md`.
 

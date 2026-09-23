@@ -137,6 +137,8 @@ Each phase leaves the tree working, and the products are taken smallest first.
     needed an `if` on `$CONFIGURATION` to spell a label by hand; deleting that
     script removed the harm. `Scripts/photogoroundd` now builds the Xcode
     target too, so nothing derives an identity from the SwiftPM side.
+    *(`Scripts/run-server.sh`, and the test target `PhotosGoRoundServerTests`,
+    since 2026-09-22.)*
   - **`SMAppService` went with it.** `make-agent-bundle.sh` was the only thing
     that wrote the plist inside the bundle that `SMAppService.agent(plistName:)`
     needs, so `pgr_ctl register`, `unregister` and `service-status` could no
@@ -422,7 +424,9 @@ have been emitting the same noise into Xcode's console all along.
 The most procedural of the three, and the one with the hardest-won details:
 
 - **The other-agent report.** `pgrep -f photogoroundd`, then `ps -o comm=` per
-  pid, skipping the job's own binary. It reports and does not kill, because
+  pid, skipping the job's own binary. *(Since 2026-09-22 the pattern is the
+  binary's name as a path's last component, `/Photos-Go-Round Server( |$)`, so
+  an `xcodebuild -scheme "Photos-Go-Round Server"` is not taken for an agent.)* It reports and does not kill, because
   stopping something the owner started is the owner's call — Syd, 2026-09-15.
   In Swift this stays a `Process` call to `pgrep` in the first cut.
   `proc_listpids` plus `proc_pidpath` would remove the subprocess entirely and
@@ -623,6 +627,16 @@ be done first**, for a reason that is easy to miss:
   precondition.
 - The same is true, less sharply, of `pgr_ctl` and `pgr_install`: each is a
   package target with a package test target, and each is also an Xcode target.
+
+**Settled 2026-09-22 by renaming the target, not removing it.** Syd: ditch
+`photogoroundd` "as a target and as a name". The shared test schemes did not
+free the package target as this section expected: `xcodebuild test` runs the
+same SwiftPM test targets, and they still need a package target to link. So the
+package target is `PhotosGoRoundServer` and its tests `PhotosGoRoundServerTests`;
+the Xcode target's binary is `Photos-Go-Round Server`, its product name, with
+`EXECUTABLE_NAME` gone; and `Scripts/photogoroundd` is `Scripts/run-server.sh`.
+Removing the package target would still need the agent's code split into a
+library the Xcode target links, which was weighed and not chosen.
 
 **`Scripts/photogoroundd`: answered 2026-09-19.** Syd, asked whether it stays as
 the one deliberate exception to `xcodebuild`-only or builds the Xcode target's
