@@ -2,6 +2,8 @@
 
 Several people can use Photos-Go-Round on one Mac, each with their own agent and library. Each agent serves only its own user: it holds a secret of that user's, publishes it beside its port, and refuses any request that does not carry it.
 
+**Complete, 2026-09-23.** All six phases are done, on branch `multi-user-support`. One problem it found is left as later work in `TODO.md`: *The wallpaper goes grey after switching users*.
+
 # Rationale
 
 The agent is per-user by design, installed in each user's `~/Library/LaunchAgents` with its own database. But it listens on loopback, and every account on the Mac shares loopback. Each user's agent now has its own port, but the port is worked out from the user name, so anyone logged in can compute another user's port and fetch their pictures from it. Where two names hash to the same port, the second user's app already mistakes the first user's agent for its own. Syd, 2026-09-21: "the danger is that the second user send a request to the first user's agent on the default port."
@@ -28,11 +30,11 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
   - `Documentation/Photos-Go-Round Server.md` lists `serviceSecret` and says what a `401` means.
 - **Phase 6 — Two users at once.** Syd logs in as a second user with the first still logged in; both agents serve, and each user sees only their own pictures.
   - Syd's way, 2026-09-23: uninstall everything in his own account, archive the app, put it in `/Applications`, run it there; then switch to `randyarbuckle` and run it again. See *Phase 6, by hand*.
-  - *In progress 2026-09-23.* The ports differ (20172 and 21458). The runs so far found three faults that are not the secret's, all fixed, the last waiting for a new archive; see *What Phase 6 found*:
+  - ***Done 2026-09-23.*** Every step in *Phase 6, by hand* passed — Syd: "everything looks good". The ports differ (20172 and 21458). The runs found three faults that are not the secret's, all fixed; see *What Phase 6 found*:
     - A first launch in a fresh account missed the launch check, so the wallpaper and the screensaver were not installed. The check now waits 90 s, allows 5 s per attempt, and logs why it is waiting.
     - The agent stopped answering altogether while CacheDelete was slow: its free-space query held a process-wide lock. Free space now comes from `statfs(2)`.
     - With both fixes installed, the check still missed on Randy's next launch: it asked `/v1/dashboard`, the heaviest read there is. It now asks `GET /v1/alive`, which answers `204` and touches nothing.
-  - **Open:** switching users leaves the other account's wallpaper grey when it comes back. Not fixed; in `TODO.md`, *The wallpaper goes grey after switching users*.
+  - **Left as later work:** switching users leaves the other account's wallpaper grey when it comes back. In `TODO.md`, *The wallpaper goes grey after switching users*.
 
 # Design Decisions
 
@@ -307,7 +309,7 @@ An archived app is a Release build, so both agents use the domain `com.sydpolk.p
 
 ## What Phase 6 found
 
-*The first run, 2026-09-23.* Everything here came back as timestamps, status codes, process states and a stack sample — nothing about `randyarbuckle`'s pictures. Settled so far: step 8, the ports differ (`jazzman` 20172, `randyarbuckle` 21458); and with the Help menu's installs, the wallpaper and the screensaver appear in `randyarbuckle`'s System Settings. Steps 6, 7, 9 and 10 to 13 wait for an archive with `/v1/alive` in it.
+*The first run, 2026-09-23.* Everything here came back as timestamps, status codes, process states and a stack sample — nothing about `randyarbuckle`'s pictures. **All thirteen steps passed**, with the build carrying `/v1/alive`: another account cannot read this one's preferences; each agent made its own secret and serves its own account; each account's secret is refused by the other's agent, both ways; the ports differ (`jazzman` 20172, `randyarbuckle` 21458); and each account sees only its own pictures. Syd, 2026-09-23: "everything looks good." Reported as a verdict, not as output — nothing came back from `randyarbuckle`'s account but yes, no, and numbers.
 
 **The unified log is shared by every account on the Mac.** `log show` in one account prints the other's lines too — and the agent's served lines name photographs — so every log command in this plan filters to lines that cannot. Claude reads no agent lines from `randyarbuckle`'s account.
 
