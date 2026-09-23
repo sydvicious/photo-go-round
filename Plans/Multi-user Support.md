@@ -236,14 +236,64 @@ It finds every fenced block in `README.md` and `Documentation/*.md` that calls `
 
 ## Phase 6, by hand
 
-*Planned 2026-09-23.* Syd, on `randyarbuckle`: "That account has a lot of sensitive pictures, so I won't be taking screenshots or movies, and I won't be giving you log snippets." So every check prints a status code, a count or a permission error, and nothing about the pictures leaves that account. An archived app is a Release build, so both agents use the domain `com.sydpolk.photosgoround.dev`.
+*Planned 2026-09-23.* Syd, on `randyarbuckle`: "That account has a lot of sensitive pictures, so I won't be taking screenshots or movies, and I won't be giving you log snippets." So every check below prints a status code, a count or a permission error, and nothing about the pictures leaves that account. What comes back to Claude is a yes or no, or a number, per step.
 
-1. **Another account cannot read this one's preferences**, measured for real this time: from `randyarbuckle`, `cat /Users/jazzman/Library/Preferences/com.sydpolk.photosgoround.dev.plist` says *Permission denied*.
-2. **Each agent made its own secret**: `defaults read … serviceSecret | wc -l` is `1` in each account.
-3. **Each agent serves its own user**: `/v1/dashboard` with the account's own secret, `-o /dev/null`, is `200`.
-4. **Neither serves the other**: each account's secret sent to the other's port is `401`, both ways.
-5. **Each sees only their own pictures**: window, wallpaper, screensaver — yes or no, by eye.
-6. **The two ports differ**, being hashes of different names. A match is a collision, and worth knowing.
+An archived app is a Release build, so both agents use the domain `com.sydpolk.photosgoround.dev`. Nothing here is secret: `serviceSecret` is only ever read inside the account it belongs to, and never printed.
+
+**In `jazzman`:**
+
+1. Uninstall everything from earlier builds.
+2. Archive the app, and put it in `/Applications`.
+3. Run it from `/Applications`. It installs its agent, wallpaper and screensaver at launch.
+4. Note this agent's port, for step 11:
+
+   ```
+   defaults read com.sydpolk.photosgoround.dev servicePort
+   ```
+
+**Switch to `randyarbuckle`, leaving `jazzman` logged in:**
+
+5. Run the app from `/Applications`.
+6. **`jazzman`'s preferences cannot be read from here.** This is Phase 1 measured for real, from another account. Expect *Permission denied*:
+
+   ```
+   cat /Users/jazzman/Library/Preferences/com.sydpolk.photosgoround.dev.plist
+   ```
+
+7. **This account's agent made a secret.** Expect `1`:
+
+   ```
+   defaults read com.sydpolk.photosgoround.dev serviceSecret | wc -l
+   ```
+
+8. **This account's port**, for step 12. Compare it with step 4's: they should differ, since each is a hash of the user name. A match is a collision, and worth knowing.
+
+   ```
+   defaults read com.sydpolk.photosgoround.dev servicePort
+   ```
+
+9. **This account's agent serves this account.** Expect `200`; `-o /dev/null` keeps the answer off the screen:
+
+   ```
+   curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:$(defaults read com.sydpolk.photosgoround.dev servicePort)/v1/dashboard"
+   ```
+
+10. **By eye:** the window, the wallpaper and the screensaver show this account's pictures and none of `jazzman`'s.
+11. **This account's secret, sent to `jazzman`'s agent, is refused.** Put step 4's port in place of `PORT`. Expect `401`:
+
+    ```
+    curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:PORT/v1/next?consumer=test"
+    ```
+
+**Back in `jazzman`:**
+
+12. **And the other way.** Put step 8's port in place of `PORT`. Expect `401`:
+
+    ```
+    curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:PORT/v1/next?consumer=test"
+    ```
+
+13. **By eye:** this account still shows its own pictures, and none of `randyarbuckle`'s.
 
 ## Testing
 
