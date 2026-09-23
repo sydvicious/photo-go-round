@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 import Testing
 
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// One walk per source at a time.
 ///

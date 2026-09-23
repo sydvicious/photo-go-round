@@ -160,5 +160,5 @@ See what an uninstall would take, and take none of it:
 
 ## SEE ALSO
 
-`photogoroundd.md`, `pgr_ctl.md`, `Installing.md`, `Plans/Xcode - Separate Build
+`Photos-Go-Round Server.md`, `pgr_ctl.md`, `Installing.md`, `Plans/Xcode - Separate Build
 and Run.md`.

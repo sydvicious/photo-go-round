@@ -184,7 +184,7 @@ The app and `pgr_install` both run `PhotosGoRoundInstall`. The app links it and 
 
 `pgr_install(1)`, `Documentation/pgr_install.md` — every install and the uninstall.
 
-`photogoroundd(1)`, `Documentation/photogoroundd.md` — the agent itself, and running it in a terminal instead.
+`Photos-Go-Round Server(1)`, `Documentation/Photos-Go-Round Server.md` — the agent itself, and running it in a terminal instead.
 
 `Plans/Xcode - Separate Build and Run.md` — why ⌘B stopped installing.
 

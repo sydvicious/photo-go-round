@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 import Testing
 
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// For a fixture whose tests are not about the resize budget: its own
 /// resizer, and a budget no run reaches, so a sized request waits for its

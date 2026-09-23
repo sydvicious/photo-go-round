@@ -49,7 +49,7 @@ let package = Package(
         // are Xcode targets as well as package ones now, and an Xcode target
         // reaches a package's *products* — a bare target is invisible to it.
         .library(name: "Console", targets: ["Console"]),
-        .executable(name: "photogoroundd", targets: ["photogoroundd"]),
+        .executable(name: "PhotosGoRoundServer", targets: ["PhotosGoRoundServer"]),
         // Internal, and never shipped. It is a product so that `swift run
         // pgr_ctl` works; nothing about that puts it in a distributed bundle.
         .executable(name: "pgr_ctl", targets: ["pgr_ctl"]),
@@ -92,7 +92,7 @@ let package = Package(
             swiftSettings: everyTarget
         ),
         .executableTarget(
-            name: "photogoroundd",
+            name: "PhotosGoRoundServer",
             dependencies: ["PhotosGoRoundAgentAPI", "PhotosGoRoundKit", "Console"],
             path: "MacOS/Agent",
             sources: ["Sources", "Dashboard/Sources", "Endpoints/Sources"],
@@ -155,8 +155,8 @@ let package = Package(
             swiftSettings: everyTarget
         ),
         .testTarget(
-            name: "photogorounddTests",
-            dependencies: ["PhotosGoRoundAgentAPI", "photogoroundd"],
+            name: "PhotosGoRoundServerTests",
+            dependencies: ["PhotosGoRoundAgentAPI", "PhotosGoRoundServer"],
             path: "MacOS/Agent",
             sources: ["Tests", "Dashboard/Tests", "Endpoints/Tests"],
             swiftSettings: everyTarget

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// Which sources get walked first on the pass after launch.
 ///

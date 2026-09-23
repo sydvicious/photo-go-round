@@ -12,7 +12,7 @@ struct AgentInstallTests {
 
     private let agents = URL(filePath: "/tmp/pgr-test/LaunchAgents")
     private let bundle = URL(filePath: "/build/Products/Debug/Photos-Go-Round Server.app")
-    private var binary: URL { bundle.appending(path: "Contents/MacOS/photogoroundd") }
+    private var binary: URL { bundle.appending(path: "Contents/MacOS/Photos-Go-Round Server") }
 
     private func surroundings(
         bundleExists: Bool = true,
@@ -78,7 +78,7 @@ struct AgentInstallTests {
     @Test("The job's own process is not mistaken for somebody else's")
     func ownProcessIsNotForeign() throws {
         let own = AgentInstall.ForeignAgent(pid: 101, path: binary.path(percentEncoded: false))
-        let theirs = AgentInstall.ForeignAgent(pid: 202, path: "/tmp/hand-built/photogoroundd")
+        let theirs = AgentInstall.ForeignAgent(pid: 202, path: "/tmp/hand-built/Photos-Go-Round Server")
         let plan = try AgentInstall.plan(
             for: bundle, launchAgents: agents,
             surroundings: surroundings(running: [own, theirs]))

@@ -4,7 +4,7 @@ import Testing
 
 @testable import PhotosGoRoundAgentAPI
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// Eviction on a thread the writer is not waiting on.
 ///

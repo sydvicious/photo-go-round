@@ -38,8 +38,13 @@ public enum Launchctl {
     ///
     /// The caller decides which of these are somebody else's: an install knows
     /// its own binary's path and everything else belongs to whoever started it.
+    ///
+    /// **Matched as the last component of the executable's path.** The name has
+    /// a space in it since 2026-09-22, when `photogoroundd` became `Photos-Go-Round
+    /// Server`, and the bare name is also the scheme's: an `xcodebuild -scheme
+    /// "Photos-Go-Round Server"` would otherwise read as an agent running.
     public static func agentsOutsideLaunchd(named name: String) -> [AgentInstall.ForeignAgent] {
-        let found = Shell.run("/usr/bin/pgrep", ["-f", name])
+        let found = Shell.run("/usr/bin/pgrep", ["-f", "/\(name)( |$)"])
         guard found.status == 0 else { return [] }
         return found.output.split(separator: "\n").compactMap { line in
             guard let pid = Int32(line.trimmingCharacters(in: .whitespaces)) else { return nil }

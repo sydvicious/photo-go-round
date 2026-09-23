@@ -147,10 +147,13 @@ struct Options {
     }
 
     static let usage = """
-        photogoroundd — the Photos-Go-Round library agent
+        Photos-Go-Round Server — the Photos-Go-Round library agent
 
         USAGE
-          photogoroundd [options]
+          ./Scripts/run-server.sh [--release | --claude] [options]
+
+        The script builds the Photos-Go-Round Server target and runs the binary
+        inside it, passing the options through.
 
         It takes no subcommand, because there is nothing to choose between: it
         scans every source, keeps the queue full, and evicts and sweeps the
@@ -212,13 +215,13 @@ struct Options {
 
         EXAMPLES
           export PGR_CONTAINER="$HOME/Library/Application Support/Photos-Go-Round"
-          photogoroundd --add-folder --recursive ~/Pictures/Albums \\
-                        --add-folder ~/Pictures/Wallpaper
+          ./Scripts/run-server.sh --add-folder --recursive ~/Pictures/Albums \\
+                                  --add-folder ~/Pictures/Wallpaper
 
-          PGR_FOLDERS=~/Pictures/A:~/Pictures/B PGR_RECURSIVE=1 photogoroundd
+          PGR_FOLDERS=~/Pictures/A:~/Pictures/B PGR_RECURSIVE=1 ./Scripts/run-server.sh
 
         SEE ALSO
-          pgr_ctl(1), Documentation/photogoroundd.md
+          pgr_ctl(1), Documentation/Photos-Go-Round Server.md
         """
 }
 

@@ -1116,7 +1116,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				ENABLE_APP_SANDBOX = NO;
-				EXECUTABLE_NAME = photogoroundd;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Agent/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
@@ -1137,7 +1136,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				ENABLE_APP_SANDBOX = NO;
-				EXECUTABLE_NAME = photogoroundd;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Agent/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
@@ -1447,7 +1445,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				ENABLE_APP_SANDBOX = NO;
-				EXECUTABLE_NAME = photogoroundd;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Agent/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";

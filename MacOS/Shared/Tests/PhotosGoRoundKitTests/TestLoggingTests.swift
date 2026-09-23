@@ -19,7 +19,7 @@ struct TestLoggingTests {
 
     @Test("A process that is not a test logs under the agent's subsystem")
     func realProcessesLogUnderTheAgent() {
-        #expect(Log.subsystem(forProcess: "photogoroundd", environment: [:]) == "com.sydpolk.photosgoround")
+        #expect(Log.subsystem(forProcess: "Photos-Go-Round Server", environment: [:]) == "com.sydpolk.photosgoround")
         #expect(Log.subsystem(forProcess: "Photos-Go-Round", environment: [:]) == "com.sydpolk.photosgoround")
         #expect(
             Log.subsystem(forProcess: "Photos-Go-Round", environment: ["XCTestConfigurationFilePath": "/x"])

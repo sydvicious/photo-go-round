@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "photogoroundd"
-               BuildableName = "photogoroundd"
-               BlueprintName = "photogoroundd"
+               BlueprintIdentifier = "PhotosGoRoundServer"
+               BuildableName = "PhotosGoRoundServer"
+               BlueprintName = "PhotosGoRoundServer"
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
@@ -42,8 +42,8 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "photogorounddTests"
-               BuildableName = "photogorounddTests"
+               BlueprintIdentifier = "PhotosGoRoundServerTests"
+               BuildableName = "PhotosGoRoundServerTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
@@ -63,9 +63,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "photogoroundd"
-            BuildableName = "photogoroundd"
-            BlueprintName = "photogoroundd"
+            BlueprintIdentifier = "PhotosGoRoundServer"
+            BuildableName = "PhotosGoRoundServer"
+            BlueprintName = "PhotosGoRoundServer"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -80,9 +80,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "photogoroundd"
-            BuildableName = "photogoroundd"
-            BlueprintName = "photogoroundd"
+            BlueprintIdentifier = "PhotosGoRoundServer"
+            BuildableName = "PhotosGoRoundServer"
+            BlueprintName = "PhotosGoRoundServer"
             ReferencedContainer = "container:">
          </BuildableReference>
       </BuildableProductRunnable>

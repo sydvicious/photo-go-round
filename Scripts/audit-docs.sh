@@ -11,7 +11,7 @@
 #
 #   - every verb and flag `pgr_ctl` accepts is documented, and every flag its
 #     man page documents is accepted;
-#   - the same pair for `photogoroundd` and for `pgr_install`;
+#   - the same pair for the agent, `Photos-Go-Round Server`, and for `pgr_install`;
 #   - every `Scripts/…` a document names exists, unless that line says it was
 #     deleted or retired.
 #
@@ -80,7 +80,7 @@ check_pair() {
 }
 
 check_pair "pgr_ctl" MacOS/Tools/pgr_ctl/Sources/PgrCtlOptions.swift Documentation/pgr_ctl.md
-check_pair "photogoroundd" MacOS/Agent/Sources/Options.swift Documentation/photogoroundd.md
+check_pair "Photos-Go-Round Server" MacOS/Agent/Sources/Options.swift "Documentation/Photos-Go-Round Server.md"
 check_pair "pgr_install" MacOS/Tools/pgr_install/Sources/main.swift Documentation/pgr_install.md
 
 echo "scripts named in documents"

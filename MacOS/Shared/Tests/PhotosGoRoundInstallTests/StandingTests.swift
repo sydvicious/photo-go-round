@@ -14,7 +14,7 @@ struct StandingTests {
     // MARK: - Agent
 
     private let server = URL(filePath: "/Applications/Photos-Go-Round.app/Contents/Helpers/Photos-Go-Round Server.app")
-    private var binary: URL { server.appending(path: "Contents/MacOS/photogoroundd") }
+    private var binary: URL { server.appending(path: "Contents/MacOS/Photos-Go-Round Server") }
     private let label = "com.sydpolk.photosgoround.server"
     private let agents = URL(filePath: "/tmp/pgr-test/LaunchAgents")
     private var plist: URL { agents.appending(path: "\(label).plist") }
@@ -52,7 +52,7 @@ struct StandingTests {
     /// Another copy of the app — a second archive somewhere else — wrote it.
     @Test("A job running another copy's binary differs, and names it")
     func anotherBinaryDiffers() throws {
-        let elsewhere = URL(filePath: "/Volumes/Disk Image/Photos-Go-Round.app/Contents/Helpers/Photos-Go-Round Server.app/Contents/MacOS/photogoroundd")
+        let elsewhere = URL(filePath: "/Volumes/Disk Image/Photos-Go-Round.app/Contents/Helpers/Photos-Go-Round Server.app/Contents/MacOS/Photos-Go-Round Server")
         let job = JobDescription(label: label, program: elsewhere)
         let standing = try agentStanding(installed(job: job))
         #expect(standing == .differs("the job runs \(elsewhere.path(percentEncoded: false))"))

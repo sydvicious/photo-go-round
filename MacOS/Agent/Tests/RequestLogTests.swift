@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 @testable import PhotosGoRoundAgentAPI
 
 /// What the service says it did.
@@ -156,7 +156,7 @@ struct RequestLogTests {
     }
 
     /// **The man page names the number, so the number has to be checked.**
-    /// `Documentation/photogoroundd.md` tells a client that a resize over 1.5
+    /// `Documentation/Photos-Go-Round Server.md` tells a client that a resize over 1.5
     /// seconds returns the original and that the console says `RESIZE: gave up
     /// after 1500ms on …`. Nothing above ties that to `ServiceTiming`, because
     /// the test beside this one passes its own duration to check the shape of

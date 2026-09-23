@@ -35,7 +35,7 @@ do {
         print(Options.usage)
 
     case .run:
-        Log.sources.notice("photogoroundd starting")
+        Log.sources.notice("Photos-Go-Round Server starting")
         try await RunCommand(
             environment: MacHostEnvironment(
                 deployment: options.deployment,

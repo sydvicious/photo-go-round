@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 @testable import PhotosGoRoundAgentAPI
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// When the filler is asked for another card.
 ///

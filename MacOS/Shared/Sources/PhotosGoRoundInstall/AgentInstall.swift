@@ -17,9 +17,10 @@ import PhotosGoRoundAgentAPI
 /// `Plans/Xcode - Separate Build and Run.md`, Phase 3.
 public enum AgentInstall {
 
-    /// The executable inside the bundle. Not the product name: the bundle is
-    /// `Photos-Go-Round Server.app` and the binary in it is `photogoroundd`.
-    public static let executableName = "photogoroundd"
+    /// The executable inside the bundle: the product's own name, so the bundle
+    /// is `Photos-Go-Round Server.app` and the binary in it `Photos-Go-Round
+    /// Server`. It was `photogoroundd` until 2026-09-22.
+    public static let executableName = "Photos-Go-Round Server"
 
     /// The key each configuration's `Info.plist` carries, holding the label
     /// launchd will know this build by.

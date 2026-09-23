@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// The `STARTUP:` lines: how long each step of a launch took.
 ///

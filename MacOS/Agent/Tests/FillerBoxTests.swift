@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 @testable import PhotosGoRoundAgentAPI
 
 /// The daemon's queue pacing, tested through the closures it actually runs.

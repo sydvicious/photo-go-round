@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// The examples in `--help` have to survive the parser.
 ///
@@ -42,15 +42,15 @@ struct UsageExamplesTests {
 
     @Test("The usage text actually contains examples to check")
     func examplesAreFound() {
-        let found = Self.examples(in: Options.usage, binary: "photogoroundd")
+        let found = Self.examples(in: Options.usage, binary: "./Scripts/run-server.sh")
         #expect(found.count >= 2, "found \(found.count); the extractor may have stopped matching")
     }
 
     @Test("Every example in `--help` parses")
     func everyExampleParses() throws {
-        for example in Self.examples(in: Options.usage, binary: "photogoroundd") {
+        for example in Self.examples(in: Options.usage, binary: "./Scripts/run-server.sh") {
             let rendered = example.arguments.joined(separator: " ")
-            #expect(throws: Never.self, "photogoroundd \(rendered)") {
+            #expect(throws: Never.self, "run-server.sh \(rendered)") {
                 try Options.parse(example.arguments, environment: example.environment)
             }
         }
@@ -59,8 +59,8 @@ struct UsageExamplesTests {
     @Test("An example that stopped parsing would be caught")
     func theCheckHasTeeth() {
         // The exact shape that broke: `-r` trailing the path it used to apply to.
-        let stale = "EXAMPLES\n  photogoroundd --add-folder ~/Pictures/Wallpaper -r\n"
-        let found = Self.examples(in: stale, binary: "photogoroundd")
+        let stale = "EXAMPLES\n  ./Scripts/run-server.sh --add-folder ~/Pictures/Wallpaper -r\n"
+        let found = Self.examples(in: stale, binary: "./Scripts/run-server.sh")
         #expect(found.count == 1)
         #expect(throws: (any Error).self) {
             try Options.parse(found[0].arguments, environment: [:])

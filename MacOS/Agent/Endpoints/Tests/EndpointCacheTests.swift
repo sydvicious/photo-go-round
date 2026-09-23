@@ -6,7 +6,7 @@ import Testing
 import UniformTypeIdentifiers
 
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 @testable import PhotosGoRoundAgentAPI
 
 /// The endpoint's own cache behaviour, driven through `route` rather than

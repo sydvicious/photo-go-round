@@ -3,7 +3,7 @@ import Synchronization
 import Testing
 
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// Each request runs on a thread of its own, and stays there.
 ///

@@ -80,7 +80,7 @@ sources_held() {
 running_agent() {
     local pids=""
     for domain in "${DOMAINS[@]}"; do
-        pids="$pids$(pgrep -f "photogoroundd" 2>/dev/null | while IFS= read -r pid; do
+        pids="$pids$(pgrep -f '/Photos-Go-Round Server( |$)' 2>/dev/null | while IFS= read -r pid; do
             if lsof -p "$pid" 2>/dev/null | grep -qF "/Library/Containers/$domain/"; then echo "$pid"; fi
         done)
 "

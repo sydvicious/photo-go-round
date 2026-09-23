@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 @testable import PhotosGoRoundAgentAPI
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// The dashboard: its routes, what the JSON says, and that the page's poll
 /// stays out of the request log.

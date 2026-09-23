@@ -41,7 +41,7 @@ OPTIONS
 AFTERWARDS
   The saver is a client and needs the agent running:
 
-    ./Scripts/photogoroundd
+    ./Scripts/run-server.sh
 
   Choose it in System Settings, under Screen Saver -> Other. Nothing loads a
   saver that is not selected, and an unselected one looks exactly like one that

@@ -23,8 +23,9 @@ pgr_ctl log [-f] [--last <time>]
 
 ## DESCRIPTION
 
-`pgr_ctl` is the rig. It is a separate binary from `photogoroundd` because the
-service has exactly one job and answering questions is not it.
+`pgr_ctl` is the rig. It is a separate binary from the agent, `Photos-Go-Round
+Server`, because the service has exactly one job and answering questions is not
+it.
 
 **It configures and inspects; it does not hand out pictures.** Every command here
 opens the same SQLite database or writes the same preference domain, then rings a
@@ -386,7 +387,7 @@ pgr_ctl shuffle-test --deals 50000 --photos 4000 -w 1.0
 
 ## SEE ALSO
 
-`photogoroundd(1)`, `Documentation/photogoroundd.md`
+`Photos-Go-Round Server(1)`, `Documentation/Photos-Go-Round Server.md`
 
 `pgr_install(1)`, `Documentation/pgr_install.md` — installing what was built,
 which is a separate job from configuring what is installed.

@@ -1,20 +1,24 @@
-# photogoroundd(1)
+# Photos-Go-Round Server(1)
 
 ## NAME
 
-**photogoroundd** — Photos-Go-Round library agent
+**Photos-Go-Round Server** — Photos-Go-Round library agent
 
 ## SYNOPSIS
 
-**photogoroundd** \[*options*]
+**./Scripts/run-server.sh** \[`--release` | `--claude`] \[*options*]
+
+The script builds the **Photos-Go-Round Server** target and runs the binary in
+it, `Photos-Go-Round Server.app/Contents/MacOS/Photos-Go-Round Server`, passing
+the options through.
 
 ## DESCRIPTION
 
-**photogoroundd** maintains a shuffled queue of photographs drawn from folders on
+**Photos-Go-Round Server** maintains a shuffled queue of photographs drawn from folders on
 disk, keeps their bytes available, and serves them to whatever wants to display
 one. It is an agent rather than a daemon — it runs in a user session and needs
-one, because photo library access is per-user — but it is named the way a
-command-line service is named.
+one, because photo library access is per-user. Until 2026-09-22 it was named
+the way a command-line service is named, `photogoroundd`.
 
 The agent is **configured, not commanded**: what it should be doing is state it
 reads, never an instruction it is asked to carry out.
@@ -55,7 +59,7 @@ any surface asks for a picture.
 While developing, run it in a terminal instead:
 
     cd photos-go-round
-    ./Scripts/photogoroundd
+    ./Scripts/run-server.sh
 
 The wrapper script builds first, so a stale binary is never run, and leaves the
 agent on its development storage so a run cannot disturb a real library. A
@@ -145,8 +149,8 @@ preferences, so it need only be given once. Repeatable.
 no other. It belongs between `--add-folder` and its path, so a flat directory and
 a nested tree can be named in one invocation and each keeps its own answer:
 
-    photogoroundd --add-folder --recursive ~/Pictures/Albums \
-                  --add-folder ~/Pictures/Wallpaper
+    ./Scripts/run-server.sh --add-folder --recursive ~/Pictures/Albums \
+                            --add-folder ~/Pictures/Wallpaper
 
 Standing on its own, `--recursive` is an error rather than a setting for the run.
 Recursion is off unless asked for, because the surprising direction is the

@@ -7,7 +7,7 @@
 #
 #     screen -h 10000
 #     cd photos-go-round
-#     ./Scripts/photogoroundd
+#     ./Scripts/run-server.sh
 #
 # It exists so that staging is one command rather than a remembered incantation
 # about bin paths, and so the build never silently runs a stale binary.
@@ -51,13 +51,13 @@ if ! build_log="$(xcodebuild build \
     -configuration "$CONFIGURATION" \
     -derivedDataPath "$DERIVED_DATA" 2>&1)"; then
     echo "$build_log" >&2
-    echo "photogoroundd: the agent did not build; nothing was started" >&2
+    echo "run-server.sh: the agent did not build; nothing was started" >&2
     exit 1
 fi
 
-BIN="$DERIVED_DATA/Build/Products/$CONFIGURATION/Photos-Go-Round Server.app/Contents/MacOS/photogoroundd"
+BIN="$DERIVED_DATA/Build/Products/$CONFIGURATION/Photos-Go-Round Server.app/Contents/MacOS/Photos-Go-Round Server"
 if [[ ! -x "$BIN" ]]; then
-    echo "photogoroundd: expected an executable at $BIN and there is none" >&2
+    echo "run-server.sh: expected an executable at $BIN and there is none" >&2
     exit 1
 fi
 

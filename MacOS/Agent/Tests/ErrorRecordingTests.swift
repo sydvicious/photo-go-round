@@ -4,7 +4,7 @@ import Testing
 
 @testable import PhotosGoRoundAgentAPI
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 
 /// How the agent's red lines reach its error record: under a kind, by their
 /// words, or not at all when something beside them already records the event.

@@ -58,7 +58,7 @@ enum DashboardLink: Equatable {
     /// The preference domain exists and could not be read.
     case unreadable(reason: String)
 
-    /// Served by `photogoroundd`'s `DashboardEndpoint.pagePath`.
+    /// Served by the agent's `DashboardEndpoint.pagePath`.
     static let path = "/dashboard"
 
     init(_ reading: ServicePort.Reading) {

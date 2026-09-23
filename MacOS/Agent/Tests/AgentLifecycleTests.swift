@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import PhotosGoRoundKit
-@testable import photogoroundd
+@testable import PhotosGoRoundServer
 @testable import PhotosGoRoundAgentAPI
 
 /// What a run does to the published port, over its whole life.
@@ -72,10 +72,10 @@ struct AgentLifecycleTests {
         // The built agent sits beside the test bundle's parent directory.
         let binary = Bundle(for: Marker.self).bundleURL
             .deletingLastPathComponent()
-            .appending(path: "photogoroundd")
+            .appending(path: "PhotosGoRoundServer")
         try #require(
             FileManager.default.fileExists(atPath: binary.path(percentEncoded: false)),
-            "photogoroundd binary not found next to the test bundle")
+            "PhotosGoRoundServer binary not found next to the test bundle")
 
         let process = Process()
         process.executableURL = binary

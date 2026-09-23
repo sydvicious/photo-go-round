@@ -57,7 +57,7 @@ To take all three off the Mac, leaving the library, cache and preferences alone:
 ## Running the agent
 
 ```
-./Scripts/photogoroundd --add-folder ~/Pictures/Wallpaper
+./Scripts/run-server.sh --add-folder ~/Pictures/Wallpaper
 ```
 
 The wrapper builds first, so a stale binary is never run — the `Photos-Go-Round
@@ -68,7 +68,7 @@ once; it is written through to preferences, and every later run needs no
 arguments at all:
 
 ```
-./Scripts/photogoroundd --port 9000
+./Scripts/run-server.sh --port 9000
 ```
 
 `--add-folder` does not walk subdirectories unless `--recursive` is given between
@@ -119,7 +119,7 @@ Start the agent in one terminal and leave it running — it prints the URL once 
 listener is up, then a line for every request it answers:
 
 ```
-./Scripts/photogoroundd
+./Scripts/run-server.sh
 ```
 
 In another terminal, take a picture:
@@ -193,7 +193,7 @@ curl -sS -X PATCH "http://localhost:9000/v1/sources/<uuid>" -H 'Content-Type: ap
 
 ## Documentation
 
-- [`Documentation/photogoroundd.md`](Documentation/photogoroundd.md) — the
+- [`Documentation/Photos-Go-Round Server.md`](<Documentation/Photos-Go-Round Server.md>) — the
   agent's man page: options, environment, preferences, files.
 - [`Documentation/pgr_ctl.md`](Documentation/pgr_ctl.md) — the command-line
   tool's man page: subcommands, options, exit status.
