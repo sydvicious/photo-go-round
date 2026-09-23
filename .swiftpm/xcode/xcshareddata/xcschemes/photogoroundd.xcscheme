@@ -32,9 +32,9 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "PhotoGoRoundKitTests"
-               BuildableName = "PhotoGoRoundKitTests"
-               BlueprintName = "PhotoGoRoundKitTests"
+               BlueprintIdentifier = "PhotosGoRoundKitTests"
+               BuildableName = "PhotosGoRoundKitTests"
+               BlueprintName = "PhotosGoRoundKitTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>

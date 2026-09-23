@@ -1,5 +1,5 @@
 import AppKit
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundAgentAPI
 import SwiftUI
 
 /// Choosing which collections in the photo library are in play.
@@ -235,7 +235,7 @@ struct CollectionPickerView: View {
     private func unauthorized(_ authorization: String) -> some View {
         VStack(spacing: 10) {
             Spacer()
-            Text("Photo Go Round has no access to your photo library.")
+            Text("Photos-Go-Round has no access to your photo library.")
                 .font(.headline)
             if authorization == "notDetermined" {
                 Text("The agent will ask, and macOS will show the prompt.")

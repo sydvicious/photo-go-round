@@ -1,9 +1,9 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// The daemon's queue pacing, tested through the closures it actually runs.
 ///
@@ -35,7 +35,7 @@ struct FillerBoxTests {
             directory = URL.temporaryDirectory.appending(path: "pgr-filler-\(UUID().uuidString)")
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
-            databasePath = directory.appending(path: "photogoround.sqlite")
+            databasePath = directory.appending(path: "photosgoround.sqlite")
                 .path(percentEncoded: false)
             database = try Database(path: databasePath)
             try Migrator.migrate(database)

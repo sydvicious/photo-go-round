@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Installs, uninstalls, starts and stops the agent Claude builds — the `Claude`
-# configuration's, label `com.sydpolk.photogoround.server.claude`.
+# configuration's, label `com.sydpolk.photosgoround.server.claude`.
 #
 # **Syd runs this, when Claude asks.** Syd, 2026-09-21: "it's ok to leave a
 # script that sets up the launchdaemon for the claude agent and ask me to
@@ -20,10 +20,10 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$REPO/Photo-Go-Round.xcodeproj"
-DERIVED_DATA="$HOME/.claude/build/photo-go-round/DerivedData"
+PROJECT="$REPO/Photos-Go-Round.xcodeproj"
+DERIVED_DATA="$HOME/.claude/build/photos-go-round/DerivedData"
 PRODUCTS="$DERIVED_DATA/Build/Products/Claude"
-SERVER="$PRODUCTS/Photo-Go-Round.app/Contents/Helpers/Photo-Go-Round Server.app"
+SERVER="$PRODUCTS/Photos-Go-Round.app/Contents/Helpers/Photos-Go-Round Server.app"
 
 usage() {
     cat <<'HELPTEXT'
@@ -36,7 +36,7 @@ USAGE
   ./Scripts/claude-agent.sh start       Start it, installed but stopped.
   ./Scripts/claude-agent.sh stop        Stop it and leave the plist installed.
 
-Only com.sydpolk.photogoround.server.claude is touched.
+Only com.sydpolk.photosgoround.server.claude is touched.
 HELPTEXT
 }
 
@@ -57,7 +57,7 @@ build() {
 
 case "${1:-}" in
     install)
-        build "Photo-Go-Round"
+        build "Photos-Go-Round"
         build pgr_install
         exec "$PRODUCTS/pgr_install" agent --from "$SERVER"
         ;;

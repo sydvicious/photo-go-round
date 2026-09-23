@@ -1,7 +1,7 @@
 import Console
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundInstall
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundInstall
 
 // Installs what this project builds, for development.
 //
@@ -13,7 +13,7 @@ import PhotoGoRoundInstall
 //
 // **It ships in nothing and is expected to be replaced.** Syd, 2026-09-19: "the
 // application which installs on first launch will eventually replace
-// pgr_install." `PhotoGoRoundInstall` is the lasting half; this is the door the
+// pgr_install." `PhotosGoRoundInstall` is the lasting half; this is the door the
 // scheme knocks on until the app can do the job.
 //
 // `Plans/Xcode - Separate Build and Run.md`.
@@ -21,7 +21,7 @@ import PhotoGoRoundInstall
 setvbuf(stdout, nil, _IOLBF, 0)
 
 let usage = """
-Installs a built Photo-Go-Round product for development.
+Installs a built Photos-Go-Round product for development.
 
 USAGE
   pgr_install saver [--from <path>] [--dry-run]
@@ -112,13 +112,13 @@ func builtProducts() -> URL? {
 
 func defaultSaver() -> URL? {
     let suffix = ProcessInfo.processInfo.environment["SAVER_NAME_SUFFIX"] ?? ""
-    return builtProducts()?.appending(path: "Photo-Go-Round Screensaver\(suffix).saver")
+    return builtProducts()?.appending(path: "Photos-Go-Round Screensaver\(suffix).saver")
 }
 
 /// The agent's bundle name does not vary by configuration — only the label
 /// inside it does, which the install reads from the bundle rather than guessing.
 func defaultAgent() -> URL? {
-    builtProducts()?.appending(path: "Photo-Go-Round Server.app")
+    builtProducts()?.appending(path: "Photos-Go-Round Server.app")
 }
 
 /// The appex, inside the host that carries it. **An appex registers only from
@@ -126,7 +126,7 @@ func defaultAgent() -> URL? {
 /// reason the host target exists.
 func defaultWallpaper() -> URL? {
     builtProducts()?.appending(
-        path: "Photo-Go-Round Wallpaper Host.app/Contents/Extensions/Photo-Go-Round Wallpaper.appex")
+        path: "Photos-Go-Round Wallpaper Host.app/Contents/Extensions/Photos-Go-Round Wallpaper.appex")
 }
 
 do {

@@ -28,9 +28,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "PhotoGoRoundKitTests"
-               BuildableName = "PhotoGoRoundKitTests"
-               BlueprintName = "PhotoGoRoundKitTests"
+               BlueprintIdentifier = "PhotosGoRoundKitTests"
+               BuildableName = "PhotosGoRoundKitTests"
+               BlueprintName = "PhotosGoRoundKitTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
@@ -42,9 +42,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "PhotoGoRoundDisplayTests"
-               BuildableName = "PhotoGoRoundDisplayTests"
-               BlueprintName = "PhotoGoRoundDisplayTests"
+               BlueprintIdentifier = "PhotosGoRoundDisplayTests"
+               BuildableName = "PhotosGoRoundDisplayTests"
+               BlueprintName = "PhotosGoRoundDisplayTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
@@ -84,9 +84,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "PhotoGoRoundInstallTests"
-               BuildableName = "PhotoGoRoundInstallTests"
-               BlueprintName = "PhotoGoRoundInstallTests"
+               BlueprintIdentifier = "PhotosGoRoundInstallTests"
+               BuildableName = "PhotosGoRoundInstallTests"
+               BlueprintName = "PhotosGoRoundInstallTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>

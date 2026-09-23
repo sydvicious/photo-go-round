@@ -5,7 +5,7 @@
 // 2026-09-15: `pluginkit -a` on a bare `.appex` exits 0 and registers nothing,
 // while the same appex inside an app registers at once with nothing launched. The
 // real app deliberately does not carry the extension in development, so that
-// building or running `Photo-Go-Round` never installs or re-registers it. This is
+// building or running `Photos-Go-Round` never installs or re-registers it. This is
 // the bundle that carries it instead.
 //
 // **It ships in nothing.** In release the extension goes inside the app wrapper
@@ -18,7 +18,7 @@
 import AppKit
 import OSLog
 
-let hostLog = Logger(subsystem: "com.sydpolk.photogoround", category: "system-wallpaper")
+let hostLog = Logger(subsystem: "com.sydpolk.photosgoround", category: "system-wallpaper")
 
 @main
 enum WallpaperHost {
@@ -28,7 +28,7 @@ enum WallpaperHost {
             """
             system-wallpaper: host bundle at \(bundle, privacy: .public). \
             It carries the wallpaper extension for development and does nothing else; \
-            choose Photo-Go-Round in System Settings › Wallpaper.
+            choose Photos-Go-Round in System Settings › Wallpaper.
             """)
         // No window, no menu, nothing to interact with: quit rather than sit in
         // the process list pretending to be an application.

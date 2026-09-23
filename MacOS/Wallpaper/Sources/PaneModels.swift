@@ -1,4 +1,4 @@
-// The Photo-Go-Round section in System Settings › Wallpaper. `Wallpaper Plan.md`,
+// The Photos-Go-Round section in System Settings › Wallpaper. `Wallpaper Plan.md`,
 // *The second probe* for how this was measured, and *The real extension, inside
 // the app*.
 //
@@ -145,7 +145,7 @@ final class ArchivedSettingsViewModels: NSObject, NSSecureCoding {
 enum PaneModels {
     /// Nil when the bundle does not say who it is; see `Identity`.
     static func make(thumbnail: URL) -> SettingsViewModels? {
-        // One item, which is the whole of Photo-Go-Round in the pane: the deck
+        // One item, which is the whole of Photos-Go-Round in the pane: the deck
         // decides what it shows, so there is nothing here to choose between.
         guard let bundleID = Identity.bundleID, let itemID = Identity.itemID,
             let itemName = Identity.itemName
@@ -159,7 +159,7 @@ enum PaneModels {
         // the hypothesis was that a wallpaper-specific id would keep this item
         // out of the Screen Saver list. It did not — and it broke the desktop.
         // `WallpaperAgent` logged "Could not find translator for:
-        // com.sydpolk.photogoround.choice.wallpaper; eagerly assuming it's an
+        // com.sydpolk.photosgoround.choice.wallpaper; eagerly assuming it's an
         // extension with the same identifier", then "no provider found", and the
         // desktop fell back to Golden Gate. Apple's ids work because a built-in
         // translator maps them; a third party's provider is looked up as an
@@ -172,9 +172,9 @@ enum PaneModels {
             id: identity,
             // **"Wallpaper", so it cannot be confused with the screensaver.**
             // Syd, 2026-09-15: one extension and one `.saver` were both called
-            // "Photo-Go-Round", in two lists, and picking the wrong one gave a
+            // "Photos-Go-Round", in two lists, and picking the wrong one gave a
             // screen saver that mirrored the desktop. The section heading below
-            // stays "Photo-Go-Round"; the item says which surface it is, and
+            // stays "Photos-Go-Round"; the item says which surface it is, and
             // which build — `Identity`.
             localizedName: itemName,
             thumbnail: ImageThumbnail(url: thumbnail),
@@ -198,9 +198,9 @@ enum PaneModels {
         // that they both go in the same section". The same identifier and
         // heading in Release, Debug and Claude's builds; only the item differs.
         let group = SettingsGroup(
-            id: WrappedID(id: "photo-go-round"),
+            id: WrappedID(id: "photos-go-round"),
             items: [item],
-            localizedName: "Photo-Go-Round",
+            localizedName: "Photos-Go-Round",
             disposability: EnumCase(name: "none"),
             sortOrder: -100,
             sortID: WrappedID(id: "com.apple.wallpaper.aerials"),
@@ -209,7 +209,7 @@ enum PaneModels {
             groups: [group], refreshPolicy: EnumCase(name: "default"), isModificationDisabled: false)
         // **The wallpaper picker only.** Syd, 2026-09-15: "advertise to the
         // wallpaper picker only." Offering the same item in both pickers put a
-        // Photo-Go-Round entry under Screen Saver as well, drawn by these same
+        // Photos-Go-Round entry under Screen Saver as well, drawn by these same
         // surfaces — so the pane showed identical previews in two places while
         // the real `.saver` sat installed and unused, and nothing on screen said
         // which was which. The screensaver is its own product, with its own view

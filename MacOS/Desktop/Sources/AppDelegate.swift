@@ -1,7 +1,7 @@
 import AppKit
 import OSLog
-import PhotoGoRoundDisplay
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundDisplay
+import PhotosGoRoundAgentAPI
 
 /// The moments SwiftUI's scenes give none of: before the first window, and
 /// once the application has finished launching.

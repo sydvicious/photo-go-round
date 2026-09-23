@@ -1,6 +1,6 @@
 import Foundation
-import PhotoGoRoundKit
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundKit
+import PhotosGoRoundAgentAPI
 
 /// Hand-rolled argument parsing. A dozen subcommands is an afternoon and about
 /// two hundred lines, which is cheaper than taking a dependency for it —
@@ -364,7 +364,7 @@ struct Options {
     }
 
     static let usage = """
-        pgr_ctl — drives the Photo-Go-Round library from a terminal
+        pgr_ctl — drives the Photos-Go-Round library from a terminal
 
         USAGE
           pgr_ctl <command> [options]
@@ -444,7 +444,7 @@ struct Options {
           library is.
 
         EXAMPLES
-          export PGR_CONTAINER="$HOME/Library/Application Support/Photo-Go-Round"
+          export PGR_CONTAINER="$HOME/Library/Application Support/Photos-Go-Round"
           pgr_ctl sources add --folder --recursive ~/Pictures/Albums \\
                               --folder ~/Pictures/Wallpaper
           pgr_ctl status

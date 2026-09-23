@@ -1,14 +1,14 @@
 import AppKit
 import OSLog
-import PhotoGoRoundDisplay
+import PhotosGoRoundDisplay
 import ScreenSaver
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundAgentAPI
 
 /// The screensaver: one photograph at a time, sized to fit, on black.
 ///
 /// **It is the app's window with the chrome taken off, and that is literal.**
 /// The loop that asks the agent for a picture, the layer that draws it, and the
-/// fit that sizes it are all `PhotoGoRoundDisplay`, shared with the window
+/// fit that sizes it are all `PhotosGoRoundDisplay`, shared with the window
 /// rather than reimplemented here. What this file adds is a `ScreenSaverView`'s
 /// lifecycle and nothing else.
 ///
@@ -185,7 +185,7 @@ public final class PGRScreenSaverView: ScreenSaverView {
         guard !isPreview else {
             Self.log.notice(
                 "saver[\(self.instance, privacy: .public)]: preview, not serving")
-            empty.show(words: "Photo-Go-Round", detail: nil)
+            empty.show(words: "Photos-Go-Round", detail: nil)
             needsLayout = true
             return
         }

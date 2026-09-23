@@ -1,9 +1,9 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// What the service says it did.
 ///
@@ -36,7 +36,7 @@ struct RequestLogTests {
     private func endpoint(_ collector: Collector) throws -> (PictureEndpoint, () -> Void) {
         let directory = URL.temporaryDirectory.appending(path: "pgr-log-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
+        let path = directory.appending(path: "photosgoround.sqlite").path(percentEncoded: false)
         try Migrator.migrate(Database(path: path))
 
         let cacheRoot = directory.appending(path: "cache")

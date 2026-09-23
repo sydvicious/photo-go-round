@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// Which sources get walked first on the pass after launch.
@@ -18,7 +18,7 @@ struct RefreshOrderTests {
     private func library() throws -> (URL, SourceStore) {
         let directory = URL.temporaryDirectory.appending(path: "pgr-order-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
+        let path = directory.appending(path: "photosgoround.sqlite").path(percentEncoded: false)
         let database = try Database(path: path)
         try Migrator.migrate(database)
         return (directory, SourceStore(database: database))

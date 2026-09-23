@@ -1,9 +1,9 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// Deleting a source in the app, and it staying deleted.
 ///
@@ -33,7 +33,7 @@ struct DeleteStaysDeletedTests {
                     contents: Data(repeating: 0xAB, count: 64))
             }
 
-            let path = directory.appending(path: "photogoround.sqlite")
+            let path = directory.appending(path: "photosgoround.sqlite")
                 .path(percentEncoded: false)
             let database = try Database(path: path)
             try Migrator.migrate(database)

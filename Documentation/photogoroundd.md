@@ -2,7 +2,7 @@
 
 ## NAME
 
-**photogoroundd** — Photo-Go-Round library agent
+**photogoroundd** — Photos-Go-Round library agent
 
 ## SYNOPSIS
 
@@ -54,7 +54,7 @@ any surface asks for a picture.
 
 While developing, run it in a terminal instead:
 
-    cd photo-go-round
+    cd photos-go-round
     ./Scripts/photogoroundd
 
 The wrapper script builds first, so a stale binary is never run, and leaves the
@@ -71,7 +71,7 @@ same three take a `.dev` suffix, so a plain run cannot disturb anything. All
 three move together, deliberately: relocating the storage root alone would leave
 the source list pointing at the real one.
 
-**`<identifier>` carries the build configuration** — `com.sydpolk.photogoround`, `….debug` or `….claude` by build configuration — so a
+**`<identifier>` carries the build configuration** — `com.sydpolk.photosgoround`, `….debug` or `….claude` by build configuration — so a
 release, a Debug and an agent's build never share a database and can all run at
 once. Everything is under the user's own home directory, so two people on one
 Mac never share a library either.
@@ -117,13 +117,13 @@ client that tries it finds nothing listening — the same answer it gets when no
 agent is running.
 
 `--container` *dir*
-Storage root, holding `photogoround.sqlite` and its WAL sidecars. Defaults to
+Storage root, holding `photosgoround.sqlite` and its WAL sidecars. Defaults to
 `~/Library/Containers/<identifier>.dev`, or with `--prod` to
 `~/Library/Containers/<identifier>`.
 
 `-d`, `--database` *file*
 The database file, overriding its default position inside the storage root.
-Defaults to `<container>/photogoround.sqlite` in both deployments.
+Defaults to `<container>/photosgoround.sqlite` in both deployments.
 
 `--cache-root` *dir*
 Where copied photo bytes live. Defaults to `~/Library/Caches/<identifier>.dev`,
@@ -536,7 +536,7 @@ That also makes `defaults write` a control channel. The agent re-reads
 preferences on a thirty-second poll, so a change takes effect on a running agent
 without restarting it and without any cooperation:
 
-    defaults write com.sydpolk.photogoround sources -array-add \
+    defaults write com.sydpolk.photosgoround sources -array-add \
         '{kind = folder; locator = "/Users/me/Pictures/Sunsets"; recursive = 1; enabled = 1;}'
 
 | key | meaning | default |
@@ -558,7 +558,7 @@ anything. An out-of-range value is logged and clamped rather than honoured.
 
 ## FILES
 
-*storage-root*`/photogoround.sqlite`
+*storage-root*`/photosgoround.sqlite`
 Sources, the photo pool, the queue, and cache bookkeeping. Written in WAL
 mode, so `-wal` and `-shm` sidecars sit beside it and "delete the database"
 means deleting all three.

@@ -1,9 +1,9 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// The source endpoints, driven through `route` rather than through the kit
 /// beneath them.
@@ -59,7 +59,7 @@ struct SourceEndpointTests {
             directory = URL.temporaryDirectory.appending(path: "pgr-src-\(UUID().uuidString)")
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
-            let path = directory.appending(path: "photogoround.sqlite")
+            let path = directory.appending(path: "photosgoround.sqlite")
                 .path(percentEncoded: false)
             let database = try Database(path: path)
             try Migrator.migrate(database)

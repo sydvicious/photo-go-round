@@ -1,7 +1,7 @@
 import Console
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundKit
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundKit
 
 /// What is in the photo library, for a client that cannot look for itself.
 ///

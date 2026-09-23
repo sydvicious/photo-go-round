@@ -1,8 +1,8 @@
 import Console
 import Dispatch
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundKit
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundKit
 
 /// Eviction, off the thread that wrote the file.
 ///
@@ -31,7 +31,7 @@ actor Evictor {
     /// A thread of its own, `utility`: nobody is waiting for this, and it is
     /// the one thing in the agent that is allowed to be behind.
     private let queue = DispatchSerialQueue(
-        label: "com.sydpolk.photogoround.evict", qos: .utility)
+        label: "com.sydpolk.photosgoround.evict", qos: .utility)
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()

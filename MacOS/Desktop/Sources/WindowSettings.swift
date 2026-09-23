@@ -1,4 +1,4 @@
-import PhotoGoRoundDisplay
+import PhotosGoRoundDisplay
 import SwiftUI
 
 /// The gear in a window's upper trailing corner, which opens Window Settings.

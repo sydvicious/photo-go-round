@@ -30,48 +30,6 @@ Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't r
 - **Photos albums stay "not responding" for up to five minutes after the agent starts.** *Syd: "is worrying", then "diagnoising startup slowness requires its own sessions, so let's do those items later".* Left open, for its own session. At the 17:46 install both were marked unavailable at 17:46:14; Photos answered in 71 ms by 17:50; the label waits for the next scheduled refresh.
   - **The same shape, 2026-09-21:** adding 26 albums to a Release agent about a minute old took more than fifteen seconds — `201 POST /v2/sources` at 23:46:42, the panel's session having given up first. The session is fixed (`AgentSession.make(above:)`); why the add was that slow is not looked into.
 
-## Audit all documentation against reality — done 2026-09-19
-
-Syd, 2026-09-19, having just asked what options `photogoroundd` actually takes: "This document is not
-going to be user-visible, so I am going to skip reviewing it for now." **Done later the same day**:
-all six documents read end to end against the code, and `Scripts/audit-docs.sh` now repeats the half
-a script can do — run by `DocumentationTests` under `⌘U`, so it fails when it drifts again.
-
-**Eleven findings, all fixed.** Five the script catches, six it never could.
-
-| what it said | what was true |
-|---|---|
-| `README.md`'s opening table: ⌘B installs, all three schemes | ⌘R, since 2026-09-19 — the most visible claim in the project |
-| `README.md`: "the port is whatever the kernel gave the agent at launch", twice | fixed per configuration since 2026-09-17 |
-| `photogoroundd.md`: the same, at length, as the reason for `--port` | as above |
-| `README.md`: System Settings lists "Photo-Go-Round Screensaver" | "(Debug)" for a Debug build — the line beside it already said so for the wallpaper |
-| `Wallpaper Extension.md`: expect `…wallpaper.extension` from a Debug build | `…wallpaper.debug.extension`, since 2026-09-16 |
-| `Wallpaper Extension.md`: `killall "Photo-Go-Round Wallpaper"` | stops every configuration's extension, including another build's |
-| `Wallpaper Extension.md`: log predicate `CONTAINS "wallpaper-extension"` | the hyphenated identifier died in the 2026-09-15 rename, so it matched nothing `pkd` says |
-| `Wallpaper Extension.md`: ⌘B for its install scheme | ⌘R |
-| `pgr_ctl.md`: no mention of `--no-default-values` | `pgr_ctl --help` documents it |
-| `PLAN.md`'s synopsis: `pgr_ctl photos-spike` | no such verb |
-| `FEATURES.md`'s own rule — "the word is 'photo', not 'photograph'" | a tooltip said "photographs" |
-
-**And one code fix the audit turned up.** `PaneHandler.swift` built its `NSError` with `domain:
-"com.sydpolk.photogoround.wallpaper-extension"` — a bundle identifier that had not existed since
-2026-09-15, in the string somebody would grep a log by. It reads `Bundle.main.bundleIdentifier` now,
-so each configuration answers under its own.
-
-**Verified and sound**, so the next audit can start from here: `photogoroundd.md`'s twelve options
-match `Options.swift` exactly; every documented preference default matches — `repeatWindowFraction`
-0.5, `queueSize` 20, `queueRefreshIntervalSeconds` 5, `serveWaitSeconds` 2, `scanIntervalSeconds`
-300, `downloadConcurrency` 4, `cacheWalkIntervalSeconds` 3600, the three cache byte limits, the
-1500 ms resize budget and the 1 MB body limit; every port matches `BuildVariant`; `pgr_ctl` still
-makes no web request; the app links `PhotoGoRoundAgentAPI` and `PhotoGoRoundDisplay` and not the
-kit; the panel polls at 60 s and retries at 15 s; the gear is 35% at 12 points and was 48.
-
-- **What the script cannot check is the prose**, and six of the eleven lived there — a number or a
-  behaviour in a sentence, matching nothing a parser knows. `Scripts/audit-docs.sh` compares flags,
-  verbs and script names; reading found the rest.
-- **What is left is the next drift, not this one.** The item stays only as the record of how it was
-  done; delete it when that is no longer worth keeping.
-
 ## Examine the cache size
 
 **`cacheByteCeiling` is 1 GB and has never been measured.** `PLAN.md` says so itself: "the default
@@ -378,11 +336,9 @@ Observed 2026-09-09, in all three views: on a first launch with no pictures, the
 
 Syd, 2026-09-15: "don't build arch:x86_64 at all". And the scope of it, the same day: "there is a difference between dev and shipping the product. At this point, macOS 27 supports intel, and if I ever ship this to the public, I will build for it. But for dev purposes, I don't want to waste the time or disk space." **So this is about development builds. Whether a shipping build is universal is Syd's, and undecided.**
 
-**Done 2026-09-15: `Scripts/make-saver-bundle.sh` passes `-destination "platform=macOS,arch=arm64"`.** A clean build through it gives a saver that `lipo -archs` reports as `arm64`, and the "multiple matching destinations" warning is gone. It is the only script that runs `xcodebuild`. The project's build settings were deliberately left alone, so a release build can still be universal.
+**Still open:** whether anything else produces x86_64 — Xcode's own builds go through `ONLY_ACTIVE_ARCH` and were not checked after `Scripts/make-saver-bundle.sh` began passing `-destination "platform=macOS,arch=arm64"` on 2026-09-15, and the local package targets were not checked at all.
 
-**Still open:** whether anything else produces x86_64 — Xcode's own builds go through `ONLY_ACTIVE_ARCH` and were not checked after this change, and the local package targets were not checked at all.
-
-- **What builds x86_64 today — measured 2026-09-15 with `lipo -archs` on products under `~/.claude/build/photo-go-round`, before the change:**
+- **What builds x86_64 today — measured 2026-09-15 with `lipo -archs` on products under `~/.claude/build/photo-go-round`, before `Scripts/make-saver-bundle.sh` began passing that destination:**
   - Several Debug builds of `Photo-Go-Round.saver` and `Photo-Go-Round.app` from `xcodebuild` are `x86_64 arm64`, although the project sets `ONLY_ACTIVE_ARCH = YES`.
   - Some other Debug builds of the same targets are `arm64` alone, so it depends on how `xcodebuild` was invoked. Which invocation gave which is not recorded.
   - `Scripts/make-wallpaper-extension-probe.sh` built `arm64` alone: its `swiftc` target came from `uname -m`. *Retired 2026-09-15.*
@@ -392,13 +348,6 @@ Syd, 2026-09-15: "don't build arch:x86_64 at all". And the scope of it, the same
   - `ARCHS = arm64` in the project's build settings — not set, since it would follow a release build too;
   - the wallpaper probe script's `$(uname -m)`, which would build x86_64 on an Intel Mac, and is the right answer for a dev build there.
 - **Check the local packages too.** The C++ hardening setting in the project did not reach the local package targets (`PLAN.md`, *Builds with no warnings*), so an architecture setting may not either. Verify with `lipo -archs` on every product after a clean build, not by reading settings.
-
-## Rename the product to "Photos-Go-Round"
-
-Syd, 2026-09-22: change the name of the app to "Photos-Go-Round". The repository keeps its name. Every user-visible name says "Photos-Go-Round", and every identifier string — preferences and the like — says `photosgoround`.
-
-- *Claude's reading, not decided:* "the like" covers bundle identifiers (`com.sydpolk.photogoround.*`), the LaunchAgent labels, the unified-log subsystem, and the storage paths. Changing a bundle identifier or storage path orphans what is already installed under the old one, so the change needs a migration or a clean uninstall first.
-- **`PhotoGoRoundKit` becomes `PhotosGoRoundKit`**, from `Project Source Reorg.md`, closed 2026-09-22. It stays in `MacOS/Shared` until another platform needs it, and then moves to `Shared`.
 
 ## Retire the `photogoroundd` name
 

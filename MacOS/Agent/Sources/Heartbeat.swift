@@ -1,5 +1,5 @@
 import Foundation
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundAgentAPI
 
 /// When the agent's periodic work is next due.
 ///

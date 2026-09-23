@@ -1,6 +1,6 @@
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundKit
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundKit
 
 /// What the agent has done since it launched: pictures handed over, by
 /// consumer, the last one handed over, what serving and dealing found in the

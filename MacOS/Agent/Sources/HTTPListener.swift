@@ -1,8 +1,8 @@
 import Console
 import Foundation
 import Network
-import PhotoGoRoundKit
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundKit
+import PhotosGoRoundAgentAPI
 
 /// A minimal HTTP/1.1 listener, on `Network.framework` and nothing else.
 ///
@@ -108,7 +108,7 @@ final class HTTPListener: @unchecked Sendable {
     }
 
     private let port: NWEndpoint.Port?
-    private let queue = DispatchQueue(label: "com.sydpolk.photogoround.http")
+    private let queue = DispatchQueue(label: "com.sydpolk.photosgoround.http")
     private var listener: NWListener?
     private let route: @Sendable (Request) async -> Response
     /// Named in the ready message, so the line a person reads is one they can

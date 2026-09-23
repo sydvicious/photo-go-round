@@ -2815,6 +2815,10 @@ It is also a third-party dependency, which collides directly with the rule that 
 
 For an application with a user base of one, that is not a compromise, it is the correct engineering. If it ever ships to strangers who will not tolerate manual updates, Sparkle becomes the deliberate exception, taken with eyes open and documented here as such.
 
+### A changelog, once there are public releases
+
+Syd, 2026-09-22: "If I ever have public betas and releases, I will start maintaining a CHANGELOG.md file." Until then there is none, and git history is the record.
+
 ## Beyond 0.1
 
 Everything in the phase list is 0.1. The display richness below is held back deliberately, so that 0.1 ships one fit, one layout, one transition, and gets used.

@@ -2,7 +2,7 @@
 
 ## NAME
 
-`pgr_install` — install a built Photo-Go-Round product on this Mac
+`pgr_install` — install a built Photos-Go-Round product on this Mac
 
 ## SYNOPSIS
 
@@ -26,7 +26,7 @@ run one, so a scheme that installs on ⌘R needs something to launch. Each
 `Install …` scheme builds its product alongside this and passes
 `BUILT_PRODUCTS_DIR` through the environment.
 
-**It is the development installer.** The work lives in `PhotoGoRoundInstall`,
+**It is the development installer.** The work lives in `PhotosGoRoundInstall`,
 which the app links too: an app installs the pieces it carries at launch and
 from its Help menu, as symlinks and registrations pointing into itself.
 `pgr_install` installs from a build directory, and copies the saver. It ships in
@@ -49,9 +49,9 @@ sit on one Mac at once.
 ## OPTIONS
 
 `--from` *path*
-The built bundle. Defaults to the one in `$BUILT_PRODUCTS_DIR`: `Photo-Go-Round
-Screensaver<suffix>.saver`, `Photo-Go-Round Server.app`, or `Photo-Go-Round
-Wallpaper Host.app/Contents/Extensions/Photo-Go-Round Wallpaper.appex`.
+The built bundle. Defaults to the one in `$BUILT_PRODUCTS_DIR`: `Photos-Go-Round
+Screensaver<suffix>.saver`, `Photos-Go-Round Server.app`, or `Photos-Go-Round
+Wallpaper Host.app/Contents/Extensions/Photos-Go-Round Wallpaper.appex`.
 
 `--dry-run`
 Print what would happen and change nothing.
@@ -132,8 +132,8 @@ bundle. Empty for Release, `" (Debug)"`, `" (Claude)"`.
 
 ## FILES
 
-`~/Library/Screen Savers/Photo-Go-Round Screensaver<suffix>.saver`
-`~/Library/LaunchAgents/com.sydpolk.photogoround.server<suffix>.plist`
+`~/Library/Screen Savers/Photos-Go-Round Screensaver<suffix>.saver`
+`~/Library/LaunchAgents/com.sydpolk.photosgoround.server<suffix>.plist`
 
 Per user, both of them, so two people on one Mac never share an install.
 
@@ -149,7 +149,7 @@ thirty, or a `start` with no plist installed.
 What ⌘R on **Install Screen Saver** does, by hand:
 
 ```bash
-pgr_install saver --from "$HOME/Library/Developer/Xcode/DerivedData/…/Photo-Go-Round Screensaver (Debug).saver"
+pgr_install saver --from "$HOME/Library/Developer/Xcode/DerivedData/…/Photos-Go-Round Screensaver (Debug).saver"
 ```
 
 See what an uninstall would take, and take none of it:

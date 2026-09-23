@@ -1,9 +1,9 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// What a run does to the published port, over its whole life.
 ///

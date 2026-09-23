@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// Each request runs on a thread of its own, and stays there.

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.sydpolk.photogoround.pgr-ctl</string>
+    <string>com.sydpolk.photosgoround.pgr-ctl</string>
     <key>CFBundleName</key>
     <string>pgr_ctl</string>
     <key>NSPhotoLibraryUsageDescription</key>

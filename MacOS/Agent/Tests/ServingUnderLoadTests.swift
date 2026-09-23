@@ -5,8 +5,8 @@ import Synchronization
 import Testing
 import UniformTypeIdentifiers
 
-@testable import PhotoGoRoundAgentAPI
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundAgentAPI
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// The agent while resizes hang.
@@ -99,7 +99,7 @@ struct ServingUnderLoadTests {
                 try ServingUnderLoadTests.writePNG(to: photos.appending(path: "photo-\(index).png"))
             }
 
-            path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
+            path = directory.appending(path: "photosgoround.sqlite").path(percentEncoded: false)
             let root = directory.appending(path: "cache")
             bytes = PhotoStore(root: root)
             database = try Database(path: path)

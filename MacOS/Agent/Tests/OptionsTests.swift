@@ -1,9 +1,9 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 @Suite("Command line")
 struct OptionsTests {
@@ -240,7 +240,7 @@ struct OptionsTests {
             cacheOverride: options.cacheOverride,
             environment: ["PGR_CONTAINER": "/tmp/c", "PGR_CACHE": "/tmp/k"]
         )
-        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/c/photogoround.sqlite")
+        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/c/photosgoround.sqlite")
         #expect(environment.cacheRoot.path(percentEncoded: false) == "/tmp/k")
         #expect(environment.origin == .environment)
     }
@@ -252,7 +252,7 @@ struct OptionsTests {
             containerOverride: URL(filePath: "/tmp/flag"),
             environment: ["PGR_CONTAINER": "/tmp/env"]
         )
-        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/flag/photogoround.sqlite")
+        #expect(environment.databaseURL.path(percentEncoded: false) == "/tmp/flag/photosgoround.sqlite")
         #expect(environment.origin == .explicitOverride)
     }
 

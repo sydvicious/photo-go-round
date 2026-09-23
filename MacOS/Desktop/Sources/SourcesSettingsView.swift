@@ -1,6 +1,6 @@
 import AppKit
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 import os
 import SwiftUI
 import UniformTypeIdentifiers
@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 /// configuring opens what that row has options for.
 struct SourcesSettingsView: View {
     /// Names the scene, since this is a `Window` of the app's own rather than
-    /// the `Settings` scene — see `PhotoGoRoundApp` for why it gave that up.
+    /// the `Settings` scene — see `PhotosGoRoundApp` for why it gave that up.
     static let windowID = "sources-settings"
 
     @Environment(\.openWindow) private var openWindow

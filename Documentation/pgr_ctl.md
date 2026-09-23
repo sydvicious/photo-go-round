@@ -2,7 +2,7 @@
 
 ## NAME
 
-`pgr_ctl` — drive and inspect the Photo-Go-Round library from a terminal
+`pgr_ctl` — drive and inspect the Photos-Go-Round library from a terminal
 
 ## SYNOPSIS
 
@@ -69,7 +69,7 @@ not be one typo from a real library, and this is the rig, never shipped.
 
 `--release`, `--debug`, `--claude`
 Whose build's library. Each build configuration has its own identifier —
-`com.sydpolk.photogoround`, `….debug`, `….claude` — so all three agents can run
+`com.sydpolk.photosgoround`, `….debug`, `….claude` — so all three agents can run
 at once without sharing a database. **Defaults to the configuration `pgr_ctl`
 itself was built as**, which is the agent you are most likely running.
 
@@ -77,7 +77,7 @@ itself was built as**, which is the agent you are most likely running.
 Storage root. Defaults to `~/Library/Containers/<identifier>` for the axes above.
 
 `-d`, `--database <path>`
-Database file. Defaults to `<container>/photogoround.sqlite` in both deployments.
+Database file. Defaults to `<container>/photosgoround.sqlite` in both deployments.
 
 `--cache-root <dir>`
 Cache root. Defaults to `~/Library/Caches/<identifier>`. Naming a container takes
@@ -287,7 +287,7 @@ up immediately. For a list of valid keys, see `get`.
 
 `wallpaper get [<key>]`
 Reads the wallpaper's own preferences, which live in
-`com.sydpolk.photogoround.wallpaper.dev` — or `.prod` with `--prod` — rather than
+`com.sydpolk.photosgoround.wallpaper.dev` — or `.prod` with `--prod` — rather than
 in the domain `get` reads. The domain carries the build configuration as the
 library does: `….debug.wallpaper.dev` with `--debug`, `….claude.wallpaper.dev`
 with `--claude`. With no key it lists every setting; with a key it prints that
@@ -331,7 +331,7 @@ Setting `PGR_CONTAINER` once per shell is the usual way to work.
 
 ## FILES
 
-`<container>/photogoround.sqlite`
+`<container>/photosgoround.sqlite`
 The database, and its WAL sidecars.
 
 `<cache>/`
@@ -357,7 +357,7 @@ failed `shuffle-test` assertion.
 Point every command at the same library as the agent, once per shell:
 
 ```
-export PGR_CONTAINER="$HOME/Library/Application Support/Photo-Go-Round"
+export PGR_CONTAINER="$HOME/Library/Application Support/Photos-Go-Round"
 ```
 
 Add a folder and watch the queue fill behind it:

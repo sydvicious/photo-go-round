@@ -5,9 +5,9 @@ import Synchronization
 import Testing
 import UniformTypeIdentifiers
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// The endpoint's own cache behaviour, driven through `route` rather than
 /// through the store beneath it.
@@ -62,7 +62,7 @@ struct EndpointCacheTests {
                     to: photos.appending(path: "photo-\(index).png"))
             }
 
-            let path = directory.appending(path: "photogoround.sqlite")
+            let path = directory.appending(path: "photosgoround.sqlite")
                 .path(percentEncoded: false)
             let database = try Database(path: path)
             try Migrator.migrate(database)

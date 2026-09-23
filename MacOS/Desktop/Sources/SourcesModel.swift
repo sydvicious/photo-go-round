@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 import os
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundAgentAPI
 
 /// What the Settings panel knows and does, with no view in it.
 ///
@@ -437,7 +437,7 @@ final class SourcesModel {
     static func explain(_ error: any Error) -> String {
         switch error {
         case SourceService.Failure.noAgent:
-            "Photo-Go-Round's agent is not running, so there is nothing to ask."
+            "Photos-Go-Round's agent is not running, so there is nothing to ask."
         case SourceService.Failure.unreachable(let reason):
             "The agent published an address but did not answer: \(reason)"
         // **Not "the agent is not running".** It is, and it took the

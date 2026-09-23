@@ -1,5 +1,5 @@
 import Foundation
-import PhotoGoRoundKit
+import PhotosGoRoundKit
 
 /// A connection that lives on a thread of its own, and the only way to reach it.
 ///
@@ -45,7 +45,7 @@ actor ConfinedDatabase {
     }
 
     init(path: String, label: String) throws {
-        queue = DispatchSerialQueue(label: "com.sydpolk.photogoround.\(label)", qos: .utility)
+        queue = DispatchSerialQueue(label: "com.sydpolk.photosgoround.\(label)", qos: .utility)
         database = try Database(path: path)
     }
 

@@ -1,8 +1,8 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundAgentAPI
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundAgentAPI
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// Which bound fires first, and why it has to be that one.

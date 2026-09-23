@@ -28,9 +28,9 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Release, Syd's Debug and an agent's Claude build. `BuildVariant.swift`.
 DOMAINS=(
-    "com.sydpolk.photogoround.dev"
-    "com.sydpolk.photogoround.debug.dev"
-    "com.sydpolk.photogoround.claude.dev"
+    "com.sydpolk.photosgoround.dev"
+    "com.sydpolk.photosgoround.debug.dev"
+    "com.sydpolk.photosgoround.claude.dev"
 )
 
 PREFERENCES=0

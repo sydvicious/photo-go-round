@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// Where the listener ends up, which is the whole of how anything finds it.

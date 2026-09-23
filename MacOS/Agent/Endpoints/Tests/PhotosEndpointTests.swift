@@ -1,8 +1,8 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundAgentAPI
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundAgentAPI
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// The one route a client cannot do without: what is in the photo library.

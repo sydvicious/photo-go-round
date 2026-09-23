@@ -1,6 +1,6 @@
 import Foundation
-import PhotoGoRoundKit
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundKit
+import PhotosGoRoundAgentAPI
 
 /// What the agent is doing, for a person with a browser.
 ///

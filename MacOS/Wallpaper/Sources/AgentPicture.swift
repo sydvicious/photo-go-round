@@ -14,8 +14,8 @@ import ColorSync
 import CoreGraphics
 import Foundation
 import ImageIO
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 
 enum AgentPicture {
     /// What the agent's served line says, which is how the pane's wallpaper is

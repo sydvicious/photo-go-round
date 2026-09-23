@@ -1,6 +1,6 @@
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundKit
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundKit
 
 /// What keeping a resized copy needs, carried onto the resizer's thread.
 ///

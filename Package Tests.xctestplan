@@ -11,15 +11,15 @@
     {
       "target": {
         "containerPath": "container:",
-        "identifier": "PhotoGoRoundKitTests",
-        "name": "PhotoGoRoundKitTests"
+        "identifier": "PhotosGoRoundKitTests",
+        "name": "PhotosGoRoundKitTests"
       }
     },
     {
       "target": {
         "containerPath": "container:",
-        "identifier": "PhotoGoRoundDisplayTests",
-        "name": "PhotoGoRoundDisplayTests"
+        "identifier": "PhotosGoRoundDisplayTests",
+        "name": "PhotosGoRoundDisplayTests"
       }
     },
     {
@@ -39,8 +39,8 @@
     {
       "target": {
         "containerPath": "container:",
-        "identifier": "PhotoGoRoundInstallTests",
-        "name": "PhotoGoRoundInstallTests"
+        "identifier": "PhotosGoRoundInstallTests",
+        "name": "PhotosGoRoundInstallTests"
       }
     }
   ],

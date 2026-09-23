@@ -40,7 +40,7 @@ accepted() {
 }
 
 # Every long flag a document presents in code voice. **Long only**: the single
-# dash catches `photogoround.sqlite-wal` and the like, and the short aliases
+# dash catches `photosgoround.sqlite-wal` and the like, and the short aliases
 # have never been where drift hides.
 documented_flags() {
     grep -oE '`--[a-z][a-z-]*' "$1" | tr -d '`' | sort -u

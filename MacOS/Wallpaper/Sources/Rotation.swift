@@ -2,14 +2,14 @@
 // extension, inside the app*.
 //
 // **The interval is read, never written.** Syd, 2026-09-15: "shared domain" — the
-// wallpaper's own domain, `com.sydpolk.photogoround.wallpaper.{dev|prod}`, which
+// wallpaper's own domain, `com.sydpolk.photosgoround.wallpaper.{dev|prod}`, which
 // the app's Settings window and `pgr_ctl wallpaper set` write and this reads
 // through a read-only exception. The next stage — a timing slider in the pane
 // itself — replaces the reading, not the writing.
 
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 
 enum Rotation {
     /// Both domains, development first, matching `AgentPicture`: a developer's

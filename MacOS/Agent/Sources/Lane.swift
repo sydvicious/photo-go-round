@@ -30,7 +30,7 @@ actor Lane {
     /// `qos` says who is waiting: `userInitiated` for a request, `utility` for
     /// the background work nobody is watching.
     init(_ label: String, qos: DispatchQoS = .userInitiated) {
-        queue = DispatchSerialQueue(label: "com.sydpolk.photogoround.\(label)", qos: qos)
+        queue = DispatchSerialQueue(label: "com.sydpolk.photosgoround.\(label)", qos: qos)
     }
 
     /// Runs `work` on this lane's thread, and answers what it answered.

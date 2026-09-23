@@ -11,7 +11,7 @@ import Foundation
 /// **Where they are found, in order:**
 ///
 /// 1. **The agent's app bundle**, `Contents/Resources`. The Xcode target
-///    `Photo-Go-Round Server` syncs `MacOS/Agent/Dashboard/Resources` and copies
+///    `Photos-Go-Round Server` syncs `MacOS/Agent/Dashboard/Resources` and copies
 ///    these there, so an installed agent — from DerivedData or shipped — reads
 ///    its own copy.
 /// 2. **The dashboard's `Resources` folder in the checkout**, for a build with no app bundle:

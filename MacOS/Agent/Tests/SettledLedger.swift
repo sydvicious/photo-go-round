@@ -1,6 +1,6 @@
 import Foundation
 
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// The error ledger, read after the reports ahead of the read have landed.
 ///

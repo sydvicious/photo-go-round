@@ -6,7 +6,7 @@
 # script, and then leaving it alone for a day.
 #
 #     screen -h 10000
-#     cd photo-go-round
+#     cd photos-go-round
 #     ./Scripts/photogoroundd
 #
 # It exists so that staging is one command rather than a remembered incantation
@@ -28,13 +28,13 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$REPO/Photo-Go-Round.xcodeproj"
+PROJECT="$REPO/Photos-Go-Round.xcodeproj"
 CONFIGURATION="${PGR_CONFIGURATION:-Debug}"
 
 # **Nothing generated goes in the repository.** Syd, 2026-09-19: "I really don't
 # want build artifacts in the repo directory", and "I would prefer ALL generated
 # artifacts to be in DerivedData and not .build directories".
-DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}/agent"
+DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photos-Go-Round-scripts}/agent"
 
 case "${1:-}" in
     --release) CONFIGURATION="Release"; shift ;;
@@ -46,7 +46,7 @@ esac
 # a screen scrollback.
 if ! build_log="$(xcodebuild build \
     -project "$PROJECT" \
-    -scheme "Photo-Go-Round Server" \
+    -scheme "Photos-Go-Round Server" \
     -destination "generic/platform=macOS" \
     -configuration "$CONFIGURATION" \
     -derivedDataPath "$DERIVED_DATA" 2>&1)"; then
@@ -55,7 +55,7 @@ if ! build_log="$(xcodebuild build \
     exit 1
 fi
 
-BIN="$DERIVED_DATA/Build/Products/$CONFIGURATION/Photo-Go-Round Server.app/Contents/MacOS/photogoroundd"
+BIN="$DERIVED_DATA/Build/Products/$CONFIGURATION/Photos-Go-Round Server.app/Contents/MacOS/photogoroundd"
 if [[ ! -x "$BIN" ]]; then
     echo "photogoroundd: expected an executable at $BIN and there is none" >&2
     exit 1

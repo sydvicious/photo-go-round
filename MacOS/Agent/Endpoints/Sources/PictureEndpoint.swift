@@ -1,8 +1,8 @@
 import Console
 import Foundation
-import PhotoGoRoundKit
+import PhotosGoRoundKit
 import UniformTypeIdentifiers
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundAgentAPI
 
 /// The one endpoint that matters.
 ///
@@ -505,7 +505,7 @@ struct PictureEndpoint {
                                 //
                                 // Reading them back is fast if the filtering
                                 // happens in the predicate rather than in a
-                                // pipe — `subsystem == "com.sydpolk.photogoround"
+                                // pipe — `subsystem == "com.sydpolk.photosgoround"
                                 // AND eventMessage CONTAINS "RENDER:"`.
                                 //
                                 // At the per-request rung since Phase 5 of

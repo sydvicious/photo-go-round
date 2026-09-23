@@ -1,6 +1,6 @@
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 import Testing
 
 @testable import pgr_ctl
@@ -23,14 +23,14 @@ struct WallpaperCommandsTests {
     ///
     /// **It did not, until 2026-09-19.** Both call sites took the running
     /// build's variant, so `--debug` from a Claude-built `pgr_ctl` wrote
-    /// `com.sydpolk.photogoround.claude.wallpaper.dev` and the Debug extension
+    /// `com.sydpolk.photosgoround.claude.wallpaper.dev` and the Debug extension
     /// never saw the change. Nothing said so: the write succeeded.
     @Test(
         "The domain carries both the deployment and the build configuration",
         arguments: [
-            (BuildVariant.release, "com.sydpolk.photogoround.wallpaper"),
-            (.debug, "com.sydpolk.photogoround.debug.wallpaper"),
-            (.claude, "com.sydpolk.photogoround.claude.wallpaper"),
+            (BuildVariant.release, "com.sydpolk.photosgoround.wallpaper"),
+            (.debug, "com.sydpolk.photosgoround.debug.wallpaper"),
+            (.claude, "com.sydpolk.photosgoround.claude.wallpaper"),
         ])
     func domainCarriesBothAxes(_ pair: (BuildVariant, String)) {
         let (variant, stem) = pair

@@ -1,5 +1,5 @@
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 import SwiftUI
 
 /// The About box.
@@ -108,7 +108,7 @@ extension Bundle {
     var displayName: String {
         object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? "Photo-Go-Round"
+            ?? "Photos-Go-Round"
     }
 
     /// `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION`, which reach the bundle

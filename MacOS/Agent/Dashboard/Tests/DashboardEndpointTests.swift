@@ -5,8 +5,8 @@ import Synchronization
 import Testing
 import UniformTypeIdentifiers
 
-@testable import PhotoGoRoundAgentAPI
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundAgentAPI
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// The dashboard: its routes, what the JSON says, and that the page's poll
@@ -45,7 +45,7 @@ struct DashboardEndpointTests {
                 try Self.write(to: photos.appending(path: "photo-\(index).png"))
             }
 
-            let path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
+            let path = directory.appending(path: "photosgoround.sqlite").path(percentEncoded: false)
             let database = try Database(path: path)
             try Migrator.migrate(database)
             sources = SourceStore(database: database, changes: changes)

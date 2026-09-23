@@ -1,12 +1,12 @@
 import Console
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 
 /// Reading and writing the wallpaper's own preferences.
 ///
 /// **A different domain from the agent's**, which is what `get` and `set` reach:
-/// the wallpaper's is `com.sydpolk.photogoround.wallpaper.{dev|prod}`, written by
+/// the wallpaper's is `com.sydpolk.photosgoround.wallpaper.{dev|prod}`, written by
 /// the app's Settings window and read by the wallpaper extension. Syd,
 /// 2026-09-15: "add wallpaper prefs and command to pgr_ctl", so that a Mac whose
 /// app is never opened can still be set from a terminal.

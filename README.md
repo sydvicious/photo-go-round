@@ -1,4 +1,4 @@
-# Photo-Go-Round
+# Photos-Go-Round
 
 Take a giant blob of photos and do something nice with it.
 
@@ -11,7 +11,7 @@ screensaver, widgets, and apps across Apple's platforms. The library problem
 
 ## Building and installing from Xcode
 
-Open `Photo-Go-Round.xcodeproj`. Everything below is the Debug configuration; Release is Archive, moved to `/Applications` by hand.
+Open `Photos-Go-Round.xcodeproj`. Everything below is the Debug configuration; Release is Archive, moved to `/Applications` by hand.
 
 **The app installs the rest.** Every build carries the agent, the wallpaper extension and the screensaver in its bundle. Each launch installs and restarts its agent; a Release launch also registers the wallpaper and links the screensaver. The Help menu installs or uninstalls any of the three, in any build. Nothing is copied out of the app.
 
@@ -19,12 +19,12 @@ Open `Photo-Go-Round.xcodeproj`. Everything below is the Debug configuration; Re
 
 | To | Scheme | Key |
 |---|---|---|
-| Run the app, which installs and restarts its agent | **Photo-Go-Round** | ⌘R |
+| Run the app, which installs and restarts its agent | **Photos-Go-Round** | ⌘R |
 | Install the wallpaper or the screensaver from it | Help › Install Wallpaper, Install Screensaver | |
 | Install the agent, and restart it | **Install Agent** | ⌘R |
 | Install the wallpaper extension | **Install Wallpaper Extension** | ⌘R |
 | Install the screensaver | **Install Screen Saver** | ⌘R |
-| Run the agent under the debugger | **Photo-Go-Round Server** | ⌘R |
+| Run the agent under the debugger | **Photos-Go-Round Server** | ⌘R |
 | Run every test | **Package Tests** | ⌘U |
 
 `Package Tests` covers the package's five test targets. From a terminal, note that it takes no `-project`, because a scheme whose targets are the package's is a package scheme:
@@ -33,7 +33,7 @@ Open `Photo-Go-Round.xcodeproj`. Everything below is the Debug configuration; Re
 xcodebuild test -scheme "Package Tests" -destination "platform=macOS,arch=arm64"
 ```
 
-The app's own bundle, `Photo-Go-RoundTests`, is not in it: it wants a running agent. Run it through the **Photo-Go-Round** scheme.
+The app's own bundle, `Photos-Go-RoundTests`, is not in it: it wants a running agent. Run it through the **Photos-Go-Round** scheme.
 
 `pgr_ctl` has no shared scheme. Build its target and put the product on your `PATH` — a copy or a symlink into `~/bin`. Not `swift run pgr_ctl`: that writes a `.build` directory into the checkout, and nothing generated belongs there.
 
@@ -43,8 +43,8 @@ Each build configuration installs under its own names, so Debug, Release and an 
 
 Then choose them in System Settings:
 
-- **Wallpaper** › *Photo-Go-Round* › **Photo-Go-Round Wallpaper (Debug)**
-- **Screen Saver** › *Other* › **Photo-Go-Round Screensaver (Debug)**
+- **Wallpaper** › *Photos-Go-Round* › **Photos-Go-Round Wallpaper (Debug)**
+- **Screen Saver** › *Other* › **Photos-Go-Round Screensaver (Debug)**
 
 To take all three off the Mac, leaving the library, cache and preferences alone:
 
@@ -60,7 +60,7 @@ To take all three off the Mac, leaving the library, cache and preferences alone:
 ./Scripts/photogoroundd --add-folder ~/Pictures/Wallpaper
 ```
 
-The wrapper builds first, so a stale binary is never run — the `Photo-Go-Round
+The wrapper builds first, so a stale binary is never run — the `Photos-Go-Round
 Server` target, so the agent it runs carries its configuration's port and label
 exactly as an installed one does. `--release` and `--claude` pick another. A bare invocation runs
 the agent — it has exactly one job and takes no subcommand. Name each folder

@@ -1,9 +1,9 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// The agent's schedule.
 ///
@@ -118,7 +118,7 @@ struct ColdStartSeedTests {
         let directory = URL.temporaryDirectory.appending(path: "pgr-coldstart-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
+        let path = directory.appending(path: "photosgoround.sqlite").path(percentEncoded: false)
         let database = try Database(path: path)
         try Migrator.migrate(database)
 

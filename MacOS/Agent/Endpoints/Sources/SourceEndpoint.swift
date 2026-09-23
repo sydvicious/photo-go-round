@@ -1,7 +1,7 @@
 import Console
 import Foundation
-import PhotoGoRoundKit
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundKit
+import PhotosGoRoundAgentAPI
 
 /// Managing sources over HTTP, so that a client never opens the database.
 ///

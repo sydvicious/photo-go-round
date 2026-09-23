@@ -30,7 +30,7 @@ actor Resizer {
     static let shared = Resizer()
 
     private let queue = DispatchSerialQueue(
-        label: "com.sydpolk.photogoround.resizer", qos: .userInitiated)
+        label: "com.sydpolk.photosgoround.resizer", qos: .userInitiated)
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()

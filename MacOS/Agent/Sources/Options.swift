@@ -1,7 +1,7 @@
 import Console
 import Foundation
-import PhotoGoRoundKit
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundKit
+import PhotosGoRoundAgentAPI
 
 /// Hand-rolled argument parsing. A dozen flags is an afternoon and about two
 /// hundred lines, which is cheaper than taking a dependency for it.
@@ -147,7 +147,7 @@ struct Options {
     }
 
     static let usage = """
-        photogoroundd — the Photo-Go-Round library agent
+        photogoroundd — the Photos-Go-Round library agent
 
         USAGE
           photogoroundd [options]
@@ -211,7 +211,7 @@ struct Options {
           `pgr_ctl` has to agree with the running agent about where the library is.
 
         EXAMPLES
-          export PGR_CONTAINER="$HOME/Library/Application Support/Photo-Go-Round"
+          export PGR_CONTAINER="$HOME/Library/Application Support/Photos-Go-Round"
           photogoroundd --add-folder --recursive ~/Pictures/Albums \\
                         --add-folder ~/Pictures/Wallpaper
 

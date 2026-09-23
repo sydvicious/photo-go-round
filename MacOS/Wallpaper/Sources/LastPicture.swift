@@ -11,7 +11,7 @@
 // there may be no desktop surface at all — the screen-saver preview with the
 // wallpaper set to something else is exactly that case, and it drew the mark
 // forever. Now the last photograph outlives the surfaces, and the process:
-// choosing Photo-Go-Round in either picker shows a photograph straight away.
+// choosing Photos-Go-Round in either picker shows a photograph straight away.
 //
 // The picture is a file because preferences are the wrong place for a few
 // megabytes; the identifier sits beside it so the log and the pane agree on

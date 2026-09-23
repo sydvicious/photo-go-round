@@ -1,7 +1,7 @@
 import Console
 import Foundation
-import PhotoGoRoundKit
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundKit
+import PhotosGoRoundAgentAPI
 
 /// Reading and writing preferences, in the domain the agent actually reads.
 ///
@@ -120,7 +120,7 @@ enum NotifyCommand {
 /// reaching them has to be one word.
 enum LogCommand {
 
-    static let predicate = "subsystem == \"com.sydpolk.photogoround\""
+    static let predicate = "subsystem == \"com.sydpolk.photosgoround\""
 
     /// What `log` asks `/usr/bin/log` for. The whole of this command's decision;
     /// running the process is plumbing around it.

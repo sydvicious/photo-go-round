@@ -1,8 +1,8 @@
 import Foundation
 import OSLog
 import Observation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundInstall
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundInstall
 import SwiftUI
 
 /// Installs what this app's wrapper carries: at every launch, and whenever the

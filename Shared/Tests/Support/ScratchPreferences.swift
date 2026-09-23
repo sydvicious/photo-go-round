@@ -17,10 +17,10 @@ import Testing
 nonisolated enum ScratchPreferences {
 
     /// Every scratch domain's file name begins with this, so a log line or a
-    /// stray file says what it is. The real domains, `com.sydpolk.photogoround`
+    /// stray file says what it is. The real domains, `com.sydpolk.photosgoround`
     /// and `.dev`, cannot match it, which is why it ends in `.tests.` rather
     /// than stopping at the bundle identifier.
-    static let prefix = "com.sydpolk.photogoround.tests."
+    static let prefix = "com.sydpolk.photosgoround.tests."
 
     /// Where a scratch domain would land if it were a dotted name: the
     /// directory `cfprefsd` owns, and the one this file exists to keep clean.

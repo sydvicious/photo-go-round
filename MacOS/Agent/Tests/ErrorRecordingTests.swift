@@ -2,8 +2,8 @@ import Console
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundAgentAPI
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundAgentAPI
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// How the agent's red lines reach its error record: under a kind, by their

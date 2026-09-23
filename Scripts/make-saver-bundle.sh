@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Builds and installs "Photo-Go-Round Screensaver.saver" — the Mac screensaver.
+# Builds and installs "Photos-Go-Round Screensaver.saver" — the Mac screensaver.
 #
 # The bundle is an Xcode target now, so this drives xcodebuild rather than
 # assembling anything itself. Xcode builds, because that is where the thing can
@@ -11,27 +11,27 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$REPO/Photo-Go-Round.xcodeproj"
+PROJECT="$REPO/Photos-Go-Round.xcodeproj"
 # **Build artifacts never land in the repository.** Syd, 2026-09-19: "I really
 # don't want build artifacts in the repo directory", and "I would prefer ALL
 # generated artifacts to be in DerivedData and not .build directories". Override
 # with --output; an agent building on Syd's Mac points it at its own directory,
 # per CLAUDE.md.
-DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}"
+DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photos-Go-Round-scripts}"
 BUILD_DIR="$DERIVED_DATA/saver"
 CONFIGURATION="Debug"
 INSTALL=0
 
 usage() {
     cat <<'HELPTEXT'
-Builds "Photo-Go-Round Screensaver.saver" — the Mac screensaver.
+Builds "Photos-Go-Round Screensaver.saver" — the Mac screensaver.
 
 USAGE
   ./Scripts/make-saver-bundle.sh [options]
 
 OPTIONS
   --output <dir>    Where to build. Default:
-                    ~/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts/saver
+                    ~/Library/Developer/Xcode/DerivedData/Photos-Go-Round-scripts/saver
                     or $PGR_BUILD_ROOT/saver. Never the repository.
   --release         Build the Release configuration instead of Debug.
   --install         Copy the result to ~/Library/Screen Savers and stop the
@@ -56,7 +56,7 @@ AFTERWARDS
   Watch what it did:
 
     /usr/bin/log show --info --last 10m \
-        --predicate 'subsystem == "com.sydpolk.photogoround" AND category == "saver"'
+        --predicate 'subsystem == "com.sydpolk.photosgoround" AND category == "saver"'
 HELPTEXT
 }
 
@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-SCHEME="Photo-Go-Round Saver"
+SCHEME="Photos-Go-Round Saver"
 
 # By scheme, not -target: a -target build gives the local package targets a
 # "Conditional compilation flags do not have values in Swift" warning that a
@@ -109,14 +109,14 @@ if [[ "$INSTALL" -eq 1 ]]; then
 fi
 
 # **The name comes from what was built, not from a constant.** Each
-# configuration produces a differently named bundle — "Photo-Go-Round
+# configuration produces a differently named bundle — "Photos-Go-Round
 # Screensaver.saver" for Release, " (Debug)" and " (Claude)" for the other two —
 # so a hard-coded name would miss the build and, on install, remove another
 # configuration's saver. `BuildVariant.swift`.
 PRODUCTS="$BUILD_DIR/Build/Products/$CONFIGURATION"
-BUNDLE="$(find "$PRODUCTS" -maxdepth 1 -name "Photo-Go-Round Screensaver*.saver" 2>/dev/null | head -1)"
+BUNDLE="$(find "$PRODUCTS" -maxdepth 1 -name "Photos-Go-Round Screensaver*.saver" 2>/dev/null | head -1)"
 [[ -n "$BUNDLE" && -d "$BUNDLE" ]] \
-    || { echo "expected a Photo-Go-Round Screensaver bundle in $PRODUCTS and there is none" >&2; exit 1; }
+    || { echo "expected a Photos-Go-Round Screensaver bundle in $PRODUCTS and there is none" >&2; exit 1; }
 NAME="$(basename "$BUNDLE" .saver)"
 echo "built $BUNDLE"
 

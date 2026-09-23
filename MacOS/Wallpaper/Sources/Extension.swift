@@ -1,7 +1,7 @@
 // The wallpaper extension. `Wallpaper Plan.md`, *The real extension, inside the
 // app*.
 //
-// It lives in System Settings › Wallpaper: one Photo-Go-Round section holding one
+// It lives in System Settings › Wallpaper: one Photos-Go-Round section holding one
 // item, and a photograph from the agent on the desktop when that item is chosen.
 // Phosphene's shape, measured over four probes — sandboxed, no private
 // entitlement, `dlopen` of the private `WallpaperExtensionKit` for the classes
@@ -14,7 +14,7 @@
 import ExtensionFoundation
 import Foundation
 import OSLog
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundAgentAPI
 import Synchronization
 
 let extensionLog = Logger(subsystem: Log.subsystem, category: "system-wallpaper")

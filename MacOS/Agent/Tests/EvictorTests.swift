@@ -2,8 +2,8 @@ import Foundation
 import Synchronization
 import Testing
 
-@testable import PhotoGoRoundAgentAPI
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundAgentAPI
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// Eviction on a thread the writer is not waiting on.
@@ -45,7 +45,7 @@ struct EvictorTests {
                     contents: Data(repeating: 0xAB, count: 2048))
             }
 
-            path = directory.appending(path: "photogoround.sqlite").path(percentEncoded: false)
+            path = directory.appending(path: "photosgoround.sqlite").path(percentEncoded: false)
             root = directory.appending(path: "cache")
             database = try Database(path: path)
             try Migrator.migrate(database)

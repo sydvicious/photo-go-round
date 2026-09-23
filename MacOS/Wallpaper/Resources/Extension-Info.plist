@@ -5,7 +5,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Photo-Go-Round$(WALLPAPER_NAME_SUFFIX)</string>
+    <string>Photos-Go-Round$(WALLPAPER_NAME_SUFFIX)</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -21,9 +21,9 @@
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>PGRWallpaperItemID</key>
-    <string>photo-go-round$(WALLPAPER_ID_SUFFIX)</string>
+    <string>photos-go-round$(WALLPAPER_ID_SUFFIX)</string>
     <key>PGRWallpaperName</key>
-    <string>Photo-Go-Round Wallpaper$(WALLPAPER_NAME_SUFFIX)</string>
+    <string>Photos-Go-Round Wallpaper$(WALLPAPER_NAME_SUFFIX)</string>
     <key>LSMinimumSystemVersion</key>
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>EXAppExtensionAttributes</key>

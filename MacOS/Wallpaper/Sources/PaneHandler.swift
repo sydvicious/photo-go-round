@@ -9,7 +9,7 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundAgentAPI
 import IOSurface
 import ObjectiveC
 import QuartzCore
@@ -71,7 +71,7 @@ protocol WallpaperExtensionXPC: NSObjectProtocol {
 /// `WallpaperAgent` says so in the `acquire` request's `presentationMode` —
 /// `default` for the desktop and every preview of it, `idle` for the screen
 /// saver. Measured 2026-09-15. They keep their own photographs, so choosing
-/// Photo-Go-Round for both does not show the same picture twice.
+/// Photos-Go-Round for both does not show the same picture twice.
 enum Slot: String, Sendable {
     case desktop
     case idle
@@ -388,14 +388,14 @@ final class PaneHandler: NSObject, WallpaperExtensionXPC {
 func wallpaperError(_ code: Int, _ text: String) -> NSError {
     wallpaperLog("answering with an error: \(text)")
     // **This build's own identifier, not a literal.** It was
-    // `com.sydpolk.photogoround.wallpaper-extension` until 2026-09-19 — the
+    // `com.sydpolk.photosgoround.wallpaper-extension` until 2026-09-19 — the
     // spelling the bundle carried before the 2026-09-15 rename, so an error
     // named a bundle that no longer existed, in a log somebody would be
     // grepping by identifier. Each configuration now answers under its own:
     // `…wallpaper.extension`, `…wallpaper.debug.extension`,
     // `…wallpaper.claude.extension`.
     return NSError(
-        domain: Bundle.main.bundleIdentifier ?? "com.sydpolk.photogoround.wallpaper.extension",
+        domain: Bundle.main.bundleIdentifier ?? "com.sydpolk.photosgoround.wallpaper.extension",
         code: code,
         userInfo: [NSLocalizedDescriptionKey: text])
 }

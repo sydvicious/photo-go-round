@@ -75,7 +75,7 @@ enum PaneThumbnail {
             wallpaperLog("thumbnail: \(folder.path(percentEncoded: false)) could not be made: \(error)")
             return nil
         }
-        let url = folder.appending(path: "photo-go-round-thumbnail.png")
+        let url = folder.appending(path: "photos-go-round-thumbnail.png")
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
             return nil
         }

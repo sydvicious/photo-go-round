@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Takes Photo-Go-Round off this Mac. `Build Plan.md`, *The install phases*.
+# Takes Photos-Go-Round off this Mac. `Build Plan.md`, *The install phases*.
 #
 # Syd, 2026-09-15: "we need an uninstall script for all of these agents". Three
 # installs put things in three places — a LaunchAgent, a plug-in registration and
@@ -10,7 +10,7 @@
 # **It is a wrapper, not an implementation.** Syd, 2026-09-19: "there should not
 # be multiple versions of the build scripts. the targets and the command line
 # builds should share their guts, and behave the same, based on input
-# parameters." Everything this does lives in `PhotoGoRoundInstall` and is driven
+# parameters." Everything this does lives in `PhotosGoRoundInstall` and is driven
 # by `pgr_install uninstall`, which is the same code `Install …` schemes run and
 # the same code the app will link when it becomes the installer.
 #
@@ -26,12 +26,12 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$REPO/Photo-Go-Round.xcodeproj"
-DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photo-Go-Round-scripts}/uninstall"
+PROJECT="$REPO/Photos-Go-Round.xcodeproj"
+DERIVED_DATA="${PGR_BUILD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData/Photos-Go-Round-scripts}/uninstall"
 
 usage() {
     cat <<'HELPTEXT'
-Removes what Photo-Go-Round's installs put on this Mac.
+Removes what Photos-Go-Round's installs put on this Mac.
 
 USAGE
   ./Scripts/uninstall.sh [--agent] [--wallpaper] [--saver] [--dry-run]
@@ -46,7 +46,7 @@ WHAT EACH ONE REMOVES
   --wallpaper   Unregisters every copy of the wallpaper extension and stops the
                 extension processes. If it is the chosen wallpaper, macOS falls
                 back to a default picture.
-  --saver       Deletes every Photo-Go-Round Screensaver bundle from
+  --saver       Deletes every Photos-Go-Round Screensaver bundle from
                 ~/Library/Screen Savers and stops the hosts holding them.
   --dry-run     Says what would go and removes nothing.
 

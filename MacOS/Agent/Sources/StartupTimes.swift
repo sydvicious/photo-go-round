@@ -1,7 +1,7 @@
 import Console
 import Foundation
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundKit
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundKit
 
 /// How long each step of a launch took: the `STARTUP:` lines.
 ///

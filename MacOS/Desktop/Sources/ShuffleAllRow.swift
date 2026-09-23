@@ -1,4 +1,4 @@
-import PhotoGoRoundDisplay
+import PhotosGoRoundDisplay
 import SwiftUI
 
 /// One *Shuffle All* row, drawn like System Settings' screen saver pane: the

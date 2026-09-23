@@ -3,9 +3,9 @@ import Network
 import Synchronization
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 /// Reading a request body, over a real socket.
 ///

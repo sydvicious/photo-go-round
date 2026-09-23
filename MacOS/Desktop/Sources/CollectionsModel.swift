@@ -1,5 +1,5 @@
 import Foundation
-import PhotoGoRoundAgentAPI
+import PhotosGoRoundAgentAPI
 import Observation
 import os
 

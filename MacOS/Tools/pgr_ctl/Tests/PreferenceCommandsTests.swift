@@ -1,9 +1,9 @@
 import Foundation
 import Testing
 
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundKit
 @testable import pgr_ctl
-@testable import PhotoGoRoundAgentAPI
+@testable import PhotosGoRoundAgentAPI
 
 @Suite("pgr_ctl preferences")
 struct PreferenceCommandsTests {
@@ -99,9 +99,9 @@ struct NotifyCommandTests {
         // every agent on the Mac, which is what let a scratch agent on a
         // throwaway database order the development agent to rescan.
         let name = environment.doorbells.name(.sourcesChanged)
-        #expect(name.hasPrefix("com.sydpolk.photogoround."))
+        #expect(name.hasPrefix("com.sydpolk.photosgoround."))
         #expect(name.hasSuffix(".sources"))
-        #expect(name != "com.sydpolk.photogoround.sources")
+        #expect(name != "com.sydpolk.photosgoround.sources")
     }
 
     @Test("A different container rings a different bell")
@@ -136,7 +136,7 @@ struct LogCommandTests {
     func predicateIsScopedToUs() {
         // A predicate that let anything else through would bury the agent's own
         // output in the system's.
-        #expect(LogCommand.predicate == "subsystem == \"com.sydpolk.photogoround\"")
+        #expect(LogCommand.predicate == "subsystem == \"com.sydpolk.photosgoround\"")
     }
 
     @Test("Following streams; not following shows a window ending now")

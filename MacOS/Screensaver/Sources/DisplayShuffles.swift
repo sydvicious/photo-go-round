@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 
 /// One picture loop per display, however many views the host makes.
 ///

@@ -1,5 +1,5 @@
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 import SwiftUI
 
 /// The window's whole contents: the photograph, the words that appear when
@@ -7,7 +7,7 @@ import SwiftUI
 /// the right-click menu, and the View menu through `WindowCommands`.
 struct ContentView: View {
     /// **The consumer name is the app's, and it is a parameter now.** The loop
-    /// moved into `PhotoGoRoundDisplay` in Phase 2 of `Screensaver Plan.md` so
+    /// moved into `PhotosGoRoundDisplay` in Phase 2 of `Screensaver Plan.md` so
     /// the screensaver could run the same one; the deck keys a consumer's
     /// history on this string, so the two must not share it.
     ///

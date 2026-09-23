@@ -1,8 +1,8 @@
 import Console
 import Foundation
-import PhotoGoRoundKit
-import PhotoGoRoundAgentAPI
-import PhotoGoRoundDisplay
+import PhotosGoRoundKit
+import PhotosGoRoundAgentAPI
+import PhotosGoRoundDisplay
 
 // The rig.
 //

@@ -5,8 +5,8 @@ import ImageIO
 import Testing
 import UniformTypeIdentifiers
 
-@testable import PhotoGoRoundAgentAPI
-@testable import PhotoGoRoundKit
+@testable import PhotosGoRoundAgentAPI
+@testable import PhotosGoRoundKit
 @testable import photogoroundd
 
 /// When the filler is asked for another card.
@@ -67,7 +67,7 @@ struct DealPacingTests {
                     .write(to: photos.appending(path: "broken-\(index).png"))
             }
 
-            let path = directory.appending(path: "photogoround.sqlite")
+            let path = directory.appending(path: "photosgoround.sqlite")
                 .path(percentEncoded: false)
             let database = try Database(path: path)
             try Migrator.migrate(database)

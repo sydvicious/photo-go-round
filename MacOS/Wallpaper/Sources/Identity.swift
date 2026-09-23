@@ -18,12 +18,12 @@ enum Identity {
     /// looks the item up by.
     static let bundleID = Bundle.main.bundleIdentifier
 
-    /// The pane's item identifier: `photo-go-round`, with the identifier's
+    /// The pane's item identifier: `photos-go-round`, with the identifier's
     /// suffix. **Measured 2026-09-16:** with the same item and section identifier
     /// in two builds, both answered the pane and it showed one section.
     static let itemID = infoString("PGRWallpaperItemID")
 
-    /// The item's name in the pane, *Photo-Go-Round Wallpaper* with the suffix,
+    /// The item's name in the pane, *Photos-Go-Round Wallpaper* with the suffix,
     /// and the title on the placeholder picture.
     static let itemName = infoString("PGRWallpaperName")
 
