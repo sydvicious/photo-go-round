@@ -382,12 +382,6 @@ Syd, 2026-09-22: investigate why the screen saver preview takes so long to show 
 
 - *Claude's note:* this may be the same thing as the item above, seen from the other end — black at first, then a picture once it arrives. Worth checking first.
 
-## An option in `uninstall.sh` to delete the user data
-
-Syd, 2026-09-22: add an option to `uninstall.sh` that deletes all of the user data — the database, the preferences, and the like. It deletes them only when the option is given.
-
-- *Claude's note:* `Scripts/scrub-dev.sh` already deletes the development libraries and, with `--preferences`, their preferences, and it refuses production on purpose. This option would reach production storage too, which is what separates it from the scrub.
-
 ## Tests for the wallpaper extension's and screensaver's own code
 
 Syd, 2026-09-22: yes, add it. Nothing tests the code in `MacOS/Wallpaper/Sources` or `MacOS/Screensaver/Sources` — `Rotation`, `LastPicture`, `AgentPicture`, the pane models, `DisplayShuffles`, the saver view. What is tested is around them: `PhotoGoRoundDisplay`, the wallpaper's entitlements, the installs, and `pgr_ctl`'s wallpaper commands.

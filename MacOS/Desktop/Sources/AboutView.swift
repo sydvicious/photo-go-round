@@ -1,3 +1,4 @@
+import AppKit
 import PhotosGoRoundAgentAPI
 import PhotosGoRoundDisplay
 import SwiftUI
@@ -8,8 +9,9 @@ import SwiftUI
 /// name, its version, and its copyright are stated once — in the xcconfig — and
 /// this only decides how they are arranged.
 ///
-/// **It also links to the agent's dashboard**, and the link's text is the URL,
-/// so it is where to find the port the agent is listening on.
+/// **It also links to the agent's dashboard, when it was opened with Option
+/// held** — see `DashboardDisclosure`. The link's text is the URL, so it is
+/// where to find the port the agent is listening on.
 struct AboutView: View {
     static let windowID = "about"
 
@@ -32,20 +34,53 @@ struct AboutView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
 
-            // **Re-read on a timer, not once.** The agent takes a new port every
-            // launch, and this window can stay open across a restart — a link
-            // read when it opened would point at nothing.
-            TimelineView(.periodic(from: .now, by: 2)) { _ in
-                DashboardLinkLine(
-                    link: DashboardLink(ServicePort.read(preferences)),
-                    service: SourceService(preferences: preferences))
+            if DashboardDisclosure.shared.inAbout {
+                DashboardLinkView(preferences: preferences)
+                    .padding(.top, 8)
             }
-            .padding(.top, 8)
         }
         .multilineTextAlignment(.center)
         .padding(.horizontal, 48)
         .padding(.vertical, 36)
         .frame(minWidth: 320)
+    }
+}
+
+/// Whether the About box and Settings show the link to the agent's dashboard.
+///
+/// **Only when their menu item was chosen with Option held**, since
+/// 2026-09-24. The dashboard is for supporting somebody, not something every
+/// user needs to see; Syd: "I like having the link in both About and Settings
+/// if you are pressing the option key when invoking the menu". Each choice of
+/// the item decides again, so choosing it without Option hides the link from a
+/// window already open. It is served over plain HTTP, and the browser's
+/// warning about that was judged acceptable for a support tool.
+@MainActor
+@Observable
+final class DashboardDisclosure {
+    static let shared = DashboardDisclosure()
+
+    var inAbout = false
+    var inSettings = false
+
+    /// Whether Option is down as a menu item's action runs. The keyboard's
+    /// state now, not the event's, which is what a menu choice leaves behind.
+    static var optionHeld: Bool { NSEvent.modifierFlags.contains(.option) }
+}
+
+/// The dashboard's link, as the About box and Settings both show it.
+struct DashboardLinkView: View {
+    let preferences: Preferences
+
+    var body: some View {
+        // **Re-read on a timer, not once.** The agent takes a new port every
+        // launch, and this window can stay open across a restart — a link read
+        // when it opened would point at nothing.
+        TimelineView(.periodic(from: .now, by: 2)) { _ in
+            DashboardLinkLine(
+                link: DashboardLink(ServicePort.read(preferences)),
+                service: SourceService(preferences: preferences))
+        }
     }
 }
 
