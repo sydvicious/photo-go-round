@@ -12,7 +12,7 @@ import PhotosGoRoundAgentAPI
 /// **It removes what was installed, not what was built.** Build directories,
 /// the library, the cache and the preferences are left alone: uninstalling is
 /// not the same as throwing away the photographs somebody chose.
-/// `Scripts/scrub-dev.sh` is what clears the retired development libraries' leftovers.
+/// `Scripts/scrub-data.sh` is what deletes a build's data.
 ///
 /// Translated from `Scripts/uninstall.sh`, 2026-09-19.
 /// `Plans/Xcode - Separate Build and Run.md`, Phase 5.
@@ -85,17 +85,21 @@ public enum Uninstall {
         public var fileExists: @Sendable (URL) -> Bool
         public var registrations: @Sendable () -> [WallpaperInstall.Registration]
         public var runningAgents: @Sendable () -> [AgentInstall.ForeignAgent]
+        /// The process a loaded job owns, by label; nil when it has none.
+        public var jobPID: @Sendable (String) -> Int32?
 
         public init(
             isJobLoaded: @escaping @Sendable (String) -> Bool,
             fileExists: @escaping @Sendable (URL) -> Bool,
             registrations: @escaping @Sendable () -> [WallpaperInstall.Registration],
-            runningAgents: @escaping @Sendable () -> [AgentInstall.ForeignAgent]
+            runningAgents: @escaping @Sendable () -> [AgentInstall.ForeignAgent],
+            jobPID: @escaping @Sendable (String) -> Int32? = { _ in nil }
         ) {
             self.isJobLoaded = isJobLoaded
             self.fileExists = fileExists
             self.registrations = registrations
             self.runningAgents = runningAgents
+            self.jobPID = jobPID
         }
 
         public static let live = Surroundings(
@@ -108,12 +112,28 @@ public enum Uninstall {
                 (try? FileManager.default.attributesOfItem(atPath: $0.path(percentEncoded: false))) != nil
             },
             registrations: { PluginKit.registrations(for: WallpaperInstall.extensionPoint) },
-            runningAgents: { Launchctl.agentsOutsideLaunchd(named: AgentInstall.executableName) })
+            runningAgents: { Launchctl.agentsOutsideLaunchd(named: AgentInstall.executableName) },
+            jobPID: { Launchctl.pid(of: $0) })
     }
 
-    /// `variants` is whose to remove: every configuration's for
-    /// `Scripts/uninstall.sh`, only its own for the app's Help menu, which must
-    /// not take another build's agent down with it.
+    /// The running agents no loaded job owns: the ones somebody started by hand.
+    ///
+    /// **Every configuration's job is asked, not only the ones being removed.**
+    /// Found 2026-09-24: `uninstall.sh --variant debug` named Syd's Release
+    /// agent — launchd's, `com.sydpolk.photosgoround.server` — as "still
+    /// running outside launchd" and printed `kill 964`. Removing all three
+    /// configurations had hidden it, because afterwards every agent left really
+    /// was hand-started.
+    public static func handStarted(
+        _ running: [AgentInstall.ForeignAgent], surroundings: Surroundings
+    ) -> [AgentInstall.ForeignAgent] {
+        let owned = Set(BuildVariant.allCases.compactMap { surroundings.jobPID($0.agentLabel) })
+        return running.filter { !owned.contains($0.pid) }
+    }
+
+    /// `variants` is whose to remove: the ones `Scripts/uninstall.sh` was named
+    /// with `--variant`, or all of them for `--all`, and only its own for the
+    /// app's Help menu, which must not take another build's agent down with it.
     public static func plan(
         removing parts: Set<Part> = Set(Part.allCases),
         variants: [BuildVariant] = BuildVariant.allCases,
@@ -147,7 +167,8 @@ public enum Uninstall {
         return Plan(
             parts: parts,
             agents: agents,
-            foreignAgents: parts.contains(.agent) ? surroundings.runningAgents() : [],
+            foreignAgents: parts.contains(.agent)
+                ? handStarted(surroundings.runningAgents(), surroundings: surroundings) : [],
             registrations: registrations,
             savers: savers,
             variants: variants)
@@ -177,7 +198,7 @@ public enum Uninstall {
             // the job's own process is, and it has just gone. Reporting the
             // list from before would name a process that no longer exists and
             // call it somebody's, which is what the shell version did.
-            for other in Surroundings.live.runningAgents() {
+            for other in handStarted(Surroundings.live.runningAgents(), surroundings: .live) {
                 done.append("agent: still running outside launchd, pid \(other.pid)")
                 done.append("  \(other.path)")
                 done.append("  Not this command's to stop: kill \(other.pid)")
@@ -202,8 +223,12 @@ public enum Uninstall {
             // Unregistering a *selected* extension leaves WallpaperAgent failing
             // every acquire until it is restarted — measured 2026-09-15, the
             // desktop stuck on a fallback picture. It is macOS's own agent and
-            // comes back on its own.
-            if Shell.killall("WallpaperAgent") { done.append("wallpaper: restarted WallpaperAgent") }
+            // comes back on its own. **Only when something was unregistered**:
+            // restarting it for nothing blanks another build's desktop, which
+            // `--variant debug` did to Syd's Release wallpaper on 2026-09-24.
+            if !plan.registrations.isEmpty, Shell.killall("WallpaperAgent") {
+                done.append("wallpaper: restarted WallpaperAgent")
+            }
         }
 
         if plan.parts.contains(.saver) {
@@ -212,7 +237,10 @@ public enum Uninstall {
                 done.append("screensaver: removed \(saver.path(percentEncoded: false))")
             }
             if plan.savers.isEmpty { done.append("screensaver: nothing installed") }
-            for host in SaverInstall.hosts where Shell.killall(host) {
+            // **Only when a saver was removed**, for the same reason: a host
+            // holds whichever screensaver is showing, and stopping it for
+            // nothing ends another build's.
+            for host in SaverInstall.hosts where !plan.savers.isEmpty && Shell.killall(host) {
                 done.append("screensaver: stopped \(host)")
             }
         }

@@ -46,11 +46,13 @@ Then choose them in System Settings:
 - **Wallpaper** › *Photos-Go-Round* › **Photos-Go-Round Wallpaper (Debug)**
 - **Screen Saver** › *Other* › **Photos-Go-Round Screensaver (Debug)**
 
-To take all three off the Mac, leaving the library, cache and preferences alone:
+To take a build's three off the Mac, leaving the library, cache and preferences alone — `--variant release`, `debug` or `claude`, or `--all`:
 
 ```bash
-./Scripts/uninstall.sh
+./Scripts/uninstall.sh --variant debug
 ```
+
+`./Scripts/install.sh` puts them back from a terminal, and `./Scripts/scrub-data.sh` deletes a build's library, cache and preferences; both take the same `--variant` or `--all`.
 
 [`Documentation/Installing.md`](Documentation/Installing.md) has what each install does and how to check it worked.
 

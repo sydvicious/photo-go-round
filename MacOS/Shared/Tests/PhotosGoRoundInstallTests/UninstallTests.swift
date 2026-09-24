@@ -108,8 +108,8 @@ struct UninstallTests {
     }
 
     /// Nothing about a library, a cache or a preference domain appears anywhere
-    /// in what an uninstall would do. `Scripts/scrub-dev.sh` is what clears
-    /// those, and deliberately cannot reach production.
+    /// in what an uninstall would do. `Scripts/scrub-data.sh` is what deletes
+    /// those, and only for the builds it is named.
     @Test("An uninstall never mentions the library, the cache or preferences")
     func neverTouchesData() {
         let plan = Uninstall.plan(
@@ -138,5 +138,21 @@ struct UninstallTests {
         #expect(plan.agents.map(\.label) == [BuildVariant.claude.agentLabel])
         #expect(plan.savers == [savers.appending(path: "\(BuildVariant.claude.saverBundleName).saver")])
         #expect(plan.registrations.map(\.identifier) == [BuildVariant.claude.wallpaperExtensionIdentifier])
+    }
+
+    /// Found 2026-09-24: `uninstall.sh --variant debug` called Syd's Release
+    /// agent hand-started and printed `kill 964`, because every running agent
+    /// was reported and launchd was never asked whose each one was.
+    @Test("An agent a loaded job owns is not reported as started by hand")
+    func launchdOwnedAgentsAreNotForeign() {
+        let release = AgentInstall.ForeignAgent(pid: 964, path: "/Applications/Photos-Go-Round.app/Server")
+        let byHand = AgentInstall.ForeignAgent(pid: 555, path: "/tmp/hand-built/Photos-Go-Round Server")
+        let plan = Uninstall.plan(
+            removing: [.agent], variants: [.debug], launchAgents: agents, screenSavers: savers,
+            surroundings: Uninstall.Surroundings(
+                isJobLoaded: { $0 == BuildVariant.debug.agentLabel }, fileExists: { _ in false },
+                registrations: { [] }, runningAgents: { [release, byHand] },
+                jobPID: { $0 == BuildVariant.release.agentLabel ? 964 : nil }))
+        #expect(plan.foreignAgents == [byHand])
     }
 }

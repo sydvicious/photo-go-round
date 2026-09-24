@@ -118,12 +118,15 @@ would not do: `KeepAlive` restarts a job whose process dies.
 Removes what the three installs put on this Mac, in every configuration unless
 `--variant` names one: every
 LaunchAgent and its plist, every registration of the extension, every installed
-saver. It reports any agent still running outside launchd afterwards and leaves
-it alone.
+saver. It reports any agent still running outside launchd afterwards — one no
+configuration's loaded job owns — and leaves it alone. It restarts
+`WallpaperAgent` only after unregistering an extension, and stops the
+screensaver hosts only after removing a saver, so removing one configuration
+leaves another's desktop and screensaver running.
 
 **It removes what was installed, not what was built.** Build directories, the
-library, the cache and the preferences are untouched; `Scripts/scrub-dev.sh` is
-what clears the retired development libraries' leftovers.
+library, the cache and the preferences are untouched; `Scripts/scrub-data.sh` is
+what deletes a build's data.
 
 ## ENVIRONMENT
 
@@ -162,7 +165,7 @@ pgr_install saver --from "$HOME/Library/Developer/Xcode/DerivedData/…/Photos-G
 See what an uninstall would take, and take none of it:
 
 ```bash
-./Scripts/uninstall.sh --dry-run
+./Scripts/uninstall.sh --all --dry-run
 ```
 
 ## SEE ALSO

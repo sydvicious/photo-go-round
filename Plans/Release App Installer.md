@@ -46,7 +46,8 @@ for Photos.
   - The spinner and the lockout in both windows; a line per product in the
     `install` log category.
   - The per-user port; `pgr_install start`, `stop` and `--variant`;
-    `Scripts/claude-agent.sh`.
+    `Scripts/claude-agent.sh`. *Deleted 2026-09-24: `Scripts/install.sh
+    --variant claude --agent` replaces it. `Build Plan.md`.*
 - **Phase 5 — Documents.** *Built 2026-09-21.*
   - The port in `CLAUDE.md`, `README.md`, `Installing.md` and
     `photogoroundd.md`; `pgr_install.md` for the new commands; `CLAUDE.md`'s
@@ -179,7 +180,8 @@ for Photos.
 - **Claude's agent is Syd's to run.** Syd, 2026-09-21: "it's ok to leave a
   script that sets up the launchdaemon for the claude agent and ask me to
   instsall/uninstall/start/stop it." `Scripts/claude-agent.sh`; a per-user
-  LaunchAgent, not a daemon. Launching a Claude-built app would install it too,
+  LaunchAgent, not a daemon. *Since 2026-09-24, `Scripts/install.sh` and
+  `uninstall.sh` with `--variant claude`, and `pgr_install start|stop`.* Launching a Claude-built app would install it too,
   so Claude never launches one.
 - **The separate build and `Install …` schemes stay.** Syd, 2026-09-21: "we
   still need the separate build/installer targets." `pgr_install` is the
@@ -509,8 +511,9 @@ answers "did the app touch my saver?" later.
 
 The Help menu's Uninstall removes this build's copy only —
 `Uninstall.plan(variants: [BuildVariant.current])` — so a Debug app never takes
-a Release agent down. `pgr_install uninstall` and `Scripts/uninstall.sh` still
-remove every configuration's by default; `--variant` narrows them.
+a Release agent down. `pgr_install uninstall` still removes every
+configuration's by default; `--variant` narrows it. *`Scripts/uninstall.sh` has
+no default since 2026-09-24: it takes `--variant` or `--all`. `Build Plan.md`.*
 
 Two defects fixed on the way, 2026-09-21: an installed saver is found without
 following a link, so one pointing into a deleted app is still removed; and the
@@ -522,7 +525,9 @@ configuration shares.
 **Claude never launches a built app**, in any configuration: since 2026-09-21
 every launch installs and restarts its agent, which bootstraps a launchd job on
 Syd's Mac. Claude's own agent is installed, started, stopped and removed by
-`Scripts/claude-agent.sh`, which Syd runs when asked.
+`Scripts/claude-agent.sh`, which Syd runs when asked. *Since 2026-09-24,
+`Scripts/install.sh --variant claude --agent`, `uninstall.sh --variant claude`
+and `pgr_install start|stop --variant claude`.*
 
 Measurements that register with `pkd` use the `Claude` identity, from
 `~/.claude/build/photo-go-round`, and unregister afterwards; `pluginkit -m -A`

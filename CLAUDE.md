@@ -107,7 +107,9 @@ To check something compiles, build the product scheme — `Photos-Go-Round`,
 `Photos-Go-Round Server`, `Photos-Go-Round Saver`, `Photos-Go-Round Wallpaper
 Host`. Hand Syd the Install scheme to run from his own Xcode.
 
-`Scripts/install-*.sh` and `Scripts/uninstall.sh` are his for the same reason.
+`Scripts/install.sh`, `Scripts/uninstall.sh` and `Scripts/scrub-data.sh` are his
+for the same reason. Each takes `--variant release|debug|claude` or `--all`, and
+none has a default.
 
 ## Launching a built app installs. Never launch one
 
@@ -120,7 +122,7 @@ running system. Build it; do not run it.
 The `Claude` agent is Syd's to install, start, stop and remove, when you ask:
 
 ```bash
-./Scripts/claude-agent.sh install
+./Scripts/install.sh --variant claude --agent
 ```
 
 `Plans/Release App Installer.md`.

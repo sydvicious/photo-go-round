@@ -78,8 +78,8 @@ assets." Its container is `~/Library/Containers/<identifier>`, its cache
 `~/Library/Caches/<identifier>`, and its preference domain `<identifier>` — all
 three named alike, so a person reading any of them can find the other two. Until
 that day each build also had a `.dev` library beside its real one, and a flag
-chose between them; both are gone. `Scripts/scrub-dev.sh` deletes what the
-retired libraries left behind.
+chose between them; both are gone. `Scripts/scrub-data.sh` deletes a build's
+library, current and retired names alike.
 
 **`<identifier>` carries the build configuration** — `com.sydpolk.photosgoround`, `….debug` or `….claude` by build configuration — so a
 release, a Debug and an agent's build never share a database and can all run at

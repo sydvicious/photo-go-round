@@ -41,13 +41,13 @@ What each launch did, a line per product:
 /usr/bin/log show --info --last 10m --predicate 'subsystem == "com.sydpolk.photosgoround" AND category == "install"'
 ```
 
-**Claude's agent** is installed and managed by a script Syd runs, because launching a build installs its agent:
+**From a terminal**, `Scripts/install.sh` builds a configuration and installs what it makes, the way an Install scheme's ⌘R does. It takes `--variant release|debug|claude` (more than once if wanted) or `--all`, and `--agent`, `--saver`, `--wallpaper` for one piece; with none of those three it installs all of them. **Claude's agent** is installed this way, by Syd, because launching a build installs its agent:
 
 ```bash
-./Scripts/claude-agent.sh install
+./Scripts/install.sh --variant claude --agent
 ```
 
-`uninstall`, `start` and `stop` too. It touches only `com.sydpolk.photosgoround.server.claude`.
+`pgr_install start --variant claude` and `stop` start and stop it without reinstalling. It touches only `com.sydpolk.photosgoround.server.claude`.
 
 ## Installing from the Install schemes
 
@@ -167,12 +167,12 @@ Installed from the schemes instead: ⌘R all three, in the order above.
 ## Removing
 
 ```bash
-./Scripts/uninstall.sh
+./Scripts/uninstall.sh --variant debug
 ```
 
-Or one at a time with `--agent`, `--wallpaper`, `--saver`. `--dry-run` says what would go and removes nothing. The app's Help menu removes one piece of its own build. The library, cache and preferences are left alone — `Scripts/scrub-dev.sh` is what clears development storage.
+**It says which build**: `--variant release`, `debug` or `claude`, more than once if wanted, or `--all` for every configuration's copy — three labels, three saver names, three extension identifiers, all from `BuildVariant`. Or one piece at a time with `--agent`, `--wallpaper`, `--saver`. `--dry-run` says what would go and removes nothing. The app's Help menu removes one piece of its own build.
 
-It finds every configuration's copy, not just the one you last built: three labels, three saver names, three extension identifiers, all from `BuildVariant`.
+The library, cache and preferences are left alone. `Scripts/scrub-data.sh`, with the same `--variant` or `--all`, deletes them — current and retired names alike — after stopping that build's agent.
 
 ## What is doing the installing
 

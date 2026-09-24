@@ -34,10 +34,28 @@ public enum Launchctl {
         Shell.run("/bin/launchctl", ["bootstrap", userDomain, plist.path(percentEncoded: false)])
     }
 
-    /// Agents running under a name, with the path each is running from.
+    /// The process of a loaded job, or nil when the job is not loaded or is not
+    /// running. Read from `launchctl print`, whose `pid = N` line is there only
+    /// while the job has a process.
+    public static func pid(of label: String) -> Int32? {
+        let printed = Shell.run("/bin/launchctl", ["print", "\(userDomain)/\(label)"])
+        guard printed.status == 0 else { return nil }
+        for line in printed.output.split(separator: "\n") {
+            let text = line.trimmingCharacters(in: .whitespaces)
+            if text.hasPrefix("pid = "), let pid = Int32(text.dropFirst("pid = ".count)) {
+                return pid
+            }
+        }
+        return nil
+    }
+
+    /// Agents running under a name, with the path each is running from —
+    /// **launchd's own among them, despite the name.**
     ///
     /// The caller decides which of these are somebody else's: an install knows
-    /// its own binary's path and everything else belongs to whoever started it.
+    /// its own binary's path and everything else belongs to whoever started it,
+    /// and an uninstall leaves out every process a loaded job owns
+    /// (`Uninstall.handStarted`).
     ///
     /// **Matched as the last component of the executable's path.** The name has
     /// a space in it since 2026-09-22, when `photogoroundd` became `Photos-Go-Round

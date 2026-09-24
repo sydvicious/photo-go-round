@@ -22,11 +22,18 @@ Installing was a fifth thing again — a copy for the saver, a plist for the age
   - **`Install Wallpaper Extension`**, **`Install Agent`** and **`Install Screen Saver`** are schemes now, not targets. Each builds its product and `pgr_install`, and its Run action installs. ⌘B changes nothing.
   - The app and `pgr_ctl` still have no dev install, and need none: the app runs from Xcode, and `pgr_ctl` is a copy or symlink into `~/bin`.
   - Dev installs in place from the build directory; release is Archive, moved to `/Applications` by hand. Syd, 2026-09-19: "We use Archive to generate the app bundle."
-  - **Uninstall is `Scripts/uninstall.sh`**, run by hand — a wrapper over `pgr_install uninstall` since 2026-09-19, so it holds no names of its own.
+  - **Uninstall is `Scripts/uninstall.sh`**, run by hand — a wrapper over `pgr_install uninstall` since 2026-09-19, so it holds no names of its own. *Since 2026-09-24 it says which build, and `Scripts/install.sh` is its counterpart; see* The scripts.
 - *The scripts* — **mostly overtaken.** The five-scripts shape assumed a script was how a product got built; `xcodebuild` is, and a script is only what a target calls or a convenience over one.
   - `make-saver-bundle.sh` survives, defaults its output to DerivedData, and its `--install` calls `pgr_install saver`.
   - `make-agent-bundle.sh` is deleted, 2026-09-19. It hand-assembled a bundle the `Photo-Go-Round Server` target already produces, and wrote a second copy of the LaunchAgent plist. `SMAppService` went with it — see *Design Decisions*.
   - `make-app.sh`, `make-wallpaper-extension.sh` and `make-pgr-ctl.sh` were never written and are not wanted: each is `xcodebuild -scheme`.
+  - **Every script Syd runs to install, uninstall or delete takes `--variant` or `--all`. Built 2026-09-24.**
+    - `Scripts/install.sh`, new: builds a configuration and installs its agent, saver and wallpaper, as an Install scheme's ⌘R does.
+    - `Scripts/uninstall.sh`: no longer removes every configuration's copy unasked.
+    - `Scripts/scrub-data.sh`, renamed from `scrub-dev.sh`: deletes a build's library, cache and preferences, current and retired names alike.
+    - `Scripts/claude-agent.sh` is deleted; `install.sh --variant claude --agent` and `pgr_install start|stop --variant claude` replace it.
+    - `Scripts/variants.sh`, sourced by all three: the option handling, the names, and the one `pgr_install` build.
+    - Uninstalling one configuration no longer reports another's launchd agent as hand-started, nor restarts `WallpaperAgent` or the screensaver hosts when it removed nothing.
 - *The combining script* — `Scripts/build-all.sh`, which runs the five in order and is what CI calls.
   - It builds; it installs nothing unless asked.
   - Its exit status is the build's, so a red CI run means a broken build and nothing else.
@@ -61,6 +68,9 @@ Written 2026-09-17, at Syd's "I guess I need to put build hygene into this proje
 
   **What it leaves:** somebody who installs and never opens the app gets a half-blind agent, which is the 2026-09-15 failure over again — folder sources working, Photos sources dark, and nothing on screen to say so. Syd, 2026-09-19: "this limitation should be fine." **Written down rather than left to be rediscovered**: `Documentation/Installing.md`, *The gap this leaves, which is accepted*, and a shorter note in `Documentation/pgr_install.md`.
 - **Uninstalling is a script, never a target.** Syd, 2026-09-15: "I am willing to run that on the command line." `Scripts/uninstall.sh` removes all three — the job and its plist, every registration of the extension, the saver bundle — or one at a time with `--agent`, `--wallpaper`, `--saver`. It leaves the library, the cache, preferences and every build directory alone, and it reports rather than kills an agent somebody started by hand.
+- **A script that changes the system says which build.** Syd, 2026-09-24: "I want all installers and uninstallers that I run to take a --variant argument, and accept --all for all three variants." `--variant` may repeat; with neither, the script refuses rather than choosing.
+- **Deleting data is its own script, not an option on uninstall.** `scrub-data.sh` stops the build's agent first, and names come only from `--variant`, never from a path or `PGR_BUILD_ROOT`.
+- **An uninstall asks launchd whose each running agent is.** A process a loaded job owns, of any configuration, is not reported as hand-started.
 - **No third-party build tooling.** `xcodebuild`, `codesign`, `pluginkit`, `launchctl`, and shell. Nothing else. **`swift build` came off this list on 2026-09-19**: it has only `debug` and `release`, so it cannot produce the `Claude` identity, and anything built that way binds Syd's Debug port and carries his label. `swift test` likewise — `xcodebuild test -scheme "Package Tests"` runs all five package test targets.
 
 # Background
@@ -149,6 +159,24 @@ Syd, 2026-09-15: "and also maintain separate scripts as well". A build phase ser
 
 `Scripts/build-all.sh` is then thin: five `xcodebuild` invocations, one per scheme, arm64, into one derived data path, with `--release` switching configuration. CI runs it and the package's tests; nothing else.
 
+## The scripts take a variant, 2026-09-24
+
+**Why.** A Debug app from Sep 23, found by Spotlight in Xcode's DerivedData and launched after a reboot, installed its own old agent beside the Release one. Removing just that agent meant calling `pgr_install uninstall --variant debug` by hand: `uninstall.sh` rejected `--variant`, and without it removed every configuration's copy. Syd asked for every installer and uninstaller he runs to take `--variant` or `--all`, and for `scrub-dev.sh` to become `scrub-data.sh` over "older versions of data files and current ones."
+
+**`Scripts/variants.sh`** is sourced by the three scripts. It parses `--variant` (repeatable) and `--all` into `VARIANTS`, refuses a run with neither, and spells each configuration's Xcode configuration and suffixes — `BuildVariant.swift`'s names, written again because a shell script cannot read Swift. It builds `pgr_install` once, as Debug, under `$BUILD_ROOT/tools`; which build a command acts on is its `--variant` or `--from`, never the configuration `pgr_install` was built as.
+
+**`install.sh`** builds each chosen configuration under `$BUILD_ROOT/<variant>` — `PGR_BUILD_ROOT`, by default `~/Library/Developer/Xcode/DerivedData/Photos-Go-Round-scripts` — and runs `pgr_install agent|saver|wallpaper --from` on what it built: the `Photos-Go-Round Server` scheme's app, the saver bundle with the configuration's name suffix, and the appex inside the Wallpaper Host. `--dry-run` still builds, because `pgr_install` reads the label and name from the bundle; building the host registers it with `pkd`, as every host-app build does. A Release installed this way runs from that build folder rather than `/Applications`, under the same label, until the app's next launch points it back.
+
+**`uninstall.sh`** passes each variant to `pgr_install uninstall --variant`, or nothing for `--all`, which `pgr_install` reads as every configuration.
+
+**`scrub-data.sh`**, for each variant, deletes the container, cache and preference domain of `com.sydpolk.photosgoround<suffix>` and of its retired `.dev` library, and the preference domains `.screensaver` and `.wallpaper` with their retired `.dev` and `.prod` forms. It stops the variant's agent with `pgr_install stop` — unloaded, so `KeepAlive` does not restart it — and kills any agent started by hand that has one of those containers open. It then restarts `cfprefsd`, whose cached copy would otherwise outlive the file. The screensaver's and wallpaper's remembered pictures are inside sandbox containers macOS protects: they are tried, and a refusal is reported without failing the run. The agent is left stopped; its plist stays, so it returns at the next login or with `pgr_install start`.
+
+**Three defects found on the first real run.** `uninstall.sh --variant debug` removed the Debug agent correctly, and then:
+
+- **It reported Syd's Release agent as "still running outside launchd" and printed `kill 964`.** `Launchctl.agentsOutsideLaunchd` lists every agent process, launchd's included, and `Uninstall` never filtered; removing all three configurations had hidden it. `Uninstall.handStarted` now leaves out every process a loaded job of any configuration owns, read from `launchctl print`'s `pid = N` (`Launchctl.pid(of:)`). Tested: *An agent a loaded job owns is not reported as started by hand*.
+- **It restarted `WallpaperAgent` with nothing unregistered**, blanking the Release desktop for a moment. Now only after an unregistration.
+- **It would have stopped the screensaver hosts with nothing removed**, ending a Release screensaver mid-show. Now only after a saver is removed.
+
 ## What this leaves stale elsewhere
 
 - **`TODO.md`, *Build products out of the repo*. Done and deleted, 2026-09-19.** Every default moved to DerivedData, and the item's real question — where development storage lives once no build writes into the repo — was answered by moving it to `~/Library/Containers/<identifier>[.dev]`, keyed by build configuration so three agents never share a database. Syd: "all of the datafiles have to run in the users home directory so that this will work for two different users on the same machine."
@@ -162,7 +190,7 @@ Syd, 2026-09-15: "and also maintain separate scripts as well". A build phase ser
 - `TODO.md` — *Build products out of the repo*; *Build for arm64 only*; *Installing by launching the app*.
 - `Wallpaper Plan.md` — *The real extension, inside the app*; *What the fourth probe found*.
 - `Screensaver Plan.md` — how the saver is built and installed today.
-- `Scripts/make-saver-bundle.sh`, `Scripts/run-server.sh` (`Scripts/photogoroundd` until 2026-09-22), `Scripts/scrub-dev.sh`, `Scripts/uninstall.sh`. `make-agent-bundle.sh` was deleted 2026-09-19.
+- `Scripts/make-saver-bundle.sh`, `Scripts/run-server.sh` (`Scripts/photogoroundd` until 2026-09-22), `Scripts/install.sh`, `Scripts/uninstall.sh`, `Scripts/scrub-data.sh` (`Scripts/scrub-dev.sh` until 2026-09-24), `Scripts/variants.sh`. `make-agent-bundle.sh` was deleted 2026-09-19, `claude-agent.sh` 2026-09-24.
 - `Documentation/pgr_install.md` — the binary every install runs now.
 - `Plans/Xcode - Separate Build and Run.md` — the plan that separated building from installing, and the measurements behind it.
 - `Photo-Go-Round.xcodeproj` — targets `Photo-Go-Round`, `Photo-Go-Round Wallpaper`, `Photo-Go-Round Saver`, `Photo-Go-Round Saver Spike`, `Photo-Go-Round Server`, `pgr_ctl`.

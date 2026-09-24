@@ -62,7 +62,7 @@ build's library is one directory name, used for the container, the cache and the
 preference domain, all under the user's own home so that two people on one Mac
 never share a library. The four deployment flags went that day, with the second
 library they chose between;
-`./Scripts/scrub-dev.sh` deletes what those left behind — see FILES.
+`./Scripts/scrub-data.sh` deletes what those left behind — see FILES.
 
 `--release`, `--debug`, `--claude`
 Whose build's library. Each build configuration has its own identifier —
@@ -336,10 +336,11 @@ The database, and its WAL sidecars.
 Materialized photo bytes. Only photos on volumes that can disappear are copied;
 anything on the boot volume is read where it lies.
 
-`Scripts/scrub-dev.sh`
-Deletes what the retired development libraries left behind — each build's `.dev`
-container, cache and preferences, and the screensaver's and wallpaper's old `.dev`
-and `.prod` domains — after stopping any agent holding one. `--dry-run` says what
+`Scripts/scrub-data.sh`
+Deletes a build's data, named by `--variant release|debug|claude` or `--all`: its
+container, cache and preferences, the screensaver's and wallpaper's domains, and
+the same under every retired name — the `.dev` library, the old `.dev` and `.prod`
+domains — after stopping that build's agent. `--dry-run` says what
 would go; `--yes` skips the prompt. Every name it touches is spelled in it and
 ends in `.dev` or `.prod`, and none can be overridden, so no library a current
 build uses is reachable from it (_internal testing only_).
