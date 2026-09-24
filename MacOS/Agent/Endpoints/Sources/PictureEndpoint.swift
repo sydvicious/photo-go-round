@@ -34,6 +34,17 @@ struct PictureEndpoint {
     /// that shortens the queue and therefore the only thing that can notice it
     /// has run low. The host decides what to do about it; this just says so.
     let queueRanShort: @Sendable () -> Void
+    /// Where what a request leaves behind is written — the deal of each card it
+    /// takes, the delivery of the one that went out, the consumer's heartbeat —
+    /// and, after a delivery, where the queue is topped up.
+    ///
+    /// **The agent writes it off the request's path**, on a connection of its
+    /// own, and rings `queueRanShort` itself once a delivery is in: the pop is
+    /// the only write a client waits for since 2026-09-24. `Plans/Startup
+    /// Performance.md`. Nil writes it here, in line, on the request's own
+    /// connection, and rings `queueRanShort` — which is every test that is not
+    /// about the order.
+    var settling: (@Sendable (Deck.Settlement) -> Void)?
     /// Called when a request found nothing to show.
     ///
     /// **A different event from the deck running short.** Running short
@@ -110,14 +121,14 @@ struct PictureEndpoint {
             store: store, evicted: evicted, kept: kept)
     }
 
-    /// `RESIZE: gave up after 1000ms on IMG_0327.HEIC (…) · card 6921 · deal #84642; serving the original`
+    /// `RESIZE: gave up after 1000ms on IMG_0327.HEIC (…) · card 6921; serving the original`
     ///
     /// The one line a stalled resize leaves, on the console and in the unified
-    /// log. Filter on the prefix.
-    static func resizeGaveUp(name: String, card: Int64, deal: Int64?, after budget: Duration) -> String {
-        var parts = ["RESIZE: gave up after \(StageTimes.milliseconds(budget)) on \(name)", "card \(card)"]
-        if let deal { parts.append("deal #\(deal)") }
-        return parts.joined(separator: " · ") + "; serving the original"
+    /// log. Filter on the prefix. **No deal ordinal since 2026-09-24**: the deal
+    /// is written off the request's path, so the request never learns it.
+    static func resizeGaveUp(name: String, card: Int64, after budget: Duration) -> String {
+        ["RESIZE: gave up after \(StageTimes.milliseconds(budget)) on \(name)", "card \(card)"]
+            .joined(separator: " · ") + "; serving the original"
     }
 
     /// **What one render actually took**, said whether or not anybody was still
@@ -184,8 +195,10 @@ struct PictureEndpoint {
         var display: String? = nil
         var width: String?
         var height: String?
+        /// The card served. **Its deal ordinal is not here since 2026-09-24**:
+        /// the deal is written off the request's path, so the request never
+        /// learns it. `Deck.settle`.
         var card: Int64?
-        var deal: Int64?
         /// Which source the photograph came from. **The name alone does not say**
         /// — two folders can hold `Image_001.jpg`, and when something is wrong
         /// with one source the first question is which one is being served from.
@@ -229,7 +242,6 @@ struct PictureEndpoint {
                 parts.append(sourceName.map { "source \(sourceID) (\($0))" } ?? "source \(sourceID)")
             }
             if let width, let height { parts.append("\(width)x\(height)") }
-            if let deal { parts.append("deal #\(deal)") }
             if bytes > 0 { parts.append(RunCommand.bytes(bytes)) }
             if let cacheBytes { parts.append("cache \(RunCommand.bytes(cacheBytes))") }
             if let queued { parts.append("\(queued) queued") }
@@ -256,7 +268,7 @@ struct PictureEndpoint {
                 """
                 served status=\(status, privacy: .public) consumer=\(consumer, privacy: .public) \
                 display=\(display ?? "none", privacy: .public) \
-                card=\(card ?? 0, privacy: .public) deal=\(deal ?? 0, privacy: .public) \
+                card=\(card ?? 0, privacy: .public) \
                 bytes=\(bytes, privacy: .public) \
                 source=\(sourceID ?? 0, privacy: .public) \
                 name=\(detail, privacy: .public) sourceName=\(sourceName ?? "none", privacy: .public) \
@@ -272,7 +284,7 @@ struct PictureEndpoint {
             }
         }
 
-        /// `TIMING: app · 200 · deal #83911 · waited 0ms · open 2ms · … · total 29012ms`
+        /// `TIMING: app · 200 · waited 0ms · open 2ms · … · total 29012ms`
         ///
         /// **Every step, every request, in the unified log only.** Added
         /// 2026-09-16 when requests took 10–50 seconds during a refresh and
@@ -284,7 +296,6 @@ struct PictureEndpoint {
         var timing: String? {
             guard let stages else { return nil }
             var parts = ["TIMING: \(consumer)", "\(status)"]
-            if let deal { parts.append("deal #\(deal)") }
             if !stages.stages.isEmpty { parts.append(stages.summary) }
             parts.append("total \(Int(milliseconds))ms")
             return parts.joined(separator: " · ")
@@ -363,7 +374,6 @@ struct PictureEndpoint {
                 width: request.query("w"),
                 height: request.query("h"),
                 card: card?.id,
-                deal: card?.dealSeq,
                 sourceID: card?.sourceID,
                 sourceName: source?.spokenName,
                 bytes: bytes,
@@ -391,17 +401,24 @@ struct PictureEndpoint {
 
         // Consumer identity is parameters rather than registration: first sight
         // creates the row, every sight updates the heartbeat. Nothing to reap.
+        // Written with the rest of what the request leaves behind; see
+        // `settling`.
         let kind = ConsumerKind(request.query("consumer") ?? "cli")
-        let consumerID = try? context.deck.register(
-            kind: kind, displayID: request.query("display")
-        ).id
-        timing.lap("register")
+        let display = request.query("display")
+        // How every request ends, whatever it answered: the consumer is seen,
+        // and a card whose bytes went out is counted.
+        let finish = { (delivered: Int64?) in
+            self.settle(
+                Deck.Settlement(delivered: delivered, consumer: kind, displayID: display),
+                context: context)
+        }
 
         let box = Self.requestedSize(request)
         let accept = request.header("Accept")
         // Refused before the pop: a request that cannot be answered in any
         // format must not spend a card finding that out.
         guard let format = PhotoRenderer.Format.negotiated(accept: accept) else {
+            finish(nil)
             report(request, status: 406, detail: "no acceptable format", timing: timing)
             return .text(
                 "neither image/heic nor image/jpeg is acceptable\n",
@@ -421,16 +438,20 @@ struct PictureEndpoint {
             // The box and format go to `serve`, so a card whose original has
             // been evicted is still served from a copy kept for that box.
             let wanted = box.map { ResizedCopies.Request(width: $0.width, height: $0.height, format: format) }
-            while let served = try await context.cache.serve(
-                to: consumerID, fitting: wanted, timing: &timing)
-            {
+            while let served = try await context.cache.take(fitting: wanted, timing: &timing) {
+                // **Dealt as soon as it is taken**, whatever becomes of it — a
+                // photograph that will not render has had its turn — and off
+                // this request's path. `Deck.settle`.
+                settle(Deck.Settlement(dealing: served.card.id), context: context)
+                timing.lap("deal")
 
                 guard let box else {
                     // No size asked for: the original, untouched — opened now,
                     // for the same reason as above.
                     guard
                         let response = original(
-                            served, request: request, context: context, timing: &timing)
+                            served, request: request, context: context, timing: &timing,
+                            finish: finish)
                     else { continue }
                     return response
                 }
@@ -446,10 +467,8 @@ struct PictureEndpoint {
                     timing.lap("resized copy")
                     var headers = Self.headers(for: served, contentType: format.mimeType)
                     headers["X-PGR-Pixels"] = "\(copy.pixelWidth)x\(copy.pixelHeight)"
-                    try? context.deck.markDelivered(photoID: served.card.id)
-                    timing.lap("delivered")
-                    queueRanShort()
-                    timing.lap("top up")
+                    finish(served.card.id)
+                    timing.lap("settle")
                     report(
                         request, status: 200, detail: served.card.spokenName, source: served.source,
                         card: served.card, bytes: stream.byteCount,
@@ -526,14 +545,15 @@ struct PictureEndpoint {
                         timing.lap("resize gave up")
                         let line = Self.resizeGaveUp(
                             name: served.card.spokenName, card: served.card.id,
-                            deal: served.card.dealSeq, after: resizeBudget)
+                            after: resizeBudget)
                         // The console mirror carries it. It used to be logged
                         // here as well, which since Phase 1 was the same line
                         // twice. `Plans/Logging.md`, Phase 5.
                         Console.event(line)
                         guard
                             let response = original(
-                                served, request: request, context: context, timing: &timing)
+                                served, request: request, context: context, timing: &timing,
+                                finish: finish)
                         else { continue }
                         return response
                     }
@@ -544,18 +564,16 @@ struct PictureEndpoint {
                     var headers = Self.headers(
                         for: served, contentType: rendered.format.mimeType)
                     headers["X-PGR-Pixels"] = "\(rendered.width)x\(rendered.height)"
-                    try? context.deck.markDelivered(photoID: served.card.id)
-                    timing.lap("delivered")
                     // **A deal follows a picture that reached somebody**, not a
                     // request that arrived. Rung at the top of this loop it
                     // fired once per card *taken*, so a request walking past
                     // three unrenderable photographs bought four fresh cards —
                     // against `PhotoCache`'s own statement that "a skip no
-                    // longer buys a fresh card". `markDelivered` is the
-                    // endpoint's existing notion of a 200 in hand, so this
-                    // belongs beside it and nowhere else.
-                    queueRanShort()
-                    timing.lap("top up")
+                    // longer buys a fresh card". A delivery is the endpoint's
+                    // notion of a 200 in hand, so the top-up rides it and
+                    // nothing else.
+                    finish(served.card.id)
+                    timing.lap("settle")
                     report(
                         request, status: 200, detail: served.card.spokenName, source: served.source,
                         card: served.card, bytes: Int64(rendered.bytes.count),
@@ -598,9 +616,11 @@ struct PictureEndpoint {
             // itself, and a client that asks again in a few seconds will find
             // whatever landed in between.
             deckCameUpEmpty()
+            finish(nil)
             report(request, status: 204, detail: "no photos available", timing: timing)
             return .noContent()
         } catch {
+            finish(nil)
             report(request, status: 500, detail: "could not serve a picture", timing: timing)
             Log.deck.error(kind: "serve.failed", "serving failed: \(error)")
             return .text("could not serve a picture\n", status: 500, reason: "Internal Server Error")
@@ -621,19 +641,18 @@ struct PictureEndpoint {
     /// moves on to the next card.
     private func original(
         _ served: PhotoCache.ServedPhoto, request: HTTPListener.Request,
-        context: (cache: PhotoCache, deck: Deck), timing: inout StageTimes
+        context: (cache: PhotoCache, deck: Deck), timing: inout StageTimes,
+        finish: (Int64?) -> Void
     ) -> HTTPListener.Response? {
         guard let stream = HTTPListener.Response.StreamedFile(url: served.url) else {
             vanished(served, context: context)
             return nil
         }
         timing.lap("original")
-        try? context.deck.markDelivered(photoID: served.card.id)
-        timing.lap("delivered")
         // **A deal follows a picture that reached somebody**, not a request
         // that arrived; see the resized branch in `next`.
-        queueRanShort()
-        timing.lap("top up")
+        finish(served.card.id)
+        timing.lap("settle")
         report(
             request, status: 200, detail: served.card.spokenName, source: served.source,
             card: served.card, bytes: stream.byteCount, timing: timing)
@@ -641,6 +660,20 @@ struct PictureEndpoint {
             status: 200, reason: "OK",
             headers: Self.headers(for: served, contentType: Self.contentType(of: served.url)),
             body: .file(stream))
+    }
+
+    /// Hands what a request leaves behind to `settling`, or writes it now.
+    private func settle(_ settlement: Deck.Settlement, context: (cache: PhotoCache, deck: Deck)) {
+        if let settling {
+            settling(settlement)
+            return
+        }
+        do {
+            try context.deck.settle(settlement)
+        } catch {
+            Log.deck.error(kind: "serve.settle-failed", "could not deal what was served: \(error)")
+        }
+        if settlement.delivered != nil { queueRanShort() }
     }
 
     private func vanished(_ served: PhotoCache.ServedPhoto, context: (cache: PhotoCache, deck: Deck)) {
@@ -668,7 +701,6 @@ struct PictureEndpoint {
         return [
             "Content-Type": contentType,
             "X-PGR-Card": String(card.id),
-            "X-PGR-Deal": String(card.dealSeq ?? 0),
             "X-PGR-Source": String(card.sourceID),
             "X-PGR-Storage": card.storage.rawValue,
             // What a person calls the photograph and its source, for a client

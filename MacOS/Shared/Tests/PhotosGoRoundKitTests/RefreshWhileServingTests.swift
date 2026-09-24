@@ -95,8 +95,7 @@ struct RefreshWhileServingTests {
                 store: bytes)
             cache.log = { _ in }
             let deck = Deck(database: database)
-            let consumer = try deck.register(kind: ConsumerKind("app"), displayID: "DISPLAY").id
-            let served = try await cache.serve(to: consumer)
+            let served = try await cache.serve(to: ConsumerKind("app"))
             if let served { try deck.markDelivered(photoID: served.card.id) }
             took.append(clock.now - request)
         }

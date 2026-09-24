@@ -316,7 +316,8 @@ extension Deck {
     /// window starts counting.
     ///
     /// Called when a picture is served from the queue, not when it is added —
-    /// so a picture prepared but never shown costs the rotation nothing.
+    /// so a picture prepared but never shown costs the rotation nothing. Serving
+    /// deals through `settle`, which does this with the rest of its writes.
     ///
     /// **Not the same as `markDelivered`, below**, which counts what actually
     /// reached a client. This one fires when serving *chooses* a card, before
@@ -325,20 +326,96 @@ extension Deck {
         try database.transaction(.immediate) { try recordShown(photoID: photoID, now: now) }
     }
 
-    /// The same deal, for a caller that is already `async`.
-    ///
-    /// **The second of the two statements a picture request contends on**, after
-    /// popping the queue. It advances the single ordinal every consumer shares,
-    /// so it takes the writer — and serving must never hold a cooperative-pool
-    /// thread waiting for it. This suspends instead.
-    public func markShown(
-        photoID: Int64,
-        now: Date = Date(),
-        isolation: isolated (any Actor)? = #isolation
-    ) async throws -> Int64 {
-        try await database.transaction(.immediate) {
-            try recordShown(photoID: photoID, now: now)
+    /// What serving leaves to be written, off the client's path: the deal of a
+    /// card it took, the delivery of one whose bytes went out, and the
+    /// consumer's heartbeat. Any of the three may be absent.
+    public struct Settlement: Sendable {
+        /// A card `PhotoQueue.take` marked, to be dealt.
+        public var dealing: Int64?
+        /// A card whose bytes reached the client.
+        public var delivered: Int64?
+        /// Who asked, to be marked seen.
+        public var consumer: ConsumerKind?
+        public var displayID: String?
+        public var at: Date
+
+        public init(
+            dealing: Int64? = nil, delivered: Int64? = nil,
+            consumer: ConsumerKind? = nil, displayID: String? = nil, at: Date = Date()
+        ) {
+            self.dealing = dealing
+            self.delivered = delivered
+            self.consumer = consumer
+            self.displayID = displayID
+            self.at = at
         }
+    }
+
+    /// Writes a settlement in one transaction: a dealt card's taken row goes
+    /// and the card is dealt, a delivered one is counted, and the consumer is
+    /// marked seen. Answers the deal's ordinal, or nil when nothing was dealt.
+    ///
+    /// **Off the client's path, since 2026-09-24.** These were three of the
+    /// four times a picture request took the writer before its bytes could go
+    /// out; only the `take` is left in front of the response. At boot, with
+    /// the refresh and the cache walk on the same disk, the deal alone was
+    /// 2.6 s of a 10.7 s first picture. `Plans/Startup Performance.md`.
+    ///
+    /// **A card is dealt as soon as it is taken**, not when its request ends,
+    /// so it is out of the queue for as long as this write takes rather than
+    /// for the length of a resize — and the deal still fires when serving
+    /// chooses a card, which is what `markShown` has always said.
+    @discardableResult
+    public func settle(
+        _ settlement: Settlement,
+        isolation: isolated (any Actor)? = #isolation
+    ) async throws -> Int64? {
+        try await database.transaction(.immediate) {
+            try settleNow(settlement)
+        }
+    }
+
+    /// The same, for a caller that is not `async`.
+    @discardableResult
+    public func settle(_ settlement: Settlement) throws -> Int64? {
+        try database.transaction(.immediate) { try settleNow(settlement) }
+    }
+
+    /// Deals every card left taken, and answers how many.
+    ///
+    /// An agent that stopped between taking a card and dealing it leaves the
+    /// card on the queue, taken — out of the filler's reach, and never shown
+    /// again until it is dealt. Nobody knows whether its bytes arrived, so it
+    /// is dealt and not counted delivered. Run at launch, before anything
+    /// serves.
+    @discardableResult
+    public func settleAbandoned(now: Date = Date()) throws -> Int {
+        try database.transaction(.immediate) {
+            let taken = try PhotoQueue(database: database).taken()
+            for photoID in taken {
+                try database.run(
+                    "DELETE FROM queue WHERE photo_id = :id;", ["id": .int(photoID)])
+                _ = try recordShown(photoID: photoID, now: now)
+            }
+            return taken.count
+        }
+    }
+
+    private func settleNow(_ settlement: Settlement) throws -> Int64? {
+        if let consumer = settlement.consumer {
+            try register(kind: consumer, displayID: settlement.displayID, now: settlement.at)
+        }
+        var seq: Int64?
+        if let photoID = settlement.dealing {
+            try database.run(
+                "DELETE FROM queue WHERE photo_id = :id AND taken_at IS NOT NULL;",
+                ["id": .int(photoID)])
+            seq = try recordShown(photoID: photoID, now: settlement.at)
+        }
+        if let photoID = settlement.delivered {
+            try markDelivered(photoID: photoID, now: settlement.at)
+        }
+        return seq
     }
 
     /// Assumes it is already inside a transaction, so the two forms above differ
@@ -440,4 +517,14 @@ extension Deck {
          ORDER BY p.shuffle_key
          LIMIT 1 OFFSET :offset;
         """
+}
+
+extension DeckCard {
+    /// The same card with the ordinal its deal was given.
+    public func dealt(_ seq: Int64?) -> DeckCard {
+        DeckCard(
+            id: id, uuid: uuid, sourceID: sourceID, sourceUUID: sourceUUID,
+            externalID: externalID, storage: storage, dealSeq: seq,
+            originalFilename: originalFilename)
+    }
 }

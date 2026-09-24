@@ -24,6 +24,7 @@ public enum Migrator {
         Migration(version: 11, name: "the album's name, beside its identifier", sql: SchemaV11.sql),
         Migration(version: 12, name: "the photograph's name, beside its identifier", sql: SchemaV12.sql),
         Migration(version: 13, name: "the resize cache comes back", sql: SchemaV13.sql),
+        Migration(version: 14, name: "a served card is taken, and dealt after", sql: SchemaV14.sql),
     ]
 
     /// The version a fully migrated database reports.

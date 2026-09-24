@@ -84,9 +84,8 @@ struct RequestLogTests {
         #expect(entry.consumer == "screensaver")
         #expect(entry.width == "3840")
         #expect(entry.height == "2160")
-        // Nothing was served, so there is no card, no deal, and no bytes.
+        // Nothing was served, so there is no card and no bytes.
         #expect(entry.card == nil)
-        #expect(entry.deal == nil)
         #expect(entry.bytes == 0)
         #expect(entry.milliseconds >= 0)
     }
@@ -117,8 +116,9 @@ struct RequestLogTests {
         #expect(collector.all.first?.consumer == "anonymous")
     }
 
-    /// An empty library still opens, registers, and looks at the queue, and a
-    /// slow empty answer needs placing as much as a slow picture does.
+    /// An empty library still opens and looks at the queue, and a slow empty
+    /// answer needs placing as much as a slow picture does. The consumer is
+    /// registered off the request's path, so it is not a step.
     @Test("An empty answer is timed too")
     func emptyAnswerIsTimed() async throws {
         let collector = Collector()
@@ -128,7 +128,7 @@ struct RequestLogTests {
         _ = await endpoint.route(try request("GET /v1/next?consumer=app&w=1&h=1 HTTP/1.1"))
 
         let stages = try #require(collector.all.first?.stages)
-        #expect(stages.stages.map(\.name) == ["waited", "open", "register", "queue"])
+        #expect(stages.stages.map(\.name) == ["waited", "open", "queue"])
     }
 
     /// A request refused before any step ran has nothing to time, and says
@@ -151,8 +151,8 @@ struct RequestLogTests {
         #expect(
             PictureEndpoint.resizeGaveUp(
                 name: "IMG_0327.HEIC (B5E295AD-B306-4E08-9876-135BBF49E2AA/L0/001)", card: 6921,
-                deal: 84642, after: .seconds(1))
-                == "RESIZE: gave up after 1000ms on IMG_0327.HEIC (B5E295AD-B306-4E08-9876-135BBF49E2AA/L0/001) · card 6921 · deal #84642; serving the original")
+                after: .seconds(1))
+                == "RESIZE: gave up after 1000ms on IMG_0327.HEIC (B5E295AD-B306-4E08-9876-135BBF49E2AA/L0/001) · card 6921; serving the original")
     }
 
     /// **The man page names the number, so the number has to be checked.**
@@ -171,48 +171,48 @@ struct RequestLogTests {
         #expect(ServiceTiming.resizeBudget == .milliseconds(1500))
         #expect(
             PictureEndpoint.resizeGaveUp(
-                name: "IMG_0327.HEIC", card: 1, deal: nil,
+                name: "IMG_0327.HEIC", card: 1,
                 after: ServiceTiming.resizeBudget)
                 == "RESIZE: gave up after 1500ms on IMG_0327.HEIC · card 1; serving the original")
     }
 
-    @Test("The timing line names the consumer, the status, the deal, each step, and the total")
+    @Test("The timing line names the consumer, the status, each step, and the total")
     func timingLine() {
         let start = ContinuousClock.now
         var stages = StageTimes(from: start)
         stages.lap("waited", now: start + .milliseconds(3))
         stages.lap("check", now: start + .milliseconds(1003))
-        stages.lap("shown", now: start + .milliseconds(29_003))
+        stages.lap("take", now: start + .milliseconds(29_003))
 
         let entry = PictureEndpoint.Served(
             status: 200, detail: "IMG_2481.HEIC", consumer: "app",
-            width: "1280", height: "673", card: 4821, deal: 83911,
+            width: "1280", height: "673", card: 4821,
             bytes: 164_000, milliseconds: 29_012.4, stages: stages)
 
         #expect(
             entry.timing
-                == "TIMING: app · 200 · deal #83911 · waited 3ms · check 1000ms · shown 28000ms · total 29012ms")
+                == "TIMING: app · 200 · waited 3ms · check 1000ms · take 28000ms · total 29012ms")
     }
 
-    @Test("A served picture reports its deal, its size, and its latency")
+    @Test("A served picture reports its size and its latency")
     func servedSummary() {
         let entry = PictureEndpoint.Served(
             status: 200, detail: "IMG_2481.HEIC", consumer: "wallpaper",
-            width: "3840", height: "2160", card: 4821, deal: 91043,
+            width: "3840", height: "2160", card: 4821,
             bytes: 4_200_000, milliseconds: 12.3)
 
         // Byte formatting is the system's, so assert the parts rather than
         // pinning a locale's rendering of them.
-        #expect(entry.summary.hasPrefix("wallpaper · 3840x2160 · deal #91043 · "))
+        #expect(entry.summary.hasPrefix("wallpaper · 3840x2160 · "))
         #expect(entry.summary.hasSuffix(" · 12.3ms"))
         #expect(entry.summary.contains("MB"))
     }
 
-    @Test("An empty answer reports no deal and no bytes")
+    @Test("An empty answer reports no bytes")
     func emptySummary() {
         let entry = PictureEndpoint.Served(
             status: 204, detail: "no photos available", consumer: "screensaver",
-            width: "1920", height: "1080", card: nil, deal: nil,
+            width: "1920", height: "1080", card: nil,
             bytes: 0, milliseconds: 0.4)
 
         #expect(entry.summary == "screensaver · 1920x1080 · 0.4ms")
@@ -223,7 +223,7 @@ struct RequestLogTests {
         let entry = PictureEndpoint.Served(
             status: 204, detail: "no photos available", consumer: "wallpaper",
             display: "37D8832A-2D66-02CA-B9F7-8F30A301B230",
-            width: "3600", height: "2338", card: nil, deal: nil,
+            width: "3600", height: "2338", card: nil,
             bytes: 0, milliseconds: 0.4)
 
         #expect(entry.summary
@@ -234,7 +234,7 @@ struct RequestLogTests {
     func summaryWithoutASize() {
         let entry = PictureEndpoint.Served(
             status: 404, detail: "no such endpoint", consumer: "anonymous",
-            width: nil, height: nil, card: nil, deal: nil,
+            width: nil, height: nil, card: nil,
             bytes: 0, milliseconds: 0.1)
 
         #expect(entry.summary == "anonymous · 0.1ms")
@@ -259,7 +259,6 @@ extension RequestLogTests {
             width: "1570",
             height: "1066",
             card: 41,
-            deal: 3205,
             sourceID: 12,
             bytes: 87_000,
             milliseconds: 56,

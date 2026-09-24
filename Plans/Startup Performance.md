@@ -1,6 +1,6 @@
 # Summary
 
-After a boot, every surface should show a photograph as soon as it can. Two pieces so far: Photos albums that a cold library is slow to answer no longer drop out of the deal for five minutes, and the screensaver opens with a picture instead of waiting a minute or more for its first one.
+After a boot, every surface should show a photograph as soon as it can. Three pieces so far: Photos albums that a cold library is slow to answer no longer drop out of the deal for five minutes, the screensaver opens with a picture instead of waiting a minute or more for its first one, and a restarted agent serves what it already has before the refresh and the cache walk compete with it.
 
 # Rationale
 
@@ -18,6 +18,13 @@ Syd, 2026-09-23: "it seems like the most hostile environment on the Mac is while
   - The screensaver opens with the last picture it showed, kept on disk per display, and replaces it with the first fresh one.
   - The screensaver's default interval is 30 seconds instead of 10.
   - *Verified* on the 22:40 reboot: the remembered picture was up 0.7 s after the screensaver started, and the first fresh one came from a single request, 7 s after the agent started listening. At 22:24 the screensaver had shown nothing for 75 s.
+- **Phase 3 — Serve first after a restart. Built 2026-09-24 on `startup-card-serving-optimization`; not yet verified on a reboot.**
+  - The launch's first refresh and first cache walk wait for the first delivered picture, a request that finds the deck empty, an empty queue, or 30 s.
+  - A served card is marked taken rather than deleted, so the pop is the only write a request waits for. Migration 14 adds `queue.taken_at`.
+  - The card is dealt the moment it is taken, and its delivery and the consumer's heartbeat are written when the request ends — both on a connection of their own, off the request's path.
+  - A card left taken by an agent that stopped is dealt at the next launch.
+  - `X-PGR-Deal`, and the deal number on the served, `TIMING:` and `RESIZE:` lines, are gone.
+  - *To verify:* reboot, and read the `LAUNCH:` line and the first `TIMING:` lines of the wallpaper and the screensaver.
 
 # Design Decisions
 
@@ -33,12 +40,20 @@ Syd, 2026-09-23: "it seems like the most hostile environment on the Mac is while
 - **The screensaver remembers what it drew, not what it was sent.** The fitted, upright image as HEIC is a few hundred KB; an original can be tens of MB and would need fitting again.
 - **Remembered per display, in a folder named for the screensaver's own bundle.** Every legacy screensaver shares the host's container, and each build configuration has its own bundle identifier.
 - **The agent is not told when a client gives up.** Syd, 2026-09-23: "2 requires a websocket or something from the client, and I don't want to mess with that." Abandoned requests are still dealt and marked shown.
+- **The launch waits for a picture, not for a clock.** The refresh and the walk contend with the first requests for the disk and the writer; they don't block serving, so holding them only helps once somebody asks.
+- **30 s is the cap.** At the 22:40 boot the first fresh picture came 7 s after the port opened; an agent nobody asks must still refresh.
+- **An empty deck opens the hold at once.** Then only a refresh can produce a picture, so waiting would be all cost.
+- **The pop stays in front of the response.** It is what settles two consumers choosing the same card. Syd chose this over folding the pop and the deal into one transaction.
+- **The row stays on the queue until the deal is written.** Otherwise the filler can deal a popped card straight back in the gap.
+- **The deal is written when the card is taken, not when the request ends.** A card stays taken for as long as one write takes, not for the length of a resize.
+- **`serve` still takes and deals in one call.** Tests and in-process callers keep their meaning; only the endpoint splits the two.
 - **Cached photographs from an unavailable source stay in the deal.** That was already the rule, in `Deck.swift`'s eligibility query. The boot at 19:28 kept about 149 of them. Unchanged.
 
 # Background
 
 - This plan picked up the `TODO.md` item *Photos albums stay "not responding" for up to five minutes after the agent starts*, first seen at the 2026-09-19 17:46 install. The item was removed once the 19:52 reboot verified the fix.
 - `BoundedPhotoLibrary` has bounded every PhotoKit call since 2026-09-12. Its 10 s bound applies to the silence between photographs in a walk, and that includes the wait for the first one. `PLAN.md`, *TODO: a wedged Photos library freezes the agent*.
+- Phase 3 came from Syd, 2026-09-24: "when the agent starts up, it should be ready to serve images already if it has been running before, even before the refresh is done." The queue and the cache index were already read from the database at launch, and the refresh already ran behind the open port; what was left was contention.
 - Phase 2 picked up the `TODO.md` item *The screensaver's first picture after a boot is late*: after the 19:28 boot the screensaver got no picture in the first four minutes, and after the 22:23 boot it took 75 s. Syd: "I am starting to suspect the screensaver code rather than the agent." The item was removed once the 22:40 reboot verified the fix.
 
 # Detailed discussions
@@ -134,6 +149,55 @@ Raising the gap bound for the whole walk would have fixed the boot too, but it w
 
 The waits run 30, 60, 120 and 240 s. A fifth wait would be 480 s, which is past the 300 s default scan interval, so after four failed retries the album goes back to the normal scan. Every retry walks only the silent album. The folder sources are not walked again.
 
+## Phase 3, in detail
+
+### What was already true
+
+A restart was already built to serve before the refresh. `PhotoCache.prepareFromDatabase()` builds the cache index from `photo.cached_at` and `resized` before the listener opens (`Agent Performance Overhaul.md`, Phase 6). The queue is the `queue` table, and nothing at launch empties it. The first heartbeat tick seeds the queue before it refreshes (`Heartbeat.order(launching:)`), and the refresh runs in a detached task. On 2026-09-24 the Release library held 20 queued cards, 250 originals and 287 resized copies.
+
+What the boots measured was not a wait for the refresh but contention with it. At 22:23 the wallpaper's first request logged `waited 1685 · open 653 · queue 3158 · shown 2555 · resize gave up 2065 · delivered 525`. The `shown` and `delivered` steps, and the `remove` and `register` beside them, were writes waiting for the writer behind the startup refresh and the cache walk. The `queue` step was reads, which WAL does not make wait on a writer; that was the cold disk.
+
+Two changes, which Syd called (a) and (b): hold the launch's refresh and walk until the first picture, and take the writes off the request's path.
+
+### The launch hold
+
+`LaunchHold`, an actor in `MacOS/Agent/Sources/LaunchHold.swift`. The first refresh's task and the cache walk's loop `await` it before their first run; later refreshes and walks never wait. It opens once, for the first of:
+
+- **A picture delivered**, from the bookkeeper's closure after a delivery is written.
+- **A request that found the deck empty**, from `deckCameUpEmpty`. Only a refresh can produce a picture then.
+- **An empty queue at launch** — a new library, or one whose sources were all removed. Same reason.
+- **`LaunchHold.limit`, 30 s after the port opened**, so an agent nobody asks still refreshes.
+- **`--once`**, which does not serve, opens it before anything waits.
+
+It says which with one line: `LAUNCH: refresh and cache walk held 7.2s, until a picture was delivered`. The time runs from the hold's creation, just after the index is read, so it includes the listener's start.
+
+The cost is the Photos albums: at boot they take 40 to 60 s to walk whatever happens, and they now start up to 30 s later. Eviction waits for the first walk, so it waits for the hold too.
+
+### Taking the writes off the request's path
+
+A request used to take the writer four times before its bytes could go out: `register` the consumer, `remove` the card, `markShown` to deal it with `touch` on the consumer, and `markDelivered`. Now it takes it once.
+
+- **`PhotoQueue.take`** is the pop: `UPDATE queue SET taken_at = :now WHERE photo_id = :id AND taken_at IS NULL` under `BEGIN IMMEDIATE`. Exactly one of two consumers sees a change, as with the `DELETE` before it.
+- **The row stays.** `size`, `peek`, `contains`, the fetcher's `nextUnheld` and `append`'s placement read only rows where `taken_at IS NULL`. The deck's candidate query and `append`'s duplicate check read every row, so a taken card can't be dealt back in.
+- **`Deck.settle(_:)`** writes a `Settlement` in one transaction. A settlement has any of three parts: `dealing` deletes the taken row and deals the card; `delivered` counts the delivery; `consumer` registers the consumer and marks it seen.
+- **The endpoint sends two settlements per picture.** The deal goes right after `take` returns, so it lands while the picture is resized. The delivery and the consumer go when the request ends. A 204, 406 or 500 sends only the consumer. A card that fails to render or vanishes was already dealt, as it was when the deal came before the render.
+- **`Bookkeeper`** in `RunCommand.swift` writes settlements on a `ConfinedDatabase` of its own. After a delivery it tops the queue up and opens the launch hold. The endpoint's `settling` hook is nil in tests, and then the endpoint writes each settlement in line and rings `queueRanShort` itself, so tests keep their meaning.
+- **`PhotoCache.serve`** is `take` then `settle`, for tests and anything else in-process. The endpoint uses `take` alone.
+- **`Deck.settleAbandoned()`** runs at launch, before the listener opens, and deals whatever was left taken. Nobody knows whether those bytes arrived, so they are not counted delivered. A settlement that fails is logged as `serve.settle-failed` and its card stays taken until then.
+
+### Why the deal is written when the card is taken
+
+The first version sent one settlement when the request ended. `ServingUnderLoadTests` caught the cost: a one-photograph library with a request stuck in the resizer returned 204 to the next request, because the only card stayed taken for the whole resize. Before the change it had been dealt at the pop and could be dealt again at once. Writing the deal the moment the card is taken keeps it taken only for the length of one write, and keeps what `markShown` has always said: the deal fires when serving chooses a card.
+
+### What was given up
+
+- **The deal ordinal.** The request never learns it, so `X-PGR-Deal`, `Served.deal`, and the deal on the `TIMING:` and `RESIZE:` lines went. No client read the header. The man page and README were updated.
+- **Downgrading.** A database at version 14 is refused by an older build (`MigrationError.databaseIsNewerThanCode`), so once a Phase 3 build has opened a library the build before it cannot.
+
+### Timing stages
+
+`waited · open · queue · check · take · deal · resize wait · render · settle`, where `deal` and `settle` are the hand-offs and cost nothing in the agent. A request that finds nothing is `waited · open · queue`.
+
 ## Tests
 
 - `FirstAssetBoundTests`: a walk slower to start than the gap bound still finishes. A walk that never starts is ended by the first-photograph bound, not the gap bound. The `WALK:` line's format. Neither test can fail on a loaded machine: the slow case sits a minute under its bound, and the silent case never answers.
@@ -142,6 +206,9 @@ The waits run 30, 60, 120 and 240 s. A fifth wait would be 480 s, which is past 
 - `FirstPictureTests` (Phase 2): only the first request of a run is patient; a failure leaves the next one patient; a restart is patient again; the memory round-trips with its details, and is nothing when missing or damaged; each display gets its own file; a surface opens with the remembered picture while the agent is silent; a fresh picture is remembered.
 - `PictureClientTests`: a patient request is bounded by the first-picture limit, and an ordinary one by the usual limit.
 - `ShuffleIntervalTests`: the default is thirty seconds.
+- `TakenCardTests` (Phase 3): a taken card is no longer waiting and only one caller takes it; it cannot be dealt again until its deal is written; a settlement deals, counts the delivery and marks the consumer seen; a delivery alone deals nothing; cards left taken are dealt at launch and not counted delivered.
+- `EndpointCacheTests`, *With a settling hook, the response returns before the deal is written*: nothing is dealt, counted or registered when the response comes back; the hook got the deal and then the delivery; writing them does what the request used to.
+- `LaunchHoldTests`: a waiter is held until the hold opens; it opens once and keeps the first reason; an open hold doesn't wait; it opens itself after the limit, and not again after something else opened it; the `LAUNCH:` line.
 
 ## Still open
 
@@ -150,7 +217,7 @@ The waits run 30, 60, 120 and 240 s. A fifth wait would be 480 s, which is past 
 - **Whether the slow add of 26 albums on 2026-09-21 has the same cause.** On a Release agent a minute old, adding them took more than 15 s. It looks like the same cold daemon, but that log hasn't been read.
 - **Serving gets slower when the screensaver asks faster, even warm.** On 2026-09-23 from 20:31 to 20:38, with the interval at ten seconds, serves climbed from about 3 s to 12 s, and fell back under 2 s when it returned to thirty. The resize gave up on 59 of 245 pictures that evening. Not looked into; the guess is that resizes the agent gives up on keep running and hold up the next one.
 - **The untimed 1.4–2 s before a request's work begins**, seen at 22:24. Nothing measures it.
-- **The wallpaper's first picture after a boot still takes 6–11 s**: 6.2 s at 19:53, 10.7 s at 22:23, 7.4 s at 22:42. It waits for the picture, so it is never empty, but the time is the same cold agent's.
+- **The wallpaper's first picture after a boot still takes 6–11 s**: 6.2 s at 19:53, 10.7 s at 22:23, 7.4 s at 22:42. It waits for the picture, so it is never empty, but the time is the same cold agent's. Phase 3 is aimed at this; not yet measured.
 - **The 8,552-photograph album walks in 10.5 s even warm.** That isn't a fault, since no gap came near 10 s, but it is more than the "handful of milliseconds" the metadata bound was sized against.
 
 # References
@@ -159,4 +226,5 @@ The waits run 30, 60, 120 and 240 s. A fifth wait would be 480 s, which is past 
 - `PLAN.md`, *TODO: a wedged Photos library freezes the agent*.
 - `Agent Performance Overhaul.md`, which has the `STARTUP:` line and the boot-to-serving measurements.
 - `Release App Installer.md`, the 2026-09-21 album add that took more than 15 s.
+- `SchemaV14.swift`, `LaunchHold.swift`, and `Bookkeeper` in `RunCommand.swift` (Phase 3).
 - The unified log for pid 920, 2026-09-23 19:28–19:35; pid 906 from 19:52; and the boots at 22:23 and 22:40, subsystem `com.sydpolk.photosgoround`.

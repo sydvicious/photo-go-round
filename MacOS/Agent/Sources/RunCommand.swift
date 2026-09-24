@@ -115,6 +115,28 @@ struct RunCommand {
         startup.lap("index")
         Console.note(
             "cache index from the database: \(held.photos) photographs, \(RunCommand.bytes(held.bytes))")
+        // A card taken and never dealt is an agent that stopped between a
+        // response and its settlement. Dealt now, so it is not held out of the
+        // deck for good. See `Deck.settleAbandoned`.
+        let abandoned = try deck.settleAbandoned()
+        if abandoned > 0 { Console.note("dealt \(abandoned) served before the last exit") }
+
+        // **The launch's refresh and cache walk wait for the first picture**,
+        // or for `LaunchHold.limit`, so a restart serves from what it has before
+        // anything competes with it for the disk. See `LaunchHold`.
+        let launchHold = LaunchHold()
+        let openHold: @Sendable (LaunchHold.Reason) -> Void = { reason in
+            Task {
+                if await launchHold.open(because: reason) {
+                    Console.note(Self.launchHoldLine(reason, after: await launchHold.heldFor()))
+                }
+            }
+        }
+        if once {
+            openHold(.notServing)
+        } else if try PhotoQueue(database: database).size() == 0 {
+            openHold(.nothingQueued)
+        }
 
         // The service is the interface: clients ask for a picture and are handed
         // the bytes, and never open the database or the cache themselves.
@@ -264,6 +286,20 @@ struct RunCommand {
             }
         }
 
+        // **What a served request leaves behind is written off its path**, on
+        // a connection of its own, and the top-up follows a delivery.
+        // `Deck.settle`.
+        let bookkeeper = Bookkeeper(databasePath: databasePath)
+        let settling: @Sendable (Deck.Settlement) -> Void = { settlement in
+            Task {
+                await bookkeeper.settle(settlement)
+                if settlement.delivered != nil {
+                    topUp()
+                    openHold(.delivered)
+                }
+            }
+        }
+
         await filler.reporting(to: Self.speak)
         // The fetch side of the dashboard's cache lookups, counted as cards are
         // dealt. Before any fill: the filler is built once and keeps its hook.
@@ -275,12 +311,14 @@ struct RunCommand {
             preferences: preferences,
             store: store,
             queueRanShort: topUp,
+            settling: settling,
             // **An empty answer refills the deck.** The heartbeat would
             // eventually do it, but it runs behind the refresh — so a source
             // removed while a slow share is being walked leaves the window blank
             // for the length of that walk. The filler has its own connection on
             // its own thread, so this does not wait for the loop.
             deckCameUpEmpty: {
+                openHold(.emptyDeck)
                 Task {
                     let round = await filler.topUpIfShort(preferences: environment.preferences)
                     if round.produced > 0 { await fetcher.kick() }
@@ -397,6 +435,9 @@ struct RunCommand {
             try listener.start()
             startup.lap("listen")
             startup.report(as: "listening")
+            launchHold.openAfter(LaunchHold.limit) { reason, held in
+                Console.note(Self.launchHoldLine(reason, after: held))
+            }
             // **The walk, behind the open port.** At launch and every
             // `cacheWalkInterval` after it — Syd, 2026-09-17: "its own
             // interval, default an hour", "but definitly at launch". On its own
@@ -404,6 +445,7 @@ struct RunCommand {
             let walker = Lane("cache-walk", qos: .utility)
             let walkRoot = environment.cacheRoot
             Task {
+                await launchHold.wait()
                 while !Task.isCancelled {
                     await walker.run {
                         await Self.walkCache(
@@ -653,6 +695,7 @@ struct RunCommand {
                         // it reads the last *finish*. The gate is what stops a
                         // tick starting a second pass over the first.
                         Task {
+                            if firstPass { await launchHold.wait() }
                             await Self.runRefresh(
                                 databasePath: databasePath, bytes: store, localFirst: firstPass,
                                 retries: retries)
@@ -1103,6 +1146,50 @@ private func describeSources(_ sources: [Source], pool: PhotoPool) {
         }
     }
     print()
+}
+
+extension RunCommand {
+    /// `LAUNCH: refresh and cache walk held 7.2s, until a picture was delivered`
+    ///
+    /// The one line the launch hold leaves, which is what a reboot is measured
+    /// by. Filter on the prefix.
+    static func launchHoldLine(_ reason: LaunchHold.Reason, after held: Duration) -> String {
+        let seconds = String(format: "%.1f", held.totalSeconds)
+        return "LAUNCH: refresh and cache walk held \(seconds)s, until \(reason.rawValue)"
+    }
+}
+
+/// Writes what each served request leaves behind — its deal, its delivery, its
+/// consumer's heartbeat — off the request's path, one at a time on a connection
+/// of its own.
+///
+/// **The pop is the only write a client waits for**, since 2026-09-24. At boot
+/// the deal waited 2.6 s for the writer behind the refresh and the cache walk,
+/// and the client waited with it. `Plans/Startup Performance.md`.
+actor Bookkeeper {
+    private let connection: ConfinedDatabase?
+
+    init(databasePath: String) {
+        connection = try? ConfinedDatabase(path: databasePath, label: "bookkeeping")
+        if connection == nil {
+            Log.deck.error(
+                kind: "serve.no-bookkeeping",
+                "could not open the bookkeeping connection at \(databasePath)")
+        }
+    }
+
+    func settle(_ settlement: Deck.Settlement) async {
+        guard let connection else { return }
+        do {
+            _ = try await connection.run { database in
+                try await Deck(database: database).settle(settlement)
+            }
+        } catch {
+            // The card stays taken, out of the deck, until the next launch
+            // deals it.
+            Log.deck.error(kind: "serve.settle-failed", "could not deal what was served: \(error)")
+        }
+    }
 }
 
 /// Owns the filler and the connections its two closures need.

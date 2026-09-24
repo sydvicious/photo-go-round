@@ -261,8 +261,9 @@ another account's agent answers it `401`.
 `200` returns the picture, with `Content-Type` describing the format,
 `X-PGR-Pixels` the size produced when a box was asked for — original bytes
 carry no such header, since nothing was decoded to measure — and `X-PGR-Card`,
-`X-PGR-Deal`, `X-PGR-Source` and
-`X-PGR-Storage` describing the photograph and its place in the shuffle.
+`X-PGR-Source` and `X-PGR-Storage` describing the photograph. There is no
+deal ordinal: the deal is written after the picture is chosen, off the
+request's path, so the response goes out before it is known.
 `X-PGR-Name` and `X-PGR-Source-Name` say what a person calls them, percent-encoded
 because a header is ASCII and a filename is not: the name is a Photos
 photograph's original filename, or its identifier — a folder photograph's path

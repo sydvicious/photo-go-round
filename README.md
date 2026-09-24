@@ -143,7 +143,7 @@ curl -sS -H "$AUTH" -D - -o /tmp/pgr.bin "http://localhost:$PORT/v1/next?consume
 ```
 
 The response headers say what you got — `Content-Type` for the format,
-`X-PGR-Card` for the photo's row id, `X-PGR-Deal` for its ordinal in the shuffle.
+`X-PGR-Card` for the photo's row id, `X-PGR-Source` for its source.
 Requesting again gives a *different* picture, because serving pops the queue.
 
 `w` and `h` are maximums — nothing comes back larger than either — and what you

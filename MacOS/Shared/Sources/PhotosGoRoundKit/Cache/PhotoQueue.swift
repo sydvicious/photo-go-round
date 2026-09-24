@@ -31,13 +31,15 @@ import PhotosGoRoundAgentAPI
 /// placed second has one picture's worth of time for its bytes rather than a
 /// whole traversal's. On average a new card has half the queue ahead of it.
 ///
-/// **A card leaves by `remove(photoID:)`, and two things call it.** Serving,
-/// once it has chosen a card and checked it — the `DELETE` under the write
-/// lock is what settles two consumers choosing the same card. And a fetch that
-/// did not produce bytes, whether the fetcher's or the wait in serving: the
-/// card is dropped and the photograph goes back into the deck's contention.
-/// There is deliberately no head-pop: since 2026-09-05 serving chooses first
-/// and removes second, because the card it serves is not always the head.
+/// **A card leaves in one of two ways.** Serving, once it has chosen a card and
+/// checked it, `take`s it — the `UPDATE` under the write lock is what settles
+/// two consumers choosing the same card — and the row goes with the card's deal,
+/// written off the request's path. A card that is not served is dropped by
+/// `remove(photoID:)`: a fetch that did not produce bytes, whether the
+/// fetcher's or the wait in serving, or a source that has gone, and the
+/// photograph goes back into the deck's contention. There is deliberately no
+/// head-pop: since 2026-09-05 serving chooses first and removes second, because
+/// the card it serves is not always the head.
 ///
 /// Serving is what notices the queue has run low, so the top-up rides serving;
 /// the heartbeat's top-up covers a queue shortened by a dropped card.
@@ -75,8 +77,11 @@ public struct PhotoQueue {
 
     // MARK: - Looking at it
 
+    /// The cards waiting their turn. A card taken by serving and not yet dealt
+    /// is not waiting, so it does not count toward the depth the filler tops
+    /// up to.
     public func size() throws -> Int {
-        try database.scalarInt("SELECT COUNT(*) FROM queue;") ?? 0
+        try database.scalarInt("SELECT COUNT(*) FROM queue WHERE taken_at IS NULL;") ?? 0
     }
 
     /// True when serving has left the queue short and providers should be asked.
@@ -94,6 +99,7 @@ public struct PhotoQueue {
               FROM queue q
               JOIN photo p ON p.id = q.photo_id
               JOIN source s ON s.id = p.source_id
+             WHERE q.taken_at IS NULL
              ORDER BY q.rank
              LIMIT :limit;
             """,
@@ -122,6 +128,7 @@ public struct PhotoQueue {
               JOIN photo p ON p.id = q.photo_id
               JOIN source s ON s.id = p.source_id
              WHERE q.rank > :after
+               AND q.taken_at IS NULL
                AND p.storage = 'materialized'
                AND p.cached_at IS NULL
                AND (p.claimed_at IS NULL OR p.claimed_at <= :expiry)
@@ -138,21 +145,20 @@ public struct PhotoQueue {
         }
     }
 
-    /// Whether this photograph is queued right now. What a request waiting on
-    /// a cold head card polls, so it notices the fetcher dropping the card.
+    /// Whether this photograph is waiting on the queue right now. What a
+    /// request waiting on a cold head card polls, so it notices the fetcher
+    /// dropping the card.
     public func contains(photoID: Int64) throws -> Bool {
         (try database.scalarInt(
-            "SELECT COUNT(*) FROM queue WHERE photo_id = :id;", ["id": .int(photoID)]) ?? 0) > 0
+            "SELECT COUNT(*) FROM queue WHERE photo_id = :id AND taken_at IS NULL;",
+            ["id": .int(photoID)]) ?? 0) > 0
     }
 
     /// Takes a card out of the queue wherever it sits. True when it was there.
     ///
-    /// **This is how a card leaves the queue**, whichever way it goes: served,
-    /// or dropped because its bytes never came. Serving takes the card it has
-    /// chosen — usually the head, but the first card with bytes once a request
-    /// has stopped waiting — and two consumers choosing the same card are
-    /// settled here: the `DELETE` runs under `BEGIN IMMEDIATE`, so exactly one
-    /// sees a change and the other goes round again.
+    /// **How a card leaves the queue without being dealt**: dropped because its
+    /// bytes never came, its source has gone, or it will not render. A served
+    /// card is `take`n instead, and leaves with its deal.
     @discardableResult
     public func remove(photoID: Int64) throws -> Bool {
         try database.transaction(.immediate) {
@@ -174,6 +180,40 @@ public struct PhotoQueue {
                 "DELETE FROM queue WHERE photo_id = :id;", ["id": .int(photoID)])
             return database.changes > 0
         }
+    }
+
+    /// Marks the card serving has chosen as taken. True when this caller got it.
+    ///
+    /// **The pop, and the atomicity.** Two consumers may both have chosen this
+    /// card; the `UPDATE` runs under `BEGIN IMMEDIATE`, so exactly one sees a
+    /// change and the other goes round again.
+    ///
+    /// **The row stays until the deal is written**, which since 2026-09-24 is
+    /// off the request's path: `Deck.settle` deletes it in the same
+    /// transaction.
+    /// Until then the card is out of every question about what is waiting, and
+    /// still on the queue as far as the deck's candidate query is concerned —
+    /// which is what stops the filler dealing it straight back. `SchemaV14`.
+    @discardableResult
+    public func take(
+        photoID: Int64,
+        at now: Date = Date(),
+        isolation: isolated (any Actor)? = #isolation
+    ) async throws -> Bool {
+        try await database.transaction(.immediate) {
+            try database.run(
+                "UPDATE queue SET taken_at = :now WHERE photo_id = :id AND taken_at IS NULL;",
+                ["id": .int(photoID), "now": SQLValue(now)])
+            return database.changes > 0
+        }
+    }
+
+    /// The cards taken and never dealt: what an agent that stopped between the
+    /// two left behind. The launch deals them.
+    public func taken() throws -> [Int64] {
+        try database.all(
+            "SELECT photo_id FROM queue WHERE taken_at IS NOT NULL ORDER BY taken_at;"
+        ) { try $0.int64("photo_id") }
     }
 
     // MARK: - Filling
@@ -198,7 +238,9 @@ public struct PhotoQueue {
                 ) ?? 0
             guard alreadyQueued == 0 else { return false }
 
-            let present = try database.scalarInt("SELECT COUNT(*) FROM queue;") ?? 0
+            // Placed among the cards waiting. A taken card is on its way out,
+            // and holds no place a new card could be put in front of.
+            let present = try database.scalarInt("SELECT COUNT(*) FROM queue WHERE taken_at IS NULL;") ?? 0
             let slot = present >= 1 ? min(max(placement(present), 1), present) : 0
             let rank: Int64
             if slot >= present {
@@ -207,7 +249,7 @@ public struct PhotoQueue {
                 // The rank of the card currently in that slot, which it and
                 // everything behind it now give up.
                 let taken = try database.scalarInt(
-                    "SELECT rank FROM queue ORDER BY rank LIMIT 1 OFFSET :slot;",
+                    "SELECT rank FROM queue WHERE taken_at IS NULL ORDER BY rank LIMIT 1 OFFSET :slot;",
                     ["slot": .int(Int64(slot))]
                 ) ?? 0
                 rank = Int64(taken)

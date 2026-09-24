@@ -888,7 +888,15 @@ public struct PhotoCache {
 
     /// One picture, ready to hand over.
     public struct ServedPhoto: Sendable {
-        public let card: DeckCard
+        public init(card: DeckCard, source: Source, url: URL, copy: ResizedCopies.Copy? = nil) {
+            self.card = card
+            self.source = source
+            self.url = url
+            self.copy = copy
+        }
+
+        /// The card, with no deal ordinal until it has been settled.
+        public var card: DeckCard
         /// The source it came from, as serving found it — so the host can say
         /// what the source is called without a second read.
         public let source: Source
@@ -962,21 +970,37 @@ public struct PhotoCache {
     /// same reason: a card is ready if its original is here **or** it has a copy
     /// for the box asked for, and `ServedPhoto.copy` carries that copy. A
     /// request with no box needs the original, as before.
+    ///
+    /// **Takes and deals in one call**, for a caller with nothing to do in
+    /// between. The endpoint calls `take` and has the deal written off its
+    /// path, so the deal's wait for the writer is not the client's. `consumer`
+    /// is who is marked seen.
     public func serve(
-        to consumerID: Int64? = nil,
+        to consumer: ConsumerKind = .commandLine,
         now: Date = Date(),
         fitting request: ResizedCopies.Request? = nil
     ) async throws -> ServedPhoto? {
         var timing = StageTimes()
-        return try await serve(to: consumerID, now: now, fitting: request, timing: &timing)
+        guard var served = try await take(now: now, fitting: request, timing: &timing) else {
+            return nil
+        }
+        let seq = try await deck.settle(
+            Deck.Settlement(dealing: served.card.id, consumer: consumer, at: now))
+        served.card = served.card.dealt(seq)
+        return served
     }
 
-    /// The same, charging each step to `timing` for the endpoint's `TIMING:`
-    /// line: `queue` for reading and walking the head, `wait` for a cold
-    /// card's bytes, `check` for asking the source, `remove` for the pop, and
-    /// `shown` for recording the deal.
-    public func serve(
-        to consumerID: Int64? = nil,
+    /// Chooses the card to serve and marks it taken, without dealing it.
+    ///
+    /// Everything `serve` says above, except the last step: the card leaves
+    /// the queue and is dealt by `Deck.settle`, which the caller has written
+    /// off its own path. Until then the card stays on the queue, taken — see
+    /// `PhotoQueue.take`.
+    ///
+    /// Each step is charged to `timing` for the endpoint's `TIMING:` line:
+    /// `queue` for reading and walking the head, `wait` for a cold card's
+    /// bytes, `check` for asking the source, and `take` for the pop.
+    public func take(
         now: Date = Date(),
         fitting request: ResizedCopies.Request? = nil,
         timing: inout StageTimes
@@ -1145,34 +1169,21 @@ public struct PhotoCache {
             }
 
             // **The pop, and the atomicity.** Two consumers may both have
-            // chosen this card; the `DELETE` under `BEGIN IMMEDIATE` lets
+            // chosen this card; the `UPDATE` under `BEGIN IMMEDIATE` lets
             // exactly one of them take it, and the other goes round again.
             timing.lap("queue")
-            let removed = try await queue.remove(photoID: card.id)
-            timing.lap("remove")
-            guard removed else { continue }
+            let taken = try await queue.take(photoID: card.id, at: now)
+            timing.lap("take")
+            guard taken else { continue }
 
             log(
                 .serving(
                     photo: card.spokenName, source: card.sourceID,
                     unconfirmed: unconfirmed, queued: depth()))
-            let seq = try await deck.markShown(photoID: card.id, now: now)
-            if let consumerID { try? deck.touch(consumerID: consumerID, at: now) }
-            timing.lap("shown")
             // The deck moved, so anything mirroring its position — a diagnostic
             // panel, another surface's idea of what is next — should go and look.
             doorbells?.post(.deckAdvanced)
-            return ServedPhoto(
-                card: DeckCard(
-                    id: card.id, uuid: card.uuid, sourceID: card.sourceID,
-                    sourceUUID: card.sourceUUID, externalID: card.externalID,
-                    storage: card.storage, dealSeq: seq,
-                    originalFilename: card.originalFilename
-                ),
-                source: source,
-                url: url,
-                copy: copy
-            )
+            return ServedPhoto(card: card, source: source, url: url, copy: copy)
         }
     }
 

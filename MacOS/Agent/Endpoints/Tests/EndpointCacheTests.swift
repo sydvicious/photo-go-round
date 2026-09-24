@@ -178,8 +178,8 @@ struct EndpointCacheTests {
         let stages = try #require(library.log.all.last?.stages)
         #expect(
             stages.stages.map(\.name)
-                == ["waited", "open", "register", "queue", "check", "remove", "shown", "resize wait",
-                    "render", "delivered", "top up"])
+                == ["waited", "open", "queue", "check", "take", "deal", "resize wait", "render",
+                    "settle"])
     }
 
     @Test("The original, sent unrendered, is timed as its own step")
@@ -254,7 +254,7 @@ struct EndpointCacheTests {
 
     // MARK: - What it says it did
 
-    @Test("A served picture is logged with its card, its deal, and its bytes")
+    @Test("A served picture is logged with its card and its bytes")
     func servedPictureIsLogged() async throws {
         let library = try Library()
         try await library.fill()
@@ -271,16 +271,12 @@ struct EndpointCacheTests {
         // `pgr_ctl sources list` prints — a person reads this line.
         #expect(entry.sourceID != nil)
         #expect(entry.summary.contains("source \(entry.sourceID ?? 0)"))
-        // The deal ordinal is assigned when the picture is handed over, so a
-        // logged record of a served picture always has one.
-        #expect(entry.deal != nil)
         #expect(entry.bytes > 0)
         #expect(entry.detail.hasSuffix(".png"))
         #expect(entry.milliseconds >= 0)
 
         // The record describes the same picture the client was handed.
         #expect(String(entry.card ?? 0) == headers(response)["X-PGR-Card"])
-        #expect(String(entry.deal ?? 0) == headers(response)["X-PGR-Deal"])
     }
 
     @Test("The console line carries what the cache holds and how deep the queue is")
@@ -462,7 +458,6 @@ struct EndpointCacheTests {
         #expect(headers(original)["X-PGR-Source"] == String(library.sourceIdentifier))
         #expect(headers(original)["X-PGR-Storage"] == "referenced")
         #expect(headers(original)["X-PGR-Card"] != nil)
-        #expect(headers(original)["X-PGR-Deal"] != nil)
         // The original was not decoded, so there is no size to report.
         #expect(headers(original)["X-PGR-Pixels"] == nil)
 
@@ -599,6 +594,60 @@ struct EndpointCacheTests {
         let list = await sources.route(
             try #require(HTTPListener.parse("GET /v1/sources HTTP/1.1")))
         #expect(list.status == 503)
+    }
+
+    // MARK: - Off the client's path
+
+    /// **The pop is the only write a client waits for**, since 2026-09-24. The
+    /// agent hands the rest to `settling`, which writes it on a connection of
+    /// its own; this pins that nothing else was written by the time the
+    /// response came back, and that what was handed over is exactly what the
+    /// request used to write itself. `Plans/Startup Performance.md`.
+    @Test("With a settling hook, the response returns before the deal is written")
+    func settlingIsOffThePath() async throws {
+        final class Handed: @unchecked Sendable {
+            private let lock = NSLock()
+            private var settlements: [Deck.Settlement] = []
+            func append(_ settlement: Deck.Settlement) {
+                lock.withLock { settlements.append(settlement) }
+            }
+            var all: [Deck.Settlement] { lock.withLock { settlements } }
+        }
+        let library = try Library()
+        try await library.fill()
+        let handed = Handed()
+        var endpoint = library.endpoint
+        endpoint.settling = { handed.append($0) }
+
+        let response = await endpoint.route(
+            try library.request("/v1/next?consumer=app&display=D&w=100&h=100"))
+        #expect(response.status == 200)
+        let card = try #require(headers(response)["X-PGR-Card"].flatMap(Int64.init))
+
+        let database = library.sources.database
+        func scalar(_ sql: String) throws -> Int {
+            try database.scalarInt(sql, ["id": .int(card)]) ?? -1
+        }
+        #expect(try scalar("SELECT times_shown FROM photo WHERE id = :id;") == 0)
+        #expect(try scalar("SELECT times_delivered FROM photo WHERE id = :id;") == 0)
+        #expect(
+            try scalar("SELECT COUNT(*) FROM queue WHERE photo_id = :id AND taken_at IS NOT NULL;")
+                == 1, "taken, and still on the queue")
+        #expect(try Deck(database: database).consumer(kind: ConsumerKind("app"), displayID: "D") == nil)
+
+        // The deal as soon as the card was taken; the delivery and the
+        // consumer when the request ended.
+        let settlements = handed.all
+        #expect(settlements.map(\.dealing) == [card, nil])
+        #expect(settlements.map(\.delivered) == [nil, card])
+        #expect(settlements.last?.consumer == ConsumerKind("app"))
+        #expect(settlements.last?.displayID == "D")
+
+        for settlement in settlements { try await Deck(database: database).settle(settlement) }
+        #expect(try scalar("SELECT times_shown FROM photo WHERE id = :id;") == 1)
+        #expect(try scalar("SELECT times_delivered FROM photo WHERE id = :id;") == 1)
+        #expect(try scalar("SELECT COUNT(*) FROM queue WHERE photo_id = :id;") == 0)
+        #expect(try Deck(database: database).consumer(kind: ConsumerKind("app"), displayID: "D") != nil)
     }
 }
 
