@@ -18,7 +18,7 @@ This project exists because Apple's screensaver has the display half solved and 
   - **Exit gate: a stub inside `legacyScreenSaver` reports a 200 and a byte count from the running agent.** Met. *One correction to the gate as written: `ScreenSaverEngine` runs the saver that is selected, so the bundle has to be chosen in System Settings before the engine will load it at all. The first run produced an empty log for that reason and nothing else.*
 - **Phase 2 — complete, 2026-09-08. The display code moves.** `Shuffle` and `PictureLayerView` are in `PhotoGoRoundDisplay`, so the saver will link the same code the window runs rather than a second copy of it. The Xcode project needed no edit: it uses synchronized root groups, so taking files out of `MacOS/Desktop/Sources` is the whole of it.
   - `consumer` is a parameter. It was hardcoded `"app"`, and the deck keys a consumer's history on the string, so two surfaces sharing it would leave neither readable.
-  - The deployment is a parameter, still defaulting to `.development`.
+  - The deployment is a parameter, still defaulting to `.development`. *Since 2026-09-23 it defaults to `Deployment.current` — production in Release, development in Debug and Claude.*
   - `app/tests/ShuffleTests.swift` moved to `Tests/PhotoGoRoundDisplayTests`, where `swift test` reaches it and Xcode is not required to run the rule it defends.
   - **Port discovery is `ServicePort`:** the suite first, the plist underneath, falling through on *empty* rather than on failure because empty is what the refusal looks like. Three answers rather than two — `published`, `none`, `unreadable` — and it handles both domain spellings, dotted under the real home and path-named beside itself. Nine tests.
   - **`PictureClient.Failure.portUnreadable`** carries *a port may be published and this process cannot see it*. It maps to `Trouble.noAgent` with a precise reason, so the log line is right and the words on the glass do not change; a `Trouble` case of its own would change what the window says. See *Not yet decided*.
@@ -147,7 +147,7 @@ Fallback 1 is therefore the mechanism rather than a fallback. The remaining two 
 `Shuffle` is 290 lines and almost entirely reusable as written. It is the loop — ask, decode off the main thread, hold what is shown, report trouble beside it rather than instead of it — and every rule it enforces is a rule the saver needs more than the window does. Two things are hardcoded to the app and become parameters:
 
 - `consumer: "app"`, passed on every request. The saver is `"screensaver"`, and `PLAN.md`'s consumer table already lists both.
-- `MacHostEnvironment(deployment: .development)` in the convenience initializer. The saver needs the same today and a different one when the app ships, so the deployment moves out to the caller.
+- `MacHostEnvironment(deployment: .development)` in the convenience initializer. The saver needs the same today and a different one when the app ships, so the deployment moves out to the caller. *Done 2026-09-23: the saver and the window both ask for `Deployment.current`.*
 
 `PictureLayerView` is 100 lines of AppKit and needs no changes at all. It already computes the picture's frame with `AspectFit` rather than delegating to `contentsGravity`, with a comment saying why: the pan needs the letterbox as a number and a gravity keeps that to itself. That decision was made for a phase that is not being built yet and it costs nothing to keep.
 

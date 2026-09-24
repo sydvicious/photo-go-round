@@ -81,12 +81,12 @@ enum DisplayShuffles {
                 "saver: joined the loop for display \(key, privacy: .public), now \(entry.views, privacy: .public) views")
             return entry.shuffle
         }
-        let environment = MacHostEnvironment(deployment: .development)
+        let environment = MacHostEnvironment(deployment: .current)
         reportPort(environment.preferences)
         if key == unknownDisplay {
             log.notice("saver: starting a loop for a view whose display is unidentified")
         }
-        let screensaver = ScreensaverPreferences(deployment: .development)
+        let screensaver = ScreensaverPreferences(deployment: .current)
         let shuffle = Shuffle(
             source: PictureClient(preferences: environment.preferences),
             consumer: ConsumerKind.screensaver.rawValue,

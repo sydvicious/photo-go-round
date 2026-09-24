@@ -89,7 +89,7 @@ final class CollectionsModel {
     convenience init() {
         self.init(
             service: SourceService(
-                preferences: MacHostEnvironment(deployment: .development).preferences))
+                preferences: MacHostEnvironment(deployment: .current).preferences))
     }
 
     // MARK: - Reading

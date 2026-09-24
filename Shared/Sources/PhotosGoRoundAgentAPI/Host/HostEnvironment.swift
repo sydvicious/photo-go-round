@@ -47,6 +47,18 @@ public enum Deployment: String, Sendable {
     case development
     case production
 
+    /// The deployment this build's app, screensaver and installed agent share:
+    /// production in a Release build, development in Debug and Claude.
+    ///
+    /// **Since 2026-09-23, for the first Developer ID build.** Syd: "switch
+    /// Release to production." Until then every surface asked for
+    /// `.development` by name, so a Release handed to somebody else would have
+    /// kept its settings and library under the development names, and moving
+    /// them later would have lost them. The agent's own default is unchanged —
+    /// a bare run is still development — and its installed plist passes
+    /// `--prod` when this is `.production`. `JobDescription`.
+    public static let current: Deployment = BuildVariant.current == .release ? .production : .development
+
     /// The bundle identifier, which is also the preference domain and the last
     /// path component of both production directories.
     ///

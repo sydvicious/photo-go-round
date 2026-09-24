@@ -52,6 +52,9 @@ Each phase leaves the tree working, and the products are taken smallest first.
     and under `~/Library`**, named by deployment *and* variant:
     `com.sydpolk.photogoround[.debug|.claude][.dev]`. `buildDirectory()` and its
     `#filePath` fallback were deleted with it.
+    *Only the variant followed the build then. Which deployment a build runs
+    followed on 2026-09-23 — production in Release, development in Debug and
+    Claude. `PLAN.md`, *Where the two directories go, and `--prod`*.*
   - `pgr_ctl` gained two axes — `--production` (its new default) /
     `--development`, and `--release` / `--debug` / `--claude` — so it can
     address any configuration's library. The variant defaults to its own build's.

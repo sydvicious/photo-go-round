@@ -72,9 +72,12 @@ public struct JobDescription: Codable, Equatable, Sendable {
     /// minutes from launch to listening after a restart*.
     public static let adaptive = "Adaptive"
 
-    public init(label: String, program: URL) {
+    /// `--prod` for a production deployment, since the agent's own default is
+    /// development. `Deployment.current`.
+    public init(label: String, program: URL, deployment: Deployment = .current) {
         self.label = label
-        self.programArguments = [program.path(percentEncoded: false)]
+        self.programArguments =
+            [program.path(percentEncoded: false)] + (deployment == .production ? ["--prod"] : [])
         self.runAtLoad = true
         self.keepAlive = KeepAlive(successfulExit: false)
         self.processType = Self.adaptive

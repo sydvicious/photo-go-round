@@ -6,6 +6,14 @@ Things to look into, deferred out of the phase list. Each one earns its own plan
 
 **When a plan closes, check what it was holding.** Anything it left as later work moves here before the plan is marked done, or it disappears with it.
 
+## Before the first release
+
+Syd, 2026-09-23, after the first notarized Release worked end to end: "checklist for final release".
+
+- [ ] **The dashboard over HTTPS, with a self-signed certificate.** *The dashboard over HTTPS*, below.
+- [ ] **An app icon.** There is none; Login Items shows a blank one. *The icon in System Settings*, below, waits on it.
+- [ ] **A finished DMG.** *Installing by launching the app*, below.
+
 ## Passed over on 2026-09-16 — to fix, not to keep
 
 Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't remember any issues you mention and bypass, so let's not bypass them." Every issue Claude mentioned during the agent performance work and did not fix is here. **Delete each one when it is fixed** — Syd, 2026-09-19: "cleaning it up every once in a while keeps me sane." Git has what was removed.
@@ -196,8 +204,7 @@ Syd, 2026-09-21, after a `(Claude)` screensaver with no agent anywhere showed "W
 
 What is left after `Plans/Release App Installer.md`, which built the app as the installer on 2026-09-21: every build carries the agent, the extension and the screensaver, installs and restarts its agent at launch, and a Release launch registers the wallpaper and links the saver.
 
-- **Check where Login Items lists the agent once there is a Developer ID build.** Since 2026-09-23 the plist carries `AssociatedBundleIdentifiers` = `com.sydpolk.photosgoround`; macOS records it, but an Apple Development build is still listed under *Allow in the Background* as *Sydney Polk*. If a Developer ID build is too, the remaining route is `SMAppService`. `PLAN.md`, beside "still appears in Login Items".
-- **Decide which deployment a shipped app runs in.** The app and the saver both ask for `.development` today; a shipped one must not.
+- **A finished DMG.** Syd, 2026-09-23: it should carry a double-clickable uninstaller and an "About …" document, with the icons arranged in a pleasing way, which he recalls took AppleScript last time. `Scripts/release-build.sh` makes a plain one today.
 - **The window needs Install Agent and Launch Agent buttons.** Syd, 2026-09-09. They are what the empty state should offer when nothing is being served, rather than words.
 - **The empty state's agent wording is a placeholder that is wrong in one of the two places it appears.** It reads "Open the Photo-Go-Round application to start it", which is right on the screensaver and absurd in the window, because the window *is* the application. The buttons above are what the window should show instead. Until then the text stands, knowingly.
   - **Changed 2026-09-16.** Syd: "fix the wording. it's stupid." Now "Waiting for Photos" with nothing underneath, in the window, the screensaver and the About box. Launchd starts the agent at login, so "open the app to start it" was wrong on the screensaver too, and an agent still starting up is not "not running". The buttons are still what would go underneath.

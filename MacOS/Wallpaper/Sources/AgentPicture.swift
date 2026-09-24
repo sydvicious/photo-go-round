@@ -39,10 +39,12 @@ enum AgentPicture {
         slot == .desktop ? "system-wallpaper" : "system-screensaver"
     }
 
-    /// Development first: a developer's Mac has both domains and only one agent.
-    /// A shipped extension finds nothing in the development domain and falls
-    /// through, which costs one read.
-    static let deployments: [Deployment] = [.development, .production]
+    /// This build's deployment only, since 2026-09-23, when each build got one:
+    /// production in Release, development in Debug and Claude —
+    /// `Deployment.current`. It asked development and then production until
+    /// then, which in a Release build read the interval out of a development
+    /// domain an older Release had left behind, ahead of the one the app writes.
+    static let deployments: [Deployment] = [.current]
 
     struct Answer: Sendable {
         let image: CGImage

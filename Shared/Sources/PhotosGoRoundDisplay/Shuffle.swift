@@ -243,12 +243,13 @@ public final class Shuffle {
     /// being spelled here, so the app and the agent cannot disagree about which
     /// deployment they are in — including when `PGR_PREFS_SUITE` moves it.
     ///
-    /// **The deployment is a parameter and still defaults to development.** It
-    /// was hardcoded while the window was the only surface; a shipped saver
-    /// talks to production, and the default is what keeps every development run
-    /// off a real library — see `Deployment`.
+    /// **The deployment defaults to this build's, since 2026-09-23** —
+    /// production in Release, development in Debug and Claude, so a development
+    /// run still stays off a real library. It defaulted to development until
+    /// then, which would have pointed a Release window at the development
+    /// agent. See `Deployment.current`.
     public convenience init(
-        consumer: String, deployment: Deployment = .development,
+        consumer: String, deployment: Deployment = .current,
         dwell: Duration = ScreensaverPreferences.defaultInterval.duration
     ) {
         let environment = MacHostEnvironment(deployment: deployment)

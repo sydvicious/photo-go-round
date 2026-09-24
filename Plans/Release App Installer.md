@@ -3,6 +3,9 @@
 **Closed 2026-09-22.** All six phases built and run on Syd's Mac, and installed
 on a second Mac, Plex — Syd: "I was able to install on Plex successfully."
 What it left open is in `TODO.md`.
+*2026-09-23: the first Developer ID signed, notarized Release was built from
+Organizer and installed on Syd's Mac, running production. `PLAN.md`,
+*Shipping it*.*
 
 Every build of `Photo-Go-Round.app` carries the agent, the wallpaper extension
 and the screensaver inside its wrapper. At every launch it installs and restarts

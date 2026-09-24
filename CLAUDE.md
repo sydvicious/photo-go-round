@@ -61,6 +61,7 @@ installed on one Mac at once and none can be mistaken for another:
 | LaunchAgent label | `…photosgoround.server` | `….server.debug` | `….server.claude` |
 | Screensaver bundle | `Photos-Go-Round Screensaver.saver` | `… (Debug).saver` | `… (Claude).saver` |
 | Wallpaper extension | `…wallpaper.extension` | `…wallpaper.debug.extension` | `…wallpaper.claude.extension` |
+| Deployment | production (`--prod`) | development | development |
 
 `-configuration Claude` sets all of it. The three settings that used to be
 passed by hand — `PGR_AGENT_CONDITION`, `WALLPAPER_ID_SUFFIX`,

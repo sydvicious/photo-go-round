@@ -51,8 +51,11 @@ and never opens the database or the cache. That is what lets a screensaver insid
 someone else's sandbox and an Apple TV across the network be the same kind of
 client. See **SERVICE**.
 
-**It is meant to run as a LaunchAgent**, installed by ⌘R on the **Install
-Agent** scheme, so that launchd starts it at login and restarts it if it stops.
+**It is meant to run as a LaunchAgent**, so that launchd starts it at login and
+restarts it if it stops. `Photos-Go-Round.app` installs and restarts it at every
+launch, since 2026-09-21, from the copy inside its own bundle; the app's Help
+menu installs or uninstalls it by hand, and ⌘R on the **Install Agent** scheme
+is still the development route.
 Nothing else has to be running for it to work, and it expects to be there before
 any surface asks for a picture.
 
@@ -74,6 +77,9 @@ Use the real library — `~/Library/Containers/<identifier>`,
 same three take a `.dev` suffix, so a plain run cannot disturb anything. All
 three move together, deliberately: relocating the storage root alone would leave
 the source list pointing at the real one.
+**A Release build installs its agent with `--prod`; Debug and Claude builds do
+not**, since 2026-09-23 — each build's app, screensaver and wallpaper extension
+use that same deployment, so a Debug build never touches the Release library.
 
 **`<identifier>` carries the build configuration** — `com.sydpolk.photosgoround`, `….debug` or `….claude` by build configuration — so a
 release, a Debug and an agent's build never share a database and can all run at

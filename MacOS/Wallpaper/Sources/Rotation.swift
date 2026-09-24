@@ -12,8 +12,7 @@ import PhotosGoRoundAgentAPI
 import PhotosGoRoundDisplay
 
 enum Rotation {
-    /// Both domains, development first, matching `AgentPicture`: a developer's
-    /// Mac has both and only one agent.
+    /// This build's deployment, matching `AgentPicture`.
     static var interval: ShuffleInterval {
         for deployment in AgentPicture.deployments {
             let preferences = WallpaperPreferences(deployment: deployment)

@@ -168,13 +168,13 @@ final class SourcesModel {
         self.retry = retry
     }
 
-    /// The ordinary case: the agent this checkout's development runs talk to.
+    /// The ordinary case: the agent this build's deployment runs.
     /// The domain is never spelled here, so the app and the agent cannot
     /// disagree about which deployment they are in.
     convenience init() {
         self.init(
             service: SourceService(
-                preferences: MacHostEnvironment(deployment: .development).preferences))
+                preferences: MacHostEnvironment(deployment: .current).preferences))
     }
 
     // MARK: - Reading

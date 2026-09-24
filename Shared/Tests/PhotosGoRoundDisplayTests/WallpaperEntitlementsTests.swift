@@ -64,9 +64,10 @@ struct WallpaperEntitlementsTests {
         Set(list.map { $0.replacingOccurrences(of: placeholder, with: variant.identifierSuffix) })
     }
 
-    /// Every domain the extension reads, for one variant: the agent's two —
-    /// `AgentPicture` asks both deployments for a published port — and the
-    /// wallpaper's own two, which `Rotation` reads for the interval.
+    /// Every domain the entitlements grant, for one variant: the agent's and
+    /// the wallpaper's own, in both deployments. Since 2026-09-23 an extension
+    /// reads only its build's deployment — `Deployment.current` — but one
+    /// entitlements file serves all three configurations, so it grants both.
     static func domainsRead(by variant: BuildVariant) -> Set<String> {
         var domains: Set<String> = []
         for deployment in [Deployment.development, .production] {

@@ -145,7 +145,8 @@ struct AgentInstallTests {
     @Test("The job description carries exactly the fields launchd is given")
     func jobDescriptionShape() throws {
         let job = JobDescription(
-            label: "com.sydpolk.photosgoround.server.debug", program: binary)
+            label: "com.sydpolk.photosgoround.server.debug", program: binary,
+            deployment: .development)
         let decoded =
             try PropertyListSerialization.propertyList(from: job.encodedPlist(), format: nil)
             as? [String: Any]
@@ -162,6 +163,20 @@ struct AgentInstallTests {
         // Filed under the app in Login Items rather than under the signing
         // certificate's name. Checked 2026-09-23 with `sfltool dumpbtm`.
         #expect(values["AssociatedBundleIdentifiers"] as? [String] == ["com.sydpolk.photosgoround"])
+    }
+
+    /// The agent's own default is development, so a Release build's job has to
+    /// ask for production by name, and a Debug or Claude one must not.
+    @Test("Only a production job passes --prod")
+    func productionJobPassesProd() {
+        let path = binary.path(percentEncoded: false)
+        let production = JobDescription(
+            label: "com.sydpolk.photosgoround.server", program: binary, deployment: .production)
+        let development = JobDescription(
+            label: "com.sydpolk.photosgoround.server.debug", program: binary, deployment: .development)
+
+        #expect(production.programArguments == [path, "--prod"])
+        #expect(development.programArguments == [path])
     }
 
     /// An installed plist from before the key existed is a different job, so
