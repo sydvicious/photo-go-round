@@ -38,10 +38,10 @@ struct SourcesSettingsView: View {
     @State private var wallpaperInterval = WallpaperPreferences.defaultInterval
 
     /// The screensaver's domain, which this window writes and the saver reads.
-    private static let screensaver = ScreensaverPreferences(deployment: .current)
+    private static let screensaver = ScreensaverPreferences()
     /// The wallpaper's, which this window writes and the wallpaper extension
     /// reads at each change of picture.
-    private static let wallpaper = WallpaperPreferences(deployment: .current)
+    private static let wallpaper = WallpaperPreferences()
 
     var body: some View {
         // Syd, 2026-09-14: "There should be THREE panels. One for the sources;

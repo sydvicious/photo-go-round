@@ -26,16 +26,15 @@ struct WallpaperCommandsTests {
     /// `com.sydpolk.photosgoround.claude.wallpaper.dev` and the Debug extension
     /// never saw the change. Nothing said so: the write succeeded.
     @Test(
-        "The domain carries both the deployment and the build configuration",
+        "The domain carries the build configuration",
         arguments: [
             (BuildVariant.release, "com.sydpolk.photosgoround.wallpaper"),
             (.debug, "com.sydpolk.photosgoround.debug.wallpaper"),
             (.claude, "com.sydpolk.photosgoround.claude.wallpaper"),
         ])
-    func domainCarriesBothAxes(_ pair: (BuildVariant, String)) {
-        let (variant, stem) = pair
-        #expect(WallpaperCommands.domain(deployment: .development, variant: variant) == "\(stem).dev")
-        #expect(WallpaperCommands.domain(deployment: .production, variant: variant) == "\(stem).prod")
+    func domainCarriesTheBuild(_ pair: (BuildVariant, String)) {
+        let (variant, domain) = pair
+        #expect(WallpaperCommands.domain(variant: variant) == domain)
     }
 
     @Test("An unset interval reports what the wallpaper would use")
@@ -80,15 +79,10 @@ struct WallpaperCommandsTests {
     }
 
     /// The domain the app writes and the extension reads, spelled once.
-    @Test("The domain follows the deployment")
-    func domainFollowsDeployment() {
-        // Spelled from the storage identifier so this holds in every build
+    @Test("The domain is this build's")
+    func domainFollowsTheBuild() {
+        // Spelled from the storage name so this holds in every build
         // configuration; `BuildVariantTests` pins the suffixes themselves.
-        #expect(
-            WallpaperPreferences(deployment: .development).domain
-                == "\(Deployment.storageIdentifier()).wallpaper.dev")
-        #expect(
-            WallpaperPreferences(deployment: .production).domain
-                == "\(Deployment.storageIdentifier()).wallpaper.prod")
+        #expect(WallpaperPreferences().domain == "\(Storage.name()).wallpaper")
     }
 }

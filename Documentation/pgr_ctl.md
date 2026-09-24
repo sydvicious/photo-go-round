@@ -56,17 +56,13 @@ the database is deleted again within half a minute.
 Every command has to agree with the running agent about the container, so these
 are spelled exactly as the agent spells them.
 
-Two axes: which library, and whose build's. Both resolve to one directory name
-used for the container, the cache and the preference domain, all under the
-user's own home so that two people on one Mac never share a library.
-
-`--production`, `--prod` (default), `--development`, `--dev`
-Which library. Production is `~/Library/Containers/<identifier>`,
-`~/Library/Caches/<identifier>` and the domain `<identifier>`; development is
-the same three with `.dev` appended. All three move together, deliberately.
-**The default is production here and development in the agent** — the agent must
-not be one typo from a real library, and this is the rig, never shipped.
-`./Scripts/scrub-dev.sh` deletes the development libraries; see FILES.
+**One library per build, and the build is the only choice.** Syd, 2026-09-24:
+"They should be completely separate builds with completely separate assets." A
+build's library is one directory name, used for the container, the cache and the
+preference domain, all under the user's own home so that two people on one Mac
+never share a library. The four deployment flags went that day, with the second
+library they chose between;
+`./Scripts/scrub-dev.sh` deletes what those left behind — see FILES.
 
 `--release`, `--debug`, `--claude`
 Whose build's library. Each build configuration has its own identifier —
@@ -75,10 +71,10 @@ at once without sharing a database. **Defaults to the configuration `pgr_ctl`
 itself was built as**, which is the agent you are most likely running.
 
 `--container <dir>`
-Storage root. Defaults to `~/Library/Containers/<identifier>` for the axes above.
+Storage root. Defaults to `~/Library/Containers/<identifier>` for the build above.
 
 `-d`, `--database <path>`
-Database file. Defaults to `<container>/photosgoround.sqlite` in both deployments.
+Database file. Defaults to `<container>/photosgoround.sqlite`.
 
 `--cache-root <dir>`
 Cache root. Defaults to `~/Library/Caches/<identifier>`. Naming a container takes
@@ -290,10 +286,9 @@ up immediately. For a list of valid keys, see `get`.
 
 `wallpaper get [<key>]`
 Reads the wallpaper's own preferences, which live in
-`com.sydpolk.photosgoround.wallpaper.dev` — or `.prod` with `--prod` — rather than
-in the domain `get` reads. The domain carries the build configuration as the
-library does: `….debug.wallpaper.dev` with `--debug`, `….claude.wallpaper.dev`
-with `--claude`. With no key it lists every setting; with a key it prints that
+`com.sydpolk.photosgoround.wallpaper` rather than in the domain `get` reads. The
+domain carries the build configuration as the library does:
+`….debug.wallpaper` with `--debug`, `….claude.wallpaper` with `--claude`. With no key it lists every setting; with a key it prints that
 value alone, for scripts. An unset `interval` reports the value the wallpaper
 would use. The only key is `interval`.
 
@@ -310,7 +305,7 @@ listening goes and looks. Valid topics are `prefs`, `sources`, `deck`, and
 cached bytes respectively.
 
 The bell is scoped to the library, so it reaches only processes that have the
-same database open. `--prod`, `--container`, and `--database` therefore decide
+same database open. The build flags, `--container` and `--database` therefore decide
 whose bell rings, and the posted name is printed so it can be checked against
 the agent being watched.
 
@@ -342,12 +337,12 @@ Materialized photo bytes. Only photos on volumes that can disappear are copied;
 anything on the boot volume is read where it lies.
 
 `Scripts/scrub-dev.sh`
-Deletes every configuration's development database and cache — release, Debug and
-Claude — after stopping any agent holding one. `--preferences` deletes the dev
-preference domains as well, which takes the source lists with them; `--dry-run`
-says what would go; `--yes` skips the prompt. Every path it touches ends in
-`.dev` and none can be overridden, so the production libraries are unreachable
-from it (_internal testing only_).
+Deletes what the retired development libraries left behind — each build's `.dev`
+container, cache and preferences, and the screensaver's and wallpaper's old `.dev`
+and `.prod` domains — after stopping any agent holding one. `--dry-run` says what
+would go; `--yes` skips the prompt. Every name it touches is spelled in it and
+ends in `.dev` or `.prod`, and none can be overridden, so no library a current
+build uses is reachable from it (_internal testing only_).
 
 ## EXIT STATUS
 

@@ -70,14 +70,10 @@ struct Options {
 
     // Where the library is. Identical to the agent's, because a subcommand that
     // disagreed with the agent about the container would be reading a different
-    // library and saying nothing about it.
-    /// **Production, unlike the agent's default.** Syd, 2026-09-19: "pgr_ctl
-    /// would default to production", and "it should be able to completely
-    /// control any of the three configurations. It will never be shipped to
-    /// users, so there is no danger here." The agent still defaults to
-    /// development, because a casual `swift run` of the agent should not be
-    /// able to reach a real library.
-    var deployment: Deployment = .production
+    // library and saying nothing about it. **One library per build**, since
+    // 2026-09-24 — Syd: "They should be completely separate builds with
+    // completely separate assets" — so the build is the only choice; `--prod`
+    // and `--dev` went with the second library they chose between.
     /// Which build's storage to address. **Defaults to this build's own**, so a
     /// `pgr_ctl` compiled in one configuration cannot silently operate another
     /// configuration's library; name one to cross over.
@@ -141,10 +137,6 @@ struct Options {
         while index < arguments.endIndex {
             let argument = arguments[index]
             switch argument {
-            case "--prod", "--production":
-                options.deployment = .production
-            case "--development", "--dev":
-                options.deployment = .development
             case "--release":
                 options.variant = .release
             case "--debug":
@@ -409,10 +401,6 @@ struct Options {
           log [-f] [--last <time>]  What every process has been logging
 
         OPTIONS
-              --production        The real library (the default), and
-              --development       the disposable one beside it. Both live under
-                                  ~/Library; all three of container, cache and
-                                  preference domain move together
               --release           Which build's library to address. Defaults to
               --debug             this build's own, which is what the agent you
               --claude            are probably running was built as

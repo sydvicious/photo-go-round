@@ -7,9 +7,8 @@ import PhotosGoRoundAgentAPI
 ///
 /// Raw `defaults write` stays usable by anyone who knows the domain — the agent
 /// re-reads on a poll precisely so that it works with no cooperation. This
-/// exists so that nobody *has* to know it: `--prod` and the development default
-/// pick different domains, and getting that wrong writes a setting nothing ever
-/// reads.
+/// exists so that nobody *has* to know it: each build has its own domain, and
+/// getting that wrong writes a setting nothing ever reads.
 enum PreferenceCommands {
 
     /// Reads preferences.

@@ -65,16 +65,13 @@ struct WallpaperEntitlementsTests {
     }
 
     /// Every domain the entitlements grant, for one variant: the agent's and
-    /// the wallpaper's own, in both deployments. Since 2026-09-23 an extension
-    /// reads only its build's deployment — `Deployment.current` — but one
-    /// entitlements file serves all three configurations, so it grants both.
+    /// the wallpaper's own. One of each per build since 2026-09-24, when the
+    /// `.dev` and `.prod` pair inside every build went.
     static func domainsRead(by variant: BuildVariant) -> Set<String> {
-        var domains: Set<String> = []
-        for deployment in [Deployment.development, .production] {
-            domains.insert(MacHostEnvironment.preferenceDomain(for: deployment, variant: variant))
-            domains.insert(WallpaperPreferences(deployment: deployment, variant: variant).domain)
-        }
-        return domains
+        [
+            MacHostEnvironment.preferenceDomain(variant: variant),
+            WallpaperPreferences(variant: variant).domain,
+        ]
     }
 
     @Test("The entitlements file was found and parsed")

@@ -123,7 +123,7 @@ it alone.
 
 **It removes what was installed, not what was built.** Build directories, the
 library, the cache and the preferences are untouched; `Scripts/scrub-dev.sh` is
-what clears development storage.
+what clears the retired development libraries' leftovers.
 
 ## ENVIRONMENT
 

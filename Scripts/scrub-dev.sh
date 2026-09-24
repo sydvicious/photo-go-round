@@ -1,51 +1,53 @@
 #!/bin/bash
 #
-# Deletes the development library and starts over.
+# Deletes what the retired development libraries left behind.
 #
-# The database and the cache are disposable by design — rebuilding them costs
-# one rescan — so this is the first thing to reach for when the dev setup is in
-# a state nobody wants to reason about.
+# **Every build has one set of assets since 2026-09-24.** Syd: "They should be
+# completely separate builds with completely separate assets." Until then each
+# build had two libraries — a real one and a `.dev` one beside it — and the
+# screensaver and the wallpaper each had a `.dev` and a `.prod` domain. None of
+# those names is used any more, and Syd chose to start fresh rather than move
+# them: "right now, I don't care about existing data, especially dev/debug."
+# This removes them — containers, caches and preferences alike.
 #
-# **Preferences are the exception and are kept unless asked for.** The source
-# list lives in UserDefaults and is the one thing here that cannot be
-# reconstructed by rescanning; everything else is derivable. So --preferences is
-# a separate flag rather than part of "scrub", and it says how many sources it
-# is about to lose before it does it.
-#
-# **Production is unreachable from here on purpose.** Every path is spelled here
-# and ends in ".dev", and nothing is taken from an argument or from
+# **Nothing in use is reachable from here.** Every name is spelled below and
+# ends in `.dev` or `.prod`, and nothing is taken from an argument or from
 # PGR_CONTAINER — otherwise the one command whose whole job is deleting things
-# would be one flag away from deleting the real library.
-#
-# **Three development libraries, one per build configuration.** Since 2026-09-19
-# the storage lives under ~/Library rather than in the checkout — Syd: "all of
-# the datafiles have to run in the users home directory so that this will work
-# for two different users on the same machine" — and each configuration has its
-# own, so all three agents can run at once. This clears all three.
+# would be one flag away from deleting a library somebody is using. The current
+# names — `com.sydpolk.photosgoround`, `….debug`, `….claude`, and their
+# `.screensaver` and `.wallpaper` domains — are never touched.
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Release, Syd's Debug and an agent's Claude build. `BuildVariant.swift`.
-DOMAINS=(
-    "com.sydpolk.photosgoround.dev"
-    "com.sydpolk.photosgoround.debug.dev"
-    "com.sydpolk.photosgoround.claude.dev"
+BUILDS=(
+    "com.sydpolk.photosgoround"
+    "com.sydpolk.photosgoround.debug"
+    "com.sydpolk.photosgoround.claude"
 )
 
-PREFERENCES=0
+# Each build's old development library: container, cache and preferences.
+LIBRARIES=()
+# Preference domains that were only ever preferences: the surfaces' old pair.
+SURFACE_DOMAINS=()
+for build in "${BUILDS[@]}"; do
+    LIBRARIES+=("$build.dev")
+    for surface in screensaver wallpaper; do
+        SURFACE_DOMAINS+=("$build.$surface.dev" "$build.$surface.prod")
+    done
+done
+
 ASSUME_YES=0
 DRY_RUN=0
 
 usage() {
     cat <<'USAGE'
-usage: scrub-dev.sh [--preferences] [--yes] [--dry-run]
+usage: scrub-dev.sh [--yes] [--dry-run]
 
-Deletes the development database and cache, so the next launch starts cold.
-The production library is never touched.
+Deletes the leftovers of the retired development libraries: each build's
+`.dev` container, cache and preferences, and the screensaver's and wallpaper's
+old `.dev` and `.prod` domains. Nothing a current build uses is touched.
 
-  --preferences  Also delete the dev preference domain. This loses the source
-                 list, which is the one thing a rescan cannot rebuild.
   --yes          Do not ask.
   --dry-run      Say what would go; delete nothing.
   -h, --help     This.
@@ -54,7 +56,6 @@ USAGE
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --preferences) PREFERENCES=1 ;;
         --yes|-y)      ASSUME_YES=1 ;;
         --dry-run|-n)  DRY_RUN=1 ;;
         -h|--help)     usage; exit 0 ;;
@@ -63,23 +64,24 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-size_of() {
-    [[ -e "$1" ]] && du -sh "$1" 2>/dev/null | cut -f1 || echo "absent"
-}
-
 container_of() { echo "$HOME/Library/Containers/$1"; }
 cache_of()     { echo "$HOME/Library/Caches/$1"; }
+plist_of()     { echo "$HOME/Library/Preferences/$1.plist"; }
 
-sources_held() {
-    defaults read "$1" sources 2>/dev/null | grep -c "kind = " || true
-}
+# Everything of the retired names still on disk, one path per entry.
+FOUND=()
+for domain in "${LIBRARIES[@]}" "${SURFACE_DOMAINS[@]}"; do
+    for path in "$(container_of "$domain")" "$(cache_of "$domain")" "$(plist_of "$domain")"; do
+        [[ -e "$path" ]] && FOUND+=("$path")
+    done
+done
 
-# **Every development agent, whichever configuration built it**, matched on the
-# development container it has open rather than on the process name — so an
-# agent serving the production library is never a candidate.
+# **Any agent with a leftover container open**, matched on the container rather
+# than on the process name — so an agent serving a current library is never a
+# candidate.
 running_agent() {
     local pids=""
-    for domain in "${DOMAINS[@]}"; do
+    for domain in "${LIBRARIES[@]}"; do
         pids="$pids$(pgrep -f '/Photos-Go-Round Server( |$)' 2>/dev/null | while IFS= read -r pid; do
             if lsof -p "$pid" 2>/dev/null | grep -qF "/Library/Containers/$domain/"; then echo "$pid"; fi
         done)
@@ -88,21 +90,19 @@ running_agent() {
     echo "$pids" | grep -v '^$' | sort -u || true
 }
 
-echo "development libraries under $HOME/Library"
-for domain in "${DOMAINS[@]}"; do
-    echo "  $domain"
-    echo "    database     $(size_of "$(container_of "$domain")")"
-    echo "    cache        $(size_of "$(cache_of "$domain")")"
-    if (( PREFERENCES )); then
-        echo "    preferences  $(sources_held "$domain") sources, which will be lost"
-    else
-        echo "    preferences  kept ($(sources_held "$domain") sources); --preferences takes them too"
-    fi
+if (( ${#FOUND[@]} == 0 )); then
+    echo "no leftovers of the retired development libraries under $HOME/Library"
+    exit 0
+fi
+
+echo "leftovers of the retired development libraries under $HOME/Library:"
+for path in "${FOUND[@]}"; do
+    echo "    $path ($(du -sh "$path" 2>/dev/null | cut -f1))"
 done
 
 PIDS="$(running_agent)"
 if [[ -n "$PIDS" ]]; then
-    echo "  agent        running as ${PIDS//$'\n'/, }, and will be stopped"
+    echo "  agent running on one of them as ${PIDS//$'\n'/, }, and will be stopped"
 fi
 
 if (( DRY_RUN )); then
@@ -111,12 +111,12 @@ if (( DRY_RUN )); then
 fi
 
 if (( ! ASSUME_YES )); then
-    read -r -p "scrub it? [y/N] " reply
+    read -r -p "delete them? [y/N] " reply
     [[ "$reply" == [yY] ]] || { echo "left alone"; exit 1; }
 fi
 
 # Stopped before anything is unlinked: a live agent holds the WAL open and
-# republishes servicePort, so deleting underneath it leaves a half-scrubbed
+# republishes servicePort, so deleting underneath it leaves a half-deleted
 # library and a running process disagreeing about what exists.
 if [[ -n "$PIDS" ]]; then
     # shellcheck disable=SC2086
@@ -132,19 +132,15 @@ if [[ -n "$PIDS" ]]; then
     echo "stopped the agent"
 fi
 
-for domain in "${DOMAINS[@]}"; do
+for domain in "${LIBRARIES[@]}"; do
     rm -rf "$(container_of "$domain")" "$(cache_of "$domain")"
 done
-echo "deleted the databases and the caches"
+for domain in "${LIBRARIES[@]}" "${SURFACE_DOMAINS[@]}"; do
+    defaults delete "$domain" 2>/dev/null || true
+    rm -f "$(plist_of "$domain")"
+done
+# cfprefsd caches a domain it has read, and hands the stale copy back to the
+# next process that asks. Deleting the file is not enough on its own.
+killall cfprefsd 2>/dev/null || true
 
-if (( PREFERENCES )); then
-    for domain in "${DOMAINS[@]}"; do
-        defaults delete "$domain" 2>/dev/null || true
-        echo "deleted $domain"
-    done
-    # cfprefsd caches a domain it has read, and hands the stale copy back to the
-    # next process that asks. Deleting the file is not enough on its own.
-    killall cfprefsd 2>/dev/null || true
-fi
-
-echo "next launch starts cold"
+echo "deleted the leftovers"

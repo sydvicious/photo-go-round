@@ -27,7 +27,7 @@ The dynamic port is the one piece of the system that changes on every launch, an
 *All of these are Claude's proposals; none is decided.*
 
 - **Numbers outside the ephemeral range**, which on this Mac is 49152–65535 (`net.inet.ip.portrange`). Inside it, a transient client socket can be holding our port when the agent starts. **9427, 9428 and 9429**, none listed in `/etc/services` and none in use on Syd's Mac. The numbers carry no other meaning.
-- **One per build variant, decided at compile time.** `Deployment` answers *whose pictures* — production against `.build` — and that is a different question from *whose build*. Two agents built differently can be running at once on this Mac, which is the collision the three numbers exist to avoid, and it is the same three identities the wallpaper extension already has.
+- **One per build variant, decided at compile time.** `Deployment` answered *whose pictures* — production against `.build` — and that was a different question from *whose build*. *Since 2026-09-24 there is no second question:* each build has exactly one library (`Storage`), so the build decides both, and three port ranges remain the right number. Two agents built differently can be running at once on this Mac, which is the collision the three numbers exist to avoid, and it is the same three identities the wallpaper extension already has.
 - **Loopback only, as now.** Nothing off the machine reaches it, so the number is a local convention rather than an allocation anyone else must respect.
 - **`--port` stays**, for a scratch agent beside the real one, and for a second user.
 - **Publishing stays**, so a pinned or scratch agent can still be found, and so `pgr_ctl status` keeps working unchanged.

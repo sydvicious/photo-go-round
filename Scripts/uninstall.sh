@@ -17,7 +17,7 @@
 # **It removes what was installed, not what was built.** Build directories, the
 # library, the cache and the preferences are left alone: uninstalling is not the
 # same as throwing away the photographs you chose. `Scripts/scrub-dev.sh` is the
-# one that clears development storage.
+# one that clears the retired development libraries' leftovers.
 #
 # **Nothing here needs the checkout that installed it.** Everything is found by
 # label, identifier and name — so it removes a Release install as readily as a
@@ -52,7 +52,7 @@ WHAT EACH ONE REMOVES
 
 WHAT IT NEVER TOUCHES
   The library, the cache, preferences, and anything under a build directory. See
-  Scripts/scrub-dev.sh for development storage.
+  Scripts/scrub-dev.sh for the retired development libraries' leftovers.
 HELPTEXT
 }
 

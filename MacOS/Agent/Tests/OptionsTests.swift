@@ -134,17 +134,14 @@ struct OptionsTests {
         #expect(options.foldersToAdd.isEmpty)
     }
 
-    // MARK: - Storage, and the flag that moves all three
+    // MARK: - Storage
 
-    /// Syd, 2026-09-24: "a release build should always install and use a
-    /// release agent, period, no matter how it is launched." This suite runs a
-    /// development build, so a plain run here must still be development.
-    @Test("The build decides the default: Release is production, Debug and Claude development")
-    func theBuildDecidesTheDefault() throws {
-        #expect(try parse([]).deployment == Deployment.current)
-        #expect(Deployment.current == (BuildVariant.current == .release ? .production : .development))
-        #expect(try parse([]).deployment == .development, "a development build's plain run")
-        #expect(try parse(["--prod"]).deployment == .production)
+    /// Syd, 2026-09-24: "They should be completely separate builds with
+    /// completely separate assets." The build is the only choice, and it is not
+    /// the agent's to make.
+    @Test("There is no flag that chooses another library")
+    func noDeploymentFlag() {
+        #expect(throws: (any Error).self) { try parse(["--prod"]) }
     }
 
     @Test("Explicit roots are taken as given")
@@ -179,7 +176,7 @@ struct OptionsTests {
 
     static let frozenFlags = [
         "--add-folder", "-r", "--recursive",
-        "--prod", "--container", "--cache-root", "--database", "-d",
+        "--container", "--cache-root", "--database", "-d",
         "--once", "-i", "--interval", "--scan-interval", "--port", "-h", "--help",
     ]
 
@@ -240,7 +237,6 @@ struct OptionsTests {
         let options = try parse(
             [], environment: ["PGR_CONTAINER": "/tmp/c", "PGR_CACHE": "/tmp/k"])
         let environment = MacHostEnvironment(
-            deployment: options.deployment,
             containerOverride: options.containerOverride,
             cacheOverride: options.cacheOverride,
             environment: ["PGR_CONTAINER": "/tmp/c", "PGR_CACHE": "/tmp/k"]
@@ -253,7 +249,6 @@ struct OptionsTests {
     @Test("A flag on the command line still beats the same setting in the environment")
     func flagsBeatEnvironment() throws {
         let environment = MacHostEnvironment(
-            deployment: .development,
             containerOverride: URL(filePath: "/tmp/flag"),
             environment: ["PGR_CONTAINER": "/tmp/env"]
         )
@@ -303,8 +298,7 @@ struct AddFolderGuardTests {
 
     @Test("A run whose storage is where preferences say may configure them")
     func ordinaryRunsWriteThrough() {
-        #expect(RunCommand.mayWriteFoldersThrough(origin: .production, prefsPinned: false))
-        #expect(RunCommand.mayWriteFoldersThrough(origin: .development, prefsPinned: false))
+        #expect(RunCommand.mayWriteFoldersThrough(origin: .build, prefsPinned: false))
     }
 
     @Test("A relocated container may not, because the preferences did not move with it")

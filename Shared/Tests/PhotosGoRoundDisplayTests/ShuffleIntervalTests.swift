@@ -52,12 +52,9 @@ struct ShuffleIntervalTests {
 
     // MARK: - The screensaver's preferences
 
-    @Test("Each deployment has its own screensaver domain, beside the wallpaper's")
+    @Test("Each build has one screensaver domain, beside the wallpaper's")
     func domains() {
-        #expect(ScreensaverPreferences(deployment: .development).domain
-            == "\(Deployment.storageIdentifier()).screensaver.dev")
-        #expect(ScreensaverPreferences(deployment: .production).domain
-            == "\(Deployment.storageIdentifier()).screensaver.prod")
+        #expect(ScreensaverPreferences().domain == "\(Storage.name()).screensaver")
     }
 
     /// "make the default screen saver time 30 seconds instead of 10" — Syd,

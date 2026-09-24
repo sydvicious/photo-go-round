@@ -1,7 +1,7 @@
 import Foundation
 import PhotosGoRoundAgentAPI
 
-/// The screensaver's own preferences: one domain per deployment, holding its
+/// The screensaver's own preferences: one domain per build, holding its
 /// *Shuffle All* choice.
 ///
 /// **Separate from the wallpaper's, the window's, and the agent's.** Syd,
@@ -22,12 +22,13 @@ public struct ScreensaverPreferences: Sendable, Equatable {
         self.domain = domain
     }
 
-    /// `com.sydpolk.photosgoround.screensaver.dev` and `.prod`, beside the
-    /// wallpaper's, and carrying the build variant for the same reason — and
-    /// naming it the same way, since the pair is meant to be read together.
-    public init(deployment: Deployment, variant: BuildVariant = .current) {
-        self.init(
-            domain: "\(Deployment.storageIdentifier(for: variant)).screensaver.\(deployment.domainSuffix)")
+    /// `com.sydpolk.photosgoround.screensaver` — `….debug.screensaver`,
+    /// `….claude.screensaver` — beside the wallpaper's, one per build and
+    /// named the same way, since the pair is meant to be read together. The
+    /// `.dev` and `.prod` pair inside every build went on 2026-09-24: each build
+    /// has one set of assets. `Storage`.
+    public init(variant: BuildVariant = .current) {
+        self.init(domain: "\(Storage.name(for: variant)).screensaver")
     }
 
     /// **The suite first, the file underneath**, which is `ServicePort`'s route
@@ -61,14 +62,3 @@ public struct ScreensaverPreferences: Sendable, Equatable {
     }
 }
 
-extension Deployment {
-    /// The last component of a surface's own domain and directory: the
-    /// wallpaper's and the screensaver's are spelled from this, so the two
-    /// cannot disagree about what a deployment is called.
-    var domainSuffix: String {
-        switch self {
-        case .production: "prod"
-        case .development: "dev"
-        }
-    }
-}

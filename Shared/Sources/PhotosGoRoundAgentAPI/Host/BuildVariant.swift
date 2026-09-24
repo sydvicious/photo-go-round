@@ -10,8 +10,8 @@ import Foundation
 /// wallpaper extension identifier, so that all three can be installed and
 /// running on one Mac at once and none can be mistaken for another.
 ///
-/// The variant is a different question from `Deployment`, which answers *whose
-/// pictures*. This answers *whose build*. `PGR_AGENT_CLAUDE` is set by the
+/// **The variant also decides the library**, since 2026-09-24: each build has
+/// exactly one set of assets, named by `Storage.name(for:)`. `PGR_AGENT_CLAUDE` is set by the
 /// `Claude` build configuration and by `swift build -Xswiftc
 /// -DPGR_AGENT_CLAUDE`; `DEBUG` is what an Xcode or SwiftPM debug build defines
 /// for itself. `Claude` defines both, and is checked first.

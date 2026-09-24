@@ -26,7 +26,7 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
 
     init() {
-        let interval = ScreensaverPreferences(deployment: .current).interval
+        let interval = ScreensaverPreferences().interval
         _interval = State(initialValue: interval)
         _shuffle = State(initialValue: Shuffle(consumer: "app", dwell: interval.duration))
     }

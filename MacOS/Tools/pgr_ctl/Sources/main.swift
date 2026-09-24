@@ -19,7 +19,6 @@ setvbuf(stdout, nil, _IOLBF, 0)
 
 func hostEnvironment(_ options: Options) -> MacHostEnvironment {
     MacHostEnvironment(
-        deployment: options.deployment,
         variant: options.variant,
         containerOverride: options.containerOverride,
         databaseOverride: options.databaseOverride,
@@ -84,12 +83,12 @@ do {
     case .wallpaper(.get(let key)):
         try WallpaperCommands.get(
             key: key,
-            domain: WallpaperCommands.domain(deployment: options.deployment, variant: options.variant))
+            domain: WallpaperCommands.domain(variant: options.variant))
 
     case .wallpaper(.set(let key, let value)):
         try WallpaperCommands.set(
             key: key, value: value,
-            domain: WallpaperCommands.domain(deployment: options.deployment, variant: options.variant))
+            domain: WallpaperCommands.domain(variant: options.variant))
 
     case .notify(let topic):
         try NotifyCommand.run(topic: topic, environment: hostEnvironment(options))

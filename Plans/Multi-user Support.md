@@ -194,10 +194,10 @@ The code is in one URL, and so in the browser's history. That is the point of it
   - **`.noSecret`** — a port is published and no secret beside it: an agent from before this plan, or a first launch not yet on disk. Treated like no port: wait and ask again.
   - **`.notOurs(port:)`** — the agent answered `401`. Before throwing, it reloads the preferences once and, if the secret changed, asks again.
   - Both reach the window as `Waiting for Photos`, the words it uses for every agent trouble, with the difference in the log line. *Syd's, 2026-09-23*, asked whether a refused secret earns words of its own: no — the person at the glass can do nothing about either.
-- **The wallpaper extension**, `AgentPicture`, makes its own `URLSession` request for each deployment's domain in turn. It reads the secret from the same domain, adds the header, and treats a `401` like no answer: log it and ask the next domain.
+- **The wallpaper extension**, `AgentPicture`, makes its own `URLSession` request to its build's domain — each deployment's in turn when this was written; one per build since 2026-09-24. It reads the secret from the same domain, adds the header, and treats a `401` like no answer: log it and ask the next domain.
 - **The app's `SourceService`** reads `serviceSecret` beside `servicePort` and adds the header. A `401` is `Failure.notOurs`, after the same one retry, and the panel says *The agent on this port refused this account's secret.* It also asks for the dashboard's code, being the app's one client of the agent's JSON.
 - **`pgr_ctl`** makes no requests at all — command-line HTTP is `curl`, by design. `status` gains whether a secret is published. It never prints one: `defaults read` is there for anyone who needs it, and a tool that printed it would put it in terminal scrollback and shell history.
-- **The launch check, `AgentProbe`.** Today it polls the hashed port for thirty seconds and counts any HTTP status as its agent. With the secret it re-reads the published port and the secret on every attempt — the agent it just restarted withdraws one port and publishes the next — sends the secret, and counts only an answer that is not `401`. `LaunchInstall.Steps.live` hands it the app's own preferences, `MacHostEnvironment(deployment: .development)`, the deployment the installed agent runs.
+- **The launch check, `AgentProbe`.** Today it polls the hashed port for thirty seconds and counts any HTTP status as its agent. With the secret it re-reads the published port and the secret on every attempt — the agent it just restarted withdraws one port and publishes the next — sends the secret, and counts only an answer that is not `401`. `LaunchInstall.Steps.live` hands it the app's own preferences, `MacHostEnvironment()` — the build's own library, which is the installed agent's too, since each build has exactly one (2026-09-24; it named a deployment until then).
 
 ## What it does not stop
 
@@ -213,7 +213,7 @@ The code is in one URL, and so in the browser's history. That is the point of it
 **One setup block, then the examples:**
 
 ```
-DOMAIN=com.sydpolk.photosgoround.debug.dev
+DOMAIN=com.sydpolk.photosgoround.debug
 PORT=$(defaults read "$DOMAIN" servicePort)
 AUTH="Authorization: Bearer $(defaults read "$DOMAIN" serviceSecret)"
 ```
@@ -248,7 +248,7 @@ It finds every fenced block in `README.md` and `Documentation/*.md` that calls `
 
 *Planned 2026-09-23.* Syd, on `randyarbuckle`: "That account has a lot of sensitive pictures, so I won't be taking screenshots or movies, and I won't be giving you log snippets." So every check below prints a status code, a count or a permission error, and nothing about the pictures leaves that account. What comes back to Claude is a yes or no, or a number, per step.
 
-An archived app is a Release build, so both agents use the domain `com.sydpolk.photosgoround`. *Corrected 2026-09-24:* the steps were run on 2026-09-23 with `com.sydpolk.photosgoround.dev`, because until that evening a Release build's agent ran the development deployment; since then a Release agent is production however it starts, and its domain has no `.dev`. Nothing here is secret: `serviceSecret` is only ever read inside the account it belongs to, and never printed.
+An archived app is a Release build, so both agents use the domain `com.sydpolk.photosgoround`. *Corrected 2026-09-24:* the steps were run on 2026-09-23 with `com.sydpolk.photosgoround.dev`, because until that evening a Release build's agent ran the development deployment. Since 2026-09-24 no build has a `.dev` library at all: each has exactly one set of assets, and Release's domain is `com.sydpolk.photosgoround`. Nothing here is secret: `serviceSecret` is only ever read inside the account it belongs to, and never printed.
 
 **In `jazzman`:**
 

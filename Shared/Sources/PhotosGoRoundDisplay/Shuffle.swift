@@ -15,7 +15,7 @@ import PhotosGoRoundAgentAPI
 ///
 /// **Shared by every surface as of Phase 2, and it names none of them.** The
 /// window and the screensaver run this same loop; what differs is the
-/// `consumer` it announces itself as, the deployment it was pointed at, and
+/// `consumer` it announces itself as, the agent it was pointed at, and
 /// the size it says it is drawing at. Nothing here knows what a window is, and
 /// there is deliberately no `NSScreen` in the signature — a display's identity
 /// arrives as the string the view worked out, so this file compiles anywhere
@@ -237,22 +237,17 @@ public final class Shuffle {
             whenEmpty: whenEmpty, whenAbsent: whenAbsent)
     }
 
-    /// The ordinary case: the agent this checkout's development runs talk to.
+    /// The ordinary case: this build's agent, the only one it has.
     ///
     /// `MacHostEnvironment` is asked for its preferences rather than a domain
     /// being spelled here, so the app and the agent cannot disagree about which
-    /// deployment they are in — including when `PGR_PREFS_SUITE` moves it.
-    ///
-    /// **The deployment defaults to this build's, since 2026-09-23** —
-    /// production in Release, development in Debug and Claude, so a development
-    /// run still stays off a real library. It defaulted to development until
-    /// then, which would have pointed a Release window at the development
-    /// agent. See `Deployment.current`.
+    /// library they are in — including when `PGR_PREFS_SUITE` moves it. One set
+    /// of assets per build since 2026-09-24; see `Storage`.
     public convenience init(
-        consumer: String, deployment: Deployment = .current,
+        consumer: String,
         dwell: Duration = ScreensaverPreferences.defaultInterval.duration
     ) {
-        let environment = MacHostEnvironment(deployment: deployment)
+        let environment = MacHostEnvironment()
         self.init(
             source: PictureClient(preferences: environment.preferences),
             consumer: consumer, dwell: dwell)

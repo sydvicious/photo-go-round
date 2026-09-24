@@ -824,7 +824,7 @@ struct RunCommand {
         switch origin {
         // The storage is where the preferences say it is, so writing to them is
         // configuring the library the run belongs to.
-        case .production, .development: true
+        case .build: true
         // Storage was relocated. Writing through would edit a source list this
         // run is not otherwise using — unless the preferences were moved too.
         case .explicitOverride, .environment: prefsPinned

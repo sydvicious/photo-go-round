@@ -9,19 +9,12 @@ import Testing
 @Suite("The wallpaper's preferences")
 struct WallpaperPreferencesTests {
 
-    @Test("Each deployment has its own wallpaper domain, beside the screensaver's")
-    func domainFollowsDeployment() {
-        // Spelled from the storage identifier so this holds in every build
+    @Test("Each build has one wallpaper domain, beside the screensaver's")
+    func domainFollowsTheBuild() {
+        // Spelled from the storage name so this holds in every build
         // configuration; `BuildVariantTests` pins the suffixes themselves.
-        #expect(
-            WallpaperPreferences(deployment: .development).domain
-                == "\(Deployment.storageIdentifier()).wallpaper.dev")
-        #expect(
-            WallpaperPreferences(deployment: .production).domain
-                == "\(Deployment.storageIdentifier()).wallpaper.prod")
-        #expect(
-            WallpaperPreferences(deployment: .development).domain
-                != ScreensaverPreferences(deployment: .development).domain)
+        #expect(WallpaperPreferences().domain == "\(Storage.name()).wallpaper")
+        #expect(WallpaperPreferences().domain != ScreensaverPreferences().domain)
     }
 
     /// Syd, 2026-09-14: "wallpaper will default to "1 hour"."

@@ -1,12 +1,13 @@
 import Foundation
 import PhotosGoRoundAgentAPI
 
-/// The wallpaper's own preferences: one domain per deployment, holding its
+/// The wallpaper's own preferences: one domain per build, holding its
 /// *Shuffle All* choice.
 ///
 /// **Separate from the screensaver's, the window's, and the agent's.** Syd,
-/// 2026-09-10: "give the wallpaper its own domain. Actually two" —
-/// `com.sydpolk.photosgoround.wallpaper.dev` and `.prod`. The app writes here
+/// 2026-09-10: "give the wallpaper its own domain. Actually two" — a `.dev` and
+/// a `.prod`, until 2026-09-24 left one per build:
+/// `com.sydpolk.photosgoround.wallpaper`. The app writes here
 /// from its Settings window and `pgr_ctl wallpaper set` from a terminal; the
 /// wallpaper extension reads, through a read-only sandbox exception, and times
 /// each display's next photograph by it.
@@ -31,8 +32,8 @@ public struct WallpaperPreferences: Sendable, Equatable {
         self.domain = domain
     }
 
-    /// `com.sydpolk.photosgoround.wallpaper.dev` and `.prod`, beside the
-    /// screensaver's — and carrying the build variant, so a Debug wallpaper and
+    /// `com.sydpolk.photosgoround.wallpaper`, beside the screensaver's — and
+    /// carrying the build variant, so a Debug wallpaper and
     /// a release one do not share an interval. `BuildVariant.swift`.
     ///
     /// **The variant is a parameter because `pgr_ctl` names one.** Syd,
@@ -41,9 +42,8 @@ public struct WallpaperPreferences: Sendable, Equatable {
     /// Claude-built `pgr_ctl --debug wallpaper set interval` wrote the Claude
     /// domain and the Debug extension never saw it. Everything else — the app,
     /// the extension — wants the build that is asking, which is the default.
-    public init(deployment: Deployment, variant: BuildVariant = .current) {
-        self.init(
-            domain: "\(Deployment.storageIdentifier(for: variant)).wallpaper.\(deployment.domainSuffix)")
+    public init(variant: BuildVariant = .current) {
+        self.init(domain: "\(Storage.name(for: variant)).wallpaper")
     }
 
     /// **The suite first, the file underneath**, as `ScreensaverPreferences`

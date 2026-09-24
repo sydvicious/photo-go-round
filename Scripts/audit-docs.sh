@@ -34,7 +34,7 @@ fail() {
 }
 
 # Every string on a `case "…"` line — a parser may accept several spellings of
-# one flag, as `case "--prod", "--production":` does.
+# one flag, as `case "--recursive", "-r":` does.
 accepted() {
     grep -oE '^[[:space:]]*case ("[^"]+"[, ]*)+' "$1" | grep -oE '"[^"]+"' | tr -d '"' | sort -u
 }

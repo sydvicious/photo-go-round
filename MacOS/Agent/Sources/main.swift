@@ -38,7 +38,6 @@ do {
         Log.sources.notice("Photos-Go-Round Server starting")
         try await RunCommand(
             environment: MacHostEnvironment(
-                deployment: options.deployment,
                 containerOverride: options.containerOverride,
                 databaseOverride: options.databaseOverride,
                 cacheOverride: options.cacheOverride

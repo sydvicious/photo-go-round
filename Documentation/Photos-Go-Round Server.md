@@ -34,7 +34,7 @@ There are four ways to say what that state is:
   The agent re-reads them on a thirty-second poll, so a plain `defaults write`
   reconfigures a running agent with no cooperation from it.
 - **`pgr_ctl`** (_recommended_). It writes those same preferences, but picks the
-  domain matching the deployment you meant, refuses a key that does not exist,
+  domain of the build you meant, refuses a key that does not exist,
   and makes the change take effect at once rather than at the next poll.
 
 None of the four needs the agent running, which is the property worth having:
@@ -65,25 +65,21 @@ While developing, run it in a terminal instead:
     ./Scripts/run-server.sh
 
 The wrapper script builds first, so a stale binary is never run. It builds Debug
-unless told `--release` or `--claude`, and a Debug agent uses its development
-storage, so a plain run cannot disturb a real library. A
+unless told `--release` or `--claude`, and each build's agent opens that build's
+own library and no other. A
 detached `screen` or `tmux` session keeps it running after the terminal closes,
 which is what a long unattended run wants.
 
 ## OPTIONS
 
-`--prod`
-Use the real library — `~/Library/Containers/<identifier>`,
-`~/Library/Caches/<identifier>`, and the domain `<identifier>`. **A Release build
-always does, however it is started**; a Debug or Claude build without this flag
-uses the same three with a `.dev` suffix, so its plain run cannot disturb
-anything. Syd, 2026-09-24: "a release build should always install and use a
-release agent, period, no matter how it is launched." All
-three move together, deliberately: relocating the storage root alone would leave
-the source list pointing at the real one.
-**A Release build installs its agent with `--prod`; Debug and Claude builds do
-not**, since 2026-09-23 — each build's app, screensaver and wallpaper extension
-use that same deployment, so a Debug build never touches the Release library.
+**Each build has exactly one library, and nothing chooses another.** Syd,
+2026-09-24: "They should be completely separate builds with completely separate
+assets." Its container is `~/Library/Containers/<identifier>`, its cache
+`~/Library/Caches/<identifier>`, and its preference domain `<identifier>` — all
+three named alike, so a person reading any of them can find the other two. Until
+that day each build also had a `.dev` library beside its real one, and a flag
+chose between them; both are gone. `Scripts/scrub-dev.sh` deletes what the
+retired libraries left behind.
 
 **`<identifier>` carries the build configuration** — `com.sydpolk.photosgoround`, `….debug` or `….claude` by build configuration — so a
 release, a Debug and an agent's build never share a database and can all run at
@@ -136,21 +132,20 @@ agent is running.
 
 `--container` *dir*
 Storage root, holding `photosgoround.sqlite` and its WAL sidecars. Defaults to
-`~/Library/Containers/<identifier>.dev`, or with `--prod` to
-`~/Library/Containers/<identifier>`.
+the build's own, `~/Library/Containers/<identifier>`.
 
 `-d`, `--database` *file*
 The database file, overriding its default position inside the storage root.
-Defaults to `<container>/photosgoround.sqlite` in both deployments.
+Defaults to `<container>/photosgoround.sqlite`.
 
 `--cache-root` *dir*
-Where copied photo bytes live. Defaults to `~/Library/Caches/<identifier>.dev`,
-or with `--prod` to `~/Library/Caches/<identifier>`. **Naming a container
+Where copied photo bytes live. Defaults to the build's own,
+`~/Library/Caches/<identifier>`. **Naming a container
 takes the cache with it**: give `--container` or `PGR_CONTAINER` and the cache
 defaults to `<container>/cache` instead, because somebody who named one
 directory meant both.
 
-The cache is deliberately not inside the container in either deployment.
+The cache is deliberately not inside the container.
 `~/Library/Caches` is a place the system may purge whenever it likes, which is
 exactly right for bytes that can be fetched again and exactly wrong for the
 database.
@@ -249,7 +244,7 @@ agent makes it on first launch and keeps it in its preference domain beside
 refusal is a console line, `401 <method> <path> · absent` or `· wrong`, with no
 query and never the value. From a terminal:
 
-    DOMAIN=com.sydpolk.photosgoround.debug.dev
+    DOMAIN=com.sydpolk.photosgoround.debug
     PORT=$(defaults read "$DOMAIN" servicePort)
     AUTH="Authorization: Bearer $(defaults read "$DOMAIN" serviceSecret)"
     curl -sS -H "$AUTH" -o /tmp/pgr.bin "http://localhost:$PORT/v1/next?consumer=cli"
@@ -632,7 +627,7 @@ process. A value the agent could not have made is replaced. Neither is listed by
 secret works. **To rotate it**, delete it and restart the agent, which the next
 launch of the app does anyway; every client reads it again on its next request:
 
-    defaults delete com.sydpolk.photosgoround.debug.dev serviceSecret
+    defaults delete com.sydpolk.photosgoround.debug serviceSecret
 
 ## FILES
 
@@ -656,15 +651,14 @@ favour, always.
 
 |                | storage root | cache root |
 | --- | --- | --- |
-| Debug or Claude, default | `~/Library/Containers/<identifier>.dev` | `~/Library/Caches/<identifier>.dev` |
-| Release, or `--prod` | `~/Library/Containers/<identifier>` | `~/Library/Caches/<identifier>` |
+| default, every build | `~/Library/Containers/<identifier>` | `~/Library/Caches/<identifier>` |
 | container named | as given | `<container>/cache` |
 
-**The build decides:** a Release agent is production however it is started, and
-a Debug or Claude agent is development unless given `--prod`, typed on purpose.
-All three of storage, cache, and the preference domain move together. Two of the three are obviously per-deployment and the
-third silently is not, so relocating the storage root alone would leave the
-source list — and therefore what the agent scans — pointing at the real one.
+**One library per build, and the build decides it.** Storage, cache and
+preference domain share one name. Relocating the storage root does not move the
+preferences — `PGR_PREFS_SUITE` does — so a scratch run that named only a
+container would still read the build's real source list; which is why a
+relocated run does not write folders through to it.
 
 `pgr_ctl status` prints which of those rungs supplied the roots, so it is never
 a guess, and the agent prints the same three lines at startup.

@@ -19,9 +19,9 @@ struct ServicePortTests {
     /// The shape `UserDefaults` uses for an ordinary reverse-DNS domain.
     @Test("A dotted domain lives under the real home, not the container")
     func dottedDomainPath() throws {
-        let preferences = Preferences(suiteName: "com.sydpolk.photosgoround.dev")
+        let preferences = Preferences(suiteName: "com.sydpolk.photosgoround.debug")
         let url = try #require(ServicePort.plistURL(for: preferences))
-        #expect(url.lastPathComponent == "com.sydpolk.photosgoround.dev.plist")
+        #expect(url.lastPathComponent == "com.sydpolk.photosgoround.debug.plist")
         #expect(url.deletingLastPathComponent().path().hasSuffix("Library/Preferences/"))
         // **The whole point of `getpwuid`.** Inside a sandbox `NSHomeDirectory()`
         // is the host's container, which holds none of our preferences; this

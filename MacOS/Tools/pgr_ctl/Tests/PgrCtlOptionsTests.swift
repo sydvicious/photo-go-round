@@ -261,17 +261,14 @@ struct OptionsTests {
 
     // MARK: - Storage
 
-    /// **The rig's default is production, unlike the agent's.** Syd,
-    /// 2026-09-19: "pgr_ctl would default to production", and "it should be able
-    /// to completely control any of the three configurations. It will never be
-    /// shipped to users, so there is no danger here."
-    @Test("Production is the default here, unlike the agent")
-    func productionIsTheDefault() throws {
-        #expect(try parse(["status"]).deployment == .production)
-        #expect(try parse(["status", "--production"]).deployment == .production)
-        #expect(try parse(["status", "--prod"]).deployment == .production)
-        #expect(try parse(["status", "--development"]).deployment == .development)
-        #expect(try parse(["status", "--dev"]).deployment == .development)
+    /// One library per build since 2026-09-24 — Syd: "They should be
+    /// completely separate builds with completely separate assets" — so the
+    /// build flags are the only choice, and the deployment flags are gone.
+    @Test("There is no flag that chooses a second library within a build")
+    func noDeploymentFlags() {
+        for flag in ["--prod", "--production", "--dev", "--development"] {
+            #expect(throws: (any Error).self, "\(flag)") { try parse(["status", flag]) }
+        }
     }
 
     /// The other axis: whose build's library, rather than which library of that
@@ -320,7 +317,7 @@ struct OptionsTests {
     @Test("Every flag the parser accepts appears in the usage text")
     func everyFlagIsDocumented() {
         let flags = [
-            "--prod", "--container", "--database", "--cache-root", "--folder", "--file",
+            "--container", "--database", "--cache-root", "--folder", "--file",
             "--recursive", "--source", "--unavailable", "--yes", "--count", "--no-default-values",
             "--window", "--deals", "--photos", "--album", "--follow",
             "--last",

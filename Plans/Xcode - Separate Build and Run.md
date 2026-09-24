@@ -54,7 +54,11 @@ Each phase leaves the tree working, and the products are taken smallest first.
     `#filePath` fallback were deleted with it.
     *Only the variant followed the build then. Which deployment a build runs
     followed on 2026-09-23 — production in Release, development in Debug and
-    Claude. `PLAN.md`, *Where the two directories go, and `--prod`*.*
+    Claude. `PLAN.md`, *Where the two directories go, and `--prod`*.* ***Since
+    2026-09-24 there is no deployment:*** each build has exactly one set of
+    assets, `com.sydpolk.photosgoround[.debug|.claude]`, and the `.dev` suffix,
+    `--prod`, and `pgr_ctl`'s two deployment flags are gone. Syd: "They should
+    be completely separate builds with completely separate assets." `Storage`.
   - `pgr_ctl` gained two axes — `--production` (its new default) /
     `--development`, and `--release` / `--debug` / `--claude` — so it can
     address any configuration's library. The variant defaults to its own build's.
@@ -646,7 +650,8 @@ the one deliberate exception to `xcodebuild`-only or builds the Xcode target's
 binary instead: "build target's binary." So it does, and it keeps everything
 else about itself — the `screen` framing, the `exec` so `^C` reaches the agent,
 and exporting nothing so the `--prod` safety stays in the program rather than in
-a wrapper.
+a wrapper. *Since 2026-09-24 there is no `--prod`: the build decides its one
+library, and the script still exports nothing.*
 
 **It gained something in the move.** Built by `swift build`, that agent got
 `DEBUG` and nothing else — the same port and label as an installed Debug one,
@@ -719,7 +724,9 @@ the agent's fixed port from `#if PGR_AGENT_CLAUDE / #elseif DEBUG / #else`, and
 says exactly why: "the variant comes from the compiler, not from which library a
 run opens: `Deployment` answers *whose pictures*, and that is a different
 question from *whose build*." Three identities — a release, Syd's Debug, and a
-build made by an agent — the same three the wallpaper extension has.
+build made by an agent — the same three the wallpaper extension has. *Since
+2026-09-24 they are one question: each build has exactly one library, so the
+variant decides whose pictures too, and `Deployment` is gone.*
 
 So the guard does not disappear; it moves from a shell environment variable that
 only existed inside a build phase into a fact the binary carries wherever it is

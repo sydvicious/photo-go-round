@@ -156,11 +156,10 @@ public enum LaunchInstall {
                 return try Uninstall.apply(
                     Uninstall.plan(removing: [part], variants: [BuildVariant.current]))
             },
-            // The app's own preferences, in this build's deployment — the one
-            // the installed agent runs, since its plist passes `--prod` exactly when
-            // that is production.
+            // The app's own preferences: this build's, which are the installed
+            // agent's too — each build has exactly one set.
             agentAnswers: {
-                AgentProbe.answers(preferences: MacHostEnvironment(deployment: .current).preferences)
+                AgentProbe.answers(preferences: MacHostEnvironment().preferences)
             },
             wallpaperMismatch: { appex in
                 WallpaperInstall.mismatch(of: appex, running: WallpaperInstall.runningExtensions())

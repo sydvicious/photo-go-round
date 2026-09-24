@@ -39,16 +39,16 @@ enum AgentPicture {
         slot == .desktop ? "system-wallpaper" : "system-screensaver"
     }
 
-    /// This build's deployment only, since 2026-09-23, when each build got one:
-    /// production in Release, development in Debug and Claude —
-    /// `Deployment.current`. It asked development and then production until
-    /// then, which in a Release build read the interval out of a development
-    /// domain an older Release had left behind, ahead of the one the app writes.
-    static let deployments: [Deployment] = [.current]
+    /// This build's agent only: one set of assets per build since 2026-09-24,
+    /// and before that this build's deployment only since 2026-09-23. It asked
+    /// development and then production until then, which in a Release build
+    /// read an older Release's leftover development domain first.
+    static let domains: [String] = [MacHostEnvironment.preferenceDomain()]
 
     struct Answer: Sendable {
         let image: CGImage
-        let deployment: Deployment
+        /// The agent's preference domain it came from.
+        let domain: String
         /// `X-PGR-Card`, which names the photograph in the agent's log and in
         /// the deck. Kept so the extension can say which picture it is showing,
         /// and remember it for the next preview.
@@ -79,29 +79,28 @@ enum AgentPicture {
         return URLSession(configuration: configuration)
     }()
 
-    /// Asks each deployment's agent in turn. A transport failure moves on, and
+    /// Asks each domain's agent in turn — this build's, the only one. A transport failure moves on, and
     /// so does a `401`, which is an agent that is not this user's; any other
     /// HTTP answer is final, since it came from this user's agent.
     static func fetch(display: UInt32?, pixels: CGSize, slot: Slot, done: @escaping @Sendable (Answer?) -> Void) {
-        ask(deployments, at: 0, uuid: displayUUID(display), pixels: pixels, slot: slot, done: done)
+        ask(domains, at: 0, uuid: displayUUID(display), pixels: pixels, slot: slot, done: done)
     }
 
     private static func ask(
-        _ deployments: [Deployment], at index: Int, uuid: String?, pixels: CGSize, slot: Slot,
+        _ domains: [String], at index: Int, uuid: String?, pixels: CGSize, slot: Slot,
         done: @escaping @Sendable (Answer?) -> Void
     ) {
-        guard index < deployments.count else {
+        guard index < domains.count else {
             wallpaperLog("no agent answered; the desktop keeps what it has")
             done(nil)
             return
         }
-        let deployment = deployments[index]
         // The agent's own domain, asked for rather than spelled again: it
-        // carries the build variant now, so a second copy of this expression
-        // would send a Debug extension at the release agent's published port.
-        let domain = MacHostEnvironment.preferenceDomain(for: deployment)
+        // carries the build variant, so a second copy of this expression would
+        // send a Debug extension at the release agent's published port.
+        let domain = domains[index]
         let next: @Sendable () -> Void = {
-            ask(deployments, at: index + 1, uuid: uuid, pixels: pixels, slot: slot, done: done)
+            ask(domains, at: index + 1, uuid: uuid, pixels: pixels, slot: slot, done: done)
         }
 
         // The suite first, the plist underneath — `ServicePort`'s own route, and
@@ -195,7 +194,7 @@ enum AgentPicture {
                 return
             }
             let card = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-PGR-Card")
-            done(Answer(image: image, deployment: deployment, card: card))
+            done(Answer(image: image, domain: domain, card: card))
         }.resume()
     }
 

@@ -49,7 +49,7 @@ open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
 - **The rotation.** Each display asks again on the *Shuffle All* interval. Set a short one to watch it:
 
 ```bash
-pgr_ctl wallpaper set interval tenSeconds --development --debug
+pgr_ctl wallpaper set interval tenSeconds --debug
 ```
 
 - **The lock screen.** Control-Command-Q shows the photograph the desktop is showing.
@@ -82,7 +82,7 @@ That matches all three configurations. Narrow it to one by naming it in full —
 Choose your usual wallpaper in System Settings › Wallpaper, and put the interval back:
 
 ```bash
-pgr_ctl wallpaper set interval oneHour --development --debug
+pgr_ctl wallpaper set interval oneHour --debug
 ```
 
 If the pane or the desktop hangs, restart `WallpaperAgent`:

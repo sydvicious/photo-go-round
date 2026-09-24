@@ -63,7 +63,7 @@ One thing ⌘B still does, and it is Xcode's doing rather than an install: **bui
 | LaunchAgent label | `com.sydpolk.photosgoround.server` | `….server.debug` | `….server.claude` |
 | Screensaver | `Photos-Go-Round Screensaver.saver` | `… (Debug).saver` | `… (Claude).saver` |
 | Wallpaper extension | `…wallpaper.extension` | `…wallpaper.debug.extension` | `…wallpaper.claude.extension` |
-| Container, cache, domain | `~/Library/…/com.sydpolk.photosgoround[.dev]` | `….debug[.dev]` | `….claude[.dev]` |
+| Container, cache, domain | `~/Library/…/com.sydpolk.photosgoround` | `….debug` | `….claude` |
 
 `Claude` is what an agent working on this project builds; you will not normally choose it.
 
@@ -71,10 +71,10 @@ The app itself is not installed: run the **Photos-Go-Round** scheme from Xcode. 
 
 `pgr_ctl` is not installed either. Build the **pgr_ctl** scheme and put the product on your `PATH` — a copy or a symlink into `~/bin`. Do not reach for `swift run pgr_ctl`: it writes a `.build` directory into the checkout, and nothing generated belongs there.
 
-**`pgr_ctl` addresses one configuration's library at a time**, and defaults to its own build's and to production. Against a Debug agent installed by the steps below, that means:
+**`pgr_ctl` addresses one configuration's library at a time**, and defaults to its own build's. Each build has exactly one library. Against a Debug agent installed by the steps below, that means:
 
 ```bash
-pgr_ctl status --development --debug
+pgr_ctl status --debug
 ```
 
 ### Order
@@ -127,7 +127,7 @@ open "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
 The desktop shows the last photograph it kept, or the blue-and-yellow mark on a first install, then a photograph from the agent. It changes on the wallpaper's *Shuffle All* interval, an hour unless set otherwise in the app's Settings or with:
 
 ```bash
-pgr_ctl wallpaper set interval oneHour --development --debug
+pgr_ctl wallpaper set interval oneHour --debug
 ```
 
 A change to the interval is picked up within ten seconds.

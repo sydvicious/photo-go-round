@@ -33,9 +33,9 @@ import Foundation
 /// once on this Mac, and one fixed port between them would mean the second to
 /// start does not start at all.
 ///
-/// The variant comes from the compiler, not from which library a run opens:
-/// `Deployment` answers *whose pictures*, and that is a different question from
-/// *whose build*. **Since 2026-09-19 that decision lives in `BuildVariant`**,
+/// The variant comes from the compiler, and since 2026-09-24 it names the
+/// library too: one set of assets per build. **Since 2026-09-19 that decision
+/// lives in `BuildVariant`**,
 /// which also owns the LaunchAgent label, the screensaver's bundle name and the
 /// wallpaper extension's identifier — the port was the first of four things
 /// that vary by build, and a second `#if` beside this one was the wrong answer.

@@ -72,17 +72,16 @@ public struct JobDescription: Codable, Equatable, Sendable {
     /// minutes from launch to listening after a restart*.
     public static let adaptive = "Adaptive"
 
-    /// `--prod` for a production deployment. **Redundant for a Release agent
-    /// since 2026-09-24**, which is production however it starts, and kept so
-    /// the job says what it runs. `Deployment.current`.
-    public init(label: String, program: URL, deployment: Deployment = .current) {
+    /// The program and nothing else: the agent's build decides its storage,
+    /// and there is no choice left to pass. It passed `--prod` for a Release
+    /// build until 2026-09-24, when each build got one set of assets.
+    public init(label: String, program: URL) {
         self.label = label
-        self.programArguments =
-            [program.path(percentEncoded: false)] + (deployment == .production ? ["--prod"] : [])
+        self.programArguments = [program.path(percentEncoded: false)]
         self.runAtLoad = true
         self.keepAlive = KeepAlive(successfulExit: false)
         self.processType = Self.adaptive
-        self.associatedBundleIdentifiers = [Deployment.identifier]
+        self.associatedBundleIdentifiers = [Storage.identifier]
     }
 
     public func encodedPlist() throws -> Data {

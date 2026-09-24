@@ -19,7 +19,6 @@ struct RefreshCommandTests {
         let name = scratchSuiteName("refresh")
         var environment: MacHostEnvironment {
             MacHostEnvironment(
-                deployment: .development,
                 environment: ["PGR_PREFS_SUITE": name, "PGR_CONTAINER": directory.path(percentEncoded: false)])
         }
         let directory = URL.temporaryDirectory.appending(path: "pgr-refresh-\(UUID().uuidString)")

@@ -21,9 +21,8 @@ struct Options {
     /// Which port to serve pictures on, or nil to take whatever the kernel
     /// gives.
     ///
-    /// **Permanent, and for the same reason `--prod` and `--container` are**: a
-    /// development agent has to be able to run beside a shipped one on the same
-    /// machine, and two listeners cannot hold one port. It keeps earning its
+    /// **Permanent, and for the same reason `--container` is**: a scratch agent
+    /// has to be able to run beside an installed one on the same machine, and two listeners cannot hold one port. It keeps earning its
     /// place now the default floats, because a pinned number is one you can
     /// `curl` without first reading the published one out of preferences.
     var servicePort: UInt16?
@@ -49,17 +48,10 @@ struct Options {
     /// walk subdirectories is a property of the folder, not of the run: one
     /// wallpaper directory is flat and the album tree beside it is not.
     var foldersToAdd: [(url: URL, recursive: Bool)] = []
-    /// Which library, decided by the build: **a Release agent is production
-    /// however it is started**, and a Debug or Claude one development unless
-    /// given `--prod`. Syd, 2026-09-24: "a release build should always install
-    /// and use a release agent, period, no matter how it is launched." Until
-    /// then only the installed plist's `--prod` made a Release agent
-    /// production; started by hand it opened the development library.
-    var deployment: Deployment = .current
 
     /// Flags beat environment beats default. A launchd plist sets environment
-    /// variables far more naturally than it sets argv, so the production roots
-    /// can be pinned there without the agent caring which it was given.
+    /// variables far more naturally than it sets argv, so roots can be pinned
+    /// there without the agent caring which it was given.
     static func parse(_ arguments: [String], environment: [String: String]) throws -> Options {
         var options = Options()
 
@@ -96,8 +88,6 @@ struct Options {
         while index < arguments.endIndex {
             let argument = arguments[index]
             switch argument {
-            case "--prod":
-                options.deployment = .production
             case "--add-folder":
                 // `--recursive` is a modifier on the folder that follows it, not
                 // a setting for the run — so a flat directory and a nested tree
@@ -184,16 +174,11 @@ struct Options {
                                   Register a folder source if it is not already
                                   there. Repeatable, and `--recursive` applies
                                   only to the folder it precedes
-              --prod              Use the real library: ~/Library/Containers,
-                                  ~/Library/Caches and the preference domain
-                                  without the .dev suffix. A Release build
-                                  always does; Debug and Claude builds use the
-                                  .dev library unless given this.
               --cache-root <dir>  Cache root
               --once              Do one pass and exit, rather than looping
               --scan-interval <s> How often to rescan sources. Default: the
                                   scanIntervalSeconds preference (300)
-          -d, --database <path>   Database file. Default: <container>/\(Deployment.databaseFilename)
+          -d, --database <path>   Database file. Default: <container>/\(Storage.databaseFilename)
               --container <dir>   Storage root
           -i, --interval <secs>   How often the loop wakes. Default: 2
               --port <n>          Pin the port. Without it the kernel assigns one

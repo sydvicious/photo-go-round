@@ -168,13 +168,13 @@ final class SourcesModel {
         self.retry = retry
     }
 
-    /// The ordinary case: the agent this build's deployment runs.
+    /// The ordinary case: this build's agent.
     /// The domain is never spelled here, so the app and the agent cannot
-    /// disagree about which deployment they are in.
+    /// disagree about which library they are in.
     convenience init() {
         self.init(
             service: SourceService(
-                preferences: MacHostEnvironment(deployment: .current).preferences))
+                preferences: MacHostEnvironment().preferences))
     }
 
     // MARK: - Reading

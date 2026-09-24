@@ -144,9 +144,7 @@ struct AgentInstallTests {
     /// argued for somewhere; `ProcessType` most of all.
     @Test("The job description carries exactly the fields launchd is given")
     func jobDescriptionShape() throws {
-        let job = JobDescription(
-            label: "com.sydpolk.photosgoround.server.debug", program: binary,
-            deployment: .development)
+        let job = JobDescription(label: "com.sydpolk.photosgoround.server.debug", program: binary)
         let decoded =
             try PropertyListSerialization.propertyList(from: job.encodedPlist(), format: nil)
             as? [String: Any]
@@ -165,18 +163,14 @@ struct AgentInstallTests {
         #expect(values["AssociatedBundleIdentifiers"] as? [String] == ["com.sydpolk.photosgoround"])
     }
 
-    /// A production job says so, though a Release agent is production without
-    /// it since 2026-09-24; a Debug or Claude job must not ask for it.
-    @Test("Only a production job passes --prod")
-    func productionJobPassesProd() {
+    /// The agent's build decides its storage, so a job passes nothing but the
+    /// program. A Release job passed `--prod` until 2026-09-24.
+    @Test("A job runs the program and passes nothing, in every build")
+    func jobPassesNothing() {
         let path = binary.path(percentEncoded: false)
-        let production = JobDescription(
-            label: "com.sydpolk.photosgoround.server", program: binary, deployment: .production)
-        let development = JobDescription(
-            label: "com.sydpolk.photosgoround.server.debug", program: binary, deployment: .development)
-
-        #expect(production.programArguments == [path, "--prod"])
-        #expect(development.programArguments == [path])
+        for label in ["com.sydpolk.photosgoround.server", "com.sydpolk.photosgoround.server.debug"] {
+            #expect(JobDescription(label: label, program: binary).programArguments == [path])
+        }
     }
 
     /// An installed plist from before the key existed is a different job, so

@@ -13,8 +13,8 @@ import SwiftUI
 struct AboutView: View {
     static let windowID = "about"
 
-    /// The deployment every other window in the app talks to.
-    var preferences = MacHostEnvironment(deployment: .current).preferences
+    /// The library every other window in the app talks to: this build's.
+    var preferences = MacHostEnvironment().preferences
 
     var body: some View {
         VStack(spacing: 10) {

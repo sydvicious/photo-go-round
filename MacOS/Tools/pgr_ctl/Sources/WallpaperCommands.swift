@@ -12,7 +12,7 @@ import PhotosGoRoundDisplay
 /// app is never opened can still be set from a terminal.
 ///
 /// Raw `defaults write` on that domain stays as valid as it ever was. This exists
-/// so nobody has to know which domain a deployment uses, and so a value that is
+/// so nobody has to know which domain a build uses, and so a value that is
 /// not a `ShuffleInterval` tag is refused here rather than silently ignored by
 /// whatever reads it.
 ///
@@ -25,17 +25,16 @@ enum WallpaperCommands {
         case interval
     }
 
-    /// The domain `get` and `set` address, from the two axes the flags name:
-    /// the deployment (`--prod`) and the build configuration (`--debug`,
-    /// `--claude`).
+    /// The domain `get` and `set` address, from the build the flags name
+    /// (`--release`, `--debug`, `--claude`).
     ///
     /// **Here rather than inline at the two call sites.** Until 2026-09-19 both
-    /// spelled `WallpaperPreferences(deployment:)`, which takes the running
+    /// spelled `WallpaperPreferences()`, which takes the running
     /// build's variant — so `--debug` reached the agent's Debug library and the
     /// *wallpaper's* Claude domain, silently. `Documentation/pgr_ctl.md`,
     /// `wallpaper get`.
-    static func domain(deployment: Deployment, variant: BuildVariant) -> String {
-        WallpaperPreferences(deployment: deployment, variant: variant).domain
+    static func domain(variant: BuildVariant) -> String {
+        WallpaperPreferences(variant: variant).domain
     }
 
     static func get(key: String?, domain: String) throws {

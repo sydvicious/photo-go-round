@@ -336,7 +336,6 @@ struct ServiceGateTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let environment = MacHostEnvironment(
-            deployment: .development,
             containerOverride: directory.appending(path: "container"),
             cacheOverride: directory.appending(path: "cache"),
             environment: ["PGR_PREFS_SUITE": name]
