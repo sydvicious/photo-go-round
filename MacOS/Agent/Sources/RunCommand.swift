@@ -558,6 +558,9 @@ struct RunCommand {
         /// heartbeat — can stamp it on the next tick rather than the pass
         /// reaching across for it.
         let refreshFinished = Rang()
+        /// Sources whose last walk went unanswered, asked again sooner than the
+        /// scan interval. See `Retries`.
+        let retries = Retries()
 
         repeat {
             let now = Date()
@@ -605,6 +608,24 @@ struct RunCommand {
                     continue  // handled around this loop
 
                 case .refresh:
+                    // **Retries first, and on their own clock.** A source that
+                    // went unanswered is walked again after thirty seconds,
+                    // then a minute, and so on, rather than waiting out a
+                    // whole scan interval. Only those sources, in a task of
+                    // their own, so a retry never delays the scheduled pass.
+                    if !once {
+                        let retrying = await retries.take(at: now, ceiling: scanInterval)
+                        if !retrying.isEmpty {
+                            Console.note(
+                                "retrying \(retrying.map { "#\($0)" }.joined(separator: " ")), which did not answer"
+                            )
+                            Task {
+                                await Self.runRefresh(
+                                    databasePath: databasePath, bytes: store,
+                                    only: Set(retrying), retries: retries)
+                            }
+                        }
+                    }
                     // Not announced. Refreshing promptly when a source changes
                     // is what the agent is supposed to do, and saying so every
                     // time is a line about routine work. What is worth printing
@@ -633,7 +654,8 @@ struct RunCommand {
                         // tick starting a second pass over the first.
                         Task {
                             await Self.runRefresh(
-                                databasePath: databasePath, bytes: store, localFirst: firstPass)
+                                databasePath: databasePath, bytes: store, localFirst: firstPass,
+                                retries: retries)
                             await refreshPass.leave()
                             await refreshFinished.heard()
                         }
@@ -703,14 +725,27 @@ struct RunCommand {
     /// `SourceStore` holds a `Database`, which belongs to one isolation domain
     /// and cannot cross. It builds its own from the path, exactly as each
     /// per-source task below already did.
+    ///
+    /// `only` narrows the pass to those sources, for a retry. `retries` hears
+    /// every walk's result, so a source that went unanswered is asked again
+    /// soon and one that answered is forgotten.
     static func runRefresh(
-        databasePath: String, bytes: PhotoStore, localFirst: Bool = false
+        databasePath: String, bytes: PhotoStore, localFirst: Bool = false,
+        only: Set<Int64>? = nil, retries: Retries? = nil
     ) async {
         guard let database = try? Database(path: databasePath) else { return }
         let sources = SourceStore(database: database, bytes: bytes)
         let reported = Reporter()
-        if let all = try? sources.all() { reported.skipped(all.filter { !$0.enabled }) }
-        guard let enabled = try? sources.enabled() else { return }
+        if only == nil, let all = try? sources.all() {
+            reported.skipped(all.filter { !$0.enabled })
+        }
+        guard var enabled = try? sources.enabled() else { return }
+        if let only {
+            enabled = enabled.filter { only.contains($0.id) }
+            // Removed or disabled since it went unanswered: nothing will walk
+            // it, so nothing would ever report on it.
+            for id in only.subtracting(enabled.map(\.id)) { await retries?.forget(id) }
+        }
         let due = localFirst ? Self.localFirst(enabled) : enabled
         guard !due.isEmpty else { return }
 
@@ -765,6 +800,7 @@ struct RunCommand {
                         reported.finish(
                             result, wasAvailable: source.available,
                             took: ContinuousClock.now - started)
+                        await retries?.heard(result, at: Date())
                     }
                     await Self.refreshing.leave(source: source.id)
                 }

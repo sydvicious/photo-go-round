@@ -174,6 +174,14 @@ How often the main loop wakes. Default 2. This is not how often anything is
 `--scan-interval` *seconds*
 Override the `scanIntervalSeconds` preference for this run.
 
+An album Photos did not answer is not left for a whole interval: it is walked
+again after 30 seconds, then 60, 120 and 240, and after that only at the
+interval. An album that answered *no*, and any folder, waits for the interval as
+before. Every walk of an album logs
+`WALK: … · first asset …ms · … assets · …ms` in the `photos` category, with
+`· stopped` when the walk failed. A walk has 60 seconds to produce its first
+photograph and 10 seconds between photographs after that.
+
 `-h`, `--help`
 Print usage and exit.
 

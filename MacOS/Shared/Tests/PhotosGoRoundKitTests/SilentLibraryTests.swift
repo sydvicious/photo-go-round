@@ -68,6 +68,7 @@ struct SilentLibraryTests {
         BoundedPhotoLibrary(
             Hanging(),
             metadata: SourceStore.validationLimit * 4,
+            firstAsset: SourceStore.validationLimit * 4,
             fetch: SourceStore.validationLimit * 4,
             consent: SourceStore.validationLimit * 4)
     }
@@ -88,7 +89,8 @@ struct SilentLibraryTests {
     /// seconds once and nothing else.
     private static func bounded(_ library: any PhotoLibrary) -> BoundedPhotoLibrary {
         BoundedPhotoLibrary(
-            library, metadata: .seconds(10), fetch: .seconds(10), consent: .seconds(10))
+            library, metadata: .seconds(10), firstAsset: .seconds(10), fetch: .seconds(10),
+            consent: .seconds(10))
     }
 
     /// For the tests whose subject *is* the bound firing. Their libraries never
@@ -100,8 +102,8 @@ struct SilentLibraryTests {
     /// see `partWay`.
     private static func impatient(_ library: any PhotoLibrary) -> BoundedPhotoLibrary {
         BoundedPhotoLibrary(
-            library, metadata: .milliseconds(100), fetch: .milliseconds(100),
-            consent: .milliseconds(100))
+            library, metadata: .milliseconds(100), firstAsset: .milliseconds(100),
+            fetch: .milliseconds(100), consent: .milliseconds(100))
     }
 
     /// For a library that delivers and *then* stalls: long enough that what it
@@ -115,7 +117,8 @@ struct SilentLibraryTests {
     /// is; the only thing the number buys is that the three arrive first.
     private static func partWay(_ library: any PhotoLibrary) -> BoundedPhotoLibrary {
         BoundedPhotoLibrary(
-            library, metadata: .seconds(5), fetch: .seconds(5), consent: .seconds(5))
+            library, metadata: .seconds(5), firstAsset: .seconds(5), fetch: .seconds(5),
+            consent: .seconds(5))
     }
 
     private static func silentProvider() -> PhotosCollectionSourceProvider {
@@ -214,8 +217,8 @@ struct SilentLibraryTests {
             .enumerate(photosSource(locator: "A")) { _ in received += 1 }
 
         #expect(received == 0)
-        guard case .unavailable = reachability else {
-            Issue.record("expected unavailable, got \(reachability)")
+        guard case .unanswered = reachability else {
+            Issue.record("expected unanswered, got \(reachability)")
             return
         }
     }
@@ -323,8 +326,8 @@ struct SilentLibraryTests {
             .enumerate(photosSource(locator: "A")) { _ in received += 1 }
 
         #expect(received == 3)
-        guard case .unavailable = reachability else {
-            Issue.record("expected unavailable, got \(reachability)")
+        guard case .unanswered = reachability else {
+            Issue.record("expected unanswered, got \(reachability)")
             return
         }
     }

@@ -21,6 +21,7 @@ import PhotosGoRoundAgentAPI
 public struct BoundedPhotoLibrary: PhotoLibrary {
     private let library: any PhotoLibrary
     private let metadata: Duration
+    private let firstAsset: Duration
     private let fetch: Duration
     private let consent: Duration
 
@@ -35,6 +36,26 @@ public struct BoundedPhotoLibrary: PhotoLibrary {
     /// *the library did not answer* rather than going silent and making the app
     /// guess.
     public static let metadataLimit = Duration.seconds(10)
+
+    /// How long a walk may take to produce its *first* asset.
+    ///
+    /// **Longer than the gap after it, because the first asset waits on
+    /// everything that comes before a walk.** Resolving the collection, the
+    /// fetch, its count, and the first batch faulting in from `photolibraryd`
+    /// all happen before anything is handed over — and just after boot that
+    /// daemon is cold. On
+    /// 2026-09-23 at 19:29, forty seconds after a reboot, both albums — 8,552
+    /// photographs and 80 — failed `metadataLimit` on the first asset, were
+    /// marked *Photos is not responding*, and the pool fell from 9,184 to 701
+    /// until the next refresh five minutes later. Warm, the same large album
+    /// walked in 10.5 s end to end.
+    ///
+    /// A cold daemon is slow, not silent. Sixty seconds still ends the wait on
+    /// one that has stopped answering; after the first asset the gap is
+    /// `metadataLimit` again, so a library that stalls part way is caught as
+    /// promptly as before. The `WALK:` line records how long the first asset
+    /// actually took, so this number can be replaced by measurement.
+    public static let firstAssetLimit = Duration.seconds(60)
 
     /// Copying a photograph's bytes out, which may cross the network.
     ///
@@ -54,11 +75,13 @@ public struct BoundedPhotoLibrary: PhotoLibrary {
     public init(
         _ library: any PhotoLibrary,
         metadata: Duration = BoundedPhotoLibrary.metadataLimit,
+        firstAsset: Duration = BoundedPhotoLibrary.firstAssetLimit,
         fetch: Duration = BoundedPhotoLibrary.fetchLimit,
         consent: Duration = BoundedPhotoLibrary.consentLimit
     ) {
         self.library = library
         self.metadata = metadata
+        self.firstAsset = firstAsset
         self.fetch = fetch
         self.consent = consent
     }
@@ -155,6 +178,14 @@ public struct BoundedPhotoLibrary: PhotoLibrary {
     /// a fault; a library that stops answering part way through one is. So the
     /// clock restarts every time an asset arrives, and what expires is silence.
     ///
+    /// **The first gap is `firstAssetLimit`, every later one `metadataLimit`.**
+    /// The first includes resolving the collection and fetching it, which a
+    /// daemon cold from boot took longer than ten seconds to do. See
+    /// `firstAssetLimit`.
+    ///
+    /// Every walk leaves a `WALK:` line, finished or not: how long the first
+    /// asset took, how many arrived, and the total.
+    ///
     /// **The sink is not `Sendable`, which is the whole difficulty.** It cannot
     /// cross into the task `Deadline` needs, so the walk cannot simply be
     /// wrapped. What crosses instead is a handoff actor: the walk runs in its
@@ -185,14 +216,53 @@ public struct BoundedPhotoLibrary: PhotoLibrary {
             Task { await handoff.release() }
         }
 
-        while true {
-            let next = try await bounded("enumerateImages", within: metadata) {
-                await handoff.take()
-            }
-            guard let next else { break }
-            try await body(next)
+        let started = ContinuousClock.now
+        var firstAnswer: Duration?
+        var delivered = 0
+        func report(finished: Bool) {
+            let line = Self.walkLine(
+                identifier, firstAnswer: firstAnswer, delivered: delivered,
+                took: ContinuousClock.now - started, finished: finished)
+            Log.photos.notice("\(line, privacy: .public)")
         }
-        return try await handoff.outcome()
+        do {
+            while true {
+                let next = try await bounded(
+                    "enumerateImages", within: firstAnswer == nil ? firstAsset : metadata
+                ) {
+                    await handoff.take()
+                }
+                if firstAnswer == nil { firstAnswer = ContinuousClock.now - started }
+                guard let next else { break }
+                delivered += 1
+                try await body(next)
+            }
+            let resolved = try await handoff.outcome()
+            report(finished: true)
+            return resolved
+        } catch {
+            report(finished: false)
+            throw error
+        }
+    }
+
+    /// One walk, as the log records it.
+    ///
+    /// **`.notice`, so it survives until somebody reads it.** A walk happens
+    /// once per album per scan interval — a few hundred lines a day — and the
+    /// walk that matters most is the one just after a boot, which is exactly
+    /// the one nobody is watching as it happens.
+    ///
+    /// `first asset` is how long PhotoKit took to produce anything: the number
+    /// `firstAssetLimit` is set against. `none` means nothing answered at all.
+    static func walkLine(
+        _ identifier: String, firstAnswer: Duration?, delivered: Int, took: Duration,
+        finished: Bool
+    ) -> String {
+        let first = firstAnswer.map { "\($0.milliseconds)ms" } ?? "none"
+        let outcome = finished ? "" : " · stopped"
+        return
+            "WALK: \(identifier) · first asset \(first) · \(delivered) assets · \(took.milliseconds)ms\(outcome)"
     }
 
     /// One asset at a time, from the walk to the sink, with real backpressure.

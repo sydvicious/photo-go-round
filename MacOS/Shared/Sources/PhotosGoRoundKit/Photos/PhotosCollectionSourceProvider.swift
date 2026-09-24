@@ -39,6 +39,8 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
         let authorization: LibraryAuthorization
         do {
             authorization = try await library.authorization
+        } catch let error as PhotoLibraryError where error.isNoAnswer {
+            return .unanswered(reason: error.sentence)
         } catch {
             return .unavailable(reason: Self.reason(error))
         }
@@ -70,8 +72,9 @@ public struct PhotosCollectionSourceProvider: SourceProvider {
             // not answer has said nothing about this album; treating the silence
             // as an empty enumeration would delete a library's worth of rows,
             // which is the same mistake as reading a switched library as an
-            // emptied one.
-            return .unavailable(reason: error.sentence)
+            // emptied one. Unanswered rather than unavailable, so the agent
+            // asks again soon instead of at the next scan.
+            return .unanswered(reason: error.sentence)
         }
         guard resolved else {
             return .unavailable(reason: Self.albumMissingReason)

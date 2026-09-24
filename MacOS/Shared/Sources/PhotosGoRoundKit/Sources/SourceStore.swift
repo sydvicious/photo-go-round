@@ -25,6 +25,9 @@ public struct ScanResult: Sendable, Equatable {
     /// was removed from the pool at all.
     public let sourceUnavailable: Bool
     public let reason: String?
+    /// True when the source was unavailable because it did not answer, which
+    /// is worth trying again soon. See `SourceReachability.unanswered`.
+    public let unanswered: Bool
     /// Cached bytes deleted along with the rows, because a photograph that has
     /// left its source is not coming back and its bytes are not worth keeping.
     ///
@@ -39,7 +42,8 @@ public struct ScanResult: Sendable, Equatable {
 
     public init(
         sourceID: Int64, added: Int, removed: Int, unchanged: Int,
-        sourceUnavailable: Bool, reason: String?, bytesFreed: Int64 = 0
+        sourceUnavailable: Bool, reason: String?, unanswered: Bool = false,
+        bytesFreed: Int64 = 0
     ) {
         self.sourceID = sourceID
         self.added = added
@@ -47,6 +51,7 @@ public struct ScanResult: Sendable, Equatable {
         self.unchanged = unchanged
         self.sourceUnavailable = sourceUnavailable
         self.reason = reason
+        self.unanswered = unanswered
         self.bytesFreed = bytesFreed
     }
 
@@ -678,7 +683,8 @@ public struct SourceStore {
             try markUnavailable(sourceID: source.id, reason: reason, at: now)
             return ScanResult(
                 sourceID: source.id, added: 0, removed: 0, unchanged: 0,
-                sourceUnavailable: true, reason: reason
+                sourceUnavailable: true, reason: reason,
+                unanswered: reachability.isUnanswered
             )
         }
         try await flush()

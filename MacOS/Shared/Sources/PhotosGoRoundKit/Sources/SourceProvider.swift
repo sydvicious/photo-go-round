@@ -139,12 +139,27 @@ public enum SourceReachability: Sendable, Equatable {
     /// The source itself is gone — volume unmounted, folder deleted, Photos
     /// library changed, permission revoked. Its photos keep their history.
     case unavailable(reason: String)
+    /// The source did not answer inside its bound — Photos, silent.
+    ///
+    /// **Unavailable in every way that decides what happens to photographs**:
+    /// the source keeps every entry and goes dark as a unit, exactly as
+    /// `.unavailable` does. It is a case of its own for one reason: silence is
+    /// usually brief, so it is worth asking again soon rather than at the next
+    /// scan. An unplugged drive is not coming back in thirty seconds; a daemon
+    /// just woken from boot usually is. See the agent's `Retries`.
+    case unanswered(reason: String)
 
     public var unavailableReason: String? {
         switch self {
         case .reachable: nil
-        case .unavailable(let reason): reason
+        case .unavailable(let reason), .unanswered(let reason): reason
         }
+    }
+
+    /// Whether the source went unanswered, as opposed to answering *no*.
+    public var isUnanswered: Bool {
+        if case .unanswered = self { return true }
+        return false
     }
 }
 
