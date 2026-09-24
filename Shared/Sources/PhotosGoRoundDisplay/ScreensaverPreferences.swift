@@ -10,9 +10,11 @@ import PhotosGoRoundAgentAPI
 /// saver reads, and a new picture window copies what it finds.
 public struct ScreensaverPreferences: Sendable, Equatable {
 
-    /// "Screensaver will default to "10 seconds"" — which is also what every
-    /// surface showed before this was a preference.
-    public static let defaultInterval = ShuffleInterval.tenSeconds
+    /// Thirty seconds. Syd, 2026-09-23: "make the default screen saver time 30
+    /// seconds instead of 10". It had been ten since 2026-09-14 — "Screensaver
+    /// will default to "10 seconds"" — which was what every surface showed
+    /// before this was a preference.
+    public static let defaultInterval = ShuffleInterval.thirtySeconds
 
     public let domain: String
 

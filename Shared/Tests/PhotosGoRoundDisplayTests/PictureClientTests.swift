@@ -69,6 +69,34 @@ struct PictureClientTests {
         }
     }
 
+    /// **A patient request waits for the first-picture bound instead.** Before
+    /// the agent has answered a surface there is no picture to protect, and
+    /// giving up at five seconds only means asking again. See
+    /// `ServiceTiming.firstPictureReadLimit`.
+    @Test("A patient request is bounded by the first-picture limit")
+    func patientRequestUsesTheFirstLimit() async throws {
+        let suite = DefaultsSuite()
+        suite.publish(port: 9000)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            limit: .milliseconds(50), firstLimit: .milliseconds(120),
+            session: Stub.silentSession())
+
+        for (patient, expected) in [(true, Duration.milliseconds(120)), (false, .milliseconds(50))] {
+            do {
+                _ = try await client.next(
+                    consumer: "screensaver", displayID: nil, fitting: nil, patient: patient)
+                Issue.record("expected a failure")
+            } catch let failure as PictureClient.Failure {
+                guard case .silent(_, let limit) = failure else {
+                    Issue.record("expected silent, got \(failure)")
+                    continue
+                }
+                #expect(limit == expected, "patient: \(patient)")
+            }
+        }
+    }
+
     /// The loop asks again every few seconds, so a bound that leaked the
     /// abandoned request would pile up one stuck task per turn of the wheel for
     /// as long as the agent stayed wedged.

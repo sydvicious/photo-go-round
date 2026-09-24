@@ -28,17 +28,6 @@ Syd, 2026-09-16: "i have no deadlines, and I hate tech debt surprises. I won't r
   - **Scope:** about 55 test files mention a sleep, a clock, a `Duration` or a timeout (`grep -E "Task\.sleep|ContinuousClock|Deadline|\.seconds\(|\.milliseconds\(|timeout|within:"` over every `Tests` folder). Many test the bounds themselves (`DeadlineTests`, `ServeWaitTests`, `PoolWaitTests`) and need a different treatment from those that only happen to sit behind one. Classify first; known losers so far are `PhotosSourceEditingTests` (five tests), the two walk-stall tests, and `SourceEndpointTests` above.
   - **Another, 2026-09-22:** `SilentLibraryTests`, *A stalled walk leaves the source unavailable, not emptied* and *A walk that stalls part way is bounded, and keeps what it received*, failed once in a full `Package Tests` run, the suite taking 10 seconds. The suite alone passed three times out of three in 5 seconds, and the next full run passed.
 
-## The screensaver's first picture after a boot is late
-
-Seen 2026-09-23, the boot at 19:28; Syd: "the screensaver should have been serving cached photos", and "it seems like the most hostile environment on the Mac is while it is starting up". The screensaver came up four times in the first four minutes and got no picture in any of them. The deal was not the cause: cached photographs from the unavailable albums stayed eligible, and the agent served them.
-
-- **19:28:26, for 5 s:** the agent was not yet listening. It opened its port at 19:28:48, after a cold 12.8 s (`open` 3.7 s, `index` 6.3 s, `wiring` 2.6 s; warm, 43 ms).
-- **19:30:12 and 19:31:04, for 8 s each:** the agent served a cached photograph after about 6.2 s and 5.3 s, both past the screensaver's 5 s `pictureReadLimit`. In both, the 1.5 s resize budget ran out and the original was sent instead. The first came from a folder source, so the one-second Photos check is not the explanation. **The other 3–4 s is not accounted for**: `TIMING:` is `.info` in a Release build and was not persisted.
-- **19:32:16, for 4 s:** nothing served.
-- **The next boot, 19:52 the same day, with `TIMING:` kept.** The agent was listening after 3.3 s. The wallpaper's first picture, 19 s later, took 6.2 s, with every step taking hundreds of milliseconds (`open 593 · register 286 · queue 532 · check 801 · remove 886 · resize gave up 1869`, total 6234 ms). The screensaver first came up about two minutes after boot and got its picture in 2.3 s, 1.6 s of it the resize giving up. So the late pictures come from the first minute or so, when everything is slow at once; there is no single slow step.
-- **The resize budget is the largest single cost in both.** It gives up at 1.5 s and sends the original, and that happened on every picture served in the first minutes after both boots.
-- **What the saver does meanwhile is part of it.** It asks once, gives up at 5 s, and a short screensaver session never gets another try.
-
 ## Examine the cache size
 
 **`cacheByteCeiling` is 1 GB and has never been measured.** `PLAN.md` says so itself: "the default

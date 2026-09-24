@@ -18,27 +18,41 @@ public struct PictureClient: PictureSource {
     /// The bound on one picture.
     ///
     /// **Under one dwell, which is what sets it.** `Shuffle` leaves a picture
-    /// up for ten seconds, so a bound of half that means an agent which has
-    /// gone quiet is reported while the picture it failed to replace is still
-    /// on screen — rather than a dwell and a half later, by which time a person
-    /// has been looking at a stalled window wondering. It is also two orders of
+    /// up for ten seconds at the shortest choice, so a bound of half that means
+    /// an agent which has gone quiet is reported while the picture it failed to
+    /// replace is still on screen — rather than a dwell and a half later, by
+    /// which time a person has been looking at a stalled window wondering.
+    /// Before the agent has answered at all there is no such picture, and the
+    /// bound is `defaultFirstLimit` instead. It is also two orders of
     /// magnitude above a healthy serve, which is a queue pop and a file
     /// streamed off the boot volume.
     ///
     /// Held in `ServiceTiming`, beside the budget serving spends inside it.
     public static let defaultLimit = ServiceTiming.pictureReadLimit
 
+    /// The bound on a patient request: one made before the agent has answered
+    /// this surface at all. See `ServiceTiming.firstPictureReadLimit`.
+    public static let defaultFirstLimit = ServiceTiming.firstPictureReadLimit
+
     /// Injected so a test can prove the bound without waiting out the real
     /// one, which is the same reason `SourcesModel` takes its poll interval.
     private let limit: Duration
+    private let firstLimit: Duration
 
+    /// **The session's own timeouts sit above the patient bound**, not the
+    /// ordinary one. Its default gap between packets is fifteen seconds, and
+    /// the agent sends nothing until it has an answer, so a default session
+    /// would end a patient request at fifteen with the transport's words rather
+    /// than the deadline's. See `AgentSession.make(above:)`.
     public init(
         preferences: Preferences,
         limit: Duration = PictureClient.defaultLimit,
-        session: URLSession = AgentSession.make()
+        firstLimit: Duration = PictureClient.defaultFirstLimit,
+        session: URLSession = AgentSession.make(above: PictureClient.defaultFirstLimit)
     ) {
         self.preferences = preferences
         self.limit = limit
+        self.firstLimit = firstLimit
         self.session = session
     }
 
@@ -100,6 +114,13 @@ public struct PictureClient: PictureSource {
     public func next(
         consumer: String, displayID: String?, fitting box: PixelSize?
     ) async throws -> ServedPicture? {
+        try await next(consumer: consumer, displayID: displayID, fitting: box, patient: false)
+    }
+
+    public func next(
+        consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
+    ) async throws -> ServedPicture? {
+        let limit = patient ? firstLimit : self.limit
         // **Not `preferences.servicePort` directly.** A sandboxed client is
         // handed an empty suite rather than a refusal, so the lookup has to be
         // able to say *unknown* as well as *none*. See `ServicePort`.
@@ -146,7 +167,7 @@ public struct PictureClient: PictureSource {
         // The session's bounds sit above the deadline so that the deadline is
         // always the one that fires.
 
-        var (data, http) = try await send(request, port: port)
+        var (data, http) = try await send(request, port: port, within: limit)
 
         // **A `401` is read again once before it is believed.** From this
         // user's own published port it most likely means the secret changed
@@ -158,7 +179,7 @@ public struct PictureClient: PictureSource {
             if case .published(let fresh, _) = ServicePort.readSecret(preferences), fresh != secret {
                 request.setValue(
                     ServiceSecret.authorization(fresh), forHTTPHeaderField: ServiceSecret.headerField)
-                (data, http) = try await send(request, port: port)
+                (data, http) = try await send(request, port: port, within: limit)
             }
             guard http.statusCode != 401 else { throw Failure.notOurs(port: port) }
         }
@@ -176,7 +197,9 @@ public struct PictureClient: PictureSource {
     }
 
     /// One request under the bound, with its failures named.
-    private func send(_ request: URLRequest, port: UInt16) async throws -> (Data, HTTPURLResponse) {
+    private func send(
+        _ request: URLRequest, port: UInt16, within limit: Duration
+    ) async throws -> (Data, HTTPURLResponse) {
         let data: Data
         let response: URLResponse
         do {

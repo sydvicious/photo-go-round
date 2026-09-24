@@ -90,11 +90,29 @@ enum DisplayShuffles {
         let shuffle = Shuffle(
             source: PictureClient(preferences: environment.preferences),
             consumer: ConsumerKind.screensaver.rawValue,
-            dwellFrom: { Self.interval(from: screensaver).duration })
+            dwellFrom: { Self.interval(from: screensaver).duration },
+            memory: PictureMemory(directory: memoryDirectory, key: key))
         entries[key] = Entry(shuffle: shuffle, views: 1)
         log.notice("saver: new loop for display \(key, privacy: .public)")
         return shuffle
     }
+
+    /// Where each display's last picture is kept between sessions. See
+    /// `PictureMemory`.
+    ///
+    /// **Inside the host's container, which every legacy screensaver shares**,
+    /// so in a folder named for this bundle. Its identifier differs by build
+    /// configuration, which keeps a Debug and a Release saver from opening
+    /// with each other's pictures. Caches, because losing it costs only the
+    /// picture a session opens with.
+    private static let memoryDirectory: URL = {
+        let caches =
+            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let name =
+            Bundle(for: PGRScreenSaverView.self).bundleIdentifier ?? "com.sydpolk.photosgoround.saver"
+        return caches.appending(path: name, directoryHint: .isDirectory)
+    }()
 
     /// The last reading reported, so a change is one line and an unchanged
     /// read is none — the interval is read before every picture.

@@ -306,7 +306,8 @@ public final class PGRScreenSaverView: ScreenSaverView {
             let size = frame.picture.pixels
             Self.log.info(
                 """
-                saver[\(self.instance, privacy: .public)]: showing card \
+                saver[\(self.instance, privacy: .public)]: showing \
+                \(frame.remembered ? "the remembered " : "", privacy: .public)card \
                 \(frame.picture.card ?? -1, privacy: .public) deal \
                 \(frame.picture.deal ?? -1, privacy: .public) at \
                 \(size?.width ?? 0, privacy: .public)x\(size?.height ?? 0, privacy: .public)

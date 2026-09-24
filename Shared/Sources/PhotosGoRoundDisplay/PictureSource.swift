@@ -26,4 +26,20 @@ public protocol PictureSource: Sendable {
     func next(
         consumer: String, displayID: String?, fitting box: PixelSize?
     ) async throws -> ServedPicture?
+
+    /// The same, with `patient` saying whether the caller can afford to wait
+    /// longer than usual — true until the agent has answered it once. See
+    /// `ServiceTiming.firstPictureReadLimit`.
+    func next(
+        consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
+    ) async throws -> ServedPicture?
+}
+
+extension PictureSource {
+    /// A source with only one speed ignores the difference.
+    public func next(
+        consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
+    ) async throws -> ServedPicture? {
+        try await next(consumer: consumer, displayID: displayID, fitting: box)
+    }
 }

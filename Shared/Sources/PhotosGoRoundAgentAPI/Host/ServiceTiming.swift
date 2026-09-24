@@ -67,6 +67,24 @@ public enum ServiceTiming {
     /// change alone.
     public static let pictureReadLimit = Duration.seconds(5)
 
+    /// The bound on a surface's first picture, before the agent has answered it
+    /// at all.
+    ///
+    /// **Longer, because giving up then protects nothing.** `pictureReadLimit`
+    /// is short so that a stuck agent is reported while the picture it failed
+    /// to replace is still up. Before the first answer there is no such
+    /// picture, and giving up only means asking again, which costs the agent
+    /// the same work over again. On 2026-09-23 at 22:24, a minute after a
+    /// reboot, the screensaver gave up at five seconds seven times running
+    /// while the agent took 4–7 s per picture, and showed nothing for 75 s;
+    /// the agent finished every one of the seven anyway.
+    ///
+    /// Twenty seconds is above every cold serve measured that night — the
+    /// slowest was the wallpaper's, at 10.7 s — and still ends the wait on an
+    /// agent that is truly stuck. A client uses it only until the agent has
+    /// answered once; after that it is `pictureReadLimit` again.
+    public static let firstPictureReadLimit = Duration.seconds(20)
+
     /// What serving allows itself, in total, to ask a source whether the picture
     /// going out is still there.
     ///

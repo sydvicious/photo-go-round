@@ -33,6 +33,9 @@ public final class Shuffle {
     public struct Frame {
         public let image: CGImage
         public let picture: ServedPicture
+        /// Read back from `PictureMemory` rather than served this session: the
+        /// picture a surface opens with while it waits for a fresh one.
+        public var remembered = false
         public var size: CGSize { CGSize(width: image.width, height: image.height) }
     }
 
@@ -177,6 +180,13 @@ public final class Shuffle {
     /// the agent says, including a failure — a streak is *consecutive* empties
     /// or it is not a streak.
     private var emptyAnswers = 0
+    /// Whether the agent has answered since the loop last began — a picture or
+    /// an empty queue alike. Until it has, a request is patient. See
+    /// `ServiceTiming.firstPictureReadLimit`.
+    private var answeredThisRun = false
+    /// Where the last picture shown is kept for the next session, if this
+    /// surface keeps one. See `PictureMemory`.
+    @ObservationIgnored private let memory: PictureMemory?
     /// When the picture on screen appeared, which is what its dwell counts from.
     @ObservationIgnored private var appearedAt: ContinuousClock.Instant?
     /// The sleep the loop is in while a picture dwells, held so `setDwell` can
@@ -188,13 +198,30 @@ public final class Shuffle {
         consumer: String,
         dwellFrom dwell: @escaping @MainActor () -> Duration,
         whenEmpty: Duration = Shuffle.defaultWhenEmpty,
-        whenAbsent: Duration = Shuffle.defaultWhenAbsent
+        whenAbsent: Duration = Shuffle.defaultWhenAbsent,
+        memory: PictureMemory? = nil
     ) {
         self.source = source
         self.consumer = consumer
         self.dwell = dwell
         self.whenEmpty = whenEmpty
         self.whenAbsent = whenAbsent
+        self.memory = memory
+        if memory != nil {
+            Task { await self.openWithRemembered() }
+        }
+    }
+
+    /// Puts up the picture the last session left, **unless a fresh one has
+    /// already arrived** — the read is a few milliseconds and the agent can
+    /// occasionally beat it.
+    private func openWithRemembered() async {
+        guard let memory, shown == nil, let recalled = await memory.recall(), shown == nil
+        else { return }
+        shown = Frame(image: recalled.image, picture: recalled.picture, remembered: true)
+        Log.deck.notice(
+            "\(self.consumer, privacy: .public): opening with the remembered picture, card \(recalled.picture.card ?? -1, privacy: .public)"
+        )
     }
 
     /// A dwell that never changes: a window's copy, or a test's.
@@ -306,6 +333,7 @@ public final class Shuffle {
     }
 
     private func begin() {
+        answeredThisRun = false
         Log.deck.notice(
             "\(self.consumer, privacy: .public): starting, each picture up for \(self.currentDwell.spokenSeconds, privacy: .public)")
         loop = Task { [weak self] in
@@ -331,9 +359,11 @@ public final class Shuffle {
     private func advance() async -> Wait {
         guard let box else { return .fixed(whenEmpty) }
         do {
-            guard let picture = try await source.next(
-                consumer: consumer, displayID: displayID, fitting: box)
-            else {
+            let answer = try await source.next(
+                consumer: consumer, displayID: displayID, fitting: box,
+                patient: !answeredThisRun)
+            answeredThisRun = true
+            guard let picture = answer else {
                 emptyAnswers += 1
                 // Below the threshold nothing is said at all — not even that
                 // the trouble has cleared. An empty answer is not the agent
@@ -353,6 +383,18 @@ public final class Shuffle {
             shown = Frame(image: image, picture: picture)
             appearedAt = .now
             note(nil)
+            if let memory {
+                let consumer = self.consumer
+                Task {
+                    do {
+                        try await memory.remember(image, as: picture)
+                    } catch {
+                        Log.deck.error(
+                            "\(consumer, privacy: .public): could not keep the picture for next time: \(String(describing: error), privacy: .public)"
+                        )
+                    }
+                }
+            }
             return .dwell
         } catch let failure as PictureClient.Failure {
             emptyAnswers = 0

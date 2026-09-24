@@ -60,15 +60,16 @@ struct ShuffleIntervalTests {
             == "\(Deployment.storageIdentifier()).screensaver.prod")
     }
 
-    /// "Screensaver will default to "10 seconds"."
-    @Test("Nothing chosen is ten seconds")
+    /// "make the default screen saver time 30 seconds instead of 10" — Syd,
+    /// 2026-09-23.
+    @Test("Nothing chosen is thirty seconds")
     func screensaverDefault() {
         let name = scratchSuiteName("screensaver-default")
         defer { discardScratchSuite(name) }
         let preferences = ScreensaverPreferences(domain: name)
 
         #expect(preferences.read() == .unset)
-        #expect(preferences.interval == .tenSeconds)
+        #expect(preferences.interval == .thirtySeconds)
     }
 
     @Test("A choice is written as its tag and read back from the suite")
@@ -142,9 +143,9 @@ struct ShuffleIntervalTests {
         let saver = Shuffle(
             source: Nothing(), consumer: "screensaver",
             dwellFrom: { preferences.interval.duration })
-        #expect(saver.currentDwell == .seconds(10))
-        preferences.set(.thirtySeconds)
         #expect(saver.currentDwell == .seconds(30))
+        preferences.set(.oneMinute)
+        #expect(saver.currentDwell == .seconds(60))
     }
 
     /// A source with nothing to give; these tests never start a loop.
