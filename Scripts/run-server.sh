@@ -61,11 +61,13 @@ if [[ ! -x "$BIN" ]]; then
     exit 1
 fi
 
-# Nothing is exported here on purpose. The binary already defaults to its own
-# development container and cache, and reaching the real library takes --prod.
-# Setting it from the wrapper would mean the safety lived in the script rather
-# than in the program, and would evaporate the moment somebody ran the binary
-# directly.
+# Nothing is exported here on purpose. The binary decides its own library from
+# its build: a Release agent is production however it is started, and a Debug or
+# Claude one development unless given --prod (Syd, 2026-09-24: "a release build
+# should always install and use a release agent, period, no matter how it is
+# launched"). Setting it from the wrapper would mean the rule lived in the
+# script rather than in the program, and would evaporate the moment somebody
+# ran the binary directly.
 
 # exec, so signals reach the agent rather than this script: ^C in screen should
 # stop the server, not orphan it.

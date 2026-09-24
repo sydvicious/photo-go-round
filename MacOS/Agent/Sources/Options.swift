@@ -49,7 +49,13 @@ struct Options {
     /// walk subdirectories is a property of the folder, not of the run: one
     /// wallpaper directory is flat and the album tree beside it is not.
     var foldersToAdd: [(url: URL, recursive: Bool)] = []
-    var deployment: Deployment = .development
+    /// Which library, decided by the build: **a Release agent is production
+    /// however it is started**, and a Debug or Claude one development unless
+    /// given `--prod`. Syd, 2026-09-24: "a release build should always install
+    /// and use a release agent, period, no matter how it is launched." Until
+    /// then only the installed plist's `--prod` made a Release agent
+    /// production; started by hand it opened the development library.
+    var deployment: Deployment = .current
 
     /// Flags beat environment beats default. A launchd plist sets environment
     /// variables far more naturally than it sets argv, so the production roots
@@ -179,9 +185,10 @@ struct Options {
                                   there. Repeatable, and `--recursive` applies
                                   only to the folder it precedes
               --prod              Use the real library: ~/Library/Containers,
-                                  ~/Library/Caches, and the real preference
-                                  domain. Without it everything lives under
-                                  .build, so a plain run cannot disturb anything.
+                                  ~/Library/Caches and the preference domain
+                                  without the .dev suffix. A Release build
+                                  always does; Debug and Claude builds use the
+                                  .dev library unless given this.
               --cache-root <dir>  Cache root
               --once              Do one pass and exit, rather than looping
               --scan-interval <s> How often to rescan sources. Default: the

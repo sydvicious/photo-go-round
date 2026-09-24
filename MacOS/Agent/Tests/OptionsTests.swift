@@ -136,9 +136,14 @@ struct OptionsTests {
 
     // MARK: - Storage, and the flag that moves all three
 
-    @Test("Development is the default, so a plain run cannot reach a real library")
-    func developmentIsTheDefault() throws {
-        #expect(try parse([]).deployment == .development)
+    /// Syd, 2026-09-24: "a release build should always install and use a
+    /// release agent, period, no matter how it is launched." This suite runs a
+    /// development build, so a plain run here must still be development.
+    @Test("The build decides the default: Release is production, Debug and Claude development")
+    func theBuildDecidesTheDefault() throws {
+        #expect(try parse([]).deployment == Deployment.current)
+        #expect(Deployment.current == (BuildVariant.current == .release ? .production : .development))
+        #expect(try parse([]).deployment == .development, "a development build's plain run")
         #expect(try parse(["--prod"]).deployment == .production)
     }
 

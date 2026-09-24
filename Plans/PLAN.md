@@ -10,7 +10,7 @@ Photos-Go-Round is a personal photo-shuffle system: a background agent maintains
 ./Scripts/run-server.sh
 ```
 
-Builds first, so a stale binary is never run. Development deployment: everything under `.build`, preference domain `com.sydpolk.photosgoround.dev`. `--prod` for the real library, typed on purpose.
+Builds first, so a stale binary is never run. **Which library is the build's, since 2026-09-24:** a Release agent is production however it starts; a Debug or Claude agent is development — everything under `~/Library/…/<identifier>.dev` — unless given `--prod`. Syd: "a release build should always install and use a release agent, period, no matter how it is launched."
 
 The kernel assigns the port and the agent publishes it; `--port 9000` pins one instead. The agent prints its dashboard's address when the listener is ready — `http://localhost:<port>/dashboard` — and the app's About box links to it. Sources are named once and written through to preferences:
 
@@ -1557,7 +1557,7 @@ Throughput matters because the first fill of a 1000-photo deck against an iCloud
 
 ## Where the two directories go, and `--prod`
 
-The agent writes to exactly two places, and **development is the default**:
+The agent writes to exactly two places, and **development is the default** — *for Debug and Claude builds since 2026-09-24; a Release agent is production however it starts* (see below):
 
 | | holds | default | with `--prod` |
 | --- | --- | --- | --- |
@@ -1566,6 +1566,8 @@ The agent writes to exactly two places, and **development is the default**:
 | preferences | the source list and every setting | `com.sydpolk.photogoround.dev` | `com.sydpolk.photogoround` |
 
 **Safe by default, dangerous on purpose.** Running the binary with no arguments cannot touch a real library — it writes to a development container of its own. Reaching the real one takes `--prod`, typed deliberately. The inverse default would mean every casual run was one typo away from a library that took hours to fetch, and every test of a delete path was a live-fire exercise.
+
+**Since 2026-09-24 the build decides.** A Release agent is production however it is started — Syd: "a release build should always install and use a release agent, period, no matter how it is launched" — so safe-by-default now holds for the Debug and Claude builds, which are the ones anybody runs casually. It replaced a rule that made only the installed plist's `--prod` choose production for Release. `Deployment.current`; `Options.deployment`.
 
 **Both deployments moved under the user's home directory on 2026-09-19**, and the storage name carries the build configuration: `~/Library/Containers/com.sydpolk.photogoround[.debug|.claude][.dev]`, with the cache and the preference domain named to match. Development wrote into `<repo>/.build` until then, which two users sharing a checkout would have shared, and which all three build configurations opened at once. Syd: "all of the datafiles have to run in the users home directory so that this will work for two different users on the same machine", and "as long as the three agent configs can all run at the same time without clobbering each other".
 

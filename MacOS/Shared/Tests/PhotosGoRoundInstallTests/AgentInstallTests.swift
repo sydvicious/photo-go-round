@@ -165,8 +165,8 @@ struct AgentInstallTests {
         #expect(values["AssociatedBundleIdentifiers"] as? [String] == ["com.sydpolk.photosgoround"])
     }
 
-    /// The agent's own default is development, so a Release build's job has to
-    /// ask for production by name, and a Debug or Claude one must not.
+    /// A production job says so, though a Release agent is production without
+    /// it since 2026-09-24; a Debug or Claude job must not ask for it.
     @Test("Only a production job passes --prod")
     func productionJobPassesProd() {
         let path = binary.path(percentEncoded: false)

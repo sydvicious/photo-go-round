@@ -72,8 +72,9 @@ public struct JobDescription: Codable, Equatable, Sendable {
     /// minutes from launch to listening after a restart*.
     public static let adaptive = "Adaptive"
 
-    /// `--prod` for a production deployment, since the agent's own default is
-    /// development. `Deployment.current`.
+    /// `--prod` for a production deployment. **Redundant for a Release agent
+    /// since 2026-09-24**, which is production however it starts, and kept so
+    /// the job says what it runs. `Deployment.current`.
     public init(label: String, program: URL, deployment: Deployment = .current) {
         self.label = label
         self.programArguments =

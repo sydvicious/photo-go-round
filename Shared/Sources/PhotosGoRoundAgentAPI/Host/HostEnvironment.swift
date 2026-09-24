@@ -29,12 +29,13 @@ public protocol HostEnvironment: Sendable {
 
 /// Which library a run is talking to.
 ///
-/// **Development is the agent's default, and that is deliberate.** Running the
-/// binary with no arguments cannot touch a real library: it writes to a
-/// development container of its own, and reaching the real one takes `--prod`,
-/// typed on purpose. The inverse default would make every casual `swift run` one
-/// typo away from a library that took hours to fetch, and every test of a delete
-/// path a live-fire exercise.
+/// **Which one a run uses is the build's, since 2026-09-24.** A Release agent is
+/// production however it is started — Syd: "a release build should always
+/// install and use a release agent, period, no matter how it is launched." A
+/// Debug or Claude agent is development unless given `--prod`, so running a
+/// development build with no arguments still cannot touch a real library: every
+/// casual run, and every test of a delete path, lands in a container of its own.
+/// `Deployment.current`.
 ///
 /// **Both deployments live under the user's home directory, since 2026-09-19.**
 /// Syd: "all of the datafiles have to run in the users home directory so that

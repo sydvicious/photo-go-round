@@ -376,7 +376,7 @@ prints it. `DOMAIN` is the agent's preference domain; see `README.md`, *Testing
 the picture endpoint*, for each configuration's:
 
 ```
-DOMAIN=com.sydpolk.photosgoround.dev
+DOMAIN=com.sydpolk.photosgoround
 PORT=$(defaults read "$DOMAIN" servicePort)
 AUTH="Authorization: Bearer $(defaults read "$DOMAIN" serviceSecret)"
 for c in a b c d; do

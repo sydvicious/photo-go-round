@@ -72,11 +72,12 @@ arguments at all:
 ```
 
 `--add-folder` does not walk subdirectories unless `--recursive` is given between
-it and the path, which applies to that folder alone. By default everything lives
-under `~/Library/Containers/<identifier>.dev` and the matching cache, where a
-development run cannot disturb a real library — reaching the real one takes
-`--prod`, typed on purpose. `<identifier>` carries the build configuration, so a
-release, a Debug and an agent's build never share a library.
+it and the path, which applies to that folder alone. **Which library it uses is
+the build's:** a Release agent uses the real one,
+`~/Library/Containers/<identifier>` and the matching cache, however it is started;
+a Debug or Claude agent uses the `.dev` one, where a development run cannot disturb
+a real library, unless given `--prod`. `<identifier>` carries the build
+configuration, so a release, a Debug and an agent's build never share a library.
 
 The agent serves pictures on a fixed port — one per build configuration — and
 publishes it where every process on the machine can read it; `pgr_ctl status`
@@ -124,9 +125,10 @@ PORT=$(defaults read "$DOMAIN" servicePort)
 AUTH="Authorization: Bearer $(defaults read "$DOMAIN" serviceSecret)"
 ```
 
-`DOMAIN` is `com.sydpolk.photosgoround.dev` for a Release build,
-`….debug.dev` for Debug and `….claude.dev` for Claude; drop `.dev` for an agent
-started with `--prod`. See `Documentation/Photos-Go-Round Server.md`, *SERVICE*.
+`DOMAIN` is `com.sydpolk.photosgoround` for a Release build, however its agent
+was started, and `….debug.dev` for Debug and `….claude.dev` for Claude — drop the
+`.dev` for a Debug or Claude agent started with `--prod`. See
+`Documentation/Photos-Go-Round Server.md`, *SERVICE*.
 
 Start the agent in one terminal and leave it running — it prints the URL once the
 listener is up, then a line for every request it answers:

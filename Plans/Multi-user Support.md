@@ -248,7 +248,7 @@ It finds every fenced block in `README.md` and `Documentation/*.md` that calls `
 
 *Planned 2026-09-23.* Syd, on `randyarbuckle`: "That account has a lot of sensitive pictures, so I won't be taking screenshots or movies, and I won't be giving you log snippets." So every check below prints a status code, a count or a permission error, and nothing about the pictures leaves that account. What comes back to Claude is a yes or no, or a number, per step.
 
-An archived app is a Release build, so both agents use the domain `com.sydpolk.photosgoround.dev`. Nothing here is secret: `serviceSecret` is only ever read inside the account it belongs to, and never printed.
+An archived app is a Release build, so both agents use the domain `com.sydpolk.photosgoround`. *Corrected 2026-09-24:* the steps were run on 2026-09-23 with `com.sydpolk.photosgoround.dev`, because until that evening a Release build's agent ran the development deployment; since then a Release agent is production however it starts, and its domain has no `.dev`. Nothing here is secret: `serviceSecret` is only ever read inside the account it belongs to, and never printed.
 
 **In `jazzman`:**
 
@@ -258,7 +258,7 @@ An archived app is a Release build, so both agents use the domain `com.sydpolk.p
 4. Note this agent's port, for step 11:
 
    ```
-   defaults read com.sydpolk.photosgoround.dev servicePort
+   defaults read com.sydpolk.photosgoround servicePort
    ```
 
 **Switch to `randyarbuckle`, leaving `jazzman` logged in:**
@@ -267,25 +267,25 @@ An archived app is a Release build, so both agents use the domain `com.sydpolk.p
 6. **`jazzman`'s preferences cannot be read from here.** This is Phase 1 measured for real, from another account. Expect *Permission denied*:
 
    ```
-   cat /Users/jazzman/Library/Preferences/com.sydpolk.photosgoround.dev.plist
+   cat /Users/jazzman/Library/Preferences/com.sydpolk.photosgoround.plist
    ```
 
 7. **This account's agent made a secret.** Expect `1`:
 
    ```
-   defaults read com.sydpolk.photosgoround.dev serviceSecret | wc -l
+   defaults read com.sydpolk.photosgoround serviceSecret | wc -l
    ```
 
 8. **This account's port**, for step 12. Compare it with step 4's: they should differ, since each is a hash of the user name. A match is a collision, and worth knowing.
 
    ```
-   defaults read com.sydpolk.photosgoround.dev servicePort
+   defaults read com.sydpolk.photosgoround servicePort
    ```
 
 9. **This account's agent serves this account.** Expect `200`; `-o /dev/null` keeps the answer off the screen, and `--max-time 20` turns a hang into `000`:
 
    ```
-   curl -s --max-time 20 -o /dev/null -w "%{http_code} %{time_total}s\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:$(defaults read com.sydpolk.photosgoround.dev servicePort)/v1/dashboard"
+   curl -s --max-time 20 -o /dev/null -w "%{http_code} %{time_total}s\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround serviceSecret)" "http://localhost:$(defaults read com.sydpolk.photosgoround servicePort)/v1/dashboard"
    ```
 
 10. **By eye:** the window, the wallpaper and the screensaver show this account's pictures and none of `jazzman`'s.
@@ -293,7 +293,7 @@ An archived app is a Release build, so both agents use the domain `com.sydpolk.p
 
     ```
     OTHER_PORT=20172
-    curl -s --max-time 20 -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:$OTHER_PORT/v1/next?consumer=test"
+    curl -s --max-time 20 -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround serviceSecret)" "http://localhost:$OTHER_PORT/v1/next?consumer=test"
     ```
 
 **Back in `jazzman`:**
@@ -302,7 +302,7 @@ An archived app is a Release build, so both agents use the domain `com.sydpolk.p
 
     ```
     OTHER_PORT=21458
-    curl -s --max-time 20 -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround.dev serviceSecret)" "http://localhost:$OTHER_PORT/v1/next?consumer=test"
+    curl -s --max-time 20 -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $(defaults read com.sydpolk.photosgoround serviceSecret)" "http://localhost:$OTHER_PORT/v1/next?consumer=test"
     ```
 
 13. **By eye:** this account still shows its own pictures, and none of `randyarbuckle`'s.

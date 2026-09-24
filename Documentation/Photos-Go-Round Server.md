@@ -64,8 +64,9 @@ While developing, run it in a terminal instead:
     cd photos-go-round
     ./Scripts/run-server.sh
 
-The wrapper script builds first, so a stale binary is never run, and leaves the
-agent on its development storage so a run cannot disturb a real library. A
+The wrapper script builds first, so a stale binary is never run. It builds Debug
+unless told `--release` or `--claude`, and a Debug agent uses its development
+storage, so a plain run cannot disturb a real library. A
 detached `screen` or `tmux` session keeps it running after the terminal closes,
 which is what a long unattended run wants.
 
@@ -73,8 +74,11 @@ which is what a long unattended run wants.
 
 `--prod`
 Use the real library — `~/Library/Containers/<identifier>`,
-`~/Library/Caches/<identifier>`, and the domain `<identifier>`. Without it the
-same three take a `.dev` suffix, so a plain run cannot disturb anything. All
+`~/Library/Caches/<identifier>`, and the domain `<identifier>`. **A Release build
+always does, however it is started**; a Debug or Claude build without this flag
+uses the same three with a `.dev` suffix, so its plain run cannot disturb
+anything. Syd, 2026-09-24: "a release build should always install and use a
+release agent, period, no matter how it is launched." All
 three move together, deliberately: relocating the storage root alone would leave
 the source list pointing at the real one.
 **A Release build installs its agent with `--prod`; Debug and Claude builds do
@@ -652,13 +656,13 @@ favour, always.
 
 |                | storage root | cache root |
 | --- | --- | --- |
-| default | `~/Library/Containers/<identifier>.dev` | `~/Library/Caches/<identifier>.dev` |
-| `--prod` | `~/Library/Containers/<identifier>` | `~/Library/Caches/<identifier>` |
+| Debug or Claude, default | `~/Library/Containers/<identifier>.dev` | `~/Library/Caches/<identifier>.dev` |
+| Release, or `--prod` | `~/Library/Containers/<identifier>` | `~/Library/Caches/<identifier>` |
 | container named | as given | `<container>/cache` |
 
-**Development is the default, and reaching a real library takes `--prod`, typed
-on purpose.** All three of storage, cache, and the preference domain move
-together under that flag. Two of the three are obviously per-deployment and the
+**The build decides:** a Release agent is production however it is started, and
+a Debug or Claude agent is development unless given `--prod`, typed on purpose.
+All three of storage, cache, and the preference domain move together. Two of the three are obviously per-deployment and the
 third silently is not, so relocating the storage root alone would leave the
 source list — and therefore what the agent scans — pointing at the real one.
 
