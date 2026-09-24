@@ -87,6 +87,13 @@ The plist points at the built bundle, which is right for development and wrong
 for anything left running: a clean build directory takes the agent with it. It
 says so when the path is one. Archive is the route for a release.
 
+The plist names the app it belongs to, `AssociatedBundleIdentifiers` =
+`com.sydpolk.photosgoround`. System Settings › General › Login Items still lists
+the agent under *Allow in the Background* by the name on the signing
+certificate, not as Photos-Go-Round: macOS records the association but, for a
+build signed with an Apple Development certificate, does not file the agent
+under the app. Checked 2026-09-23, across a logout.
+
 `wallpaper`
 Registers the extension with `pluginkit`, from inside the host app that carries
 it — **an appex registers only from inside a signed app bundle**. It first

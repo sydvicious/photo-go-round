@@ -1,4 +1,5 @@
 import Foundation
+import PhotosGoRoundAgentAPI
 
 /// The LaunchAgent plist, as a value.
 ///
@@ -14,6 +15,32 @@ public struct JobDescription: Codable, Equatable, Sendable {
     public var runAtLoad: Bool
     public var keepAlive: KeepAlive
     public var processType: String
+    /// The app this job belongs to, which is what System Settings files it
+    /// under.
+    ///
+    /// **Without it the job is listed under the signing certificate's name.**
+    /// Checked 2026-09-23 with `sfltool dumpbtm`: macOS tracks this per-user
+    /// plist as a legacy agent, enabled and allowed, with `Parent Identifier:
+    /// Sydney Polk` — so *Allow in the Background* showed it under Syd's name,
+    /// and nothing called Photos-Go-Round was anywhere in Login Items. This key
+    /// names the app, and the plist stays per user in `~/Library/LaunchAgents`,
+    /// as decided 2026-09-10.
+    ///
+    /// **It has not changed the listing yet.** Checked the same night: macOS
+    /// read the key — `dumpbtm` shows `Assoc. Bundle IDs: [
+    /// com.sydpolk.photosgoround ]` — and still filed the item under `Sydney
+    /// Polk`, across a logout, for a build signed with an Apple Development
+    /// certificate. Kept because it is the documented way to name the owning
+    /// app and costs nothing; whether a Developer ID build honours it is not
+    /// known.
+    ///
+    /// The app's identifier is the same in every build configuration, so every
+    /// configuration's agent is filed under the one app.
+    ///
+    /// **Optional only so an older plist still decodes.** One written before
+    /// this key existed reads as a different job, which is what makes the next
+    /// app launch write it again. Every plist this writes carries it.
+    public var associatedBundleIdentifiers: [String]?
 
     /// Restart it when it fails, and leave it alone when it exits cleanly.
     public struct KeepAlive: Codable, Equatable, Sendable {
@@ -30,6 +57,7 @@ public struct JobDescription: Codable, Equatable, Sendable {
         case runAtLoad = "RunAtLoad"
         case keepAlive = "KeepAlive"
         case processType = "ProcessType"
+        case associatedBundleIdentifiers = "AssociatedBundleIdentifiers"
     }
 
     /// **`Adaptive`, not `Background`, since 2026-09-17.** macOS throttles a
@@ -50,6 +78,7 @@ public struct JobDescription: Codable, Equatable, Sendable {
         self.runAtLoad = true
         self.keepAlive = KeepAlive(successfulExit: false)
         self.processType = Self.adaptive
+        self.associatedBundleIdentifiers = [Deployment.identifier]
     }
 
     public func encodedPlist() throws -> Data {

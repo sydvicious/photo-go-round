@@ -196,6 +196,7 @@ Syd, 2026-09-21, after a `(Claude)` screensaver with no agent anywhere showed "W
 
 What is left after `Plans/Release App Installer.md`, which built the app as the installer on 2026-09-21: every build carries the agent, the extension and the screensaver, installs and restarts its agent at launch, and a Release launch registers the wallpaper and links the saver.
 
+- **Check where Login Items lists the agent once there is a Developer ID build.** Since 2026-09-23 the plist carries `AssociatedBundleIdentifiers` = `com.sydpolk.photosgoround`; macOS records it, but an Apple Development build is still listed under *Allow in the Background* as *Sydney Polk*. If a Developer ID build is too, the remaining route is `SMAppService`. `PLAN.md`, beside "still appears in Login Items".
 - **Decide which deployment a shipped app runs in.** The app and the saver both ask for `.development` today; a shipped one must not.
 - **The window needs Install Agent and Launch Agent buttons.** Syd, 2026-09-09. They are what the empty state should offer when nothing is being served, rather than words.
 - **The empty state's agent wording is a placeholder that is wrong in one of the two places it appears.** It reads "Open the Photo-Go-Round application to start it", which is right on the screensaver and absurd in the window, because the window *is* the application. The buttons above are what the window should show instead. Until then the text stands, knowingly.

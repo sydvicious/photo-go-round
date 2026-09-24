@@ -159,5 +159,22 @@ struct AgentInstallTests {
         // person waiting on a picture. Measured 2026-09-17.
         #expect(values["ProcessType"] as? String == "Adaptive")
         #expect(values["ProcessType"] as? String != "Background")
+        // Filed under the app in Login Items rather than under the signing
+        // certificate's name. Checked 2026-09-23 with `sfltool dumpbtm`.
+        #expect(values["AssociatedBundleIdentifiers"] as? [String] == ["com.sydpolk.photosgoround"])
+    }
+
+    /// An installed plist from before the key existed is a different job, so
+    /// the next app launch writes it again — which is how existing installs
+    /// get the key.
+    @Test("A plist without the app named is an older job description")
+    func olderPlistIsReinstalled() throws {
+        var older = JobDescription(label: "com.sydpolk.photosgoround.server", program: binary)
+        older.associatedBundleIdentifiers = nil
+        let decoded = try PropertyListDecoder().decode(
+            JobDescription.self, from: older.encodedPlist())
+
+        #expect(decoded.associatedBundleIdentifiers == nil)
+        #expect(decoded != JobDescription(label: "com.sydpolk.photosgoround.server", program: binary))
     }
 }
