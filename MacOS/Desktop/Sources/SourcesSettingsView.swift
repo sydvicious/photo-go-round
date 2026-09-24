@@ -51,6 +51,10 @@ struct SourcesSettingsView: View {
             sourcesPanel
             screensaverPanel
             wallpaperPanel
+            // Only when Settings was chosen with Option held.
+            if DashboardDisclosure.shared.inSettings {
+                supportPanel
+            }
         }
         .padding(12)
         // Everything here goes to the agent, which an install may be restarting.
@@ -102,6 +106,16 @@ struct SourcesSettingsView: View {
                 Task { await model.setRecursive(recursive, of: source.uuid) }
             }
         }
+    }
+
+    /// The agent's dashboard, for supporting somebody. `DashboardDisclosure`.
+    private var supportPanel: some View {
+        Panel("Support") {
+            DashboardLinkView(preferences: MacHostEnvironment().preferences)
+                .frame(maxWidth: .infinity)
+                .padding(10)
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - The screensaver and the wallpaper

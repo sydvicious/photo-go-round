@@ -24,7 +24,9 @@ struct PhotosGoRoundApp: App {
         // panel, and two About boxes is one too many.
         .commands {
             CommandGroup(replacing: .appInfo) {
+                // Option held shows the dashboard's link. `DashboardDisclosure`.
                 Button("About \(Bundle.main.displayName)") {
+                    DashboardDisclosure.shared.inAbout = DashboardDisclosure.optionHeld
                     openWindow(id: AboutView.windowID)
                 }
             }
@@ -35,6 +37,7 @@ struct PhotosGoRoundApp: App {
             // and `⌘,` is the shortcut `Settings` would have taken for free.
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") {
+                    DashboardDisclosure.shared.inSettings = DashboardDisclosure.optionHeld
                     openWindow(id: SourcesSettingsView.windowID)
                 }
                 .keyboardShortcut(",", modifiers: .command)
