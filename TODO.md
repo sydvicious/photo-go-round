@@ -11,7 +11,7 @@ Things to look into, deferred out of the phase list. Each one earns its own plan
 Syd, 2026-09-23, after the first notarized Release worked end to end: "checklist for final release".
 
 - [ ] **The dashboard over HTTPS, with a self-signed certificate.** *The dashboard over HTTPS*, below.
-- [ ] **An app icon.** There is none; Login Items shows a blank one. *The icon in System Settings*, below, waits on it.
+- [ ] **Check Login Items shows the new app icon.** It showed a blank one before the icon existed; unverified since.
 - [ ] **A finished DMG.** *Installing by launching the app*, below.
 
 ## Passed over on 2026-09-16 — to fix, not to keep
@@ -180,7 +180,7 @@ The saver's tile in the Screen Saver pane is the system's generic placeholder �
 
 - The convention is `thumbnail.png` and `thumbnail@2x.png` in `Contents/Resources`, with `COMBINE_HIDPI_IMAGES` disabled so the two are not merged. No `Info.plist` key is involved.
 - **Unverified on macOS 27** — the reference is older than Sonoma's System Settings rewrite.
-- Blocked on there being an app icon at all, which does not exist yet.
+- **Not possible on macOS 26 and later**, found 2026-09-24. System Settings no longer shows a custom saver's own thumbnail; a saver installed before 26 keeps a cached one, and a new one is never used. Apple DTS: "there's no supported way to replace the default thumbnail". FB21094920; <https://developer.apple.com/forums/thread/806641>. Revisit only if Apple ships an extension-based screen saver API.
 - **Distinct from the large preview at the top of the pane, which is fine.** That one is a live instance of the saver showing the real library — the same screenshot has a photograph in it. Only the tile is generic. *An earlier version of this note called that preview a captured still; it is not, and the correction is in `Screensaver Plan.md`, `The preview is live, and it is an ordinary instance`.*
 - So the two are supplied differently: the preview draws itself, and the tile is an image the bundle has to carry. Nothing we do to the saver's drawing will change the tile.
 
@@ -400,3 +400,7 @@ Syd, 2026-09-22: add it. A deleted build of the wallpaper extension stays listed
 Syd, 2026-09-22: add it. Since the reorganization put `Photo-Go-Round.xcodeproj` beside `Package.swift`, `xcodebuild test -scheme "Package Tests"` picks the project, and through the project the scheme finds no test bundles — "There are no test bundles available to test", with or without `-project`. Pointing the test plan's targets at `container:.` did not help. What works is `-workspace .swiftpm/xcode/package.xcworkspace`, now the command in `CLAUDE.md`.
 
 - **That workspace is generated and ignored.** `.gitignore` excludes both `.swiftpm/xcode/package.xcworkspace/` and `*.xcworkspacedata`, so a fresh clone does not have it. *Claude's reading, not tested:* Xcode writes it when it opens the package, so the documented command would fail on a fresh clone until that has happened once.
+
+## The app icon on smaller devices
+
+Syd, 2026-09-24: re-examine the icon for smaller devices later. At 32 points the house picture is discernible; at 16 it is hopeless, and a `.icon` file has no per-size artwork. `Plans/App Icon.md`.
