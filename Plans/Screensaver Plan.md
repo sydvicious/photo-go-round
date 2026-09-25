@@ -61,6 +61,7 @@ This project exists because Apple's screensaver has the display half solved and 
 - **The saver ships no motion but keeps the layer.** `PictureLayerView` is already layer-backed with a computed frame, which is what the pan will need — reverting it to a drawn image would be work done twice.
 - **`os_log`, prefixed `saver:`, and the logging stays in.** It is the only channel out of the host's sandbox, and it is how every question about this phase gets answered. Same convention as the panel's `panel:`.
 - **Development deployment first.** The saver talks to the same `com.sydpolk.photogoround.dev` domain the app does, so one agent serves the window and the saver during development and neither can be confused about which library it is on. *Since 2026-09-24 there is no development deployment: each build has one library, and the saver, the app and the agent of a build share it — `com.sydpolk.photosgoround[.debug|.claude]`.*
+- **The Screen Saver pane's tile is the app icon's picture, carried as `thumbnail.png` and `thumbnail@2x.png` in the bundle. Measured 2026-09-24, reversing that morning's finding that it was impossible on macOS 26 and later.** The settings extension asks the bundle for an image named `thumbnail` and caches the answer under a key that survives rebuilds, which is what made it look impossible. A Debug or Claude saver, linked into a build folder the sandbox will not let the extension read, keeps the default swirl. See *The tile in the Screen Saver pane*.
 - **Swift, with an `@objc` principal class.** No Objective-C anywhere, and the three configuration traps that make a Swift `.saver` silently not appear are named in `PLAN.md`'s *Swift everywhere, including the screensaver*.
 - **Ad-hoc signing is enough to develop against. Confirmed 2026-09-07.** The host sets `com.apple.security.cs.disable-library-validation`, and it loaded a bundle this project signed itself.
 
@@ -200,6 +201,32 @@ Consequences, in the order they cost anything:
 **The sizing problem it left behind.** The preview view is 1800x1169 and is then scaled down into a small pane, so the empty state's font, fitted to 1800 points, arrives illegible. The view cannot tell it is being scaled. See `TODO.md`, *The empty state is sized for the view, not for how it is shown*.
 
 
+## The tile in the Screen Saver pane
+
+The tile is the small picture under a saver's name in the list — not the live preview above it, which *The preview is live, and it is an ordinary instance* covers. Until 2026-09-24 this plan and `TODO.md` said it could not be ours: a forum report, <https://developer.apple.com/forums/thread/806641>, that "a cached version of the thumbnail is used but a new version is never used" since macOS 26, and Apple DTS answering "there's no supported way to replace the default thumbnail". Syd, that evening: "Opus said setting the icon for a screensaver in MacOS 27 was impossible. Well, the Apple screensavers have their own icons. Let's see if we can figure out how they do it." What follows is what they do, read from the disassembly of `WallpaperLegacyExtension` — the sandboxed System Settings extension that lists legacy `.saver` bundles — and confirmed by what it cached.
+
+**How the tile is found.** Three steps, in order:
+
+1. The saver's bundle is asked for an image named `thumbnail`, through `-[NSBundle imageForResource:]`. That looks in an asset catalog first — Apple's own savers, `Drift.appex` and the rest, carry a `thumbnail` image set at 107 × 65 and 214 × 130 — and then for loose `thumbnail.png` and `thumbnail@2x.png` in `Contents/Resources`, which is what Apple's `Random.saver` still ships and what this saver ships. Random's own picture was in the cache, which is what proved the loose-file path on this build of macOS 27.
+2. If that returns nothing, a picture from the extension's own catalog under the module's name — `Shell` and `Arabesque` are in there, which is why those two ship no picture at all.
+3. Otherwise `Default`: the blue swirl.
+
+**The cache is what made it look impossible.** Whatever step wins is written to `$(getconf DARWIN_USER_CACHE_DIR)com.apple.wallpaper.extension.legacy/com.apple.wallpaper.legacy.thumbnails/<sha256>.png` and served from there ever after. The key was the same across three installs on 2026-09-23 and 2026-09-24, and again when the extension rebuilt the file, so what it hashes is something about the installed saver rather than the build — the exact input was not established. So a saver installed once with no picture keeps the swirl through every reinstall that adds one, which is the forum report exactly. DTS's answer is true of the API and not of the code.
+
+**Refreshing it after the picture changes** is two steps and a wait, and stopping the extension is not one of them:
+
+```bash
+rm "$(getconf DARWIN_USER_CACHE_DIR)com.apple.wallpaper.extension.legacy/com.apple.wallpaper.legacy.thumbnails/"*.png
+```
+
+then wait five minutes, then quit and reopen System Settings. `WallpaperAgent` fronts the extension over XPC and keeps the connection for five minutes after the last call, and its list of modules — thumbnail file names included — lives for the life of that connection. Measured 2026-09-25: a `killall WallpaperLegacyExtension` left the agent holding a dead connection, every `provideSettingsViewModels` failed with `NSCocoaErrorDomain 4099` until the timer ran out, and the pane showed a cloud-with-exclamation placeholder for the cached file it could no longer open. After the timer, the next pane open relaunched the extension, which asked the bundle and wrote the file again — with the ring and house card in it. Removing every file in that folder is safe: it holds nothing but tiles, and the Apple ones come back the same way.
+
+**Only a saver the extension can read shows a tile.** The extension is sandboxed. Measured 2026-09-24: `deny(1) file-read-data` on the Debug saver, which is a link from `~/Library/Screen Savers` into `~/Library/Developer/Xcode/DerivedData`. The name still shows, since the module list is built by `legacyScreenSaver`, but the tile is the swirl, and no picture in the bundle can change that. The Release saver, linked into `/Applications`, is readable and shows the picture. A Claude saver, linked into `~/.claude/build`, is presumably the same as Debug; not measured. This follows from *an app installs its saver as a symlink back into itself* (`Release App Installer.md`), and a copy just for a picture is not worth having — the tile is a Release concern.
+
+**The picture** is the wallpaper item's, drawn at the tile's two sizes by the same script from the same icon layers: `App Icon.md`, *The wallpaper pane's picture*. Syd, 2026-09-24: "you can reuse the wallpaper icon we already generated." The two files live in `MacOS/Screensaver/Sources`, where the target's synchronized folder carries them into `Contents/Resources` as it does the wallpaper's picture. `COMBINE_HIDPI_IMAGES = NO` on the saver target keeps Xcode from merging the pair into one `thumbnail.tiff` — the forum poster's installer did exactly that, which was a second thing in their way.
+
+**Left alone:** for every `.saver` without an asset catalog, Random included, the extension logs three CoreUI faults per pane open — `CUICatalog initWithName:fromBundle:` unable to find a bundle — from step 1's catalog lookup. An `.xcassets` with a `thumbnail` image set would silence them. Cosmetic.
+
 ## The empty state without motion
 
 With the bouncing letters out of scope, an empty screensaver is words sitting still on black. `PLAN.md`'s *The empty state* argues the motion is not only fun: it "moves, so it cannot burn in on the OLED and XDR panels where a static centered label would be a genuine hazard over hours." A screensaver is the surface where that matters most, because it is the only one that runs unattended all night.
@@ -275,7 +302,7 @@ The `.saver` is a new bundle target in `Photo-Go-Round.xcodeproj`, alongside the
 - Both `init?(frame:isPreview:)` and `init?(coder:)` present, because the class is instantiated through the Objective-C runtime.
 - The target links `PhotoGoRoundDisplay` from the local package, statically, the way the app does.
 
-Installation for development is a copy into `~/Library/Screen Savers/`, which exists on this machine already. Two caches then get in the way, and both are worth writing into a script rather than rediscovering each time: `legacyScreenSaver` holds loaded bundles for the life of its process, and the Screen Saver pane holds its own list. `killall legacyScreenSaver` and quitting System Settings between builds is the whole of it.
+Installation for development is a copy into `~/Library/Screen Savers/`, which exists on this machine already. Two caches then get in the way, and both are worth writing into a script rather than rediscovering each time: `legacyScreenSaver` holds loaded bundles for the life of its process, and the Screen Saver pane holds its own list. `killall legacyScreenSaver` and quitting System Settings between builds is the whole of it. *A third, found 2026-09-24: the tile under the saver's name is cached on disk and outlives every reinstall — see* The tile in the Screen Saver pane.
 
 For exercising it without waiting for an idle timer, `/System/Library/CoreServices/ScreenSaverEngine.app` can be launched directly. That is the fast loop for Phase 3 and the closest thing this phase has to a debugger.
 

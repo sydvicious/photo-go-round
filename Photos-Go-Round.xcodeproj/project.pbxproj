@@ -146,7 +146,6 @@
 				LastPicture.swift,
 				PaneHandler.swift,
 				PaneModels.swift,
-				PaneThumbnail.png,
 				PaneThumbnail.swift,
 				Rotation.swift,
 			);
@@ -1093,6 +1092,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = NO;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Screensaver/Resources/Info.plist;
@@ -1116,6 +1116,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = NO;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Screensaver/Resources/Info.plist;
@@ -1450,6 +1451,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = NO;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MacOS/Screensaver/Resources/Info.plist;
