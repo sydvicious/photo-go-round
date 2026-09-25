@@ -27,6 +27,7 @@
 		AA0000000000000000000403 /* Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver in Embed Screensaver */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000441 /* Photos-Go-Round Screensaver$(SAVER_NAME_SUFFIX).saver */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		AA0000000000000000000451 /* PhotosGoRoundInstall in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000452 /* PhotosGoRoundInstall */; };
 		AA0000000000000000000461 /* PhotosGoRoundAgentAPI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000462 /* PhotosGoRoundAgentAPI */; };
+		AA0000000000000000000800 /* PhotosGoRound.icon in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000801 /* PhotosGoRound.icon */; };
 		AA0000000000000000000A02 /* PhotosGoRoundDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000A03 /* PhotosGoRoundDisplay */; };
 /* End PBXBuildFile section */
 
@@ -125,6 +126,7 @@
 		AA0000000000000000000620 /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Package.swift; sourceTree = "<group>"; };
 		AA0000000000000000000621 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		AA0000000000000000000622 /* TODO.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TODO.md; sourceTree = "<group>"; };
+		AA0000000000000000000801 /* PhotosGoRound.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = PhotosGoRound.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -144,6 +146,7 @@
 				LastPicture.swift,
 				PaneHandler.swift,
 				PaneModels.swift,
+				PaneThumbnail.png,
 				PaneThumbnail.swift,
 				Rotation.swift,
 			);
@@ -332,6 +335,7 @@
 		000000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
+				AA0000000000000000000802 /* Artwork */,
 				AA0000000000000000000613 /* Audits */,
 				AA0000000000000000000031 /* Config */,
 				AA0000000000000000000614 /* Documentation */,
@@ -472,6 +476,14 @@
 			path = Endpoints;
 			sourceTree = "<group>";
 		};
+		AA0000000000000000000802 /* Artwork */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000801 /* PhotosGoRound.icon */,
+			);
+			path = Artwork;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -602,6 +614,7 @@
 			buildPhases = (
 				AA00000000000000000000E2 /* Sources */,
 				AA00000000000000000000E3 /* Frameworks */,
+				AA0000000000000000000803 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -708,6 +721,7 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				AA0000000000000000000800 /* PhotosGoRound.icon in Resources */,
 			);
 		};
 		AA00000000000000000000A4 /* Resources */ = {
@@ -716,6 +730,11 @@
 			);
 		};
 		AA00000000000000000000C4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		AA0000000000000000000803 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -951,6 +970,7 @@
 		000000000000000111000000 /* Debug configuration for PBXNativeTarget "Photos-Go-Round" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = PhotosGoRound;
 				CODE_SIGN_ENTITLEMENTS = "MacOS/Desktop/Resources/Photos-Go-Round.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
@@ -991,6 +1011,7 @@
 		000000000000000112000000 /* Release configuration for PBXNativeTarget "Photos-Go-Round" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = PhotosGoRound;
 				CODE_SIGN_ENTITLEMENTS = "MacOS/Desktop/Resources/Photos-Go-Round.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;
@@ -1367,6 +1388,7 @@
 		AA0000000000000000000202 /* Claude configuration for PBXNativeTarget "Photos-Go-Round" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = PhotosGoRound;
 				CODE_SIGN_ENTITLEMENTS = "MacOS/Desktop/Resources/Photos-Go-Round.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R5PQPZARC5;

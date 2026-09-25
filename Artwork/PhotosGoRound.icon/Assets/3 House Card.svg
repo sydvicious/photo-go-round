@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6ec6ff"/><stop offset="1" stop-color="#c9ecff"/></linearGradient></defs>
+  <g transform="translate(512 512) scale(1.15) translate(-520 -548)"><g transform="translate(640 545) scale(1.5) translate(-695.6 -511.1)"><g transform="rotate(14 695.6 511.1)"><g transform="matrix(1.0710 0.0000 0.0000 0.9626 535.00 414.86)">
+      <rect width="300" height="200" rx="14" fill="#ffffff"/>
+      <clipPath id="pic"><rect x="12" y="12" width="276" height="176" rx="8"/></clipPath>
+      <g clip-path="url(#pic)">
+        <rect width="300" height="200" fill="url(#sky)"/>
+        <rect y="145" width="300" height="200" fill="#9be27a"/>
+        <g transform="translate(58 52)"><line x1="0" y1="0" x2="30.0" y2="0.0" stroke="#ffb800" stroke-width="9" stroke-linecap="round"/><line x1="0" y1="0" x2="21.2" y2="21.2" stroke="#ffb800" stroke-width="9" stroke-linecap="round"/><line x1="0" y1="0" x2="0.0" y2="30.0" stroke="#ffb800" stroke-width="9" stroke-linecap="round"/><line x1="0" y1="0" x2="-21.2" y2="21.2" stroke="#ffb800" stroke-width="9" stroke-linecap="round"/><line x1="0" y1="0" x2="-30.0" y2="0.0" stroke="#ffb800" stroke-width="9" stroke-linecap="round"/><line x1="0" y1="0" x2="-21.2" y2="-21.2" stroke="#ffb800" stroke-width="9" stroke-linecap="round"/><line x1="0" y1="0" x2="-0.0" y2="-30.0" stroke="#ffb800" stroke-width="9" stroke-linecap="round"/><line x1="0" y1="0" x2="21.2" y2="-21.2" stroke="#ffb800" stroke-width="9" stroke-linecap="round"/><circle r="24" fill="#ffd21f"/></g>
+        <rect x="110" y="100" width="90" height="50" fill="#ffe68f"/>
+        <polygon points="100,102 155,62 210,102" fill="#a3271c"/>
+        <rect x="145" y="118" width="20" height="32" fill="#34246e"/>
+        <rect x="241" y="108" width="11" height="42" fill="#5a3a1e"/>
+        <circle cx="246" cy="94" r="32" fill="#1d6b36"/>
+      </g>
+      <!-- Thin navy edge: the white border alone vanishes against the pale yellow. -->
+      <rect x="2" y="2" width="296" height="196" rx="13" fill="none" stroke="#2f4a73" stroke-width="6"/></g></g></g></g>
+</svg>
