@@ -6,7 +6,11 @@
 //
 // Run from the repository root. Writes `MacOS/Wallpaper/Sources/PaneThumbnail.png`,
 // which is committed: the sandboxed extension cannot read the app's icon, so it
-// carries this picture instead. Run it again whenever the icon changes.
+// carries this picture instead. Run it again whenever the icon changes, and
+// the screensaver's tile with it:
+//
+//     swift "Artwork/App Icon/Scripts/pane-thumbnail.swift" 107 65 MacOS/Screensaver/Sources/thumbnail.png
+//     swift "Artwork/App Icon/Scripts/pane-thumbnail.swift" 214 130 MacOS/Screensaver/Sources/thumbnail@2x.png
 //
 // The layers are read from `PhotosGoRound.icon` itself, so the picture is made
 // from exactly what the icon is made from. Syd, 2026-09-24: "What I really want
@@ -14,15 +18,27 @@
 
 import AppKit
 
-let width = 1920, height = 1080
-let margin: CGFloat = 40  // around the ring and card together
-let icon = "Artwork/PhotosGoRound.icon"
-let output = "MacOS/Wallpaper/Sources/PaneThumbnail.png"
-
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
     exit(1)
 }
+
+// With no arguments it writes the wallpaper's picture. With three -- width,
+// height, output -- it draws the same picture at another size, which is how
+// the screensaver's tile in System Settings is made: `Plans/Screensaver Plan.md`,
+// *The tile in the Screen Saver pane*.
+let arguments = Array(CommandLine.arguments.dropFirst())
+let width: Int, height: Int, output: String
+if arguments.isEmpty {
+    (width, height, output) = (1920, 1080, "MacOS/Wallpaper/Sources/PaneThumbnail.png")
+} else {
+    guard arguments.count == 3, let w = Int(arguments[0]), let h = Int(arguments[1]) else {
+        fail("usage: pane-thumbnail.swift [width height output]")
+    }
+    (width, height, output) = (w, h, arguments[2])
+}
+let margin = 40 * CGFloat(height) / 1080  // around the ring and card together
+let icon = "Artwork/PhotosGoRound.icon"
 
 // 1. The layers, bottom first, as `icon.json` lists them top first.
 struct Manifest: Decodable {

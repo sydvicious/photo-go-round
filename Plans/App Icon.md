@@ -78,5 +78,17 @@ from the repository root. It draws the layers inside `PhotosGoRound.icon`
 itself, so it follows any change to them. Syd: "What I really want is the ring
 and photo on the gradient, but without the icon frame."
 
-The Screen Saver pane cannot show it: since macOS 26 a custom saver's own
-thumbnail is never used. `TODO.md`, *The icon in System Settings*.
+The Screen Saver pane shows the same picture as the saver's tile, drawn at the
+tile's two sizes by the same script — `MacOS/Screensaver/Sources/thumbnail.png`,
+107 × 65, and `thumbnail@2x.png`, 214 × 130, the sizes Apple's own savers carry.
+Syd, 2026-09-24: "you can reuse the wallpaper icon we already generated." Redraw
+them with the wallpaper's whenever the icon changes:
+
+```bash
+swift "Artwork/App Icon/Scripts/pane-thumbnail.swift" 107 65 MacOS/Screensaver/Sources/thumbnail.png
+swift "Artwork/App Icon/Scripts/pane-thumbnail.swift" 214 130 "MacOS/Screensaver/Sources/thumbnail@2x.png"
+```
+
+How the pane finds the picture, the cache that hides a new one until it is
+removed, and why only the Release saver can show it are in
+`Screensaver Plan.md`, *The tile in the Screen Saver pane*.
