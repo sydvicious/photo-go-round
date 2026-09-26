@@ -369,3 +369,7 @@ Syd, 2026-09-24: re-examine the icon for smaller devices later. At 32 points the
 ## Remove the option to disable a source
 
 Syd, 2026-09-26: "get rid of the disable sources option completely". Today a source is disabled by `pgr_ctl sources disable`, or the `enabled` key in a source list written with `defaults write`; the Settings window has no control for it. Open when picked up: whether `source.enabled` and `photo.source_enabled` go too, since the deck's indexes lead with the second, and a migration to re-enable any source disabled at the time.
+
+## The wallpaper's separate picture pipeline
+
+Syd, 2026-09-26: "This honestly is a surprise to me." The wallpaper extension asks the agent through its own `AgentPicture`, times itself with its own `Rotation`, and keeps its own `LastPicture`, where the window and the screensaver share `PictureClient`, `Shuffle` and `PictureMemory` — so every empty-state behaviour on the `no-photos` branch was built twice, and the second copy is untested. `Wallpaper Plan.md`, *The real extension, inside the app*, said the extension would link the display library "rather than carrying the probe's private copies of `ServicePort` and the picture request".
