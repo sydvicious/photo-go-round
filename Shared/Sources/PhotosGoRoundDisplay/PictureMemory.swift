@@ -96,6 +96,20 @@ public struct PictureMemory: Sendable {
         }.value
     }
 
+    /// Keeps nothing, so the next session opens with no picture.
+    ///
+    /// **For when the agent says there is nothing to show.** Syd, 2026-09-26:
+    /// a screensaver starting after a reboot would otherwise put up a
+    /// photograph that can no longer be served, for the half a minute before a
+    /// cold agent answers and it comes down again. Files already gone are
+    /// what was asked for, not a failure.
+    public func forget() async {
+        let files = [image, details]
+        await Task.detached(priority: .utility) {
+            for file in files { try? FileManager.default.removeItem(at: file) }
+        }.value
+    }
+
     enum Failure: Error {
         case cannotEncode
     }

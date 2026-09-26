@@ -39,12 +39,12 @@ This project exists because Apple's screensaver has the display half solved and 
   - **It had to be counted from the agent's side, and that is a finding of its own.** The saver's per-photograph line is `.info`, which is memory-only, so it had evaporated by morning; the run was countable only because the agent's `served status=… consumer=screensaver` line is `.notice`. `Log.swift` states the rule — "state transitions worth reconstructing after the fact must be `.notice` or higher" — and the number that mattered was on the wrong side of it. See `TODO.md`, *Metrics in the database*.
 - **Phase 4 — complete, 2026-09-09.** The bouncing treatment `PLAN.md` has described from the beginning, in `EmptyStateView` and `BouncePath`.
   - **Built once, in the display library, and mounted by the window and the saver alike** — which settles the standoff where `FEATURES.md` said the app would build it "so Phase 6 inherits it" while `Shuffle.swift` called it "Phase 6's treatment", and neither did.
-  - Two lines: the words, and underneath them what to do. An empty library says *Use the Settings panel in the application to add images.*, because nothing is broken — nobody has added any.
+  - Two lines: the words, and underneath them what to do. An empty library says *Use the Settings panel in the application to add images.*, because nothing is broken — nobody has added any. *One line since 2026-09-26 — see* The empty state, told apart by the agent.
   - **A missing agent and a wedged one are one message on screen**, at Syd's direction: to the user they are the same predicament. `Trouble.line` keeps them apart for the log.
   - One `CAKeyframeAnimation` over a path that closes on itself, so it repeats for ever with no seam and nothing to reschedule. Constant speed, pure reflection, an angle drawn away from both axes, and stillness when there is less than 24 points to travel through.
   - **Preview left this phase and came back as something else.** It is live and costs a card per dwell; what is left is a decision to record rather than code to write. See *The preview is live, and it is an ordinary instance*.
   - **Exit gate: an agent that is stopped produces words rather than a black rectangle, and they are not sitting still.** Met. The words appear and move, confirmed in all three surfaces — the window, the screensaver, and the settings preview. *Closed on the no-photos state; the agent-stopped wording had not been looked at on screen when this was marked, and it is a placeholder in the window regardless until the Install and Launch buttons exist. See `TODO.md`, `Installing by launching the app`.*
-  - **Two things went to `TODO.md` rather than holding the phase open**: the words are illegible at the settings preview's scale, and there is nothing on screen at all for the first ten seconds of an empty library.
+  - **Two things went to `TODO.md` rather than holding the phase open**: the words are illegible at the settings preview's scale, and there is nothing on screen at all for the first ten seconds of an empty library. *Both answered 2026-09-26: the words are 80% of the width everywhere, and the agent says when a library is empty, so the words go up on the first answer. See* The empty state, told apart by the agent.
 
 # Design Decisions
 
@@ -198,7 +198,7 @@ Consequences, in the order they cost anything:
 
 **It works, and not well. Syd, 2026-09-09: "I don't think that the preview works all that well, but it is something."** Recorded so that nobody later reads the paragraphs above as a claim that this is finished. Three things are wrong with it and only the first is ours: the empty state's text is illegible at that scale; the photograph is drawn for an 1800-point view and then shrunk into a tile, so it is seen at a fraction of the size it was fetched for; and it spends a card per dwell for as long as the pane is open. None of that is worth work today — it is better than the generic placeholder it replaced, and the alternatives were all worse — but *acceptable* is the claim being made here, not *good*.
 
-**The sizing problem it left behind.** The preview view is 1800x1169 and is then scaled down into a small pane, so the empty state's font, fitted to 1800 points, arrives illegible. The view cannot tell it is being scaled. See `TODO.md`, *The empty state is sized for the view, not for how it is shown*.
+**The sizing problem it left behind.** The preview view is 1800x1169 and is then scaled down into a small pane, so the empty state's font, fitted to 1800 points, arrives illegible. The view cannot tell it is being scaled. See `TODO.md`, *The empty state is sized for the view, not for how it is shown*. **Answered 2026-09-26, the only way the view allows: larger words everywhere.** The words take 80% of the width at every size rather than 55%, so the preview shrinks a line four-fifths as wide as itself. Syd chose it over leaving the preview hard to read. *That TODO item had already left `TODO.md` by then.*
 
 
 ## The tile in the Screen Saver pane
@@ -241,6 +241,17 @@ Options that keep motion out of scope:
 - **Accept the static label in v1** and note that a proof of concept does not run all night. True, until the exit gate above says it does.
 
 Listed under *Not yet decided*.
+
+## The empty state, told apart by the agent
+
+Built 2026-09-26. `PLAN.md`, *The empty state*, has the whole of it; what reaches the saver:
+
+- **Four sets of words, one line each, every word capitalized.** *Starting…* while the agent is not answering; *Please Add Photos* when no source is enabled; *No Photos Available* when there is nothing to show; a photograph otherwise. *Waiting for Photos* is gone. Syd: "everything should say *Starting...* until the agent responds", and "No secondary lines of text."
+- **The agent's `204` says why when it knows**, so *Please Add Photos* and *No Photos Available* go up on the first answer rather than after three. A cold start is still a bare `204` and still waits.
+- **Either takes the photograph down at its next scheduled change** — the one exception to *a picture already showing is never taken down*. `PictureLayerView.show(nil)` clears now, where it used to do nothing.
+- **And the remembered picture is deleted**, so a start after a reboot does not open on a photograph that cannot be served while a cold agent starts. `PictureMemory.forget()`; Syd's choice. `Startup Performance.md`, *The remembered picture*.
+- **80% of the width at every size**, so the preview in the pane is readable — see *The preview is live* above.
+- **The application opens its Settings for *Please Add Photos*; the saver does not.** It has nothing to open.
 
 ## One instance per display
 
@@ -323,7 +334,7 @@ What cannot be unit-tested is the part that is new: whether a bundle loads, whet
 Listed rather than asked, one at a time as they come up:
 
 - **How a stale published port is handled**, which the file fallback inherits and the spike did not exercise: the agent synchronizes after publishing, or the client tolerates a stale value and retries.
-- **Whether `Trouble` gains a case for an unreadable port.** `PictureClient` distinguishes it; the window does not, and says "No agent" for both — "Waiting for Photos" since 2026-09-16. They are the same predicament for the person looking at the glass and nothing alike in the log, which is where the distinction is currently spent.
+- **Whether `Trouble` gains a case for an unreadable port.** `PictureClient` distinguishes it; the window does not, and says "No agent" for both — "Waiting for Photos" since 2026-09-16, and "Starting…" since 2026-09-26. They are the same predicament for the person looking at the glass and nothing alike in the log, which is where the distinction is currently spent.
 - **Whether `Shuffle` keeps its name** once it is shared by three surfaces and sits one import away from the deck's own use of the word.
 - **Whether the dwell becomes a preference.** It is `Shuffle.defaultDwell`, ten seconds, and `PLAN.md` holds *Everything user-settable is a user default* back to Beyond 0.1 on the grounds that "a number nobody has looked at yet is not worth a key." Two surfaces wanting different numbers is the thing that would change that, and this phase is where the second one arrives.
 - **Whether the saver is ever installed by the app,** which is a 1.0 distribution question but decides whether an App Group is available to solve port discovery properly.

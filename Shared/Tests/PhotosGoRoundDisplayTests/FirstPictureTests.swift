@@ -212,6 +212,42 @@ struct FirstPictureTests {
         #expect(shuffle.shown?.picture.card == 42)
     }
 
+    /// Answers that there is nothing to show, every time.
+    private final class Nothing: PictureSource, Sendable {
+        func next(
+            consumer: String, displayID: String?, fitting box: PixelSize?
+        ) async throws -> ServedPicture? { nil }
+
+        func answer(
+            consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
+        ) async throws -> PictureAnswer { .noSources }
+    }
+
+    /// Syd, 2026-09-26: a screensaver starting after a reboot must not put up a
+    /// photograph that can no longer be served while a cold agent starts.
+    @Test("Nothing to show forgets the remembered picture")
+    func nothingToShowForgets() async throws {
+        let directory = Self.scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let memory = PictureMemory(directory: directory, key: "display")
+        try await memory.remember(
+            try Self.image(), as: ServedPicture(data: Data(), contentType: "image/png", card: 42))
+
+        let shuffle = Self.shuffle(Nothing(), memory: memory)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: "display")
+        try await Self.until({ shuffle.trouble == .noSources }, "no sources being said")
+        shuffle.stop()
+
+        var remembered = true
+        let deadline = ContinuousClock.now + .seconds(10)
+        while remembered, ContinuousClock.now < deadline {
+            remembered = await memory.recall() != nil
+            if remembered { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        #expect(!remembered, "the remembered picture outlived no sources")
+        #expect(shuffle.shown == nil)
+    }
+
     @Test("A fresh picture is remembered for next time")
     func freshPictureIsRemembered() async throws {
         let directory = Self.scratchDirectory()

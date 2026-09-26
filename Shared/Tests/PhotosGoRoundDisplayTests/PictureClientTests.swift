@@ -129,6 +129,48 @@ struct PictureClientTests {
 
         let picture = try await client.next(consumer: "app", displayID: nil, fitting: nil)
         #expect(picture == nil)
+        let answer = try await client.answer(consumer: "app", displayID: nil, fitting: nil, patient: false)
+        #expect(answer == .empty)
+    }
+
+    @Test("A 204 that says no sources is no sources")
+    func noSources() async throws {
+        let suite = DefaultsSuite()
+        suite.publish(port: 9000)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            session: Stub.session { _ in .success((204, ["X-PGR-Empty": "no-sources"], Data())) })
+
+        let answer = try await client.answer(consumer: "app", displayID: nil, fitting: nil, patient: false)
+        #expect(answer == .noSources)
+        // Still empty to a caller that only asks for the picture.
+        #expect(try await client.next(consumer: "app", displayID: nil, fitting: nil) == nil)
+    }
+
+    @Test("A 204 that says no photos is no photos")
+    func noPhotos() async throws {
+        let suite = DefaultsSuite()
+        suite.publish(port: 9000)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            session: Stub.session { _ in .success((204, ["X-PGR-Empty": "no-photos"], Data())) })
+
+        let answer = try await client.answer(consumer: "app", displayID: nil, fitting: nil, patient: false)
+        #expect(answer == .noPhotos)
+    }
+
+    /// A reason from an agent newer than this client is read as a bare empty
+    /// answer, which it still is.
+    @Test("A 204 with a reason this client does not know is plain empty")
+    func unknownReason() async throws {
+        let suite = DefaultsSuite()
+        suite.publish(port: 9000)
+        let client = PictureClient(
+            preferences: suite.preferences,
+            session: Stub.session { _ in .success((204, ["X-PGR-Empty": "something-new"], Data())) })
+
+        let answer = try await client.answer(consumer: "app", displayID: nil, fitting: nil, patient: false)
+        #expect(answer == .empty)
     }
 
     @Test("A picture arrives with its bytes and everything the service said about it")

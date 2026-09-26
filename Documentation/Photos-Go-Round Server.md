@@ -276,7 +276,13 @@ version 12 of the database is named by its identifier until it is fetched again.
 Content` means nothing could be served: the queue is empty, or nothing on it has
 its bytes yet and the request's one wait is spent. It is an ordinary answer
 rather than an error — a fresh library replies this way until the first fetch
-lands.
+lands. **When the agent knows why, it says so** in `X-PGR-Empty`, and the window
+and the screensaver answer at once rather than after three empty answers:
+`no-sources` when no source is enabled — none added, or every one turned off —
+shown as *Please Add Photos*; and `no-photos` when nothing could be shown and
+nothing is still coming — every source that is there has finished a scan and
+holds nothing, and no offline source has anything cached — shown as *No Photos
+Available*. Either takes down the picture on screen.
 
 **Serving takes the head of the queue, and waits for its bytes if they are not
 here yet.** A card is dealt whether or not its photograph has been copied, and

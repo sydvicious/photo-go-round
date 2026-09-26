@@ -51,7 +51,7 @@ The agent is per-user by design, installed in each user's `~/Library/LaunchAgent
 - **The launch check asks the published port, not the hashed one.** The hashed port is predictable, so it is the one another account can hold; the secret must not be sent there.
 - **Nothing ever sends the secret to the hashed port.** *Syd's, 2026-09-23.* `Service Port Plan.md`'s Phase 2 may still try that port first, but without the secret.
 - **A `401` is its own failure, not *agent not running*.** A client re-reads the secret once and tries again before reporting it.
-- **The window still says *Waiting for Photos*.** *Syd's, 2026-09-23.* A refused secret is told apart in the log, not on the screen.
+- **The window still says *Waiting for Photos*.** *Syd's, 2026-09-23. The words are "Starting…" since 2026-09-26; the point stands.* A refused secret is told apart in the log, not on the screen.
 - **The dashboard trades a one-time code for a cookie.** *Syd's, 2026-09-22.* The secret never reaches the browser or its history.
 - **The cookie is derived from the secret, and so is its name.** It survives the agent's restarts, and two agents' cookies in one browser cannot overwrite each other, since cookies ignore ports.
 - **The cookie lasts until the secret is rotated**, capped at the 400 days browsers allow. *Syd's, 2026-09-23.* A bookmarked dashboard survives browser restarts.
@@ -193,7 +193,7 @@ The code is in one URL, and so in the browser's history. That is the point of it
 - **`PictureClient`**, used by the app's picture window and the saver, reads the secret beside the port through `ServicePort`, by the same two routes, and adds the header. Its failures gain two:
   - **`.noSecret`** — a port is published and no secret beside it: an agent from before this plan, or a first launch not yet on disk. Treated like no port: wait and ask again.
   - **`.notOurs(port:)`** — the agent answered `401`. Before throwing, it reloads the preferences once and, if the secret changed, asks again.
-  - Both reach the window as `Waiting for Photos`, the words it uses for every agent trouble, with the difference in the log line. *Syd's, 2026-09-23*, asked whether a refused secret earns words of its own: no — the person at the glass can do nothing about either.
+  - Both reach the window as `Waiting for Photos` — `Starting…` since 2026-09-26 — the words it uses for every agent trouble, with the difference in the log line. *Syd's, 2026-09-23*, asked whether a refused secret earns words of its own: no — the person at the glass can do nothing about either.
 - **The wallpaper extension**, `AgentPicture`, makes its own `URLSession` request to its build's domain — each deployment's in turn when this was written; one per build since 2026-09-24. It reads the secret from the same domain, adds the header, and treats a `401` like no answer: log it and ask the next domain.
 - **The app's `SourceService`** reads `serviceSecret` beside `servicePort` and adds the header. A `401` is `Failure.notOurs`, after the same one retry, and the panel says *The agent on this port refused this account's secret.* It also asks for the dashboard's code, being the app's one client of the agent's JSON.
 - **`pgr_ctl`** makes no requests at all — command-line HTTP is `curl`, by design. `status` gains whether a secret is published. It never prints one: `defaults read` is there for anyone who needs it, and a tool that printed it would put it in terminal scrollback and shell history.

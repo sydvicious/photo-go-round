@@ -64,15 +64,17 @@ struct ContentView: View {
                     .transition(.opacity)
             }
 
-            // Only when there has never been a picture. A stale photograph is a
-            // better answer than a blank window, so trouble that arrives after
-            // one is showing stays out of the way.
+            // Only when there is no picture: there has never been one, or the
+            // agent said there is nothing to show and `Shuffle` took it down. A
+            // stale photograph is a better answer than a blank window, so any
+            // other trouble that arrives after one is showing stays out of the
+            // way.
             if shuffle.shown == nil, let trouble = shuffle.trouble {
                 // The same view the screensaver mounts. It moves, which matters
                 // less in a window than on a panel left on all night — but one
                 // empty state built once is the point, and this is where it can
                 // be looked at with a debugger attached.
-                EmptyStateDisplay(words: trouble.words, detail: trouble.detail)
+                EmptyStateDisplay(words: trouble.words)
             }
 
             // **A layer of nothing, above the picture and the words, for the
@@ -107,6 +109,14 @@ struct ContentView: View {
         }
         .onChange(of: interval) {
             shuffle.setDwell(interval.duration)
+        }
+        // **With no sources, Settings opens by itself.** Syd, 2026-09-26: "The
+        // app (only) should automatically open Settings" beside *Please Add
+        // Photos*. On the change and not on every answer, so a person who
+        // closes it without adding anything is not handed it back every few
+        // seconds; it is one window, so two windows asking open it once.
+        .onChange(of: shuffle.trouble) { _, trouble in
+            if trouble == .noSources { openWindow(id: SourcesSettingsView.windowID) }
         }
         // How the View menu's Window Settings finds this window's sheet.
         .focusedSceneValue(\.windowSettings, $showingSettings)

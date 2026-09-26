@@ -33,6 +33,29 @@ public protocol PictureSource: Sendable {
     func next(
         consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
     ) async throws -> ServedPicture?
+
+    /// The same again, with an empty answer saying why when the agent knows.
+    ///
+    /// **This is what a surface asks; `next` is what a stub finds easiest to
+    /// write.** A source that implements only `next` answers every empty queue
+    /// as plain `.empty`, which is what it always meant.
+    func answer(
+        consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
+    ) async throws -> PictureAnswer
+}
+
+/// What one ask comes back with.
+public enum PictureAnswer: Sendable, Equatable {
+    case picture(ServedPicture)
+    /// Nothing right now. A queue turning over says this, and so does a
+    /// library with nothing in it; only a streak of them tells the two apart.
+    case empty
+    /// Nothing, because no source is enabled — which the agent knows outright,
+    /// so one answer is enough to say it. See `EmptyReason`.
+    case noSources
+    /// Nothing, and nothing coming: every source is scanned or offline, and
+    /// none has a photograph that could be shown. Also known outright.
+    case noPhotos
 }
 
 extension PictureSource {
@@ -41,5 +64,13 @@ extension PictureSource {
         consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
     ) async throws -> ServedPicture? {
         try await next(consumer: consumer, displayID: displayID, fitting: box)
+    }
+
+    /// A source that cannot say why it is empty never says so.
+    public func answer(
+        consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
+    ) async throws -> PictureAnswer {
+        try await next(consumer: consumer, displayID: displayID, fitting: box, patient: patient)
+            .map(PictureAnswer.picture) ?? .empty
     }
 }

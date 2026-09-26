@@ -10,6 +10,8 @@ import PhotosGoRoundAgentAPI
 /// GET /v1/next?consumer=screensaver&display=<uuid>&w=3840&h=2160
 /// → 200  the picture
 /// → 204  nothing queued
+/// → 204  X-PGR-Empty: no-sources — no source is enabled
+/// → 204  X-PGR-Empty: no-photos  — nothing to show, and nothing still being scanned
 /// ```
 ///
 /// **The answer is rendered to the box the client asked for**, in the format it
@@ -302,13 +304,19 @@ struct PictureEndpoint {
         }
     }
 
+    /// What one request works against, all on the same connection.
+    ///
+    /// `sources` is for an empty answer only: whether any source is enabled is
+    /// what lets a `204` say *no sources* rather than *nothing right now*.
+    typealias Context = (cache: PhotoCache, deck: Deck, sources: SourceStore)
+
     /// A connection per request rather than one shared.
     ///
     /// A `Database` belongs to one isolation domain and WAL is what makes
     /// several of them safe, so concurrent requests get their own rather than
     /// serialising behind a lock. Opening one is sub-millisecond against a
     /// picture that arrives every several seconds.
-    private func context() throws -> (cache: PhotoCache, deck: Deck) {
+    private func context() throws -> Context {
         let database = try Database(path: databasePath)
         try Migrator.migrate(database)
         let sources = SourceStore(database: database, bytes: store)
@@ -327,7 +335,7 @@ struct PictureEndpoint {
         cache.ensureFetching = ensureFetching
         cache.bench = bench
         if let tally { cache.lookedUp = { tally.record($0) } }
-        return (cache, deck)
+        return (cache, deck, sources)
     }
 
     func route(_ request: HTTPListener.Request) async -> HTTPListener.Response {
@@ -388,7 +396,7 @@ struct PictureEndpoint {
     private func next(_ request: HTTPListener.Request) async -> HTTPListener.Response {
         var timing = StageTimes(from: request.receivedAt)
         timing.lap("waited")
-        let context: (cache: PhotoCache, deck: Deck)
+        let context: Context
         do {
             context = try self.context()
             timing.lap("open")
@@ -615,8 +623,23 @@ struct PictureEndpoint {
             // nothing useful to ask for — the cache is already refreshing
             // itself, and a client that asks again in a few seconds will find
             // whatever landed in between.
+            //
+            // **Except when the agent knows why**, which a client cannot see.
+            // Said on the header so the surface can put its words up on this
+            // answer, rather than after the streak a bare `204` needs. A list
+            // or a count that will not read says nothing: a bare `204` is
+            // still true.
             deckCameUpEmpty()
             finish(nil)
+            if let reason = try? Self.emptyReason(
+                enabled: context.sources.enabled(), poolSize: { try context.deck.poolSize() })
+            {
+                let detail = reason == .noSources ? "no sources" : "no photos, and none coming"
+                report(request, status: 204, detail: detail, timing: timing)
+                var response = HTTPListener.Response.noContent()
+                response.headers[EmptyReason.headerField] = reason.rawValue
+                return response
+            }
             report(request, status: 204, detail: "no photos available", timing: timing)
             return .noContent()
         } catch {
@@ -641,7 +664,7 @@ struct PictureEndpoint {
     /// moves on to the next card.
     private func original(
         _ served: PhotoCache.ServedPhoto, request: HTTPListener.Request,
-        context: (cache: PhotoCache, deck: Deck), timing: inout StageTimes,
+        context: Context, timing: inout StageTimes,
         finish: (Int64?) -> Void
     ) -> HTTPListener.Response? {
         guard let stream = HTTPListener.Response.StreamedFile(url: served.url) else {
@@ -663,7 +686,7 @@ struct PictureEndpoint {
     }
 
     /// Hands what a request leaves behind to `settling`, or writes it now.
-    private func settle(_ settlement: Deck.Settlement, context: (cache: PhotoCache, deck: Deck)) {
+    private func settle(_ settlement: Deck.Settlement, context: Context) {
         if let settling {
             settling(settlement)
             return
@@ -676,11 +699,35 @@ struct PictureEndpoint {
         if settlement.delivered != nil { queueRanShort() }
     }
 
-    private func vanished(_ served: PhotoCache.ServedPhoto, context: (cache: PhotoCache, deck: Deck)) {
+    private func vanished(_ served: PhotoCache.ServedPhoto, context: Context) {
         Console.event(
             "\(served.card.spokenName) vanished between the index and the open; skipping it")
         Log.deck.notice(
             "photo \(served.card.id, privacy: .public) vanished before its bytes could be opened")
+    }
+
+    /// Why nothing could be served, when that is known for certain; nil when a
+    /// bare `204` is all that can honestly be said.
+    ///
+    /// `poolSize` is the deck's: every photograph that could be dealt, which
+    /// counts an offline source's photographs only where their bytes are held.
+    /// So zero is *nothing to show* — and it is *nothing coming* once every
+    /// source that is there has finished a scan. **A source that is there and
+    /// has not** may be about to produce photographs; one that is offline
+    /// contributes its cache and nothing else, so it has nothing to finish.
+    /// `scannedAt` means a finished scan only while the source is available,
+    /// since a failed one writes it too — which is the only way it is read here.
+    ///
+    /// The count is asked for last, and only once every source has finished,
+    /// so a large library still filling is not counted on every empty answer.
+    static func emptyReason(
+        enabled: [Source], poolSize: () throws -> Int
+    ) rethrows -> EmptyReason? {
+        guard !enabled.isEmpty else { return .noSources }
+        guard enabled.allSatisfy({ !$0.available || $0.scannedAt != nil }),
+            try poolSize() == 0
+        else { return nil }
+        return .noPhotos
     }
 
     /// The box the client asked to fill, or nil when it asked for the original.

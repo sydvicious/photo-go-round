@@ -53,6 +53,10 @@ enum AgentPicture {
         /// the deck. Kept so the extension can say which picture it is showing,
         /// and remember it for the next preview.
         let card: String?
+        /// The empty state's words drawn as a picture, rather than a
+        /// photograph: see `message(_:pixels:domain:)`. Never remembered as
+        /// the last picture, and asked past sooner.
+        var isMessage = false
     }
 
     /// The display's UUID, spelled as the saver spells it,
@@ -183,9 +187,17 @@ enum AgentPicture {
                 next()
                 return
             }
+            if status == 204,
+                let reason = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: EmptyReason.headerField)
+                    .flatMap(EmptyReason.init(rawValue:))
+            {
+                done(message(reason, pixels: CGSize(width: width, height: height), domain: domain))
+                return
+            }
             guard status == 200, let data else {
-                // 204 is an empty library or a queue turning over, and is an
-                // answer: the desktop keeps the picture it has.
+                // A bare 204 is a queue turning over or a library still being
+                // scanned, and is an answer: the desktop keeps the picture it
+                // has.
                 done(nil)
                 return
             }
@@ -196,6 +208,23 @@ enum AgentPicture {
             let card = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-PGR-Card")
             done(Answer(image: image, domain: domain, card: card))
         }.resume()
+    }
+
+    /// **The empty state, as a picture**, when the agent says why it has
+    /// nothing: *Please Add Photos* or *No Photos Available*, the window's own
+    /// words. Syd, 2026-09-26: the wallpaper hands the pane pictures and cannot
+    /// draw words, so it is given a picture of them — black, as the letterbox
+    /// is, at the desktop's size. Still rather than moving: it is a wallpaper.
+    /// Nil only if the picture could not be made, which leaves the desktop as
+    /// it is, as a bare `204` does.
+    static func message(_ reason: EmptyReason, pixels: CGSize, domain: String) -> Answer? {
+        let words = Shuffle.Trouble(reason).words
+        guard let image = EmptyStateWords.still(words, pixels: pixels) else {
+            wallpaperLog("could not draw \"\(words)\" at \(Int(pixels.width))x\(Int(pixels.height))")
+            return nil
+        }
+        wallpaperLogWhenChanged("message", "the agent says \(reason.rawValue); showing \"\(words)\"")
+        return Answer(image: image, domain: domain, card: nil, isMessage: true)
     }
 
     /// Decoded at no more than the desktop's longest side, with the file's
