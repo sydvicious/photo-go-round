@@ -47,8 +47,17 @@ public final class PictureLayerView: NSView {
     @available(*, unavailable)
     public required init?(coder: NSCoder) { fatalError("not loaded from a nib") }
 
+    /// The photograph, or `nil` for none — which **clears** what is up.
+    ///
+    /// `Shuffle` sets `shown` back to nil only when the agent says there is
+    /// nothing to show, so nil is either the moment before the first picture,
+    /// when there is nothing to clear, or the picture deliberately coming down.
+    /// See `Shuffle.takeDown(for:)`.
     public func show(_ frame: Shuffle.Frame?) {
-        guard let frame else { return }
+        guard let frame else {
+            withoutAnimation { pictureLayer.contents = nil }
+            return
+        }
         photoSize = frame.size
         // No implicit animation on the swap: the cross-fade is its own thing
         // and arrives with the pan, and Core Animation's default half-second

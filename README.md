@@ -160,7 +160,9 @@ curl -sS -H "$AUTH" -D /tmp/pgr.head -o /tmp/pgr.body "http://localhost:$PORT/v1
 
 Two answers that are not errors. **`204 No Content`** means the queue is empty —
 a fresh library answers this way until the agent has produced something, and so
-does a small library asked faster than it can refill. And four requests at once
+does a small library asked faster than it can refill. When the agent knows why,
+it says so: `X-PGR-Empty: no-sources` with no source enabled, and `no-photos`
+when there is nothing to show and nothing still being scanned. And four requests at once
 never hand out the same picture, because serving removes the queue entry:
 
 ```

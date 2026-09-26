@@ -172,7 +172,7 @@ Some savers show one in System Settings. `ScreenSaverView` provides it through `
 - **Whether the sheet is presented at all is untested.** `hasConfigureSheet` is queried — it appears in the call sequence on `FB9835060` — so the button probably shows. Whether the sheet displays is unknown, and the preview instance being 0x0 is a reason to check rather than assume.
 - **What would go in it** is also open: dwell, fit, an upscale cap. All are `PLAN.md`'s *Beyond 0.1* today, and *Everything user-settable is a user default* is held back with them.
 - **Parked until there is a real setting**, which means until *Settings endpoints* below exists. A sheet with nothing configurable in it is a button that disappoints.
-- When it is built, it can hold what needs no persistence even before then: agent status, the port and whether it was found through the suite or the file, the version, and the same pointer to the app's Settings panel that the empty state now shows.
+- When it is built, it can hold what needs no persistence even before then: agent status, the port and whether it was found through the suite or the file, the version, and a pointer to the app's Settings panel — which the empty state carried underneath its words until 2026-09-26, when Syd asked for "No secondary lines of text."
 
 ## Sandboxing, and whether the App Store is reachable
 
@@ -185,14 +185,6 @@ Some savers show one in System Settings. `ScreenSaverView` provides it through `
 - **The wallpaper's files would move.** They are in `~/Library/Application Support/com.sydpolk.photogoround.wallpaper.{dev|prod}/` for now; Syd, 2026-09-10: "we will probably have to move it if we want to sandbox." See `Wallpaper Plan.md`, *The file on disk*.
 - **The animated-preview item that was here is withdrawn, 2026-09-09: we already have one.** It said that if the App Store were unreachable, private API would be on the table for getting a fully animated preview like Apple's own savers have. The premise was a wrong reading — the pane runs an ordinary live instance of our saver and it animates and cycles photographs. Nothing needs reverse-engineering. The general point survives in a smaller form: shipping Developer ID direct means no review, so private API is not disqualifying if some *other* need for it appears.
 
-## Three empty-state messages, each for its own cause
-
-Syd, 2026-09-21, after a `(Claude)` screensaver with no agent anywhere showed "Waiting for Photos": show **"No agent running"** when there is no agent running, **"No Photos available"** when there are zero photos in the database, and **"Waiting for Photos"** otherwise. **Capitalized as a sentence, except "Photos"**, which keeps its capital everywhere — Syd, the same day: "Initial capitals, small everywhere else, except for 'Photos'". So today's "No Photos Available" becomes "No Photos available".
-
-- **Today `Shuffle.Trouble.words` maps `.noAgent` and `.silent` both to "Waiting for Photos"**, `Shared/Sources/PhotoGoRoundDisplay/Shuffle.swift`. That follows two earlier decisions, which this one revises: 2026-09-09, "to the user, 'no agent' and 'stuck agent' are the same thing", and 2026-09-16, when "Open the Photo-Go-Round application to start it" became "Waiting for Photos". So `.noAgent` gets its own words; `.silent` — accepted the connection, never answered — stays "Waiting for Photos".
-- **"No Photos Available" is not "zero photos in the database" today.** `.noPhotos` is said after three empty answers in a row (`emptyAnswersBeforeSaying`), which a library with photos but nothing servable yet also produces. Saying it only for an empty database needs the agent to tell the client its count, which no endpoint the surfaces use does now.
-- The words appear in the window, the screensaver and the About box; all three read `Trouble.words`.
-
 ## Installing by launching the app
 
 What is left after `Plans/Release App Installer.md`, which built the app as the installer on 2026-09-21: every build carries the agent, the extension and the screensaver, installs and restarts its agent at launch, and a Release launch registers the wallpaper and links the saver.
@@ -201,6 +193,7 @@ What is left after `Plans/Release App Installer.md`, which built the app as the 
 - **The window needs Install Agent and Launch Agent buttons.** Syd, 2026-09-09. They are what the empty state should offer when nothing is being served, rather than words.
 - **The empty state's agent wording is a placeholder that is wrong in one of the two places it appears.** It reads "Open the Photo-Go-Round application to start it", which is right on the screensaver and absurd in the window, because the window *is* the application. The buttons above are what the window should show instead. Until then the text stands, knowingly.
   - **Changed 2026-09-16.** Syd: "fix the wording. it's stupid." Now "Waiting for Photos" with nothing underneath, in the window, the screensaver and the About box. Launchd starts the agent at login, so "open the app to start it" was wrong on the screensaver too, and an agent still starting up is not "not running". The buttons are still what would go underneath.
+  - **Changed 2026-09-26.** "Starting…" in the window and the screensaver — Syd: "*Waiting for Photos* should be gone" — and no line underneath anything. The About box keeps "Waiting for Photos": "keep the about box as it is."
 - **A missing agent and a wedged one are one state to the user** — implemented 2026-09-09, one message on screen and the distinction kept in the log. The buttons inherit that: whatever they offer has to cover both starting an agent that is not there and dealing with one that is running and not answering.
 - **The first run has a race nothing has exercised.** The saver finds the port by reading `~/Library/Preferences/<domain>.plist` directly, because the sandbox will not hand it the domain. On a genuinely first launch that file may not exist yet, and `cfprefsd` buffers writes, so there is a window after the agent starts where the saver still says nothing is running. It self-heals on the next request; whether that is acceptable as somebody's first impression is a first-launch decision. See `Screensaver Plan.md`, *Not yet decided*.
 
@@ -255,7 +248,9 @@ Carried out of `Plans/Xcode - Separate Build and Run.md` when it closed, 2026-09
 - **What to decide** is whether it belongs in the same plan behind a filter, in a second plan of its own, or nowhere — Syd skips GUI tests, and this is the suite closest to being one. `TODO.md`, *No GUI testing* is the standing position.
 - `Package Tests.xctestplan` is the file, and a test plan can hold more than one configuration if that turns out to be the shape.
 
-## The screensaver says "Waiting for Photos" for a few minutes after a restart
+## The screensaver says "Starting…" for a few minutes after a restart
+
+*"Waiting for Photos" when this was written; the words changed 2026-09-26, the delay did not.*
 
 Seen 2026-09-23 on Syd's MacBook Pro, load 78–100 after boot. The lock-screen screensaver started at 19:28:26, 21 s before the agent was listening (`nothing is listening on 20172`); then two serves took 4.4 s and 4.1 s inside the agent, past the saver's 5 s bound (`not answering … within 5 seconds`), so each picture was served after the saver stopped listening and its card was spent. By 19:32 serving took 1.1 s and photos showed. Probably also what plex showed after its restart, though plex's saver logged nothing at all.
 
@@ -321,30 +316,6 @@ Syd, 2026-09-10: *"Add a TODO.md item to see what we need to do in System Settin
 - **Dynamic and Aerial wallpapers.** What happens when one is selected and we set a still over it, and whether it comes back on its own — a candidate for the reversions `PLAN.md`'s *Wallpaper is asserted continuously* describes.
 - Whatever this turns up goes into `Wallpaper Plan.md` before its Phase 1 is built, since several of these could change what Phase 1 does.
 
-## Removing every source leaves the window showing a photograph
-
-Observed 2026-09-09. Remove all sources and the agent does the right thing — it has nothing to serve and answers `204`. The window keeps the last photograph up indefinitely, and the Settings panel is meanwhile showing the empty list correctly.
-
-- **Quitting and relaunching shows *No Photos Available* immediately**, which narrows this to one line of state. A fresh `Shuffle` starts with `shown` nil, takes its three empty answers, and says so; the old process was only holding the photograph because `shown` is never cleared once it has been set. So the agent is genuinely answering `204`, the cache is not involved, and nothing needs to be discovered — the window is showing a value it already has no reason to keep.
-- **The rule doing this is deliberate**, and it is the deck's first duty: *a picture already showing is never taken down*. `Shuffle` keeps `shown` through an empty answer so a slow or absent agent never blanks a surface. It is why the screensaver survives a wake, and it should not be weakened generally.
-- **It is already a known shortcoming**, in the general form: `PLAN.md`, *Deferred: retracting a photo already on screen*, and *Known shortcomings* item 6 — 0.1 ships accepting that a photograph can linger on a surface after it is gone.
-- **But this case is worse than the one that was accepted, and for a reason worth writing down.** The deferred case is a photograph deleted somewhere else, where the client cannot know. Here the person removed the sources *themselves*, in this app, through this app's own panel — and one window of it is showing an empty list while another shows a photograph from a source that no longer exists. Nothing is stale except the screen, and the process that made the change is the process still displaying the old answer.
-- **It therefore does not need the revocation protocol to fix.** `FEATURES.md` already draws this distinction under *One window telling another is not a doorbell*: a change *this app just made* is narrower than a change the agent announces, and the picker already tells its own windows. The empty state exists now, so the window has somewhere to go.
-- **Decided 2026-09-19: straight to *No Photos Available*.** Syd: "when all sources have been removed, *No Photos Available* is the right answer." So the picture comes down. The abruptness is the point — the person just emptied the library themselves, and a surface still showing a photograph from it is lying about what is there.
-- **Still to settle when it is built:** whether removing the *last source* is the trigger, or any change that empties the pool. *Claude's reading, not decided: the pool emptying is the honest condition — it covers a source going offline and a source whose photographs were all deleted, and it needs no special case for "last". The risk is that a source briefly reporting nothing would blank a surface that a source-removal test would not.*
-- **What it must not become** is a general retraction. The deferred case in `PLAN.md` — a photograph deleted somewhere else — stays deferred; this is only the case where this app made the change and therefore knows. do it.
-
-## Always show "No Photos Available" when it is true
-
-Observed 2026-09-09, in all three views: on a first launch with no pictures, the surface is blank for several seconds before *No Photos Available* appears. `Shuffle` says nothing until it has had three consecutive empty answers three seconds apart — about ten seconds — because one `204` is a queue turning over rather than an empty library.
-
-**Decided 2026-09-19.** Syd: "Always show *No Photos Available* when it is true that no photos are available." It is a rule about honesty, not about timing: the surface says what is so, as soon as it is so. **No third state** — the *Launching…* / *Loading photos* wording this item used to propose is dropped. And nothing is painted before it is known, because a surface claiming an empty library while the queue is merely turning over would be saying something false.
-
-- **The whole difficulty is knowing that it is true**, and the ten-second delay is what knowing currently costs. Three empty answers three seconds apart is a guess dressed as certainty; it is slow *and* it can still be wrong.
-- **The agent is not guessing, and that is the opening.** *Claude's reading, not decided:* this item has said since 2026-09-09 that it "needs no change to the wire" because "the service cannot tell a cold start from an empty library; both are `204`" — but that is a fact about today's wire, not a necessity. The agent knows whether the pool is empty, whether any source is configured, and whether it is still filling. If a `204` said which, every surface could show the truth on the first answer with no streak, no delay, and no flash on a healthy launch.
-- **`PLAN.md`'s *The empty state* wants updating when this is built.** It names three cases and asks for the third, the transient cold start, to "say something like *Loading photos*". That is the state now dropped.
-- **What becomes of the `Shuffle` streak** depends on the above: it exists only to turn repeated `204`s into confidence, so an answer that carries its own reason would retire it.
-
 ## Build for arm64 only
 
 Syd, 2026-09-15: "don't build arch:x86_64 at all". And the scope of it, the same day: "there is a difference between dev and shipping the product. At this point, macOS 27 supports intel, and if I ever ship this to the public, I will build for it. But for dev purposes, I don't want to waste the time or disk space." **So this is about development builds. Whether a shipping build is universal is Syd's, and undecided.**
@@ -394,3 +365,7 @@ Syd, 2026-09-22: add it. Since the reorganization put `Photo-Go-Round.xcodeproj`
 ## The app icon on smaller devices
 
 Syd, 2026-09-24: re-examine the icon for smaller devices later. At 32 points the house picture is discernible; at 16 it is hopeless, and a `.icon` file has no per-size artwork. `Plans/App Icon.md`.
+
+## Remove the option to disable a source
+
+Syd, 2026-09-26: "get rid of the disable sources option completely". Today a source is disabled by `pgr_ctl sources disable`, or the `enabled` key in a source list written with `defaults write`; the Settings window has no control for it. Open when picked up: whether `source.enabled` and `photo.source_enabled` go too, since the deck's indexes lead with the second, and a migration to re-enable any source disabled at the time.

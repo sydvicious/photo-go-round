@@ -6,9 +6,11 @@ import PhotosGoRoundAgentAPI
 
 /// Asks the agent for a picture, decodes it, and holds the one on screen.
 ///
-/// **A picture already showing is never taken down.** When the queue runs empty
-/// or the agent goes away, what is up stays up and the trouble is recorded
-/// beside it — the words only appear when there has never been anything to show.
+/// **A picture already showing is never taken down** — unless the agent says
+/// there is nothing to replace it with. When the queue runs empty or the agent
+/// goes away, what is up stays up and the trouble is recorded beside it; the
+/// words only appear when nothing is showing. The exception is an empty answer
+/// that says *why*: see `takeDown(for:)`.
 /// Blanking a window because the *next* picture is late would be a worse answer
 /// than the stale picture, and the same rule keeps a screensaver from going
 /// black mid-session when the cache is cleared under it.
@@ -39,19 +41,25 @@ public final class Shuffle {
         public var size: CGSize { CGSize(width: image.width, height: image.height) }
     }
 
-    /// The empty states, of which the wire can distinguish exactly two.
+    /// The empty states.
     ///
     /// *The empty state* separates no-sources, sources-that-enumerate-to-nothing,
-    /// and cold-start, and all three arrive here as `204` — a client cannot see
-    /// the pool, which is the point of the service being the interface. The
-    /// fourth is one that section predates: with no agent there is nobody to
-    /// answer at all.
+    /// and cold-start. A cold start arrives here as a bare `204` — a client
+    /// cannot see the pool, which is the point of the service being the
+    /// interface. The other two arrive as a `204` that says which, because the
+    /// agent knows them outright; see `EmptyReason`. The fourth is one that
+    /// section predates: with no agent there is nobody to answer at all.
     public enum Trouble: Equatable {
-        /// **Said only after three empty answers in a row.** See
-        /// `emptyAnswersBeforeSaying`: one `204` is a queue turning over, not a
-        /// library with nothing in it, and the first picture to arrive takes
+        /// Nothing to show. **Said on the first answer when the agent says
+        /// so**, and otherwise after three empty answers in a row — see
+        /// `emptyAnswersBeforeSaying`: one bare `204` is a queue turning over,
+        /// not a library with nothing in it. The first picture to arrive takes
         /// the words back down.
         case noPhotos
+        /// No source is enabled. Said on the first answer, since the agent is
+        /// stating a fact rather than reporting a moment — and in the
+        /// application, it opens Settings.
+        case noSources
         case noAgent(String)
         /// The agent accepted the connection and never answered.
         ///
@@ -76,31 +84,29 @@ public final class Shuffle {
         /// so two messages would be a distinction drawn for the implementer's
         /// benefit. The difference is real and it survives in `line`, where
         /// whoever is diagnosing it can see which one happened.
+        ///
+        /// **Agent trouble says "Starting…".** Syd, 2026-09-26: "everything
+        /// should say *Starting...* until the agent responds. Once the agent
+        /// responds, it should display one of the messages", and "*Waiting for
+        /// Photos* should be gone." Once it answers, what it says — a picture,
+        /// *Please Add Photos*, *No Photos Available* — replaces it.
+        ///
+        /// **Every word capitalized.** Syd, 2026-09-26, dropping the sentence
+        /// case he asked for on 2026-09-21 ("Initial capitals, small everywhere
+        /// else, except for 'Photos'").
+        ///
+        /// **And nothing underneath, for any of them.** Syd, 2026-09-26: "No
+        /// secondary lines of text." *No Photos Available* used to say "Use the
+        /// Settings panel in the application to add images." below it, and agent
+        /// trouble lost its line on 2026-09-16 — "Open the Photos-Go-Round
+        /// application to start it.", which was wrong once launchd started the
+        /// agent at login. What a person can do about no sources, the
+        /// application does for them: it opens Settings.
         public var words: String {
             switch self {
             case .noPhotos: "No Photos Available"
-            case .noAgent, .silent: "Waiting for Photos"
-            }
-        }
-
-        /// The line underneath the words: **what to do, never what went wrong.**
-        ///
-        /// The reason a failure was constructed with is a fact about the agent
-        /// and not an instruction to anybody, so it stays in `line` and out of
-        /// this. Nothing is broken when there are no photographs — nobody has
-        /// added any — so that case names a place to go.
-        ///
-        /// **Agent trouble has nothing underneath.** Until 2026-09-16 it said
-        /// "Open the Photos-Go-Round application to start it." — shown inside the
-        /// application it named, and wrong everywhere once launchd started the
-        /// agent at login: opening the app starts nothing, and an agent that is
-        /// still starting or busy is running. Syd: "fix the wording. it's
-        /// stupid." There is no instruction that would help, so there is none;
-        /// the Install and Launch buttons in `TODO.md` are what would go here.
-        public var detail: String? {
-            switch self {
-            case .noPhotos: "Use the Settings panel in the application to add images."
-            case .noAgent, .silent: nil
+            case .noSources: "Please Add Photos"
+            case .noAgent, .silent: "Starting…"
             }
         }
 
@@ -111,16 +117,17 @@ public final class Shuffle {
         /// fix by adding a source and not a sign anything is broken.
         public var isAgentTrouble: Bool {
             switch self {
-            case .noPhotos: false
+            case .noPhotos, .noSources: false
             case .noAgent, .silent: true
             }
         }
 
-        /// What to say in a log line — the words plus whatever detail came
+        /// What to say in a log line — the words plus whatever reason came
         /// with them.
         public var line: String {
             switch self {
             case .noPhotos: "no photos"
+            case .noSources: "no sources"
             case .noAgent(let why): "no agent: \(why)"
             case .silent(let why): "not answering: \(why)"
             }
@@ -214,9 +221,11 @@ public final class Shuffle {
 
     /// Puts up the picture the last session left, **unless a fresh one has
     /// already arrived** — the read is a few milliseconds and the agent can
-    /// occasionally beat it.
+    /// occasionally beat it — or the agent has already said there is nothing
+    /// to show, which would put back a picture `takeDown(for:)` just removed.
     private func openWithRemembered() async {
-        guard let memory, shown == nil, let recalled = await memory.recall(), shown == nil
+        guard let memory, shown == nil, let recalled = await memory.recall(), shown == nil,
+            trouble != .noSources, trouble != .noPhotos
         else { return }
         shown = Frame(image: recalled.image, picture: recalled.picture, remembered: true)
         Log.deck.notice(
@@ -355,11 +364,27 @@ public final class Shuffle {
     private func advance() async -> Wait {
         guard let box else { return .fixed(whenEmpty) }
         do {
-            let answer = try await source.next(
+            let answer = try await source.answer(
                 consumer: consumer, displayID: displayID, fitting: box,
                 patient: !answeredThisRun)
             answeredThisRun = true
-            guard let picture = answer else {
+            let picture: ServedPicture
+            switch answer {
+            case .picture(let served):
+                picture = served
+            case .noSources:
+                takeDown(for: .noSources)
+                return .fixed(whenEmpty)
+            case .noPhotos:
+                takeDown(for: .noPhotos)
+                return .fixed(whenEmpty)
+            case .empty:
+                // *Please Add Photos* is no longer true the moment the agent
+                // stops saying it: a source was added and is being scanned. The
+                // streak decides what is said next, from nothing. *No Photos
+                // Available* stays until the streak says it again or a picture
+                // arrives, as it always has.
+                if trouble == .noSources { note(nil) }
                 emptyAnswers += 1
                 // Below the threshold nothing is said at all — not even that
                 // the trouble has cleared. An empty answer is not the agent
@@ -401,6 +426,35 @@ public final class Shuffle {
             note(.noAgent(error.localizedDescription))
             return .fixed(whenAbsent)
         }
+    }
+
+    /// An empty answer that says why: a fact rather than a moment, so no
+    /// streak — and **the picture comes down**.
+    ///
+    /// Syd, 2026-09-26: "if there is truly nothing to display, the next time
+    /// the picture is scheduled to change, you should display *No Photos
+    /// Available*." The loop only asks when the picture's dwell is up, so the
+    /// answer arriving *is* the scheduled change. The agent says this only when
+    /// nothing could be shown — an offline source's cached photographs count —
+    /// so what comes down is a picture it could not hand out again. It is not
+    /// a general retraction: a photograph deleted somewhere else, while others
+    /// remain, still lingers until its dwell is up, as `PLAN.md` accepts.
+    ///
+    /// **The remembered picture goes too**, once, on the change: the next
+    /// session would otherwise open with a photograph that cannot be served
+    /// again. See `PictureMemory.forget()`.
+    private func takeDown(for trouble: Trouble) {
+        emptyAnswers = 0
+        if shown != nil {
+            Log.deck.notice(
+                "\(self.consumer, privacy: .public): \(trouble.line, privacy: .public), taking the picture down")
+        }
+        shown = nil
+        appearedAt = nil
+        if let memory, self.trouble != trouble {
+            Task { await memory.forget() }
+        }
+        note(trouble)
     }
 
     /// Records the trouble, and logs it **when it changes**.
@@ -516,5 +570,17 @@ public final class Shuffle {
             else { return nil }
             return Decoded(image: image)
         }.value?.image
+    }
+}
+
+extension Shuffle.Trouble {
+    /// The trouble an empty answer's reason names, for a surface that reads the
+    /// header itself — the wallpaper, which has no `Shuffle` — so it says what
+    /// the window and the screensaver say.
+    public init(_ reason: EmptyReason) {
+        switch reason {
+        case .noSources: self = .noSources
+        case .noPhotos: self = .noPhotos
+        }
     }
 }

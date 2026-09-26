@@ -120,6 +120,15 @@ public struct PictureClient: PictureSource {
     public func next(
         consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
     ) async throws -> ServedPicture? {
+        let answer = try await answer(
+            consumer: consumer, displayID: displayID, fitting: box, patient: patient)
+        guard case .picture(let picture) = answer else { return nil }
+        return picture
+    }
+
+    public func answer(
+        consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
+    ) async throws -> PictureAnswer {
         let limit = patient ? firstLimit : self.limit
         // **Not `preferences.servicePort` directly.** A sandboxed client is
         // handed an empty suite rather than a refusal, so the lookup has to be
@@ -186,11 +195,20 @@ public struct PictureClient: PictureSource {
 
         switch http.statusCode {
         case 200:
-            return ServedPicture.from(data: data, headers: Self.headers(of: http))
+            return .picture(ServedPicture.from(data: data, headers: Self.headers(of: http)))
         // Ordinary rather than an error: the queue is empty, which a fresh
-        // library answers until the agent has produced something.
+        // library answers until the agent has produced something — unless the
+        // agent says why. An agent older than the header never says, and one
+        // newer may say something this does not know; both read as they
+        // always did.
         case 204:
-            return nil
+            switch http.value(forHTTPHeaderField: EmptyReason.headerField)
+                .flatMap(EmptyReason.init(rawValue:))
+            {
+            case .noSources: return .noSources
+            case .noPhotos: return .noPhotos
+            case nil: return .empty
+            }
         default:
             throw Failure.refused(status: http.statusCode)
         }

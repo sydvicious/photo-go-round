@@ -26,6 +26,8 @@ struct ShuffleTests {
         enum Answer {
             case picture(Data)
             case empty
+            case noSources
+            case noPhotos
             case failure(PictureClient.Failure)
         }
 
@@ -49,11 +51,28 @@ struct ShuffleTests {
             switch answer {
             case .picture(let data):
                 return ServedPicture(data: data, contentType: "image/png")
-            case .empty:
+            case .empty, .noSources, .noPhotos:
                 return nil
             case .failure(let failure):
                 throw failure
             }
+        }
+
+        /// `next` cannot say why it is empty, so this says it for the answers
+        /// that need to.
+        func answer(
+            consumer: String, displayID: String?, fitting box: PixelSize?, patient: Bool
+        ) async throws -> PictureAnswer {
+            let reason = lock.withLock { () -> PictureAnswer? in
+                switch answer {
+                case .noSources: calls += 1; return .noSources
+                case .noPhotos: calls += 1; return .noPhotos
+                default: return nil
+                }
+            }
+            if let reason { return reason }
+            return try await next(consumer: consumer, displayID: displayID, fitting: box)
+                .map(PictureAnswer.picture) ?? .empty
         }
     }
 
@@ -124,7 +143,7 @@ struct ShuffleTests {
         #expect(shuffle.shown?.picture == shown.picture)
         // The words, not the whole sentence: how `Duration` renders itself is
         // not this test's business.
-        #expect(shuffle.trouble?.words == "Waiting for Photos")
+        #expect(shuffle.trouble?.words == "Starting…")
     }
 
     /// **One predicament, one message — and the distinction kept where it pays.**
@@ -138,24 +157,22 @@ struct ShuffleTests {
         let wedged = Shuffle.Trouble.silent("the agent on 9000 said nothing within 5 seconds")
 
         #expect(absent.words == wedged.words)
-        #expect(absent.detail == wedged.detail)
 
         #expect(absent.line != wedged.line)
         #expect(absent.line.contains("no agent"))
         #expect(wedged.line.contains("not answering"))
     }
 
-    /// **Waiting, and nothing to do about it.** It said "Photos-Go-Round Is Not
+    /// **Starting, and nothing to do about it.** It said "Photos-Go-Round Is Not
     /// Running" with "Open the Photos-Go-Round application to start it."
     /// underneath until 2026-09-16 — shown inside the application it named, and,
-    /// once launchd started the agent at login, wrong everywhere: opening the
-    /// app starts nothing, and an agent still starting up or busy *is* running.
-    /// Syd: "fix the wording. it's stupid."
-    @Test("Agent trouble says it is waiting, and gives no instruction")
-    func agentTroubleIsWaiting() {
+    /// once launchd started the agent at login, wrong everywhere — and then
+    /// "Waiting for Photos" until 2026-09-26, when Syd: "everything should say
+    /// *Starting...* until the agent responds."
+    @Test("Agent trouble says it is starting, and gives no instruction")
+    func agentTroubleIsStarting() {
         for trouble in [Shuffle.Trouble.noAgent("no port"), .silent("said nothing")] {
-            #expect(trouble.words == "Waiting for Photos")
-            #expect(trouble.detail == nil)
+            #expect(trouble.words == "Starting…")
         }
     }
 
@@ -165,7 +182,6 @@ struct ShuffleTests {
     func theReasonStaysInTheLog() {
         let trouble = Shuffle.Trouble.noAgent("nothing is listening on 9000 — connection refused")
         #expect(!trouble.words.contains("9000"))
-        #expect(trouble.detail?.contains("9000") != true)
         #expect(trouble.line.contains("9000"))
     }
 
@@ -176,6 +192,16 @@ struct ShuffleTests {
         #expect(Shuffle.Trouble.silent("x").isAgentTrouble)
         #expect(Shuffle.Trouble.noAgent("x").isAgentTrouble)
         #expect(!Shuffle.Trouble.noPhotos.isAgentTrouble)
+        #expect(!Shuffle.Trouble.noSources.isAgentTrouble)
+    }
+
+    /// Every word capitalized, and no line underneath any of them — there is
+    /// nowhere left for one to go. Syd, 2026-09-26.
+    @Test("The words")
+    func theWords() {
+        #expect(Shuffle.Trouble.noSources.words == "Please Add Photos")
+        #expect(Shuffle.Trouble.noPhotos.words == "No Photos Available")
+        #expect(Shuffle.Trouble.noAgent("x").words == "Starting…")
     }
 
     // MARK: - It keeps asking
@@ -276,6 +302,102 @@ struct ShuffleTests {
         #expect(shuffle.trouble == .noPhotos)
         #expect(shuffle.trouble?.words == "No Photos Available")
         #expect(shuffle.trouble?.isAgentTrouble == false, "an empty library is not the agent's fault")
+    }
+
+    // MARK: - When the agent says why
+
+    /// The agent knows there are no sources outright, so there is no streak to
+    /// wait out. Syd, 2026-09-26: "Please Add Photos".
+    @Test("No sources says Please Add Photos on the first answer")
+    func noSourcesIsSaidAtOnce() async throws {
+        let source = Stub(.noSources)
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+
+        try await Self.until({ shuffle.trouble != nil }, "no sources being noticed")
+
+        #expect(source.callCount == 1, "it waited for a streak")
+        #expect(shuffle.trouble == .noSources)
+        #expect(shuffle.trouble?.words == "Please Add Photos")
+        #expect(shuffle.trouble?.isAgentTrouble == false)
+    }
+
+    /// Nothing to show and nothing coming, which the agent knows outright too.
+    @Test("Nothing to show says No Photos Available on the first answer")
+    func noPhotosIsSaidAtOnce() async throws {
+        let source = Stub(.noPhotos)
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+
+        try await Self.until({ shuffle.trouble != nil }, "no photos being noticed")
+
+        #expect(source.callCount == 1, "it waited for a streak")
+        #expect(shuffle.trouble == .noPhotos)
+        #expect(shuffle.trouble?.words == "No Photos Available")
+    }
+
+    /// **Removing every source used to leave the last photograph up
+    /// indefinitely** beside a Settings panel showing an empty list. Syd,
+    /// 2026-09-19: the picture comes down.
+    @Test("No sources takes a picture already showing down")
+    func noSourcesTakesThePictureDown() async throws {
+        let source = Stub(.picture(try Self.onePixelPNG()))
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.shown != nil }, "a first picture")
+
+        source.answers(.noSources)
+        try await Self.until({ shuffle.shown == nil }, "the picture coming down")
+
+        #expect(shuffle.trouble == .noSources)
+    }
+
+    /// Syd, 2026-09-26: "if there is truly nothing to display, the next time the
+    /// picture is scheduled to change, you should display *No Photos
+    /// Available*." The loop asks when the dwell is up, so that is this answer.
+    @Test("Nothing to show takes a picture already showing down")
+    func noPhotosTakesThePictureDown() async throws {
+        let source = Stub(.picture(try Self.onePixelPNG()))
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.shown != nil }, "a first picture")
+
+        source.answers(.noPhotos)
+        try await Self.until({ shuffle.shown == nil }, "the picture coming down")
+
+        #expect(shuffle.trouble == .noPhotos)
+    }
+
+    /// **A bare empty answer still never takes a picture down.** Only an agent
+    /// that says why does that; a queue turning over is not a reason.
+    @Test("A bare empty answer leaves the picture up")
+    func aBareEmptyLeavesThePicture() async throws {
+        let source = Stub(.picture(try Self.onePixelPNG()))
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.shown != nil }, "a first picture")
+
+        source.answers(.empty)
+        try await Self.until({ shuffle.trouble == .noPhotos }, "the streak being noticed")
+
+        #expect(shuffle.shown != nil, "a bare 204 took the picture down")
+    }
+
+    /// Once a source is added the agent stops saying *no sources*, and the
+    /// queue is filling. The words go, and the next picture puts one up.
+    @Test("A source being added takes Please Add Photos back down")
+    func addingASourceClearsNoSources() async throws {
+        let source = Stub(.noSources)
+        let shuffle = Self.shuffle(source)
+        shuffle.draws(at: PixelSize(width: 100, height: 100), on: nil)
+        try await Self.until({ shuffle.trouble == .noSources }, "no sources being noticed")
+
+        source.answers(.empty)
+        try await Self.until({ shuffle.trouble != .noSources }, "the words coming down")
+
+        source.answers(.picture(try Self.onePixelPNG()))
+        try await Self.until({ shuffle.shown != nil }, "a picture once a source is added")
+        #expect(shuffle.trouble == nil)
     }
 
     // MARK: - Stopping, and starting again

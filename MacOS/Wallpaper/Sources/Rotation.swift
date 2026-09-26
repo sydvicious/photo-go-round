@@ -42,6 +42,20 @@ enum Rotation {
     /// setting in the app is NOT updating the setting for the wallpaper."
     static let recheck = Duration.seconds(10)
 
+    /// What one ask came back with, which decides when to ask again.
+    enum Asked: Sendable {
+        /// A photograph: the next is due a whole interval from now.
+        case picture
+        /// The empty state's words, drawn: the agent is answering and has
+        /// nothing. **Asked past within `recheck`**, not a whole interval —
+        /// Syd's rotation can be twelve hours, and a desktop still saying
+        /// *Please Add Photos* half a day after a source was added would be
+        /// the stale answer this exists to replace.
+        case message
+        /// Nothing arrived: no agent, or a bare empty answer.
+        case nothing
+    }
+
     /// One rotation per desktop surface, cancelled when that surface goes.
     ///
     /// **A due time, re-read every slice, rather than a wait computed once**,
@@ -52,8 +66,8 @@ enum Rotation {
     /// within ten seconds if the picture is already older than the new
     /// interval; lengthening it leaves the picture up for the new interval,
     /// counted from when it appeared.
-    /// **The body says whether a picture arrived**, because the answer decides
-    /// when to ask again. Measured 2026-09-18 across two reboots: the extension
+    /// **The body says what arrived**, because the answer decides when to ask
+    /// again. Measured 2026-09-18 across two reboots: the extension
     /// woke 5 and 51 seconds before the agent was listening, was refused, and
     /// then waited its whole interval — ten minutes of a stale desktop, or half
     /// a day at `twelveHours`. A refusal now costs ten seconds; see
@@ -62,12 +76,18 @@ enum Rotation {
     /// **The first ask is due at once**, which is why `lastAsk` starts an
     /// interval in the past. It used to be made separately by the caller, where
     /// nothing could see whether it worked — the one ask that fails most often.
-    static func run(_ body: @escaping @Sendable () async -> Bool) -> Task<Void, Never> {
+    ///
+    /// **While a message is up, every ask is `recheck` apart**, whatever comes
+    /// back short of a photograph: a bare empty answer after one is most often
+    /// a source that has just been added and is being scanned, and the desktop
+    /// should change as soon as it has something.
+    static func run(_ body: @escaping @Sendable () async -> Asked) -> Task<Void, Never> {
         Task.detached(priority: .utility) {
             let clock = ContinuousClock()
             var lastInterval = interval
             var lastAsk = clock.now - clamped(lastInterval.duration)
             var retry = RetryAfterSilence()
+            var messageUp = false
             while !Task.isCancelled {
                 let current = interval
                 if current != lastInterval {
@@ -75,17 +95,21 @@ enum Rotation {
                     lastInterval = current
                 }
                 let rotation = clamped(current.duration)
-                let due = lastAsk + retry.wait(interval: rotation)
+                let due = lastAsk + (messageUp ? min(recheck, rotation) : retry.wait(interval: rotation))
                 let remaining = clock.now.duration(to: due)
                 if remaining <= .zero {
-                    let answered = await body()
+                    let asked = await body()
                     lastAsk = clock.now
-                    if answered {
+                    switch asked {
+                    case .picture, .message:
+                        messageUp = asked == .message
                         if retry.answered() { wallpaperLog("the agent is answering again") }
-                    } else if retry.wentQuiet(cap: rotation) {
-                        wallpaperLog(
-                            "no agent; asking again in \(retry.wait(interval: rotation)) "
-                                + "rather than waiting out the \(current.rawValue) rotation")
+                    case .nothing:
+                        if retry.wentQuiet(cap: rotation), !messageUp {
+                            wallpaperLog(
+                                "no agent; asking again in \(retry.wait(interval: rotation)) "
+                                    + "rather than waiting out the \(current.rawValue) rotation")
+                        }
                     }
                     continue
                 }

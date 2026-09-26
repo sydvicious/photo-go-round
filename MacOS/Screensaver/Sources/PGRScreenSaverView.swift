@@ -185,7 +185,7 @@ public final class PGRScreenSaverView: ScreenSaverView {
         guard !isPreview else {
             Self.log.notice(
                 "saver[\(self.instance, privacy: .public)]: preview, not serving")
-            empty.show(words: "Photos-Go-Round", detail: nil)
+            empty.show(words: "Photos-Go-Round")
             needsLayout = true
             return
         }
@@ -294,8 +294,9 @@ public final class PGRScreenSaverView: ScreenSaverView {
     }
 
     private func render() {
-        // Passing `nil` shows nothing rather than clearing, which is the rule:
-        // a picture already on screen is never taken down.
+        // `nil` clears, and `Shuffle` only goes back to nil when the agent says
+        // there is nothing to show: otherwise a picture already on screen is
+        // never taken down.
         picture.show(shuffle?.shown)
 
         // **One line per photograph, at info.** The gate for this phase is an
@@ -315,9 +316,9 @@ public final class PGRScreenSaverView: ScreenSaverView {
         }
 
         if shuffle?.shown != nil {
-            empty.show(words: nil, detail: nil)
+            empty.show(words: nil)
         } else if let trouble = shuffle?.trouble {
-            empty.show(words: trouble.words, detail: trouble.detail)
+            empty.show(words: trouble.words)
         }
     }
 

@@ -587,7 +587,11 @@ enum Surfaces {
         wallpaperLog("\(slot.name) preview has nothing to show; asking once, with no rotation")
         AgentPicture.fetch(display: display, pixels: pixels, slot: slot) { answer in
             guard let answer else { return }
-            LastPicture.remember(answer.image, card: answer.card, for: slot)
+            if answer.isMessage {
+                LastPicture.forget(for: slot)
+            } else {
+                LastPicture.remember(answer.image, card: answer.card, for: slot)
+            }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { show(answer.image, on: display, slot: slot) }
             }
@@ -607,25 +611,33 @@ enum Surfaces {
         lock.unlock()
         guard let entry else { return }
 
-        // **Answers whether a picture arrived**, because `Rotation` decides when
-        // to ask again from that: a refusal is worth ten seconds, not a whole
-        // rotation. The first ask is the loop's too — it used to be made here,
+        // **Answers what arrived**, because `Rotation` decides when to ask again
+        // from that: a refusal is worth ten seconds, not a whole rotation, and
+        // so is the empty state's message. The first ask is the loop's too — it used to be made here,
         // where nothing could see whether it worked, and it is the ask that
         // fails most often because the agent is not listening yet after a boot.
-        let ask: @Sendable () async -> Bool = {
+        let ask: @Sendable () async -> Rotation.Asked = {
             await withCheckedContinuation { continuation in
                 AgentPicture.fetch(display: display, pixels: pixels, slot: slot) { answer in
                     guard let answer else {
-                        continuation.resume(returning: false)
+                        continuation.resume(returning: .nothing)
                         return
                     }
                     // Kept before it is drawn, so a surface acquired after this
-                    // process dies still has a photograph to show.
-                    LastPicture.remember(answer.image, card: answer.card, for: slot)
+                    // process dies still has a photograph to show. **Not the
+                    // message**: a relaunch would open on words that may no
+                    // longer be true, where a photograph is only old — and the
+                    // photograph kept before it goes, since it can no longer be
+                    // served either.
+                    if answer.isMessage {
+                        LastPicture.forget(for: slot)
+                    } else {
+                        LastPicture.remember(answer.image, card: answer.card, for: slot)
+                    }
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated { show(answer.image, on: display, slot: slot) }
                     }
-                    continuation.resume(returning: true)
+                    continuation.resume(returning: answer.isMessage ? .message : .picture)
                 }
             }
         }

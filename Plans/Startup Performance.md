@@ -123,6 +123,7 @@ The first reboot with Phase 2 installed. The screensaver had run once at 22:39 o
 - **A missing or damaged file is no picture**, never an error on screen.
 - The display's identifier becomes the file name, with anything other than letters, digits and `-` replaced by `_`.
 - The first session on a new install has nothing to open with. From the second session on, it does.
+- **Deleted when the agent says there is nothing to show.** Added 2026-09-26: a session that opened on the remembered photograph after the agent had said *no sources* or *no photos* would show, for the half a minute a cold agent takes, a photograph that can no longer be served. `PictureMemory.forget()`, called once when `Shuffle` takes its picture down. The wallpaper's `LastPicture` is deleted for the same reason — Syd: "wallpaper has same problem; same answer."
 
 ## Why a first-photograph bound, and not a longer gap
 

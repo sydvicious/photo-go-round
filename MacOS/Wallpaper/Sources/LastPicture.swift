@@ -76,6 +76,27 @@ enum LastPicture {
         wallpaperLog("last \(slot.name) picture: kept card \(card ?? "unknown"), \(image.width)x\(image.height)")
     }
 
+    /// Keeps nothing for this slot, so the next surface starts without a
+    /// photograph rather than with one that can no longer be served.
+    ///
+    /// **For when the agent says there is nothing to show.** Syd, 2026-09-26,
+    /// of the screensaver's remembered picture and then of this one: delete it.
+    /// Said in the log only when there was something to delete, since this runs
+    /// on every ask while the message is up.
+    static func forget(for slot: Slot) {
+        guard let url = url(for: slot), FileManager.default.fileExists(atPath: url.path(percentEncoded: false))
+        else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            wallpaperLog("last picture: could not be removed: \(error)")
+            return
+        }
+        let defaults = UserDefaults.standard
+        for name in ["lastCard", "lastShownAt", "lastPixels"] { defaults.removeObject(forKey: key(name, slot)) }
+        wallpaperLog("last \(slot.name) picture: forgotten, since the agent has nothing to show")
+    }
+
     /// The photograph this slot last showed, or nil where none has been served.
     static func image(for slot: Slot) -> CGImage? {
         guard let url = url(for: slot), FileManager.default.fileExists(atPath: url.path(percentEncoded: false)),
